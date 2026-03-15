@@ -1,4 +1,11 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Aurora Language Proposal</title><style>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aurora Language Proposal</title>
+  <style>
+
 :root { --fg:#24292f; --muted:#57606a; --border:#d0d7de; --bg:#ffffff; --bg-subtle:#f6f8fa; --quote-bg:#f6f8fa; --link:#0969da; }
 html { scroll-behavior:smooth; }
 body { margin:0; background:var(--bg); color:var(--fg); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; line-height:1.65; }
@@ -13,14 +20,23 @@ ul,ol { padding-left:1.5rem; }
 li+li { margin-top:.2rem; }
 a { color:var(--link); text-decoration:none; }
 a:hover { text-decoration:underline; }
-code { background:var(--bg-subtle); border:1px solid rgba(27,31,36,.08); border-radius:6px; font-family:ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,monospace; font-size:.9em; padding:.15em .35em; }
-pre { background:var(--bg-subtle); border:1px solid var(--border); border-radius:10px; overflow-x:auto; padding:1rem; }
-pre code { background:transparent; border:0; padding:0; }
-blockquote { margin-left:0; padding:.25rem 1rem; color:var(--muted); background:var(--quote-bg); border-left:4px solid var(--border); }
+code { background:var(--bg-subtle); border:1px solid rgba(27,31,36,.08); border-radius:6px; font-family:ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,Liberation Mono,monospace; font-size:.92em; padding:.15em .35em; }
+pre { background:var(--bg-subtle); border:1px solid var(--border); border-radius:10px; overflow:auto; padding:16px; }
+pre code { background:transparent; border:none; padding:0; font-size:.9em; }
+blockquote { border-left:4px solid var(--border); margin-left:0; padding:.25rem 1rem; color:var(--muted); background:var(--quote-bg); }
 hr { border:0; border-top:1px solid var(--border); margin:2rem 0; }
-table { border-collapse:collapse; width:100%; display:block; overflow-x:auto; }
-th,td { border:1px solid var(--border); padding:.5rem .75rem; text-align:left; }
+table { border-collapse:collapse; width:100%; }
+th,td { border:1px solid var(--border); padding:.5rem .75rem; text-align:left; vertical-align:top; }
+th { background:var(--bg-subtle); }
 img { max-width:100%; }
+.toc { background:var(--bg-subtle); border:1px solid var(--border); border-radius:10px; padding:16px 18px; margin-bottom:2rem; }
+.toc ul { margin-bottom:0; }
+.codehilite { background:var(--bg-subtle); border:1px solid var(--border); border-radius:10px; }
+.codehilite pre { border:none; margin:0; }
+.headerlink { color:var(--muted); font-size:.85em; margin-left:.35em; visibility:hidden; }
+h1:hover .headerlink, h2:hover .headerlink, h3:hover .headerlink, h4:hover .headerlink { visibility:visible; }
+@media (max-width: 720px) { main { padding:32px 16px 56px; } h1 { font-size:1.9rem; } h2 { font-size:1.5rem; } }
+
 pre { line-height: 125%; }
 td.linenos .normal { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
 span.linenos { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
@@ -96,8 +112,11 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 .codehilite .vi { color: #19177C } /* Name.Variable.Instance */
 .codehilite .vm { color: #19177C } /* Name.Variable.Magic */
 .codehilite .il { color: #666 } /* Literal.Number.Integer.Long */
-@media (max-width:720px) { main { padding:28px 16px 56px; } h1 { font-size:1.9rem; } h2 { font-size:1.45rem; } }
-</style></head><body><main><h1 id="aurora">Aurora<a class="headerlink" href="#aurora" title="Permanent link">&para;</a></h1>
+  </style>
+</head>
+<body>
+  <main>
+<h1 id="aurora">Aurora<a class="headerlink" href="#aurora" title="Permanent link">&para;</a></h1>
 <p><strong>A readable, Python-inspired systems language with Rust-like memory safety and Go-like concurrency</strong></p>
 <h2 id="executive-summary">Executive summary<a class="headerlink" href="#executive-summary" title="Permanent link">&para;</a></h2>
 <p>Aurora is a new programming language designed for developers who love Python’s readability but want the performance, safety, and deployment model of a modern compiled systems language.</p>
@@ -282,13 +301,13 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li>Shared immutable access may be aliased.</li>
 </ol>
 <h3 id="example_1">Example<a class="headerlink" href="#example_1" title="Permanent link">&para;</a></h3>
-<div class="codehilite"><pre><span></span><code><span class="n">mut</span> <span class="n">xs</span> <span class="o">=</span> <span class="n">Vec</span><span class="p">[</span><span class="nb">int</span><span class="p">]([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>
+<div class="codehilite"><pre><span></span><code><span class="n">mut</span> <span class="n">xs</span> <span class="o">=</span> <span class="n">Vec</span><span class="p">[</span><span class="n">i32</span><span class="p">]([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>
 <span class="n">ys</span> <span class="o">=</span> <span class="n">xs</span>         <span class="c1"># move</span>
 <span class="c1"># xs is no longer usable after this line</span>
 </code></pre></div>
 
 <p>Cloning remains explicit:</p>
-<div class="codehilite"><pre><span></span><code><span class="n">mut</span> <span class="n">ys</span> <span class="o">=</span> <span class="n">Vec</span><span class="p">[</span><span class="nb">int</span><span class="p">]([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>
+<div class="codehilite"><pre><span></span><code><span class="n">mut</span> <span class="n">ys</span> <span class="o">=</span> <span class="n">Vec</span><span class="p">[</span><span class="n">i32</span><span class="p">]([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>
 <span class="n">zs</span> <span class="o">=</span> <span class="n">ys</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span>
 <span class="c1"># ys is still usable because clone creates a second owned value</span>
 </code></pre></div>
@@ -297,14 +316,23 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <p>Mutability must be opt-in.</p>
 <h3 id="rules_1">Rules<a class="headerlink" href="#rules_1" title="Permanent link">&para;</a></h3>
 <ul>
+<li><code>x = expr</code> introduces a new immutable binding only when <code>x</code> is not already bound in the current scope</li>
+<li><code>mut x = expr</code> introduces a new mutable binding</li>
+<li><code>x = expr</code> against an existing binding is reassignment, not a new declaration</li>
+<li>reassignment is legal only for bindings originally declared with <code>mut</code></li>
+<li>shadowing local bindings is not part of v1; reusing a name in the same function body should be treated as reassignment or rejected with a clear diagnostic</li>
 <li>bindings are immutable by default</li>
 <li>fields are immutable unless declared mutable or accessed through a mutable owner</li>
 <li>interior mutability should exist only through explicit library types</li>
 </ul>
 <h3 id="example_2">Example<a class="headerlink" href="#example_2" title="Permanent link">&para;</a></h3>
 <div class="codehilite"><pre><span></span><code><span class="n">x</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="c1"># x = 20      # error: `x` is immutable</span>
+
 <span class="n">mut</span> <span class="n">y</span> <span class="o">=</span> <span class="mi">20</span>
 <span class="n">y</span> <span class="o">=</span> <span class="mi">30</span>
+
+<span class="c1"># mut y = 40  # error: this is not a new declaration; `y` already exists</span>
 </code></pre></div>
 
 <h2 id="53-copy-vs-move-vs-borrow">5.3 Copy vs move vs borrow<a class="headerlink" href="#53-copy-vs-move-vs-borrow" title="Permanent link">&para;</a></h2>
@@ -326,8 +354,14 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </code></pre></div>
 
 <p>Borrowing must stay visually obvious.</p>
+<p>Applying <code>borrow</code> to an already borrowed value creates a reborrow rather than a nested surface type such as <code>borrow borrow T</code>.</p>
+<p>Reborrows still obey the ordinary exclusivity rules:</p>
+<ul>
+<li><code>borrow</code> of a shared or mutable borrow creates a temporary shared reborrow</li>
+<li><code>borrow mut</code> requires mutable access and may not be derived from a shared borrow</li>
+</ul>
 <p>Shared borrows allow read-only aliasing:</p>
-<div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">show_total</span><span class="p">(</span><span class="n">xs</span><span class="p">:</span> <span class="n">borrow</span> <span class="n">Vec</span><span class="p">[</span><span class="nb">int</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">i32</span><span class="p">:</span>
+<div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">show_total</span><span class="p">(</span><span class="n">xs</span><span class="p">:</span> <span class="n">borrow</span> <span class="n">Vec</span><span class="p">[</span><span class="n">i32</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">i32</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">xs</span><span class="o">.</span><span class="n">len</span><span class="p">()</span>
 </code></pre></div>
 
@@ -364,6 +398,12 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li>keep most user code lifetime-annotation free</li>
 </ul>
 <p>This is a major ergonomics differentiator.</p>
+<p>Canonical elision rules for v1:</p>
+<ul>
+<li>if a function has exactly one borrowed input and returns a borrowed value, the returned borrow is tied to that input</li>
+<li>if a method returns a borrowed value and has a borrowed receiver, the returned borrow is tied to <code>self</code> unless another source is stated explicitly</li>
+<li>if multiple borrowed inputs could be the source of the returned borrow and elision would be ambiguous, the API must use explicit lifetime parameters in advanced code rather than relying on inference</li>
+</ul>
 <h2 id="55-destruction-and-resource-cleanup">5.5 Destruction and resource cleanup<a class="headerlink" href="#55-destruction-and-resource-cleanup" title="Permanent link">&para;</a></h2>
 <p>Aurora should use deterministic destruction for owned values.</p>
 <p>When a value goes out of scope, its destructor runs automatically.</p>
@@ -378,7 +418,15 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </ul>
 <p>Aurora uses <code>with</code> as the scoped cleanup mechanism in v1.</p>
 <p>Leaving a <code>with</code> block runs the cleanup path deterministically on normal completion and on propagated errors.</p>
+<p><code>with</code> is Aurora's general scoped enter/exit construct. It is used both for ordinary resource cleanup and for structured task scopes such as <code>with task_group() as group:</code>.</p>
 <p>There is no general-purpose <code>defer</code> construct in v1.</p>
+<p>Conceptually, <code>with</code> lowers through a standard-library protocol like:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">trait</span> <span class="n">With</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">enter</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">T</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">exit</span><span class="p">(</span><span class="n">borrow</span> <span class="n">mut</span> <span class="bp">self</span><span class="p">)</span>
+</code></pre></div>
+
+<p><code>with name = expr:</code> evaluates <code>expr</code>, calls <code>enter()</code>, binds the entered value to <code>name</code>, and always calls <code>exit()</code> on scope exit. The runtime may use specialized implementations for types like task groups, but the user-facing model stays trait-like rather than ad hoc.</p>
 <p>Example:</p>
 <div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">read_file</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">borrow</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">String</span><span class="p">,</span> <span class="n">IoError</span><span class="p">]:</span>
     <span class="k">with</span> <span class="n">file</span> <span class="o">=</span> <span class="k">try</span> <span class="n">fs</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">path</span><span class="p">):</span>
@@ -390,7 +438,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <p>Rules:</p>
 <ul>
 <li>class values are move types by default</li>
-<li>a class may be marked <code>copy</code> only when all of its fields are themselves copy types; copy is explicit in v1 and is not inferred automatically</li>
+<li>a class may be declared with <code>copy class Name:</code> only when all of its fields are themselves copy types; copy is explicit in v1 and is not inferred automatically</li>
 <li>passing a class by value into a function or returning it by value moves ownership unless the class is <code>copy</code></li>
 <li>method calls do not create hidden aliasing; <code>self</code>, <code>borrow self</code>, and <code>borrow mut self</code> obey normal ownership and borrow rules</li>
 <li>field access through a borrowed receiver yields borrowed access for non-copy fields and copied values for copy fields; moving a non-copy field out of <code>borrow self</code> or <code>borrow mut self</code> is illegal unless an explicit extraction operation is defined</li>
@@ -407,6 +455,13 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li>mutate a field in place through <code>borrow mut self</code></li>
 </ul>
 <p>What you cannot do is silently move a non-copy field out of a borrowed object.</p>
+<p>Example <code>copy</code> class:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">copy</span> <span class="k">class</span><span class="w"> </span><span class="nc">Color</span><span class="p">:</span>
+    <span class="n">r</span><span class="p">:</span> <span class="n">u8</span>
+    <span class="n">g</span><span class="p">:</span> <span class="n">u8</span>
+    <span class="n">b</span><span class="p">:</span> <span class="n">u8</span>
+</code></pre></div>
+
 <p>Example:</p>
 <div class="codehilite"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Node</span><span class="p">:</span>
     <span class="n">value</span><span class="p">:</span> <span class="n">i32</span>
@@ -486,7 +541,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <div class="codehilite"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Cell</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
     <span class="n">value</span><span class="p">:</span> <span class="n">T</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">first</span><span class="p">[</span><span class="n">T</span><span class="p">](</span><span class="n">xs</span><span class="p">:</span> <span class="n">Vec</span><span class="p">[</span><span class="n">T</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">T</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">first</span><span class="p">[</span><span class="n">T</span><span class="p">](</span><span class="n">xs</span><span class="p">:</span> <span class="n">borrow</span> <span class="p">[</span><span class="n">T</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">borrow</span> <span class="n">T</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">xs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
 </code></pre></div>
 
@@ -516,12 +571,36 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
         <span class="n">w</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="o">.</span><span class="n">as_str</span><span class="p">())</span>
 </code></pre></div>
 
+<p>Canonical v1 syntax for generic constraints uses inline bounds:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">sort</span><span class="p">[</span><span class="n">T</span><span class="p">:</span> <span class="n">Ord</span><span class="p">](</span><span class="n">xs</span><span class="p">:</span> <span class="n">borrow</span> <span class="n">mut</span> <span class="p">[</span><span class="n">T</span><span class="p">]):</span>
+    <span class="o">...</span>
+</code></pre></div>
+
+<p>Aurora may add trailing <code>where</code> clauses later, but inline <code>T: Trait</code> bounds are the frozen v1 form.</p>
+<p>Multiple bounds use <code>+</code>:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_sorted</span><span class="p">[</span><span class="n">T</span><span class="p">:</span> <span class="n">Display</span> <span class="o">+</span> <span class="n">Ord</span><span class="p">](</span><span class="n">xs</span><span class="p">:</span> <span class="n">borrow</span> <span class="p">[</span><span class="n">T</span><span class="p">]):</span>
+    <span class="o">...</span>
+</code></pre></div>
+
+<p>Operator overloading is expressed through ordinary traits:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">trait</span> <span class="n">Add</span><span class="p">[</span><span class="n">Rhs</span><span class="p">,</span> <span class="n">Out</span><span class="p">]:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rhs</span><span class="p">:</span> <span class="n">Rhs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Out</span>
+
+<span class="n">impl</span> <span class="n">Add</span><span class="p">[</span><span class="n">Point</span><span class="p">,</span> <span class="n">Point</span><span class="p">]</span> <span class="k">for</span> <span class="n">Point</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">add</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rhs</span><span class="p">:</span> <span class="n">Point</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Point</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">Point</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">x</span> <span class="o">+</span> <span class="n">rhs</span><span class="o">.</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">y</span> <span class="o">+</span> <span class="n">rhs</span><span class="o">.</span><span class="n">y</span><span class="p">)</span>
+</code></pre></div>
+
 <h2 id="65-enums-and-algebraic-data-types">6.5 Enums and algebraic data types<a class="headerlink" href="#65-enums-and-algebraic-data-types" title="Permanent link">&para;</a></h2>
 <p>Aurora should have first-class sum types.</p>
 <p>Example:</p>
 <div class="codehilite"><pre><span></span><code><span class="n">enum</span> <span class="n">Result</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">E</span><span class="p">]:</span>
     <span class="n">Ok</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
     <span class="n">Err</span><span class="p">(</span><span class="n">E</span><span class="p">)</span>
+
+<span class="n">enum</span> <span class="n">Option</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
+    <span class="n">Some</span><span class="p">(</span><span class="n">T</span><span class="p">)</span>
+    <span class="kc">None</span>
 </code></pre></div>
 
 <p>This is essential for error handling, protocols, and compiler-friendly exhaustive matching.</p>
@@ -562,6 +641,83 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li>APIs that inspect text should usually accept <code>borrow str</code></li>
 <li>APIs that construct or store text should return or contain <code>String</code></li>
 <li>converting borrowed text to owned text is explicit, for example <code>String("hello")</code></li>
+</ul>
+<h2 id="69-slices">6.9 Slices<a class="headerlink" href="#69-slices" title="Permanent link">&para;</a></h2>
+<p>Aurora supports borrowed slices for zero-copy access to contiguous data.</p>
+<ul>
+<li><code>borrow [T]</code> is a borrowed slice of elements of type <code>T</code></li>
+<li>slices are non-owning views and do not allocate</li>
+<li>slices are the preferred parameter type for read-only access to vectors and buffers</li>
+</ul>
+<p>Examples:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">sum</span><span class="p">(</span><span class="n">xs</span><span class="p">:</span> <span class="n">borrow</span> <span class="p">[</span><span class="n">i32</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">i32</span><span class="p">:</span>
+    <span class="n">total</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">xs</span><span class="p">:</span>
+        <span class="n">total</span> <span class="o">+=</span> <span class="n">x</span>
+    <span class="k">return</span> <span class="n">total</span>
+</code></pre></div>
+
+<div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">starts_with</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">borrow</span> <span class="p">[</span><span class="n">u8</span><span class="p">],</span> <span class="n">prefix</span><span class="p">:</span> <span class="n">borrow</span> <span class="p">[</span><span class="n">u8</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="o">...</span>
+</code></pre></div>
+
+<h2 id="610-none-and-unit">6.10 None and unit<a class="headerlink" href="#610-none-and-unit" title="Permanent link">&para;</a></h2>
+<p>Aurora uses <code>None</code> as the unit type and as the sole value of that type.</p>
+<ul>
+<li><code>None</code> means "no meaningful value"</li>
+<li><code>None</code> is a copy type</li>
+<li><code>Result[None, E]</code> is the standard way to express success-or-error when success carries no payload</li>
+</ul>
+<p>Aurora also uses <code>None</code> as the empty <code>Option[T]</code> variant. The meaning is resolved by type context:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">x</span><span class="p">:</span> <span class="n">Option</span><span class="p">[</span><span class="n">i32</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>   <span class="c1"># the empty option variant</span>
+<span class="n">y</span><span class="p">:</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>          <span class="c1"># the unit value</span>
+</code></pre></div>
+
+<p>This is not a runtime ambiguity. <code>None</code> has no payload in either role, so the compiler resolves it statically from the expected type.</p>
+<h2 id="611-string-interpolation">6.11 String interpolation<a class="headerlink" href="#611-string-interpolation" title="Permanent link">&para;</a></h2>
+<p>Aurora supports string interpolation with <code>f"..."</code>.</p>
+<p>Rules:</p>
+<ul>
+<li>an f-string produces an owned <code>String</code></li>
+<li>interpolated expressions are formatted through the <code>Display</code> trait or equivalent formatting trait</li>
+<li>interpolation borrows values for formatting where possible; it does not implicitly move non-copy values merely to print or format them</li>
+</ul>
+<p>Example:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">greet</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="n">borrow</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">String</span><span class="p">:</span>
+    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Hello, </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span>
+</code></pre></div>
+
+<h2 id="612-tuples">6.12 Tuples<a class="headerlink" href="#612-tuples" title="Permanent link">&para;</a></h2>
+<p>Aurora supports anonymous tuple types for small fixed-size aggregates.</p>
+<p>Rules:</p>
+<ul>
+<li>tuple syntax uses <code>(T1, T2, ...)</code> for types and <code>(v1, v2, ...)</code> for values</li>
+<li>tuple elements are accessed with zero-based dotted indices such as <code>pair.0</code> and <code>pair.1</code></li>
+<li>tuples are copy when all of their element types are copy</li>
+<li>tuples otherwise follow normal move semantics</li>
+<li>tuple literals may be destructured in pattern matching and bindings in later phases</li>
+</ul>
+<p>Example:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">pair</span><span class="p">:</span> <span class="p">(</span><span class="n">i32</span><span class="p">,</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">true</span><span class="p">)</span>
+<span class="n">named</span> <span class="o">=</span> <span class="p">(</span><span class="n">String</span><span class="p">(</span><span class="s2">&quot;Aurora&quot;</span><span class="p">),</span> <span class="mi">1</span><span class="p">)</span>
+<span class="n">first</span> <span class="o">=</span> <span class="n">pair</span><span class="mf">.0</span>
+</code></pre></div>
+
+<h2 id="613-primitive-numeric-types">6.13 Primitive numeric types<a class="headerlink" href="#613-primitive-numeric-types" title="Permanent link">&para;</a></h2>
+<p>Aurora uses explicit primitive numeric type names in v1:</p>
+<ul>
+<li>signed integers: <code>i8</code>, <code>i16</code>, <code>i32</code>, <code>i64</code>, <code>i128</code>, <code>isize</code></li>
+<li>unsigned integers: <code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code>, <code>u128</code>, <code>usize</code></li>
+<li>floating-point: <code>f32</code>, <code>f64</code></li>
+<li>boolean: <code>bool</code></li>
+</ul>
+<p>There is no unsuffixed <code>int</code> type in v1. Examples should use fixed-width integers or pointer-width integers explicitly.</p>
+<h2 id="614-fixed-size-arrays">6.14 Fixed-size arrays<a class="headerlink" href="#614-fixed-size-arrays" title="Permanent link">&para;</a></h2>
+<p>Fixed-size owned arrays are deferred until after v1.</p>
+<p>Aurora v1 standard sequence types are:</p>
+<ul>
+<li><code>Vec[T]</code> for owned growable sequences</li>
+<li><code>borrow [T]</code> for borrowed contiguous slices</li>
 </ul>
 <hr />
 <h1 id="7-functions-and-methods">7. Functions and methods<a class="headerlink" href="#7-functions-and-methods" title="Permanent link">&para;</a></h1>
@@ -604,7 +760,44 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </code></pre></div>
 
 <p>Spawning closures should usually move captured values unless borrowed under strict scoped rules.</p>
-<h2 id="74-constructors">7.4 Constructors<a class="headerlink" href="#74-constructors" title="Permanent link">&para;</a></h2>
+<h2 id="74-iteration-and-for-loops">7.4 Iteration and for loops<a class="headerlink" href="#74-iteration-and-for-loops" title="Permanent link">&para;</a></h2>
+<p>Aurora uses a trait-based iteration protocol.</p>
+<p>Aurora distinguishes between iterable values and iterator objects.</p>
+<p>Core rules:</p>
+<ul>
+<li><code>for x in expr:</code> consumes <code>expr</code> by value unless <code>expr</code> is explicitly borrowed</li>
+<li><code>for x in borrow expr:</code> iterates by shared borrow</li>
+<li><code>for x in borrow mut expr:</code> iterates by mutable borrow</li>
+<li>iterable values implement an <code>Iterable[T, IterT: Iterator[T]]</code>-style capability and provide <code>into_iter()</code> to yield an iterator object</li>
+<li>iterator objects provide <code>next(borrow mut self) -&gt; Option[T]</code></li>
+<li>if <code>expr</code> already has a borrowed type, <code>for x in expr:</code> uses that borrowed iteration behavior</li>
+<li><code>for x in borrow expr:</code> where <code>expr</code> is already borrowed is treated as a reborrow, not as a nested <code>borrow borrow ...</code> type</li>
+<li>shared borrowed iteration yields copied element values for copy element types and <code>borrow T</code> for non-copy element types</li>
+<li>mutable borrowed iteration yields <code>borrow mut T</code> elements</li>
+<li>borrowed iteration works through ordinary <code>Iterable</code> implementations for borrowed receiver types such as <code>borrow [T]</code> and <code>borrow Vec[T]</code>, not through a separate compiler-only escape hatch</li>
+</ul>
+<p>This lets ownership stay explicit:</p>
+<ul>
+<li>iterating over <code>Vec[T]</code> by value may consume the vector</li>
+<li>iterating over <code>borrow [i32]</code> yields copied <code>i32</code> values because <code>i32</code> is copy</li>
+<li>iterating over <code>borrow [String]</code> yields <code>borrow String</code> elements</li>
+<li>iterating over a channel receives values until the channel is closed</li>
+</ul>
+<p>Example:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">trait</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">next</span><span class="p">(</span><span class="n">borrow</span> <span class="n">mut</span> <span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Option</span><span class="p">[</span><span class="n">T</span><span class="p">]</span>
+
+<span class="n">trait</span> <span class="n">Iterable</span><span class="p">[</span><span class="n">T</span><span class="p">,</span> <span class="n">IterT</span><span class="p">:</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">T</span><span class="p">]]:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">into_iter</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">IterT</span>
+
+<span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">4</span><span class="p">):</span>
+    <span class="n">println</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+<span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">borrow</span> <span class="n">xs</span><span class="p">:</span>
+    <span class="n">println</span><span class="p">(</span><span class="n">item</span><span class="p">)</span>
+</code></pre></div>
+
+<h2 id="75-constructors">7.5 Constructors<a class="headerlink" href="#75-constructors" title="Permanent link">&para;</a></h2>
 <p>Aurora uses value constructors rather than Python-style <code>__init__</code>.</p>
 <p>Rules:</p>
 <ul>
@@ -612,6 +805,9 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li>constructor calls produce fully initialized values directly</li>
 <li>classes may define associated constructor methods such as <code>new</code>, <code>default</code>, <code>empty</code>, or <code>from_file</code></li>
 <li>fallible constructors return <code>Result[Self, E]</code></li>
+<li>default argument expressions are evaluated at the call site in left-to-right parameter order</li>
+<li>default values may not reference other parameters in v1</li>
+<li>trait method declarations do not use default arguments in v1</li>
 <li>partial initialization is not part of v1</li>
 </ul>
 <p>Example:</p>
@@ -624,6 +820,32 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 
     <span class="k">def</span><span class="w"> </span><span class="nf">guest</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Self</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">Self</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="n">String</span><span class="p">(</span><span class="s2">&quot;Guest&quot;</span><span class="p">),</span> <span class="n">age</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</code></pre></div>
+
+<h2 id="76-control-flow">7.6 Control flow<a class="headerlink" href="#76-control-flow" title="Permanent link">&para;</a></h2>
+<p>Aurora uses Python-style conditionals and loop syntax.</p>
+<p>Rules:</p>
+<ul>
+<li>conditionals use <code>if</code>, <code>elif</code>, and <code>else</code></li>
+<li>looping supports both <code>for</code> and <code>while</code></li>
+<li>loops support <code>break</code> and <code>continue</code></li>
+<li>conditions must have type <code>bool</code>; Aurora does not use truthy/falsy coercion in v1</li>
+</ul>
+<p>Example:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">if</span> <span class="n">score</span> <span class="o">&gt;</span> <span class="mi">90</span><span class="p">:</span>
+    <span class="n">println</span><span class="p">(</span><span class="s2">&quot;A&quot;</span><span class="p">)</span>
+<span class="k">elif</span> <span class="n">score</span> <span class="o">&gt;</span> <span class="mi">80</span><span class="p">:</span>
+    <span class="n">println</span><span class="p">(</span><span class="s2">&quot;B&quot;</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">println</span><span class="p">(</span><span class="s2">&quot;C&quot;</span><span class="p">)</span>
+
+<span class="k">while</span> <span class="n">remaining</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">remaining</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+        <span class="k">break</span>
+    <span class="k">if</span> <span class="n">remaining</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">remaining</span> <span class="o">-=</span> <span class="mi">1</span>
+        <span class="k">continue</span>
+    <span class="n">remaining</span> <span class="o">-=</span> <span class="mi">1</span>
 </code></pre></div>
 
 <hr />
@@ -652,6 +874,24 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <p>Tasks should be much lighter than OS threads and scheduled by the Aurora runtime.</p>
 <h2 id="83-channels">8.3 Channels<a class="headerlink" href="#83-channels" title="Permanent link">&para;</a></h2>
 <p>Channels are a core runtime abstraction exposed as <code>Channel[T]</code>.</p>
+<p><code>Channel[T]</code> is a lightweight handle to shared channel state.</p>
+<p>Rules:</p>
+<ul>
+<li>channel handles are move types</li>
+<li><code>channel.clone()</code> creates an additional handle to the same underlying channel</li>
+<li>channels support multiple producers and multiple consumers in v1</li>
+<li><code>.send()</code>, <code>.recv()</code>, and <code>.close()</code> borrow the handle rather than consuming it</li>
+<li><code>.send(value)</code> returns <code>Result[None, SendError[T]]</code>; a send to a closed channel fails and the error carries the unsent value</li>
+<li><code>.recv()</code> blocks until a value is available or the channel is closed and drained, then returns <code>T?</code></li>
+<li>closing any handle closes the underlying channel for the whole channel instance</li>
+<li>channel iteration repeatedly calls <code>.recv()</code> and stops after it returns <code>None</code></li>
+</ul>
+<p>Sharing a channel across tasks uses cloned handles:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">with</span> <span class="n">task_group</span><span class="p">()</span> <span class="k">as</span> <span class="n">group</span><span class="p">:</span>
+    <span class="n">group</span><span class="o">.</span><span class="n">spawn</span><span class="p">(</span><span class="n">worker</span><span class="p">,</span> <span class="n">jobs</span><span class="o">.</span><span class="n">clone</span><span class="p">(),</span> <span class="n">results</span><span class="o">.</span><span class="n">clone</span><span class="p">())</span>
+    <span class="n">group</span><span class="o">.</span><span class="n">spawn</span><span class="p">(</span><span class="n">worker</span><span class="p">,</span> <span class="n">jobs</span><span class="o">.</span><span class="n">clone</span><span class="p">(),</span> <span class="n">results</span><span class="o">.</span><span class="n">clone</span><span class="p">())</span>
+</code></pre></div>
+
 <p>Example:</p>
 <div class="codehilite"><pre><span></span><code><span class="n">jobs</span> <span class="o">=</span> <span class="n">Channel</span><span class="p">[</span><span class="n">i32</span><span class="p">](</span><span class="n">capacity</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
 <span class="n">results</span> <span class="o">=</span> <span class="n">Channel</span><span class="p">[</span><span class="n">String</span><span class="p">](</span><span class="n">capacity</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
@@ -666,24 +906,40 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li>bounded and unbounded variants if desired</li>
 </ul>
 <p>Canonical API style:</p>
-<div class="codehilite"><pre><span></span><code><span class="n">jobs</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="mi">42</span><span class="p">)</span>
-<span class="n">value</span> <span class="o">=</span> <span class="n">results</span><span class="o">.</span><span class="n">recv</span><span class="p">()</span>
+<div class="codehilite"><pre><span></span><code><span class="n">send_result</span> <span class="o">=</span> <span class="n">jobs</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="mi">42</span><span class="p">)</span>
+<span class="n">next_value</span> <span class="o">=</span> <span class="n">results</span><span class="o">.</span><span class="n">recv</span><span class="p">()</span>
 </code></pre></div>
 
 <p>Aurora uses method-call channel operations in v1. There is no alternate operator syntax for send or receive.</p>
 <h2 id="84-select">8.4 Select<a class="headerlink" href="#84-select" title="Permanent link">&para;</a></h2>
 <p>Aurora should have a <code>select</code> construct for waiting on multiple channel operations.</p>
 <p>Example:</p>
-<div class="codehilite"><pre><span></span><code><span class="n">select</span><span class="p">:</span>
-    <span class="k">case</span> <span class="n">msg</span> <span class="o">=</span> <span class="n">inbox</span><span class="o">.</span><span class="n">recv</span><span class="p">():</span>
-        <span class="n">handle</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
-    <span class="k">case</span> <span class="n">sig</span> <span class="o">=</span> <span class="n">shutdown</span><span class="o">.</span><span class="n">recv</span><span class="p">():</span>
-        <span class="k">break</span>
-    <span class="k">case</span> <span class="n">after</span><span class="p">(</span><span class="mi">1</span><span class="n">s</span><span class="p">):</span>
-        <span class="n">heartbeat</span><span class="p">()</span>
+<div class="codehilite"><pre><span></span><code><span class="k">while</span> <span class="n">running</span><span class="p">:</span>
+    <span class="n">select</span><span class="p">:</span>
+        <span class="k">case</span> <span class="n">msg</span> <span class="o">=</span> <span class="n">inbox</span><span class="o">.</span><span class="n">recv</span><span class="p">():</span>
+            <span class="k">match</span> <span class="n">msg</span><span class="p">:</span>
+                <span class="k">case</span> <span class="n">Some</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
+                    <span class="n">handle</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">case</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">break</span>
+        <span class="k">case</span> <span class="n">sig</span> <span class="o">=</span> <span class="n">shutdown</span><span class="o">.</span><span class="n">recv</span><span class="p">():</span>
+            <span class="k">match</span> <span class="n">sig</span><span class="p">:</span>
+                <span class="k">case</span><span class="w"> </span><span class="n">Some</span><span class="p">(</span><span class="k">_</span><span class="p">):</span>
+                    <span class="k">break</span>
+                <span class="k">case</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">break</span>
+        <span class="k">case</span> <span class="n">after</span><span class="p">(</span><span class="mi">1</span><span class="n">s</span><span class="p">):</span>
+            <span class="n">heartbeat</span><span class="p">()</span>
 </code></pre></div>
 
 <p>This is essential for service programming and structured concurrent systems.</p>
+<p>Aurora also supports duration literals for time-related APIs:</p>
+<ul>
+<li><code>500ms</code></li>
+<li><code>1s</code></li>
+<li><code>2m</code></li>
+</ul>
+<p>These construct <code>Duration</code> values and may be used in places such as timers, deadlines, and <code>after(...)</code>.</p>
 <h2 id="85-structured-concurrency">8.5 Structured concurrency<a class="headerlink" href="#85-structured-concurrency" title="Permanent link">&para;</a></h2>
 <p>Aurora uses structured concurrency in v1.</p>
 <p>Core rules:</p>
@@ -749,9 +1005,23 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
     <span class="k">return</span> <span class="n">parse_config</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
 </code></pre></div>
 
-<h2 id="93-panics-or-fatal-errors">9.3 Panics or fatal errors<a class="headerlink" href="#93-panics-or-fatal-errors" title="Permanent link">&para;</a></h2>
+<h2 id="93-error-conversion">9.3 Error conversion<a class="headerlink" href="#93-error-conversion" title="Permanent link">&para;</a></h2>
+<p>If <code>try expr</code> produces <code>Err(source_err)</code> and the current function returns <code>Result[T, TargetError]</code>, Aurora first checks for an exact error-type match.</p>
+<p>If the types differ, Aurora applies a <code>From[SourceError] for TargetError</code> conversion when one exists.</p>
+<p>Example:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">trait</span> <span class="n">From</span><span class="p">[</span><span class="n">T</span><span class="p">]:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">from</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">T</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Self</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">load_and_parse</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">borrow</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="n">Config</span><span class="p">,</span> <span class="n">AppError</span><span class="p">]:</span>
+    <span class="n">text</span> <span class="o">=</span> <span class="k">try</span> <span class="n">fs</span><span class="o">.</span><span class="n">read_to_string</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>   <span class="c1"># IoError converts into AppError</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="k">try</span> <span class="n">parse_config</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>      <span class="c1"># ParseError converts into AppError</span>
+    <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+</code></pre></div>
+
+<p>If no exact match or <code>From</code> conversion exists, <code>try expr</code> is a type error.</p>
+<h2 id="94-panics-or-fatal-errors">9.4 Panics or fatal errors<a class="headerlink" href="#94-panics-or-fatal-errors" title="Permanent link">&para;</a></h2>
 <p>Aurora may include unrecoverable failures for internal bugs or violated invariants, but these should be clearly separate from ordinary error handling.</p>
-<h2 id="94-exceptions">9.4 Exceptions<a class="headerlink" href="#94-exceptions" title="Permanent link">&para;</a></h2>
+<h2 id="95-exceptions">9.5 Exceptions<a class="headerlink" href="#95-exceptions" title="Permanent link">&para;</a></h2>
 <p>Recommendation: avoid general-purpose exceptions in v1.</p>
 <p>This keeps control flow explicit and compiler-friendly.</p>
 <hr />
@@ -851,6 +1121,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li><code>test</code></li>
 </ul>
 <p>A small default prelude may re-export a few extremely common names, such as <code>println</code>, while their canonical library home remains explicit modules like <code>fmt</code>.</p>
+<p><code>print(...)</code> and <code>println(...)</code> are ordinary library functions, not macros. They format their arguments through the formatting traits and should borrow values for formatting where possible.</p>
 <h2 id="115-reflection">11.5 Reflection<a class="headerlink" href="#115-reflection" title="Permanent link">&para;</a></h2>
 <p>Keep reflection deliberately limited in v1.</p>
 <p>Full runtime introspection often fights static compilation, optimization, and safety.</p>
@@ -925,6 +1196,15 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li>fast startup</li>
 <li>excellent error messages</li>
 <li>REPL later if desired using JIT or eval subsets</li>
+</ul>
+<h2 id="144-task-aware-io">14.4 Task-aware I/O<a class="headerlink" href="#144-task-aware-io" title="Permanent link">&para;</a></h2>
+<p>Aurora's standard network and timer APIs should be task-aware.</p>
+<p>Recommended v1 behavior:</p>
+<ul>
+<li>when a task waits on supported network I/O, the runtime parks that task rather than blocking an OS thread</li>
+<li>the runtime uses platform event mechanisms such as epoll, kqueue, or IOCP behind ordinary library APIs</li>
+<li>Aurora does not require a separate <code>async</code>/<code>await</code> syntax for its primary I/O model</li>
+<li>explicitly blocking FFI or OS calls may still block the underlying thread unless wrapped in runtime-aware libraries</li>
 </ul>
 <hr />
 <h1 id="15-compilation-model">15. Compilation model<a class="headerlink" href="#15-compilation-model" title="Permanent link">&para;</a></h1>
@@ -1038,7 +1318,7 @@ aura<span class="w"> </span>publish
 <h2 id="177-spawning-tasks">17.7 Spawning tasks<a class="headerlink" href="#177-spawning-tasks" title="Permanent link">&para;</a></h2>
 <div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">worker</span><span class="p">(</span><span class="nb">id</span><span class="p">:</span> <span class="n">i32</span><span class="p">,</span> <span class="n">jobs</span><span class="p">:</span> <span class="n">Channel</span><span class="p">[</span><span class="n">Job</span><span class="p">],</span> <span class="n">out</span><span class="p">:</span> <span class="n">Channel</span><span class="p">[</span><span class="n">Result</span><span class="p">[</span><span class="n">String</span><span class="p">,</span> <span class="n">Error</span><span class="p">]]):</span>
     <span class="k">for</span> <span class="n">job</span> <span class="ow">in</span> <span class="n">jobs</span><span class="p">:</span>
-        <span class="n">out</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">process</span><span class="p">(</span><span class="n">job</span><span class="p">))</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">process</span><span class="p">(</span><span class="n">job</span><span class="p">))</span>    <span class="c1"># ignoring send failure for brevity</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Result</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="n">Error</span><span class="p">]:</span>
     <span class="n">jobs</span> <span class="o">=</span> <span class="n">Channel</span><span class="p">[</span><span class="n">Job</span><span class="p">](</span><span class="n">capacity</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
@@ -1046,19 +1326,56 @@ aura<span class="w"> </span>publish
 
     <span class="k">with</span> <span class="n">task_group</span><span class="p">()</span> <span class="k">as</span> <span class="n">group</span><span class="p">:</span>
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">4</span><span class="p">):</span>
-            <span class="n">group</span><span class="o">.</span><span class="n">spawn</span><span class="p">(</span><span class="n">worker</span><span class="p">,</span> <span class="n">i</span><span class="p">,</span> <span class="n">jobs</span><span class="p">,</span> <span class="n">out</span><span class="p">)</span>
+            <span class="n">group</span><span class="o">.</span><span class="n">spawn</span><span class="p">(</span><span class="n">worker</span><span class="p">,</span> <span class="n">i</span><span class="p">,</span> <span class="n">jobs</span><span class="o">.</span><span class="n">clone</span><span class="p">(),</span> <span class="n">out</span><span class="o">.</span><span class="n">clone</span><span class="p">())</span>
+
+        <span class="k">for</span> <span class="n">job</span> <span class="ow">in</span> <span class="n">load_jobs</span><span class="p">():</span>
+            <span class="n">jobs</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">job</span><span class="p">)</span>        <span class="c1"># ignoring send failure for brevity</span>
+
+        <span class="n">jobs</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 
     <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
 </code></pre></div>
 
 <h2 id="178-select">17.8 Select<a class="headerlink" href="#178-select" title="Permanent link">&para;</a></h2>
-<div class="codehilite"><pre><span></span><code><span class="n">select</span><span class="p">:</span>
-    <span class="k">case</span> <span class="n">msg</span> <span class="o">=</span> <span class="n">inbox</span><span class="o">.</span><span class="n">recv</span><span class="p">():</span>
-        <span class="n">handle</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
-    <span class="k">case</span> <span class="n">err</span> <span class="o">=</span> <span class="n">errors</span><span class="o">.</span><span class="n">recv</span><span class="p">():</span>
-        <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="n">err</span><span class="p">)</span>
-    <span class="k">case</span> <span class="n">after</span><span class="p">(</span><span class="mi">500</span><span class="n">ms</span><span class="p">):</span>
-        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;tick&quot;</span><span class="p">)</span>
+<div class="codehilite"><pre><span></span><code><span class="k">while</span> <span class="n">running</span><span class="p">:</span>
+    <span class="n">select</span><span class="p">:</span>
+        <span class="k">case</span> <span class="n">msg</span> <span class="o">=</span> <span class="n">inbox</span><span class="o">.</span><span class="n">recv</span><span class="p">():</span>
+            <span class="k">match</span> <span class="n">msg</span><span class="p">:</span>
+                <span class="k">case</span> <span class="n">Some</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
+                    <span class="n">handle</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">case</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">break</span>
+        <span class="k">case</span> <span class="n">err</span> <span class="o">=</span> <span class="n">errors</span><span class="o">.</span><span class="n">recv</span><span class="p">():</span>
+            <span class="k">match</span> <span class="n">err</span><span class="p">:</span>
+                <span class="k">case</span> <span class="n">Some</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
+                    <span class="n">log</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">case</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="k">break</span>
+        <span class="k">case</span> <span class="n">after</span><span class="p">(</span><span class="mi">500</span><span class="n">ms</span><span class="p">):</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;tick&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<h2 id="179-conditionals-and-while">17.9 Conditionals and while<a class="headerlink" href="#179-conditionals-and-while" title="Permanent link">&para;</a></h2>
+<div class="codehilite"><pre><span></span><code><span class="k">if</span> <span class="n">ready</span><span class="p">:</span>
+    <span class="n">run</span><span class="p">()</span>
+<span class="k">elif</span> <span class="n">retry</span><span class="p">:</span>
+    <span class="n">wait</span><span class="p">()</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">fail</span><span class="p">()</span>
+
+<span class="k">while</span> <span class="n">remaining</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">remaining</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+        <span class="k">break</span>
+    <span class="k">if</span> <span class="n">remaining</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">remaining</span> <span class="o">-=</span> <span class="mi">1</span>
+        <span class="k">continue</span>
+    <span class="n">remaining</span> <span class="o">-=</span> <span class="mi">1</span>
+</code></pre></div>
+
+<h2 id="1710-tuples">17.10 Tuples<a class="headerlink" href="#1710-tuples" title="Permanent link">&para;</a></h2>
+<div class="codehilite"><pre><span></span><code><span class="n">point</span> <span class="o">=</span> <span class="p">(</span><span class="mf">3.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">)</span>
+<span class="n">pair</span><span class="p">:</span> <span class="p">(</span><span class="n">i32</span><span class="p">,</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">true</span><span class="p">)</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">point</span><span class="mf">.0</span>
 </code></pre></div>
 
 <hr />
@@ -1078,6 +1395,8 @@ aura<span class="w"> </span>publish
 <h1 id="19-testing-and-documentation">19. Testing and documentation<a class="headerlink" href="#19-testing-and-documentation" title="Permanent link">&para;</a></h1>
 <h2 id="191-tests">19.1 Tests<a class="headerlink" href="#191-tests" title="Permanent link">&para;</a></h2>
 <p>Built-in test support should exist from v1.</p>
+<p>Aurora uses a small built-in attribute syntax spelled <code>@name</code> on declarations.</p>
+<p><code>@test</code> is a built-in v1 attribute for the test runner. General user-defined decorators or arbitrary compile-time attributes are not part of v1.</p>
 <p>Example:</p>
 <div class="codehilite"><pre><span></span><code><span class="nd">@test</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">test_add</span><span class="p">():</span>
@@ -1100,17 +1419,22 @@ aura<span class="w"> </span>publish
 <ol>
 <li>Source files use the <code>.au</code> extension.</li>
 <li>Package metadata lives in <code>Aurora.toml</code>.</li>
-<li>Bindings use <code>x = 10</code> and <code>mut y = 20</code>; there is no <code>let</code> keyword.</li>
+<li>Bindings use <code>x = 10</code> and <code>mut y = 20</code>; there is no <code>let</code> keyword; first assignment in a scope introduces the binding, later assignment is reassignment, and local shadowing is not part of v1.</li>
 <li>Borrow syntax is <code>borrow T</code> and <code>borrow mut T</code>.</li>
 <li>Assignment of non-copy values moves ownership.</li>
-<li>Nominal product types use <code>class</code>; inherent methods live in class bodies; <code>impl Trait for Type</code> is reserved for trait conformance; classes move by default, <code>copy</code> is explicit, and recursive fields use the built-in <code>indirect</code> storage modifier.</li>
+<li>Nominal product types use <code>class</code>; inherent methods live in class bodies; <code>impl Trait for Type</code> is reserved for trait conformance; classes move by default, <code>copy class Name:</code> is the explicit copy spelling, and recursive fields use the built-in <code>indirect</code> storage modifier.</li>
 <li>Pattern matching is by value unless the scrutinee is explicitly borrowed with <code>match borrow value:</code> or <code>match borrow mut value:</code>.</li>
-<li>Concurrency uses <code>spawn</code>, <code>task_group</code>, <code>Channel[T]</code>, and <code>select</code>; detached tasks require explicit <code>spawn detached</code>.</li>
-<li>Recoverable errors use <code>Result[T, E]</code> and <code>try expr</code>.</li>
-<li>Text uses <code>String</code> for owned values and <code>borrow str</code> for borrowed slices.</li>
+<li><code>for</code> loops use a trait-based iteration model; <code>for x in expr:</code> consumes by value unless <code>expr</code> is explicitly borrowed.</li>
+<li>Concurrency uses <code>spawn</code>, <code>task_group</code>, <code>Channel[T]</code>, and <code>select</code>; detached tasks require explicit <code>spawn detached</code>; channel sharing uses cloned handles over shared channel state; <code>.send()</code> returns <code>Result[None, SendError[T]]</code>; <code>.recv()</code> returns <code>T?</code>; and ordinary network/timer APIs are task-aware rather than split into a separate <code>async</code> dialect.</li>
+<li>Recoverable errors use <code>Result[T, E]</code>, <code>try expr</code>, and <code>None</code> as the unit success payload when no value is needed.</li>
+<li>Text uses <code>String</code> for owned values, <code>borrow str</code> for borrowed string slices, <code>borrow [T]</code> for borrowed contiguous slices, and <code>f"..."</code> to produce owned interpolated strings.</li>
 <li>Visibility uses <code>public</code>, with items private by default.</li>
 <li>The initial standard library uses <code>string</code>, <code>bytes</code>, <code>collections</code>, <code>task</code>, <code>sync</code>, <code>fs</code>, <code>fmt</code>, <code>json</code>, and related core modules.</li>
-<li>Scoped cleanup uses <code>with</code>; there is no general-purpose <code>defer</code> in v1.</li>
+<li>Scoped cleanup uses <code>with</code>; the same construct is also used for managed task scopes; there is no general-purpose <code>defer</code> in v1.</li>
+<li>Generic constraints use inline <code>T: Trait</code> bounds with <code>+</code> for multiple bounds; <code>try expr</code> supports <code>From[SourceError] for TargetError</code> conversions; and default arguments are evaluated at the call site and are not part of trait method declarations in v1.</li>
+<li>Control flow uses Python-style <code>if</code>/<code>elif</code>/<code>else</code> plus <code>while</code>; loops support <code>break</code> and <code>continue</code>; conditions must be <code>bool</code>; and tuple syntax uses <code>(T1, T2, ...)</code> with dotted numeric field access.</li>
+<li>Primitive numeric types use explicit names like <code>i32</code>, <code>u64</code>, <code>usize</code>, and <code>f64</code>; there is no bare <code>int</code> in v1; fixed-size owned arrays are deferred until after v1.</li>
+<li><code>with</code> lowers through a standard enter/exit protocol, and <code>@test</code> is part of a small built-in attribute syntax rather than a general decorator system in v1.</li>
 </ol>
 <p>Do not start implementation until these decisions are treated as fixed.</p>
 <h2 id="phase-1-minimal-viable-language-front-end">Phase 1: Minimal viable language front end<a class="headerlink" href="#phase-1-minimal-viable-language-front-end" title="Permanent link">&para;</a></h2>
@@ -1172,7 +1496,15 @@ aura<span class="w"> </span>publish
 <li>formatting</li>
 <li>JSON and TOML parsing if feasible</li>
 </ul>
-<h2 id="phase-5-concurrency-runtime">Phase 5: Concurrency runtime<a class="headerlink" href="#phase-5-concurrency-runtime" title="Permanent link">&para;</a></h2>
+<h2 id="phase-5-error-handling-and-pattern-matching">Phase 5: Error handling and pattern matching<a class="headerlink" href="#phase-5-error-handling-and-pattern-matching" title="Permanent link">&para;</a></h2>
+<p>Implement:</p>
+<ul>
+<li><code>Result</code></li>
+<li><code>try expr</code></li>
+<li>enums</li>
+<li>exhaustive <code>match</code></li>
+</ul>
+<h2 id="phase-6-concurrency-runtime">Phase 6: Concurrency runtime<a class="headerlink" href="#phase-6-concurrency-runtime" title="Permanent link">&para;</a></h2>
 <p>Implement:</p>
 <ul>
 <li>task scheduler</li>
@@ -1183,14 +1515,6 @@ aura<span class="w"> </span>publish
 <li>runtime shutdown behavior</li>
 </ul>
 <p>Initially keep the scheduler simple but correct.</p>
-<h2 id="phase-6-error-handling-and-pattern-matching">Phase 6: Error handling and pattern matching<a class="headerlink" href="#phase-6-error-handling-and-pattern-matching" title="Permanent link">&para;</a></h2>
-<p>Implement:</p>
-<ul>
-<li><code>Result</code></li>
-<li>propagation operator</li>
-<li>enums</li>
-<li>exhaustive <code>match</code></li>
-</ul>
 <h2 id="phase-7-package-manager-and-registry-tooling">Phase 7: Package manager and registry tooling<a class="headerlink" href="#phase-7-package-manager-and-registry-tooling" title="Permanent link">&para;</a></h2>
 <p>Implement:</p>
 <ul>
@@ -1279,6 +1603,13 @@ aura<span class="w"> </span>publish
 <li><code>mut y = 20</code></li>
 </ul>
 <p>There is no <code>let</code> keyword in v1.</p>
+<p>Additional frozen rules:</p>
+<ul>
+<li>first assignment to a name in a local scope introduces that binding</li>
+<li>later <code>x = expr</code> reuses the existing binding and is reassignment, not a new declaration</li>
+<li>reassignment requires the binding to have been declared with <code>mut</code></li>
+<li>local shadowing is not part of v1</li>
+</ul>
 <h2 id="232-borrow-syntax">23.2 Borrow syntax<a class="headerlink" href="#232-borrow-syntax" title="Permanent link">&para;</a></h2>
 <p>Aurora uses <code>borrow T</code> and <code>borrow mut T</code>.</p>
 <p>This keeps borrowing visually explicit in an indentation-based language and reads more naturally than sigils.</p>
@@ -1288,22 +1619,40 @@ aura<span class="w"> </span>publish
 <p>Additional frozen rules:</p>
 <ul>
 <li>classes move by default when passed, assigned, or returned by value</li>
-<li><code>copy</code> is explicit and only legal when all fields are copy types</li>
+<li><code>copy class Name:</code> is the explicit copy spelling in v1</li>
+<li><code>copy</code> is only legal when all fields are copy types</li>
 <li>direct recursive class fields are illegal; recursion uses the built-in <code>indirect</code> storage modifier</li>
 <li><code>T?</code> is shorthand for <code>Option[T]</code> in type positions, so recursive fields commonly look like <code>indirect Node?</code></li>
 <li>accessing a non-copy field through <code>borrow self</code> does not move that field out of the object</li>
 <li>shared identity must be modeled through explicit wrapper types rather than plain classes</li>
 </ul>
-<h2 id="234-trait-model">23.4 Trait model<a class="headerlink" href="#234-trait-model" title="Permanent link">&para;</a></h2>
+<h2 id="234-trait-and-iteration-model">23.4 Trait and iteration model<a class="headerlink" href="#234-trait-and-iteration-model" title="Permanent link">&para;</a></h2>
 <p>Aurora uses <code>trait</code> for behavior declarations.</p>
 <p>Inherent methods are written inside class bodies. Trait implementations use explicit <code>impl Trait for Type</code> blocks.</p>
-<h2 id="235-string-model">23.5 String model<a class="headerlink" href="#235-string-model" title="Permanent link">&para;</a></h2>
+<p>Additional frozen rules:</p>
+<ul>
+<li><code>for</code> loops use a trait-based iteration protocol</li>
+<li>iterable values provide <code>into_iter()</code> and iterator objects provide <code>next(borrow mut self) -&gt; Option[T]</code></li>
+<li><code>for x in expr:</code> iterates by value unless <code>expr</code> is explicitly borrowed</li>
+<li>multiple trait bounds use <code>T: Trait1 + Trait2</code></li>
+<li><code>for x in borrow expr:</code> over an already borrowed iterable is a reborrow</li>
+<li>shared borrowed iteration yields copied element values for copy element types and <code>borrow T</code> for non-copy element types</li>
+<li>mutable borrowed iteration yields <code>borrow mut T</code> elements</li>
+<li>borrowed iteration uses ordinary <code>Iterable</code> implementations for borrowed receiver types rather than compiler-only special cases</li>
+</ul>
+<h2 id="235-string-slice-and-interpolation-model">23.5 String, slice, and interpolation model<a class="headerlink" href="#235-string-slice-and-interpolation-model" title="Permanent link">&para;</a></h2>
 <p>Aurora uses:</p>
 <ul>
 <li><code>String</code> for owned UTF-8 text</li>
 <li><code>borrow str</code> for borrowed UTF-8 string slices</li>
+<li><code>borrow [T]</code> for borrowed contiguous slices</li>
 </ul>
 <p>String literals have type <code>borrow str</code>. Converting borrowed text to owned text is explicit.</p>
+<p>Additional frozen rules:</p>
+<ul>
+<li><code>f"..."</code> produces an owned <code>String</code></li>
+<li>interpolation formats values through formatting traits and borrows where possible rather than moving just to print or format</li>
+</ul>
 <h2 id="236-visibility">23.6 Visibility<a class="headerlink" href="#236-visibility" title="Permanent link">&para;</a></h2>
 <p>Aurora uses <code>public</code> for exported APIs.</p>
 <p>Items are private by default.</p>
@@ -1314,6 +1663,8 @@ aura<span class="w"> </span>publish
 <li>keyword field construction</li>
 <li>associated constructor methods that return <code>Self</code></li>
 <li>fallible constructors that return <code>Result[Self, E]</code></li>
+<li>default arguments evaluated at the call site</li>
+<li>no default arguments in trait method declarations in v1</li>
 </ul>
 <p>Aurora does not use Python-style <code>__init__</code>.</p>
 <h2 id="238-match-ownership-model">23.8 Match ownership model<a class="headerlink" href="#238-match-ownership-model" title="Permanent link">&para;</a></h2>
@@ -1325,14 +1676,37 @@ aura<span class="w"> </span>publish
 <li><code>spawn</code> creates a child task in the current task scope</li>
 <li><code>task_group</code> owns related child tasks</li>
 <li>detached background work must be explicit</li>
+<li><code>with</code> is the general scoped enter/exit construct and is also used for task groups</li>
 <li>channels use the <code>Channel[T]</code> type</li>
-<li>channel operations use methods such as <code>.send()</code>, <code>.recv()</code>, and <code>.close()</code></li>
+<li>channel handles are move types that refer to shared channel state</li>
+<li>channel sharing uses <code>.clone()</code> to create additional handles to the same channel</li>
+<li>channels are multi-producer and multi-consumer in v1</li>
+<li>channel operations use methods such as <code>.send()</code>, <code>.recv()</code>, and <code>.close()</code>, and those operations borrow the handle</li>
+<li><code>.send()</code> returns <code>Result[None, SendError[T]]</code> and preserves the unsent value on failure</li>
+<li><code>.recv()</code> returns <code>T?</code>, blocking until a value is available or the channel is closed and drained</li>
+<li><code>select</code> supports duration literals such as <code>500ms</code>, <code>1s</code>, and <code>2m</code> through <code>after(...)</code></li>
+<li>ordinary network and timer APIs are task-aware; Aurora does not use a separate <code>async</code>/<code>await</code> model for primary I/O</li>
 </ul>
-<h2 id="2310-result-placement">23.10 Result placement<a class="headerlink" href="#2310-result-placement" title="Permanent link">&para;</a></h2>
+<h2 id="2310-result-and-unit-model">23.10 Result and unit model<a class="headerlink" href="#2310-result-and-unit-model" title="Permanent link">&para;</a></h2>
 <p><code>Result[T, E]</code> is a standard-library enum with language support for <code>try expr</code>.</p>
+<p>Aurora uses <code>None</code> as the unit type and as the sole value of that type.</p>
+<p><code>Option[T]</code> uses <code>Some(T)</code> and <code>None</code>, and the meaning of <code>None</code> is resolved from type context.</p>
+<p>If <code>try expr</code> returns an error whose type does not exactly match the caller's error type, Aurora uses a <code>From[SourceError] for TargetError</code> conversion when available.</p>
 <h2 id="2311-scoped-cleanup">23.11 Scoped cleanup<a class="headerlink" href="#2311-scoped-cleanup" title="Permanent link">&para;</a></h2>
 <p>Aurora uses <code>with</code> for scoped cleanup in v1.</p>
+<p>The same <code>with</code> construct is also used for managed task scopes such as <code>with task_group() as group:</code>.</p>
+<p><code>with</code> lowers through a standard enter/exit protocol rather than a one-off special form for each type.</p>
 <p>There is no general-purpose <code>defer</code>.</p>
+<h2 id="2312-control-flow-and-tuples">23.12 Control flow and tuples<a class="headerlink" href="#2312-control-flow-and-tuples" title="Permanent link">&para;</a></h2>
+<p>Aurora uses Python-style <code>if</code>/<code>elif</code>/<code>else</code> and supports <code>while</code> loops in v1.</p>
+<p>Conditions must have type <code>bool</code>.</p>
+<p>Loops support <code>break</code> and <code>continue</code>.</p>
+<p>Tuple syntax uses <code>(T1, T2, ...)</code> for types, <code>(v1, v2, ...)</code> for values, and <code>.0</code>, <code>.1</code>, ... for element access.</p>
+<h2 id="2313-primitive-types-and-attributes">23.13 Primitive types and attributes<a class="headerlink" href="#2313-primitive-types-and-attributes" title="Permanent link">&para;</a></h2>
+<p>Aurora v1 primitive scalar types are <code>bool</code>, <code>i8</code>, <code>i16</code>, <code>i32</code>, <code>i64</code>, <code>i128</code>, <code>isize</code>, <code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code>, <code>u128</code>, <code>usize</code>, <code>f32</code>, and <code>f64</code>.</p>
+<p>There is no bare <code>int</code> type in v1.</p>
+<p>Fixed-size owned arrays are deferred until after v1.</p>
+<p>Aurora supports a small built-in <code>@name</code> attribute syntax in v1, and <code>@test</code> is the canonical built-in attribute for the test runner.</p>
 <hr />
 <h1 id="24-canonical-language-pitch">24. Canonical language pitch<a class="headerlink" href="#24-canonical-language-pitch" title="Permanent link">&para;</a></h1>
 <p>Use this as the short public description:</p>
@@ -1395,4 +1769,7 @@ aura<span class="w"> </span>publish
 <h1 id="27-closing-note">27. Closing note<a class="headerlink" href="#27-closing-note" title="Permanent link">&para;</a></h1>
 <p>Aurora should not try to be everything.</p>
 <p>It should be one thing done well:</p>
-<p><strong>a beautiful, safe, concurrent compiled language that feels familiar to Python programmers without being bound by Python’s past.</strong></p></main></body></html>
+<p><strong>a beautiful, safe, concurrent compiled language that feels familiar to Python programmers without being bound by Python’s past.</strong></p>
+  </main>
+</body>
+</html>

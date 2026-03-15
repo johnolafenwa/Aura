@@ -233,7 +233,7 @@ A binding owns a value unless it is borrowing it.
 ### Example
 
 ```python
-mut xs = Vec[int]([1, 2, 3])
+mut xs = Vec[i32]([1, 2, 3])
 ys = xs         # move
 # xs is no longer usable after this line
 ```
@@ -241,7 +241,7 @@ ys = xs         # move
 Cloning remains explicit:
 
 ```python
-mut ys = Vec[int]([1, 2, 3])
+mut ys = Vec[i32]([1, 2, 3])
 zs = ys.clone()
 # ys is still usable because clone creates a second owned value
 ```
@@ -252,6 +252,11 @@ Mutability must be opt-in.
 
 ### Rules
 
+- `x = expr` introduces a new immutable binding only when `x` is not already bound in the current scope
+- `mut x = expr` introduces a new mutable binding
+- `x = expr` against an existing binding is reassignment, not a new declaration
+- reassignment is legal only for bindings originally declared with `mut`
+- shadowing local bindings is not part of v1; reusing a name in the same function body should be treated as reassignment or rejected with a clear diagnostic
 - bindings are immutable by default
 - fields are immutable unless declared mutable or accessed through a mutable owner
 - interior mutability should exist only through explicit library types
@@ -260,8 +265,12 @@ Mutability must be opt-in.
 
 ```python
 x = 10
+# x = 20      # error: `x` is immutable
+
 mut y = 20
 y = 30
+
+# mut y = 40  # error: this is not a new declaration; `y` already exists
 ```
 
 ## 5.3 Copy vs move vs borrow
@@ -289,10 +298,17 @@ writer = borrow mut config
 
 Borrowing must stay visually obvious.
 
+Applying `borrow` to an already borrowed value creates a reborrow rather than a nested surface type such as `borrow borrow T`.
+
+Reborrows still obey the ordinary exclusivity rules:
+
+- `borrow` of a shared or mutable borrow creates a temporary shared reborrow
+- `borrow mut` requires mutable access and may not be derived from a shared borrow
+
 Shared borrows allow read-only aliasing:
 
 ```python
-def show_total(xs: borrow Vec[int]) -> i32:
+def show_total(xs: borrow Vec[i32]) -> i32:
     return xs.len()
 ```
 
@@ -337,6 +353,12 @@ Preferred approach:
 
 This is a major ergonomics differentiator.
 
+Canonical elision rules for v1:
+
+- if a function has exactly one borrowed input and returns a borrowed value, the returned borrow is tied to that input
+- if a method returns a borrowed value and has a borrowed receiver, the returned borrow is tied to `self` unless another source is stated explicitly
+- if multiple borrowed inputs could be the source of the returned borrow and elision would be ambiguous, the API must use explicit lifetime parameters in advanced code rather than relying on inference
+
 ## 5.5 Destruction and resource cleanup
 
 Aurora should use deterministic destruction for owned values.
@@ -356,7 +378,19 @@ Aurora uses `with` as the scoped cleanup mechanism in v1.
 
 Leaving a `with` block runs the cleanup path deterministically on normal completion and on propagated errors.
 
+`with` is Aurora's general scoped enter/exit construct. It is used both for ordinary resource cleanup and for structured task scopes such as `with task_group() as group:`.
+
 There is no general-purpose `defer` construct in v1.
+
+Conceptually, `with` lowers through a standard-library protocol like:
+
+```python
+trait With[T]:
+    def enter(self) -> T
+    def exit(borrow mut self)
+```
+
+`with name = expr:` evaluates `expr`, calls `enter()`, binds the entered value to `name`, and always calls `exit()` on scope exit. The runtime may use specialized implementations for types like task groups, but the user-facing model stays trait-like rather than ad hoc.
 
 Example:
 
@@ -373,7 +407,7 @@ Classes are nominal product types with ownership-aware value semantics.
 Rules:
 
 - class values are move types by default
-- a class may be marked `copy` only when all of its fields are themselves copy types; copy is explicit in v1 and is not inferred automatically
+- a class may be declared with `copy class Name:` only when all of its fields are themselves copy types; copy is explicit in v1 and is not inferred automatically
 - passing a class by value into a function or returning it by value moves ownership unless the class is `copy`
 - method calls do not create hidden aliasing; `self`, `borrow self`, and `borrow mut self` obey normal ownership and borrow rules
 - field access through a borrowed receiver yields borrowed access for non-copy fields and copied values for copy fields; moving a non-copy field out of `borrow self` or `borrow mut self` is illegal unless an explicit extraction operation is defined
@@ -390,6 +424,15 @@ In practice, there are only a few things you can do with fields through a borrow
 - mutate a field in place through `borrow mut self`
 
 What you cannot do is silently move a non-copy field out of a borrowed object.
+
+Example `copy` class:
+
+```python
+copy class Color:
+    r: u8
+    g: u8
+    b: u8
+```
 
 Example:
 
@@ -486,7 +529,7 @@ Example:
 class Cell[T]:
     value: T
 
-def first[T](xs: Vec[T]) -> T:
+def first[T](xs: borrow [T]) -> borrow T:
     return xs[0]
 ```
 
@@ -525,6 +568,33 @@ impl Display for User:
         w.write(self.name.as_str())
 ```
 
+Canonical v1 syntax for generic constraints uses inline bounds:
+
+```python
+def sort[T: Ord](xs: borrow mut [T]):
+    ...
+```
+
+Aurora may add trailing `where` clauses later, but inline `T: Trait` bounds are the frozen v1 form.
+
+Multiple bounds use `+`:
+
+```python
+def render_sorted[T: Display + Ord](xs: borrow [T]):
+    ...
+```
+
+Operator overloading is expressed through ordinary traits:
+
+```python
+trait Add[Rhs, Out]:
+    def add(self, rhs: Rhs) -> Out
+
+impl Add[Point, Point] for Point:
+    def add(self, rhs: Point) -> Point:
+        return Point(x=self.x + rhs.x, y=self.y + rhs.y)
+```
+
 ## 6.5 Enums and algebraic data types
 
 Aurora should have first-class sum types.
@@ -535,6 +605,10 @@ Example:
 enum Result[T, E]:
     Ok(T)
     Err(E)
+
+enum Option[T]:
+    Some(T)
+    None
 ```
 
 This is essential for error handling, protocols, and compiler-friendly exhaustive matching.
@@ -584,6 +658,103 @@ Rules:
 - APIs that inspect text should usually accept `borrow str`
 - APIs that construct or store text should return or contain `String`
 - converting borrowed text to owned text is explicit, for example `String("hello")`
+
+## 6.9 Slices
+
+Aurora supports borrowed slices for zero-copy access to contiguous data.
+
+- `borrow [T]` is a borrowed slice of elements of type `T`
+- slices are non-owning views and do not allocate
+- slices are the preferred parameter type for read-only access to vectors and buffers
+
+Examples:
+
+```python
+def sum(xs: borrow [i32]) -> i32:
+    total = 0
+    for x in xs:
+        total += x
+    return total
+```
+
+```python
+def starts_with(data: borrow [u8], prefix: borrow [u8]) -> bool:
+    ...
+```
+
+## 6.10 None and unit
+
+Aurora uses `None` as the unit type and as the sole value of that type.
+
+- `None` means "no meaningful value"
+- `None` is a copy type
+- `Result[None, E]` is the standard way to express success-or-error when success carries no payload
+
+Aurora also uses `None` as the empty `Option[T]` variant. The meaning is resolved by type context:
+
+```python
+x: Option[i32] = None   # the empty option variant
+y: None = None          # the unit value
+```
+
+This is not a runtime ambiguity. `None` has no payload in either role, so the compiler resolves it statically from the expected type.
+
+## 6.11 String interpolation
+
+Aurora supports string interpolation with `f"..."`.
+
+Rules:
+
+- an f-string produces an owned `String`
+- interpolated expressions are formatted through the `Display` trait or equivalent formatting trait
+- interpolation borrows values for formatting where possible; it does not implicitly move non-copy values merely to print or format them
+
+Example:
+
+```python
+def greet(name: borrow str) -> String:
+    return f"Hello, {name}"
+```
+
+## 6.12 Tuples
+
+Aurora supports anonymous tuple types for small fixed-size aggregates.
+
+Rules:
+
+- tuple syntax uses `(T1, T2, ...)` for types and `(v1, v2, ...)` for values
+- tuple elements are accessed with zero-based dotted indices such as `pair.0` and `pair.1`
+- tuples are copy when all of their element types are copy
+- tuples otherwise follow normal move semantics
+- tuple literals may be destructured in pattern matching and bindings in later phases
+
+Example:
+
+```python
+pair: (i32, bool) = (1, true)
+named = (String("Aurora"), 1)
+first = pair.0
+```
+
+## 6.13 Primitive numeric types
+
+Aurora uses explicit primitive numeric type names in v1:
+
+- signed integers: `i8`, `i16`, `i32`, `i64`, `i128`, `isize`
+- unsigned integers: `u8`, `u16`, `u32`, `u64`, `u128`, `usize`
+- floating-point: `f32`, `f64`
+- boolean: `bool`
+
+There is no unsuffixed `int` type in v1. Examples should use fixed-width integers or pointer-width integers explicitly.
+
+## 6.14 Fixed-size arrays
+
+Fixed-size owned arrays are deferred until after v1.
+
+Aurora v1 standard sequence types are:
+
+- `Vec[T]` for owned growable sequences
+- `borrow [T]` for borrowed contiguous slices
 
 ---
 
@@ -644,7 +815,49 @@ f = |y| x + y
 
 Spawning closures should usually move captured values unless borrowed under strict scoped rules.
 
-## 7.4 Constructors
+## 7.4 Iteration and for loops
+
+Aurora uses a trait-based iteration protocol.
+
+Aurora distinguishes between iterable values and iterator objects.
+
+Core rules:
+
+- `for x in expr:` consumes `expr` by value unless `expr` is explicitly borrowed
+- `for x in borrow expr:` iterates by shared borrow
+- `for x in borrow mut expr:` iterates by mutable borrow
+- iterable values implement an `Iterable[T, IterT: Iterator[T]]`-style capability and provide `into_iter()` to yield an iterator object
+- iterator objects provide `next(borrow mut self) -> Option[T]`
+- if `expr` already has a borrowed type, `for x in expr:` uses that borrowed iteration behavior
+- `for x in borrow expr:` where `expr` is already borrowed is treated as a reborrow, not as a nested `borrow borrow ...` type
+- shared borrowed iteration yields copied element values for copy element types and `borrow T` for non-copy element types
+- mutable borrowed iteration yields `borrow mut T` elements
+- borrowed iteration works through ordinary `Iterable` implementations for borrowed receiver types such as `borrow [T]` and `borrow Vec[T]`, not through a separate compiler-only escape hatch
+
+This lets ownership stay explicit:
+
+- iterating over `Vec[T]` by value may consume the vector
+- iterating over `borrow [i32]` yields copied `i32` values because `i32` is copy
+- iterating over `borrow [String]` yields `borrow String` elements
+- iterating over a channel receives values until the channel is closed
+
+Example:
+
+```python
+trait Iterator[T]:
+    def next(borrow mut self) -> Option[T]
+
+trait Iterable[T, IterT: Iterator[T]]:
+    def into_iter(self) -> IterT
+
+for value in range(4):
+    println(value)
+
+for item in borrow xs:
+    println(item)
+```
+
+## 7.5 Constructors
 
 Aurora uses value constructors rather than Python-style `__init__`.
 
@@ -654,6 +867,9 @@ Rules:
 - constructor calls produce fully initialized values directly
 - classes may define associated constructor methods such as `new`, `default`, `empty`, or `from_file`
 - fallible constructors return `Result[Self, E]`
+- default argument expressions are evaluated at the call site in left-to-right parameter order
+- default values may not reference other parameters in v1
+- trait method declarations do not use default arguments in v1
 - partial initialization is not part of v1
 
 Example:
@@ -668,6 +884,36 @@ class User:
 
     def guest() -> Self:
         return Self(name=String("Guest"), age=0)
+```
+
+## 7.6 Control flow
+
+Aurora uses Python-style conditionals and loop syntax.
+
+Rules:
+
+- conditionals use `if`, `elif`, and `else`
+- looping supports both `for` and `while`
+- loops support `break` and `continue`
+- conditions must have type `bool`; Aurora does not use truthy/falsy coercion in v1
+
+Example:
+
+```python
+if score > 90:
+    println("A")
+elif score > 80:
+    println("B")
+else:
+    println("C")
+
+while remaining > 0:
+    if remaining == 3:
+        break
+    if remaining % 2 == 0:
+        remaining -= 1
+        continue
+    remaining -= 1
 ```
 
 ---
@@ -710,6 +956,27 @@ Tasks should be much lighter than OS threads and scheduled by the Aurora runtime
 
 Channels are a core runtime abstraction exposed as `Channel[T]`.
 
+`Channel[T]` is a lightweight handle to shared channel state.
+
+Rules:
+
+- channel handles are move types
+- `channel.clone()` creates an additional handle to the same underlying channel
+- channels support multiple producers and multiple consumers in v1
+- `.send()`, `.recv()`, and `.close()` borrow the handle rather than consuming it
+- `.send(value)` returns `Result[None, SendError[T]]`; a send to a closed channel fails and the error carries the unsent value
+- `.recv()` blocks until a value is available or the channel is closed and drained, then returns `T?`
+- closing any handle closes the underlying channel for the whole channel instance
+- channel iteration repeatedly calls `.recv()` and stops after it returns `None`
+
+Sharing a channel across tasks uses cloned handles:
+
+```python
+with task_group() as group:
+    group.spawn(worker, jobs.clone(), results.clone())
+    group.spawn(worker, jobs.clone(), results.clone())
+```
+
 Example:
 
 ```python
@@ -728,8 +995,8 @@ Operations:
 Canonical API style:
 
 ```python
-jobs.send(42)
-value = results.recv()
+send_result = jobs.send(42)
+next_value = results.recv()
 ```
 
 Aurora uses method-call channel operations in v1. There is no alternate operator syntax for send or receive.
@@ -741,16 +1008,33 @@ Aurora should have a `select` construct for waiting on multiple channel operatio
 Example:
 
 ```python
-select:
-    case msg = inbox.recv():
-        handle(msg)
-    case sig = shutdown.recv():
-        break
-    case after(1s):
-        heartbeat()
+while running:
+    select:
+        case msg = inbox.recv():
+            match msg:
+                case Some(value):
+                    handle(value)
+                case None:
+                    break
+        case sig = shutdown.recv():
+            match sig:
+                case Some(_):
+                    break
+                case None:
+                    break
+        case after(1s):
+            heartbeat()
 ```
 
 This is essential for service programming and structured concurrent systems.
+
+Aurora also supports duration literals for time-related APIs:
+
+- `500ms`
+- `1s`
+- `2m`
+
+These construct `Duration` values and may be used in places such as timers, deadlines, and `after(...)`.
 
 ## 8.5 Structured concurrency
 
@@ -844,11 +1128,31 @@ def load_config(path: borrow str) -> Result[Config, IoError]:
     return parse_config(text)
 ```
 
-## 9.3 Panics or fatal errors
+## 9.3 Error conversion
+
+If `try expr` produces `Err(source_err)` and the current function returns `Result[T, TargetError]`, Aurora first checks for an exact error-type match.
+
+If the types differ, Aurora applies a `From[SourceError] for TargetError` conversion when one exists.
+
+Example:
+
+```python
+trait From[T]:
+    def from(value: T) -> Self
+
+def load_and_parse(path: borrow str) -> Result[Config, AppError]:
+    text = try fs.read_to_string(path)   # IoError converts into AppError
+    config = try parse_config(text)      # ParseError converts into AppError
+    return Ok(config)
+```
+
+If no exact match or `From` conversion exists, `try expr` is a type error.
+
+## 9.4 Panics or fatal errors
 
 Aurora may include unrecoverable failures for internal bugs or violated invariants, but these should be clearly separate from ordinary error handling.
 
-## 9.4 Exceptions
+## 9.5 Exceptions
 
 Recommendation: avoid general-purpose exceptions in v1.
 
@@ -979,6 +1283,8 @@ Recommended v1 modules:
 
 A small default prelude may re-export a few extremely common names, such as `println`, while their canonical library home remains explicit modules like `fmt`.
 
+`print(...)` and `println(...)` are ordinary library functions, not macros. They format their arguments through the formatting traits and should borrow values for formatting where possible.
+
 ## 11.5 Reflection
 
 Keep reflection deliberately limited in v1.
@@ -1086,6 +1392,17 @@ Instead of a true interpreter, Aurora should aim for:
 - fast startup
 - excellent error messages
 - REPL later if desired using JIT or eval subsets
+
+## 14.4 Task-aware I/O
+
+Aurora's standard network and timer APIs should be task-aware.
+
+Recommended v1 behavior:
+
+- when a task waits on supported network I/O, the runtime parks that task rather than blocking an OS thread
+- the runtime uses platform event mechanisms such as epoll, kqueue, or IOCP behind ordinary library APIs
+- Aurora does not require a separate `async`/`await` syntax for its primary I/O model
+- explicitly blocking FFI or OS calls may still block the underlying thread unless wrapped in runtime-aware libraries
 
 ---
 
@@ -1234,7 +1551,7 @@ match borrow msg:
 ```python
 def worker(id: i32, jobs: Channel[Job], out: Channel[Result[String, Error]]):
     for job in jobs:
-        out.send(process(job))
+        out.send(process(job))    # ignoring send failure for brevity
 
 def main() -> Result[None, Error]:
     jobs = Channel[Job](capacity=100)
@@ -1242,7 +1559,12 @@ def main() -> Result[None, Error]:
 
     with task_group() as group:
         for i in range(4):
-            group.spawn(worker, i, jobs, out)
+            group.spawn(worker, i, jobs.clone(), out.clone())
+
+        for job in load_jobs():
+            jobs.send(job)        # ignoring send failure for brevity
+
+        jobs.close()
 
     return Ok(None)
 ```
@@ -1250,13 +1572,49 @@ def main() -> Result[None, Error]:
 ## 17.8 Select
 
 ```python
-select:
-    case msg = inbox.recv():
-        handle(msg)
-    case err = errors.recv():
-        log.error(err)
-    case after(500ms):
-        print("tick")
+while running:
+    select:
+        case msg = inbox.recv():
+            match msg:
+                case Some(value):
+                    handle(value)
+                case None:
+                    break
+        case err = errors.recv():
+            match err:
+                case Some(value):
+                    log.error(value)
+                case None:
+                    break
+        case after(500ms):
+            print("tick")
+```
+
+## 17.9 Conditionals and while
+
+```python
+if ready:
+    run()
+elif retry:
+    wait()
+else:
+    fail()
+
+while remaining > 0:
+    if remaining == 3:
+        break
+    if remaining % 2 == 0:
+        remaining -= 1
+        continue
+    remaining -= 1
+```
+
+## 17.10 Tuples
+
+```python
+point = (3.0, 4.0)
+pair: (i32, bool) = (1, true)
+x = point.0
 ```
 
 ---
@@ -1283,6 +1641,10 @@ This matters because ownership systems live or die by error quality.
 ## 19.1 Tests
 
 Built-in test support should exist from v1.
+
+Aurora uses a small built-in attribute syntax spelled `@name` on declarations.
+
+`@test` is a built-in v1 attribute for the test runner. General user-defined decorators or arbitrary compile-time attributes are not part of v1.
 
 Example:
 
@@ -1316,17 +1678,22 @@ Before writing the full compiler, freeze these decisions. The rest of this docum
 
 1. Source files use the `.au` extension.
 2. Package metadata lives in `Aurora.toml`.
-3. Bindings use `x = 10` and `mut y = 20`; there is no `let` keyword.
+3. Bindings use `x = 10` and `mut y = 20`; there is no `let` keyword; first assignment in a scope introduces the binding, later assignment is reassignment, and local shadowing is not part of v1.
 4. Borrow syntax is `borrow T` and `borrow mut T`.
 5. Assignment of non-copy values moves ownership.
-6. Nominal product types use `class`; inherent methods live in class bodies; `impl Trait for Type` is reserved for trait conformance; classes move by default, `copy` is explicit, and recursive fields use the built-in `indirect` storage modifier.
+6. Nominal product types use `class`; inherent methods live in class bodies; `impl Trait for Type` is reserved for trait conformance; classes move by default, `copy class Name:` is the explicit copy spelling, and recursive fields use the built-in `indirect` storage modifier.
 7. Pattern matching is by value unless the scrutinee is explicitly borrowed with `match borrow value:` or `match borrow mut value:`.
-8. Concurrency uses `spawn`, `task_group`, `Channel[T]`, and `select`; detached tasks require explicit `spawn detached`.
-9. Recoverable errors use `Result[T, E]` and `try expr`.
-10. Text uses `String` for owned values and `borrow str` for borrowed slices.
-11. Visibility uses `public`, with items private by default.
-12. The initial standard library uses `string`, `bytes`, `collections`, `task`, `sync`, `fs`, `fmt`, `json`, and related core modules.
-13. Scoped cleanup uses `with`; there is no general-purpose `defer` in v1.
+8. `for` loops use a trait-based iteration model; `for x in expr:` consumes by value unless `expr` is explicitly borrowed.
+9. Concurrency uses `spawn`, `task_group`, `Channel[T]`, and `select`; detached tasks require explicit `spawn detached`; channel sharing uses cloned handles over shared channel state; `.send()` returns `Result[None, SendError[T]]`; `.recv()` returns `T?`; and ordinary network/timer APIs are task-aware rather than split into a separate `async` dialect.
+10. Recoverable errors use `Result[T, E]`, `try expr`, and `None` as the unit success payload when no value is needed.
+11. Text uses `String` for owned values, `borrow str` for borrowed string slices, `borrow [T]` for borrowed contiguous slices, and `f"..."` to produce owned interpolated strings.
+12. Visibility uses `public`, with items private by default.
+13. The initial standard library uses `string`, `bytes`, `collections`, `task`, `sync`, `fs`, `fmt`, `json`, and related core modules.
+14. Scoped cleanup uses `with`; the same construct is also used for managed task scopes; there is no general-purpose `defer` in v1.
+15. Generic constraints use inline `T: Trait` bounds with `+` for multiple bounds; `try expr` supports `From[SourceError] for TargetError` conversions; and default arguments are evaluated at the call site and are not part of trait method declarations in v1.
+16. Control flow uses Python-style `if`/`elif`/`else` plus `while`; loops support `break` and `continue`; conditions must be `bool`; and tuple syntax uses `(T1, T2, ...)` with dotted numeric field access.
+17. Primitive numeric types use explicit names like `i32`, `u64`, `usize`, and `f64`; there is no bare `int` in v1; fixed-size owned arrays are deferred until after v1.
+18. `with` lowers through a standard enter/exit protocol, and `@test` is part of a small built-in attribute syntax rather than a general decorator system in v1.
 
 Do not start implementation until these decisions are treated as fixed.
 
@@ -1394,7 +1761,16 @@ Implement:
 - formatting
 - JSON and TOML parsing if feasible
 
-## Phase 5: Concurrency runtime
+## Phase 5: Error handling and pattern matching
+
+Implement:
+
+- `Result`
+- `try expr`
+- enums
+- exhaustive `match`
+
+## Phase 6: Concurrency runtime
 
 Implement:
 
@@ -1406,15 +1782,6 @@ Implement:
 - runtime shutdown behavior
 
 Initially keep the scheduler simple but correct.
-
-## Phase 6: Error handling and pattern matching
-
-Implement:
-
-- `Result`
-- propagation operator
-- enums
-- exhaustive `match`
 
 ## Phase 7: Package manager and registry tooling
 
@@ -1519,6 +1886,13 @@ Aurora uses direct bindings:
 
 There is no `let` keyword in v1.
 
+Additional frozen rules:
+
+- first assignment to a name in a local scope introduces that binding
+- later `x = expr` reuses the existing binding and is reassignment, not a new declaration
+- reassignment requires the binding to have been declared with `mut`
+- local shadowing is not part of v1
+
 ## 23.2 Borrow syntax
 
 Aurora uses `borrow T` and `borrow mut T`.
@@ -1534,26 +1908,44 @@ A `class` is a value type by default. It does not imply inheritance, hidden heap
 Additional frozen rules:
 
 - classes move by default when passed, assigned, or returned by value
-- `copy` is explicit and only legal when all fields are copy types
+- `copy class Name:` is the explicit copy spelling in v1
+- `copy` is only legal when all fields are copy types
 - direct recursive class fields are illegal; recursion uses the built-in `indirect` storage modifier
 - `T?` is shorthand for `Option[T]` in type positions, so recursive fields commonly look like `indirect Node?`
 - accessing a non-copy field through `borrow self` does not move that field out of the object
 - shared identity must be modeled through explicit wrapper types rather than plain classes
 
-## 23.4 Trait model
+## 23.4 Trait and iteration model
 
 Aurora uses `trait` for behavior declarations.
 
 Inherent methods are written inside class bodies. Trait implementations use explicit `impl Trait for Type` blocks.
 
-## 23.5 String model
+Additional frozen rules:
+
+- `for` loops use a trait-based iteration protocol
+- iterable values provide `into_iter()` and iterator objects provide `next(borrow mut self) -> Option[T]`
+- `for x in expr:` iterates by value unless `expr` is explicitly borrowed
+- multiple trait bounds use `T: Trait1 + Trait2`
+- `for x in borrow expr:` over an already borrowed iterable is a reborrow
+- shared borrowed iteration yields copied element values for copy element types and `borrow T` for non-copy element types
+- mutable borrowed iteration yields `borrow mut T` elements
+- borrowed iteration uses ordinary `Iterable` implementations for borrowed receiver types rather than compiler-only special cases
+
+## 23.5 String, slice, and interpolation model
 
 Aurora uses:
 
 - `String` for owned UTF-8 text
 - `borrow str` for borrowed UTF-8 string slices
+- `borrow [T]` for borrowed contiguous slices
 
 String literals have type `borrow str`. Converting borrowed text to owned text is explicit.
+
+Additional frozen rules:
+
+- `f"..."` produces an owned `String`
+- interpolation formats values through formatting traits and borrows where possible rather than moving just to print or format
 
 ## 23.6 Visibility
 
@@ -1570,6 +1962,8 @@ The language supports:
 - keyword field construction
 - associated constructor methods that return `Self`
 - fallible constructors that return `Result[Self, E]`
+- default arguments evaluated at the call site
+- no default arguments in trait method declarations in v1
 
 Aurora does not use Python-style `__init__`.
 
@@ -1586,18 +1980,56 @@ Aurora uses structured concurrency in v1.
 - `spawn` creates a child task in the current task scope
 - `task_group` owns related child tasks
 - detached background work must be explicit
+- `with` is the general scoped enter/exit construct and is also used for task groups
 - channels use the `Channel[T]` type
-- channel operations use methods such as `.send()`, `.recv()`, and `.close()`
+- channel handles are move types that refer to shared channel state
+- channel sharing uses `.clone()` to create additional handles to the same channel
+- channels are multi-producer and multi-consumer in v1
+- channel operations use methods such as `.send()`, `.recv()`, and `.close()`, and those operations borrow the handle
+- `.send()` returns `Result[None, SendError[T]]` and preserves the unsent value on failure
+- `.recv()` returns `T?`, blocking until a value is available or the channel is closed and drained
+- `select` supports duration literals such as `500ms`, `1s`, and `2m` through `after(...)`
+- ordinary network and timer APIs are task-aware; Aurora does not use a separate `async`/`await` model for primary I/O
 
-## 23.10 Result placement
+## 23.10 Result and unit model
 
 `Result[T, E]` is a standard-library enum with language support for `try expr`.
+
+Aurora uses `None` as the unit type and as the sole value of that type.
+
+`Option[T]` uses `Some(T)` and `None`, and the meaning of `None` is resolved from type context.
+
+If `try expr` returns an error whose type does not exactly match the caller's error type, Aurora uses a `From[SourceError] for TargetError` conversion when available.
 
 ## 23.11 Scoped cleanup
 
 Aurora uses `with` for scoped cleanup in v1.
 
+The same `with` construct is also used for managed task scopes such as `with task_group() as group:`.
+
+`with` lowers through a standard enter/exit protocol rather than a one-off special form for each type.
+
 There is no general-purpose `defer`.
+
+## 23.12 Control flow and tuples
+
+Aurora uses Python-style `if`/`elif`/`else` and supports `while` loops in v1.
+
+Conditions must have type `bool`.
+
+Loops support `break` and `continue`.
+
+Tuple syntax uses `(T1, T2, ...)` for types, `(v1, v2, ...)` for values, and `.0`, `.1`, ... for element access.
+
+## 23.13 Primitive types and attributes
+
+Aurora v1 primitive scalar types are `bool`, `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `f32`, and `f64`.
+
+There is no bare `int` type in v1.
+
+Fixed-size owned arrays are deferred until after v1.
+
+Aurora supports a small built-in `@name` attribute syntax in v1, and `@test` is the canonical built-in attribute for the test runner.
 
 ---
 
