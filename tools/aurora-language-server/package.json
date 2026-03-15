@@ -1,0 +1,17 @@
+{
+  "name": "aurora-language-server",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Language Server Protocol implementation for Aurora.",
+  "main": "./src/server.js",
+  "scripts": {
+    "check": "node --check ./src/server.js && node --check ./src/analysis.js",
+    "test": "node --test ./test/*.test.js",
+    "start": "node ./src/server.js"
+  },
+  "dependencies": {
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12"
+  }
+}

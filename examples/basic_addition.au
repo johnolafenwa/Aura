@@ -1,0 +1,9 @@
+def main() -> i32:
+    a: i32 = 6
+    b: i32 = 10
+
+    c: i32 = a + b 
+
+    println(c)
+
+    return 0

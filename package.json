@@ -1,0 +1,17 @@
+{
+  "name": "aurora-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "tools/*"
+  ],
+  "scripts": {
+    "build:extension": "npm --prefix tools/vscode-aurora run build",
+    "package:extension": "npm --prefix tools/vscode-aurora run package:vsix",
+    "check:lsp": "npm --prefix tools/aurora-language-server run check",
+    "test:lsp": "npm --prefix tools/aurora-language-server test",
+    "check:extension": "npm --prefix tools/vscode-aurora run check",
+    "test:extension": "npm --prefix tools/vscode-aurora test",
+    "postinstall": "npm run build:extension"
+  }
+}
