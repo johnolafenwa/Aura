@@ -24,9 +24,15 @@ Last updated: 2026-03-15
 - Added the first compiler modules: diagnostics, AST, lexer, parser, semantic checker, and evaluator.
 - Added the first milestone sample program at `examples/point.au`.
 - Added `examples/README.md` with instructions for running, checking, and inspecting example programs.
+- Added `crates/aura/README.md` with release-build and direct binary usage instructions.
 - Added in-repo work tracking under `work/`.
 - Verified `cargo test` passes.
 - Verified `cargo run -p aura -- run examples/point.au` prints `5`.
+- Added support for `def name(...):` as shorthand for `-> None`.
+- Added support for running top-level script statements without an explicit `main`.
+- Renamed primitive language types to explicit spellings like `int32`, `uint64`, and `float64`.
+- Renamed the line-printing builtin from `println` to `print`.
+- Verified `examples/basic_addition.au` and `examples/top_level_addition.au` both run and print `16`.
 - Added `tools/vscode-aurora` as an in-repo VS Code extension package.
 - Added `tools/aurora-language-server` as an in-repo LSP package.
 - Added a root npm workspace manifest for repo-managed tools.
@@ -34,6 +40,7 @@ Last updated: 2026-03-15
 - Switched the VS Code package from local editor analysis to an LSP client.
 - Added a bundled `dist/` build for the VS Code extension so VSIX packaging stays self-contained inside the monorepo.
 - Verified `npm run package:extension` produces `tools/vscode-aurora/aurora-language.vsix`.
+- Regenerated `docs/aurora_language_proposal.html` from the updated proposal Markdown.
 
 ## Blocked
 

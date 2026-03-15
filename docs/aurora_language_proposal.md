@@ -168,10 +168,10 @@ import math
 import net.http
 
 class Point:
-    x: f64
-    y: f64
+    x: float64
+    y: float64
 
-def distance(a: Point, b: Point) -> f64:
+def distance(a: Point, b: Point) -> float64:
     dx = a.x - b.x
     dy = a.y - b.y
     return math.sqrt(dx * dx + dy * dy)
@@ -233,7 +233,7 @@ A binding owns a value unless it is borrowing it.
 ### Example
 
 ```python
-mut xs = Vec[i32]([1, 2, 3])
+mut xs = Vec[int32]([1, 2, 3])
 ys = xs         # move
 # xs is no longer usable after this line
 ```
@@ -241,7 +241,7 @@ ys = xs         # move
 Cloning remains explicit:
 
 ```python
-mut ys = Vec[i32]([1, 2, 3])
+mut ys = Vec[int32]([1, 2, 3])
 zs = ys.clone()
 # ys is still usable because clone creates a second owned value
 ```
@@ -308,7 +308,7 @@ Reborrows still obey the ordinary exclusivity rules:
 Shared borrows allow read-only aliasing:
 
 ```python
-def show_total(xs: borrow Vec[i32]) -> i32:
+def show_total(xs: borrow Vec[int32]) -> int32:
     return xs.len()
 ```
 
@@ -429,24 +429,24 @@ Example `copy` class:
 
 ```python
 copy class Color:
-    r: u8
-    g: u8
-    b: u8
+    r: uint8
+    g: uint8
+    b: uint8
 ```
 
 Example:
 
 ```python
 class Node:
-    value: i32
+    value: int32
     next: indirect Node?       # optional indirect child
 
 class User:
-    id: u64
+    id: uint64
     name: String
 
-    def user_id(borrow self) -> u64:
-        return self.id         # valid: `u64` is a copy type
+    def user_id(borrow self) -> uint64:
+        return self.id         # valid: `uint64` is a copy type
 
     def name_view(borrow self) -> borrow str:
         return self.name.as_str()
@@ -465,9 +465,9 @@ def into_name(user: User) -> String:
 #     return user.name         # illegal: cannot move a non-copy field out of a borrow
 
 class Counter:
-    value: i32
+    value: int32
 
-    def read(borrow self) -> i32:
+    def read(borrow self) -> int32:
         return self.value
 ```
 
@@ -476,7 +476,7 @@ How to read this example:
 - `Node.next` uses `indirect Node?` because a class cannot contain itself directly. Without `indirect`, the type would have infinite size.
 - `indirect T` means the field owns a `T`, but stores it out of line instead of inline inside the parent object.
 - `Node?` means the field is optional, so a node may or may not have a next node.
-- `user_id` is valid because `id` is a `u64`, and `u64` is a copy type. Reading it from `borrow self` copies the value.
+- `user_id` is valid because `id` is a `uint64`, and `uint64` is a copy type. Reading it from `borrow self` copies the value.
 - `name_view` is valid because it does not take ownership of the `String`; it returns a borrowed string view instead.
 - `name_copy` is valid because `.clone()` creates a new owned `String` while leaving the original field in place.
 - `rename` is valid because `borrow mut self` gives exclusive mutable access, so replacing a field in place is allowed.
@@ -493,7 +493,7 @@ For recursive data structures, Aurora prefers `indirect` over exposing a wrapper
 
 ```python
 class Node:
-    value: i32
+    value: int32
     next: indirect Node?
 ```
 
@@ -516,7 +516,8 @@ Inference should make local code pleasant, but public APIs should encourage expl
 Recommended rule:
 
 - local bindings may omit type annotations when inferable
-- function parameters and return types should usually be explicit
+- function parameters should be explicit
+- function return types should be explicit unless the function returns `None`
 - exported public items should require explicit signatures
 
 ## 6.3 Generics
@@ -535,7 +536,7 @@ def first[T](xs: borrow [T]) -> borrow T:
 
 Generics should compile efficiently through monomorphization where appropriate.
 
-Monomorphization means the compiler generates specialized concrete code for each generic type use, such as one version of a function for `Vec[i32]` and another for `Vec[String]`.
+Monomorphization means the compiler generates specialized concrete code for each generic type use, such as one version of a function for `Vec[int32]` and another for `Vec[String]`.
 
 ## 6.4 Traits
 
@@ -670,7 +671,7 @@ Aurora supports borrowed slices for zero-copy access to contiguous data.
 Examples:
 
 ```python
-def sum(xs: borrow [i32]) -> i32:
+def sum(xs: borrow [int32]) -> int32:
     total = 0
     for x in xs:
         total += x
@@ -678,7 +679,7 @@ def sum(xs: borrow [i32]) -> i32:
 ```
 
 ```python
-def starts_with(data: borrow [u8], prefix: borrow [u8]) -> bool:
+def starts_with(data: borrow [uint8], prefix: borrow [uint8]) -> bool:
     ...
 ```
 
@@ -693,7 +694,7 @@ Aurora uses `None` as the unit type and as the sole value of that type.
 Aurora also uses `None` as the empty `Option[T]` variant. The meaning is resolved by type context:
 
 ```python
-x: Option[i32] = None   # the empty option variant
+x: Option[int32] = None   # the empty option variant
 y: None = None          # the unit value
 ```
 
@@ -731,7 +732,7 @@ Rules:
 Example:
 
 ```python
-pair: (i32, bool) = (1, true)
+pair: (int32, bool) = (1, true)
 named = (String("Aurora"), 1)
 first = pair.0
 ```
@@ -740,9 +741,9 @@ first = pair.0
 
 Aurora uses explicit primitive numeric type names in v1:
 
-- signed integers: `i8`, `i16`, `i32`, `i64`, `i128`, `isize`
-- unsigned integers: `u8`, `u16`, `u32`, `u64`, `u128`, `usize`
-- floating-point: `f32`, `f64`
+- signed integers: `int8`, `int16`, `int32`, `int64`, `int128`, `intsize`
+- unsigned integers: `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize`
+- floating-point: `float32`, `float64`
 - boolean: `bool`
 
 There is no unsuffixed `int` type in v1. Examples should use fixed-width integers or pointer-width integers explicitly.
@@ -764,11 +765,31 @@ Aurora v1 standard sequence types are:
 
 Functions use `def`.
 
+Rules:
+
+- `def name(...):` is shorthand for `def name(...) -> None:`
+- reaching the end of a `None`-returning function is equivalent to `return`
+- `return value` requires a non-`None` return type
+- `return` with no value is only valid in `None`-returning functions
+- executable entry files may use top-level executable statements instead of an explicit `main`
+- a file may not mix top-level executable statements with an explicit `main` in v1
+
 Example:
 
 ```python
-def add(x: i32, y: i32) -> i32:
+def add(x: int32, y: int32) -> int32:
     return x + y
+
+def log_total(total: int32):
+    print(total)
+```
+
+Script-style entry files are also allowed:
+
+```python
+a: int32 = 6
+b: int32 = 10
+print(a + b)
 ```
 
 ## 7.2 Methods
@@ -779,7 +800,7 @@ Example:
 
 ```python
 class Counter:
-    value: i32 = 0
+    value: int32 = 0
 
     def inc(borrow mut self):
         self.value += 1
@@ -837,7 +858,7 @@ Core rules:
 This lets ownership stay explicit:
 
 - iterating over `Vec[T]` by value may consume the vector
-- iterating over `borrow [i32]` yields copied `i32` values because `i32` is copy
+- iterating over `borrow [int32]` yields copied `int32` values because `int32` is copy
 - iterating over `borrow [String]` yields `borrow String` elements
 - iterating over a channel receives values until the channel is closed
 
@@ -851,10 +872,10 @@ trait Iterable[T, IterT: Iterator[T]]:
     def into_iter(self) -> IterT
 
 for value in range(4):
-    println(value)
+    print(value)
 
 for item in borrow xs:
-    println(item)
+    print(item)
 ```
 
 ## 7.5 Constructors
@@ -877,9 +898,9 @@ Example:
 ```python
 class User:
     public name: String
-    public age: i32 = 0
+    public age: int32 = 0
 
-    def new(name: String, age: i32 = 0) -> Self:
+    def new(name: String, age: int32 = 0) -> Self:
         return Self(name=name, age=age)
 
     def guest() -> Self:
@@ -901,11 +922,11 @@ Example:
 
 ```python
 if score > 90:
-    println("A")
+    print("A")
 elif score > 80:
-    println("B")
+    print("B")
 else:
-    println("C")
+    print("C")
 
 while remaining > 0:
     if remaining == 3:
@@ -980,7 +1001,7 @@ with task_group() as group:
 Example:
 
 ```python
-jobs = Channel[i32](capacity=100)
+jobs = Channel[int32](capacity=100)
 results = Channel[String](capacity=100)
 ```
 
@@ -1107,7 +1128,7 @@ Primary recoverable errors should use a `Result[T, E]` style.
 Example:
 
 ```python
-def parse_int(s: borrow str) -> Result[i32, ParseError]:
+def parse_int(s: borrow str) -> Result[int32, ParseError]:
     ...
 ```
 
@@ -1281,9 +1302,9 @@ Recommended v1 modules:
 - `fmt`
 - `test`
 
-A small default prelude may re-export a few extremely common names, such as `println`, while their canonical library home remains explicit modules like `fmt`.
+A small default prelude may re-export a few extremely common names, such as `print`, while their canonical library home remains explicit modules like `fmt`.
 
-`print(...)` and `println(...)` are ordinary library functions, not macros. They format their arguments through the formatting traits and should borrow values for formatting where possible.
+`print(...)` is an ordinary library function, not a macro. In v1 it is the standard line-printing helper and appends a trailing newline. It formats its arguments through the formatting traits and should borrow values for formatting where possible.
 
 ## 11.5 Reflection
 
@@ -1501,7 +1522,7 @@ name: String = String("Aurora")
 
 ```python
 class User:
-    id: u64
+    id: uint64
     name: String
     email: String
 ```
@@ -1526,7 +1547,7 @@ def greet(name: borrow str) -> String:
 
 ```python
 class User:
-    id: u64
+    id: uint64
     name: String
     email: String
 
@@ -1539,7 +1560,7 @@ class User:
 ```python
 match borrow msg:
     case Message.Ping:
-        print("ping")
+    print("ping")
     case Message.Text(text):
         print(text)
     case Message.Data(data):
@@ -1549,7 +1570,7 @@ match borrow msg:
 ## 17.7 Spawning tasks
 
 ```python
-def worker(id: i32, jobs: Channel[Job], out: Channel[Result[String, Error]]):
+def worker(id: int32, jobs: Channel[Job], out: Channel[Result[String, Error]]):
     for job in jobs:
         out.send(process(job))    # ignoring send failure for brevity
 
@@ -1613,7 +1634,7 @@ while remaining > 0:
 
 ```python
 point = (3.0, 4.0)
-pair: (i32, bool) = (1, true)
+pair: (int32, bool) = (1, true)
 x = point.0
 ```
 
@@ -1662,7 +1683,7 @@ Example:
 
 ```python
 ## Returns the Euclidean distance between two points.
-def distance(a: Point, b: Point) -> f64:
+def distance(a: Point, b: Point) -> float64:
     ...
 ```
 
@@ -1691,9 +1712,10 @@ Before writing the full compiler, freeze these decisions. The rest of this docum
 13. The initial standard library uses `string`, `bytes`, `collections`, `task`, `sync`, `fs`, `fmt`, `json`, and related core modules.
 14. Scoped cleanup uses `with`; the same construct is also used for managed task scopes; there is no general-purpose `defer` in v1.
 15. Generic constraints use inline `T: Trait` bounds with `+` for multiple bounds; `try expr` supports `From[SourceError] for TargetError` conversions; and default arguments are evaluated at the call site and are not part of trait method declarations in v1.
-16. Control flow uses Python-style `if`/`elif`/`else` plus `while`; loops support `break` and `continue`; conditions must be `bool`; and tuple syntax uses `(T1, T2, ...)` with dotted numeric field access.
-17. Primitive numeric types use explicit names like `i32`, `u64`, `usize`, and `f64`; there is no bare `int` in v1; fixed-size owned arrays are deferred until after v1.
-18. `with` lowers through a standard enter/exit protocol, and `@test` is part of a small built-in attribute syntax rather than a general decorator system in v1.
+16. Functions may omit `-> None`, and executable entry files may use top-level statements instead of an explicit `main`, but a file may not use both entry styles at once in v1.
+17. Control flow uses Python-style `if`/`elif`/`else` plus `while`; loops support `break` and `continue`; conditions must be `bool`; and tuple syntax uses `(T1, T2, ...)` with dotted numeric field access.
+18. Primitive numeric types use explicit names like `int32`, `uint64`, `uintsize`, and `float64`; there is no bare `int` in v1; fixed-size owned arrays are deferred until after v1.
+19. `with` lowers through a standard enter/exit protocol, and `@test` is part of a small built-in attribute syntax rather than a general decorator system in v1.
 
 Do not start implementation until these decisions are treated as fixed.
 
@@ -2023,7 +2045,7 @@ Tuple syntax uses `(T1, T2, ...)` for types, `(v1, v2, ...)` for values, and `.0
 
 ## 23.13 Primitive types and attributes
 
-Aurora v1 primitive scalar types are `bool`, `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `f32`, and `f64`.
+Aurora v1 primitive scalar types are `bool`, `int8`, `int16`, `int32`, `int64`, `int128`, `intsize`, `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize`, `float32`, and `float64`.
 
 There is no bare `int` type in v1.
 
@@ -2086,19 +2108,27 @@ The first milestone should be a tiny but complete subset capable of this:
 
 ```python
 class Point:
-    x: f64
-    y: f64
+    x: float64
+    y: float64
 
-def distance(a: Point, b: Point) -> f64:
+def distance(a: Point, b: Point) -> float64:
     dx = a.x - b.x
     dy = a.y - b.y
     return (dx * dx + dy * dy).sqrt()
 
-def main() -> i32:
+def main() -> int32:
     p1 = Point(x=0.0, y=0.0)
     p2 = Point(x=3.0, y=4.0)
-    println(distance(p1, p2))
+    print(distance(p1, p2))
     return 0
+```
+
+An equivalent script-style milestone entry file could omit `main` entirely:
+
+```python
+p1 = Point(x=0.0, y=0.0)
+p2 = Point(x=3.0, y=4.0)
+print(distance(p1, p2))
 ```
 
 Once that works with parsing, type checking, compilation, and execution, move on to ownership, collections, `Result`, and tasks.

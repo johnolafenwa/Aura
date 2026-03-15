@@ -23,7 +23,7 @@ Current completion scope is intentionally lightweight. The language server under
 - class fields and methods
 - function parameters and simple local bindings
 - constructor-style type inference such as `p = Point(...)`
-- basic builtin members like `f64.sqrt`
+- basic builtin members like `float64.sqrt`
 
 ## Install In VS Code
 

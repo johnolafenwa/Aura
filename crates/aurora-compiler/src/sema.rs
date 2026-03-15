@@ -12,6 +12,7 @@ pub struct Program {
     pub module: Module,
     pub classes: BTreeMap<String, ClassInfo>,
     pub functions: BTreeMap<String, FunctionInfo>,
+    pub top_level_stmts: Vec<Stmt>,
 }
 
 #[derive(Clone, Debug)]
@@ -57,21 +58,20 @@ impl Type {
                     && matches!(
                         name.as_str(),
                         "bool"
-                            | "i8"
-                            | "i16"
-                            | "i32"
-                            | "i64"
-                            | "i128"
-                            | "isize"
-                            | "u8"
-                            | "u16"
-                            | "u32"
-                            | "u64"
-                            | "u128"
-                            | "usize"
-                            | "f32"
-                            | "f64"
-                            | "None"
+                            | "int8"
+                            | "int16"
+                            | "int32"
+                            | "int64"
+                            | "int128"
+                            | "intsize"
+                            | "uint8"
+                            | "uint16"
+                            | "uint32"
+                            | "uint64"
+                            | "uint128"
+                            | "uintsize"
+                            | "float32"
+                            | "float64"
                     )
             }
         }
@@ -81,7 +81,7 @@ impl Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Type::Unit => write!(f, "Unit"),
+            Type::Unit => write!(f, "None"),
             Type::Named(name, args) if args.is_empty() => write!(f, "{}", name),
             Type::Named(name, args) => {
                 write!(f, "{}[", name)?;
@@ -207,15 +207,26 @@ pub fn check(module: Module) -> Result<Program> {
     }
 
     let program = Program {
-        module,
+        module: module.clone(),
         classes,
         functions,
+        top_level_stmts: module.top_level_stmts.clone(),
     };
+
+    if !program.top_level_stmts.is_empty() && program.functions.contains_key("main") {
+        let main = program.functions.get("main").unwrap();
+        return Err(Diagnostic::at(
+            main.decl.span,
+            "files cannot mix top-level executable statements with an explicit `main` function",
+        ));
+    }
 
     let checker = FunctionChecker::new(&class_names, &program.classes, &program.functions);
     for function in program.functions.values() {
         checker.check_function(&function.decl)?;
     }
+
+    checker.check_top_level(&program.top_level_stmts)?;
 
     Ok(program)
 }
@@ -224,6 +235,16 @@ fn lower_type(
     type_ref: &TypeRef,
     class_names: &BTreeMap<String, crate::diag::Span>,
 ) -> Result<Type> {
+    if type_ref.name == "None" {
+        if !type_ref.args.is_empty() {
+            return Err(Diagnostic::at(
+                type_ref.span,
+                "`None` does not take generic arguments",
+            ));
+        }
+        return Ok(Type::Unit);
+    }
+
     let args = type_ref
         .args
         .iter()
@@ -244,22 +265,21 @@ fn is_builtin_type(name: &str) -> bool {
     matches!(
         name,
         "bool"
-            | "i8"
-            | "i16"
-            | "i32"
-            | "i64"
-            | "i128"
-            | "isize"
-            | "u8"
-            | "u16"
-            | "u32"
-            | "u64"
-            | "u128"
-            | "usize"
-            | "f32"
-            | "f64"
+            | "int8"
+            | "int16"
+            | "int32"
+            | "int64"
+            | "int128"
+            | "intsize"
+            | "uint8"
+            | "uint16"
+            | "uint32"
+            | "uint64"
+            | "uint128"
+            | "uintsize"
+            | "float32"
+            | "float64"
             | "String"
-            | "None"
     )
 }
 
@@ -300,7 +320,11 @@ impl<'a> FunctionChecker<'a> {
             match stmt {
                 Stmt::Assign(assign) => self.check_assign(assign, &mut locals)?,
                 Stmt::Return(return_stmt) => {
-                    let ty = self.type_of_expr(&return_stmt.value, &mut locals)?;
+                    let ty = if let Some(value) = &return_stmt.value {
+                        self.type_of_expr(value, &mut locals)?
+                    } else {
+                        Type::Unit
+                    };
                     if ty != return_type {
                         return Err(Diagnostic::at(
                             return_stmt.span,
@@ -323,6 +347,27 @@ impl<'a> FunctionChecker<'a> {
                 function.span,
                 format!("function `{}` is missing a return", function.name),
             ));
+        }
+
+        Ok(())
+    }
+
+    fn check_top_level(&self, body: &[Stmt]) -> Result<()> {
+        let mut locals = HashMap::new();
+
+        for stmt in body {
+            match stmt {
+                Stmt::Assign(assign) => self.check_assign(assign, &mut locals)?,
+                Stmt::Expr(expr_stmt) => {
+                    self.type_of_expr(&expr_stmt.expr, &mut locals)?;
+                }
+                Stmt::Return(return_stmt) => {
+                    return Err(Diagnostic::at(
+                        return_stmt.span,
+                        "`return` is only allowed inside a function body",
+                    ));
+                }
+            }
         }
 
         Ok(())
@@ -414,8 +459,8 @@ impl<'a> FunctionChecker<'a> {
                 .get(name)
                 .map(|binding| binding.ty.clone())
                 .ok_or_else(|| Diagnostic::at(expr.span, format!("unknown name `{}`", name))),
-            ExprKind::Int(_) => Ok(Type::named("i32")),
-            ExprKind::Float(_) => Ok(Type::named("f64")),
+            ExprKind::Int(_) => Ok(Type::named("int32")),
+            ExprKind::Float(_) => Ok(Type::named("float64")),
             ExprKind::Group(inner) => self.type_of_expr(inner, locals),
             ExprKind::Binary { op, left, right } => {
                 let left_ty = self.type_of_expr(left, locals)?;
@@ -433,7 +478,11 @@ impl<'a> FunctionChecker<'a> {
                     (
                         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div,
                         Type::Named(name, args),
-                    ) if args.is_empty() && matches!(name.as_str(), "i32" | "f64") => Ok(left_ty),
+                    ) if args.is_empty()
+                        && matches!(name.as_str(), "int32" | "float64") =>
+                    {
+                        Ok(left_ty)
+                    }
                     _ => Err(Diagnostic::at(
                         expr.span,
                         format!("unsupported operands for binary expression: `{}`", left_ty),
@@ -456,17 +505,17 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
         match &callee.kind {
-            ExprKind::Name(name) if name == "println" => {
+            ExprKind::Name(name) if name == "print" => {
                 if args.len() != 1 {
                     return Err(Diagnostic::at(
                         span,
-                        "`println` expects exactly one argument",
+                        "`print` expects exactly one argument",
                     ));
                 }
                 if args[0].name.is_some() {
                     return Err(Diagnostic::at(
                         span,
-                        "`println` does not take keyword arguments",
+                        "`print` does not take keyword arguments",
                     ));
                 }
                 self.type_of_expr(&args[0].value, locals)?;
@@ -565,7 +614,7 @@ impl<'a> FunctionChecker<'a> {
                 let receiver_ty = self.type_of_expr(object, locals)?;
                 match (&receiver_ty, field.as_str()) {
                     (Type::Named(name, type_args), "sqrt")
-                        if type_args.is_empty() && name == "f64" =>
+                        if type_args.is_empty() && name == "float64" =>
                     {
                         if args.iter().any(|argument| argument.name.is_some()) {
                             return Err(Diagnostic::at(
@@ -576,7 +625,7 @@ impl<'a> FunctionChecker<'a> {
                         if !args.is_empty() {
                             return Err(Diagnostic::at(span, "`sqrt` does not take arguments"));
                         }
-                        Ok(Type::named("f64"))
+                        Ok(Type::named("float64"))
                     }
                     _ => Err(Diagnostic::at(
                         span,

@@ -51,7 +51,7 @@ The repository now contains a working bootstrap compiler/runtime path for the fi
 - parse
 - basic semantic checking
 - evaluate `main`
-- print runtime output through `println`
+- print runtime output through `print`
 
 ## Next Actions
 

@@ -21,6 +21,8 @@ This repository is intended to evolve as a monorepo for the Aurora language and 
 - `work/`
   - persistent task board and implementation notes
 
+Compiler build and direct binary usage are documented in [crates/aura/README.md](/Users/johnolafenwa/source2/Aurora/crates/aura/README.md).
+
 Current editor tooling:
 
 - `tools/vscode-aurora`

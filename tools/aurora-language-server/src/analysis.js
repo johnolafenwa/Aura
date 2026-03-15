@@ -28,16 +28,20 @@ const KEYWORDS = [
 ];
 
 const BUILTIN_MEMBERS = {
-  f64: [{ name: "sqrt", kind: "method", detail: "sqrt() -> f64" }],
+  float64: [{ name: "sqrt", kind: "method", detail: "sqrt() -> float64" }],
   String: [
     { name: "clone", kind: "method", detail: "clone() -> String" },
     { name: "as_str", kind: "method", detail: "as_str() -> borrow str" }
   ],
   Vec: [
-    { name: "len", kind: "method", detail: "len() -> usize" },
+    { name: "len", kind: "method", detail: "len() -> uintsize" },
     { name: "clone", kind: "method", detail: "clone() -> Vec[T]" }
   ]
 };
+
+const BUILTIN_FUNCTIONS = [
+  { name: "print", kind: "function", detail: "print(value) -> None" }
+];
 
 function analyzeDocument(text) {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
@@ -112,13 +116,13 @@ function parseClass(lines, startLine, indent) {
     }
 
     const methodMatch = trimmed.match(
-      /^def\s+([a-zA-Z_][A-Za-z0-9_]*)\s*\((.*)\)\s*->\s*([^:]+)\s*:/
+      /^def\s+([a-zA-Z_][A-Za-z0-9_]*)\s*\((.*)\)(?:\s*->\s*([^:]+))?\s*:/
     );
     if (methodMatch) {
       const method = {
         kind: "method",
         name: methodMatch[1],
-        returnType: normalizeType(methodMatch[3]),
+        returnType: normalizeType(methodMatch[3] || "None"),
         line: i
       };
       classInfo.methods.push(method);
@@ -146,12 +150,14 @@ function parseClass(lines, startLine, indent) {
 
 function parseFunctionSignature(lines, startLine, indent) {
   const line = lines[startLine].trim();
-  const headerMatch = line.match(/^def\s+([a-zA-Z_][A-Za-z0-9_]*)\s*\((.*)\)\s*->\s*([^:]+)\s*:/);
+  const headerMatch = line.match(
+    /^def\s+([a-zA-Z_][A-Za-z0-9_]*)\s*\((.*)\)(?:\s*->\s*([^:]+))?\s*:/
+  );
   const functionInfo = {
     kind: "function",
     name: headerMatch[1],
     params: parseParams(headerMatch[2]),
-    returnType: normalizeType(headerMatch[3]),
+    returnType: normalizeType(headerMatch[3] || "None"),
     locals: new Map(),
     line: startLine,
     endLine: startLine
@@ -233,10 +239,10 @@ function inferExpressionType(expression, moduleInfo, functionInfo) {
   const expr = stripOuterParens(expression.trim());
 
   if (/^\d+\.\d+$/.test(expr)) {
-    return "f64";
+    return "float64";
   }
   if (/^\d+$/.test(expr)) {
-    return "i32";
+    return "int32";
   }
   if (/^(true|false)$/.test(expr)) {
     return "bool";
@@ -276,8 +282,8 @@ function inferBinaryExpressionType(expression, moduleInfo, functionInfo) {
   if (!leftType || !rightType) {
     return null;
   }
-  if (leftType === "f64" || rightType === "f64") {
-    return "f64";
+  if (leftType === "float64" || rightType === "float64") {
+    return "float64";
   }
   if (leftType === rightType) {
     return leftType;
@@ -359,6 +365,9 @@ function completionsForDocument(text, line, character, triggerCharacter) {
       kind: "function",
       detail: `${functionInfoItem.name}() -> ${functionInfoItem.returnType}`
     });
+  }
+  for (const builtin of BUILTIN_FUNCTIONS) {
+    completions.push(builtin);
   }
   return completions;
 }

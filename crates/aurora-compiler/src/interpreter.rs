@@ -72,7 +72,12 @@ enum ExecFlow {
 impl<'a> Interpreter<'a> {
     fn run_main(&mut self) -> Result<Value> {
         let Some(main_fn) = self.program.functions.get("main") else {
-            return Err(Diagnostic::new("no `main` function was found"));
+            if self.program.top_level_stmts.is_empty() {
+                return Err(Diagnostic::new(
+                    "no `main` function or top-level script statements were found",
+                ));
+            }
+            return self.run_top_level_script();
         };
 
         if !main_fn.signature.params.is_empty() {
@@ -83,6 +88,19 @@ impl<'a> Interpreter<'a> {
         }
 
         self.call_function(&main_fn.decl, Vec::new())
+    }
+
+    fn run_top_level_script(&mut self) -> Result<Value> {
+        let mut env = HashMap::new();
+
+        for stmt in &self.program.top_level_stmts {
+            match self.exec_stmt(stmt, &mut env)? {
+                ExecFlow::Continue => {}
+                ExecFlow::Return(_) => unreachable!("top-level return should be rejected in sema"),
+            }
+        }
+
+        Ok(Value::Int(0))
     }
 
     fn call_function(&mut self, function: &FunctionDecl, args: Vec<Value>) -> Result<Value> {
@@ -109,7 +127,12 @@ impl<'a> Interpreter<'a> {
                 Ok(ExecFlow::Continue)
             }
             Stmt::Return(return_stmt) => {
-                Ok(ExecFlow::Return(self.eval_expr(&return_stmt.value, env)?))
+                let value = if let Some(value) = &return_stmt.value {
+                    self.eval_expr(value, env)?
+                } else {
+                    Value::Unit
+                };
+                Ok(ExecFlow::Return(value))
             }
             Stmt::Expr(expr_stmt) => {
                 self.eval_expr(&expr_stmt.expr, env)?;
@@ -160,11 +183,11 @@ impl<'a> Interpreter<'a> {
         env: &mut HashMap<String, Value>,
     ) -> Result<Value> {
         match &callee.kind {
-            ExprKind::Name(name) if name == "println" => {
+            ExprKind::Name(name) if name == "print" => {
                 if args.len() != 1 {
                     return Err(Diagnostic::at(
                         callee.span,
-                        "`println` expects exactly one argument",
+                        "`print` expects exactly one argument",
                     ));
                 }
                 let value = self.eval_expr(&args[0].value, env)?;
@@ -228,7 +251,7 @@ impl<'a> Interpreter<'a> {
                     other => Err(Diagnostic::at(
                         callee.span,
                         format!(
-                            "`sqrt` is only available on `f64`, found `{}`",
+                            "`sqrt` is only available on `float64`, found `{}`",
                             other.render()
                         ),
                     )),

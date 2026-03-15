@@ -3,6 +3,7 @@ use crate::diag::Span;
 #[derive(Clone, Debug)]
 pub struct Module {
     pub items: Vec<Item>,
+    pub top_level_stmts: Vec<Stmt>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,7 +71,7 @@ pub struct AssignStmt {
 
 #[derive(Clone, Debug)]
 pub struct ReturnStmt {
-    pub value: Expr,
+    pub value: Option<Expr>,
     pub span: Span,
 }
 

@@ -2,11 +2,19 @@
 
 This directory contains runnable Aurora programs for the current compiler bootstrap.
 
+Current numeric spellings use explicit names such as `int32` and `float64`.
+
 ## Current Examples
 
 - `point.au`
   - first milestone sample
   - defines `Point`, computes the distance between `(0, 0)` and `(3, 4)`, and prints `5`
+- `basic_addition.au`
+  - shows a `main` function with an omitted return type
+  - prints `16`
+- `top_level_addition.au`
+  - shows a runnable script without an explicit `main`
+  - prints `16`
 
 ## Run An Example
 
@@ -14,12 +22,16 @@ From the repo root:
 
 ```bash
 cargo run -p aura -- run examples/point.au
+cargo run -p aura -- run examples/basic_addition.au
+cargo run -p aura -- run examples/top_level_addition.au
 ```
 
-Expected output:
+Expected outputs:
 
 ```text
 5
+16
+16
 ```
 
 ## Type Check An Example

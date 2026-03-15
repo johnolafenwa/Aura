@@ -1,14 +1,14 @@
 class Point:
-    x: f64
-    y: f64
+    x: float64
+    y: float64
 
-def distance(a: Point, b: Point) -> f64:
+def distance(a: Point, b: Point) -> float64:
     dx = a.x - b.x
     dy = a.y - b.y
     return (dx * dx + dy * dy).sqrt()
 
-def main() -> i32:
+def main() -> int32:
     p1 = Point(x=0.0, y=0.0)
     p2 = Point(x=3.0, y=4.0)
-    println(distance(p1, p2))
+    print(distance(p1, p2))
     return 0

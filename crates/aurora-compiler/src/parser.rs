@@ -18,14 +18,22 @@ struct Parser {
 impl Parser {
     fn parse_module(&mut self) -> Result<Module> {
         let mut items = Vec::new();
+        let mut top_level_stmts = Vec::new();
         self.skip_newlines();
 
         while !self.at_eof() {
-            items.push(self.parse_item()?);
+            if self.at_keyword_class() || self.at_keyword_def() {
+                items.push(self.parse_item()?);
+            } else {
+                top_level_stmts.push(self.parse_stmt()?);
+            }
             self.skip_newlines();
         }
 
-        Ok(Module { items })
+        Ok(Module {
+            items,
+            top_level_stmts,
+        })
     }
 
     fn parse_item(&mut self) -> Result<Item> {
@@ -87,8 +95,15 @@ impl Parser {
         self.expect_simple(TokenKind::LParen)?;
         let params = self.parse_params()?;
         self.expect_simple(TokenKind::RParen)?;
-        self.expect_simple(TokenKind::Arrow)?;
-        let return_type = self.parse_type()?;
+        let return_type = if self.eat_simple(&TokenKind::Arrow).is_some() {
+            self.parse_type()?
+        } else {
+            TypeRef {
+                name: "None".to_string(),
+                args: Vec::new(),
+                span,
+            }
+        };
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
         self.expect_simple(TokenKind::Indent)?;
@@ -147,7 +162,11 @@ impl Parser {
 
     fn parse_return_stmt(&mut self) -> Result<Stmt> {
         let span = self.expect_keyword(TokenKind::KwReturn)?.span;
-        let value = self.parse_expr()?;
+        let value = if self.at_simple(&TokenKind::Newline) {
+            None
+        } else {
+            Some(self.parse_expr()?)
+        };
         self.expect_newline()?;
         Ok(Stmt::Return(ReturnStmt { value, span }))
     }

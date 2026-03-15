@@ -172,7 +172,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.aurora",
-          "match": "\\b(bool|i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f32|f64|String|Option|Result|Channel|Vec)\\b"
+          "match": "\\b(bool|int8|int16|int32|int64|int128|intsize|uint8|uint16|uint32|uint64|uint128|uintsize|float32|float64|String|Option|Result|Channel|Vec)\\b"
         }
       ]
     },
