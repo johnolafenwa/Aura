@@ -1,0 +1,18 @@
+class Greeter:
+    prefix: String
+
+    def say(borrow self, name: String) -> String:
+        return self.prefix + name
+
+    def named(prefix: String) -> Greeter:
+        return Greeter(prefix=prefix)
+
+def subtract(left: int32, right: int32) -> int32:
+    return left - right
+
+def main() -> int32:
+    greeter = Greeter.named(prefix="hello, ")
+    amount = subtract(left=10, right=3)
+    print(greeter.say(name="aurora"))
+    print(amount)
+    return 0

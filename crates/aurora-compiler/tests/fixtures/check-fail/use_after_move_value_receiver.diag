@@ -1,0 +1,5 @@
+error: use of moved value `token`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/use_after_move_value_receiver.au:10:11
+   |
+10 |     print(token.value)
+   |           ^

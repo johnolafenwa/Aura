@@ -1,0 +1,13 @@
+enum TrafficLight:
+    Red
+    Yellow
+    Green
+
+def describe(light: TrafficLight) -> String:
+    match light:
+        case TrafficLight.Red:
+            return "red"
+        case TrafficLight.Yellow:
+            return "yellow"
+        case TrafficLight.Green:
+            return "green"

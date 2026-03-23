@@ -1,0 +1,34 @@
+def divide(a: int32, b: int32) -> Result[int32, String]:
+    if b == 0:
+        return Result.Err("division by zero")
+    return Result.Ok(a / b)
+
+def first_value(flag: bool) -> Option[int32]:
+    if flag:
+        return Option.Some(7)
+    return Option.None
+
+def main() -> int32:
+    good: Result[int32, String] = divide(8, 2)
+    bad: Result[int32, String] = divide(8, 0)
+    maybe: Option[int32] = first_value(true)
+
+    match good:
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(message):
+            print(message)
+
+    match bad:
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(message):
+            print(message)
+
+    match maybe:
+        case Option.Some(value):
+            print(value)
+        case Option.None:
+            print(0)
+
+    return 0

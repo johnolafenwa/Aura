@@ -1,0 +1,5 @@
+def main() -> int32:
+    select:
+        case value = after(1s):
+            print(value)
+    return 0

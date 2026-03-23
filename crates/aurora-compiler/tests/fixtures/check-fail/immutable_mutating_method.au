@@ -1,0 +1,10 @@
+class Counter:
+    value: int32
+
+    def bump(borrow mut self):
+        self.value += 1
+
+def main() -> int32:
+    counter = Counter(value=4)
+    counter.bump()
+    return 0

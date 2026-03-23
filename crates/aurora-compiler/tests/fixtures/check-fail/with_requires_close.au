@@ -1,0 +1,7 @@
+class PlainValue:
+    value: int32
+
+def main() -> int32:
+    with item = PlainValue(value=1):
+        print(item.value)
+    return 0

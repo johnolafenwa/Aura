@@ -1,0 +1,5 @@
+error: use of moved value `text`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/double_move_function_arg.au:7:18
+  |
+7 |     consume(text=text)
+  |                  ^

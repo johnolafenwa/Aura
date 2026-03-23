@@ -1,0 +1,7 @@
+def main():
+    mut counter: int32 = 1
+
+    counter = counter + 1
+    counter += 3
+
+    print(counter)

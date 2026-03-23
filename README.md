@@ -1,6 +1,6 @@
 # Aurora
 
-Aurora is a systems programming language designed to have python like simplicity, the memory safety of rust and the concurrency of Go.
+Aurora is a systems programming language designed to have Python-like simplicity, the memory safety of Rust, and the concurrency model of Go.
 
 The goal is to build a systems programming language that is easy to learn and very effective for building agents and ML infrastructure.
 
@@ -15,13 +15,19 @@ This repository is intended to evolve as a monorepo for the Aurora language and 
 - `package.json`
   - npm workspace manifest for repo-managed tools
 - `examples/`
-  - sample Aurora programs
+  - categorized sample Aurora programs
+- `tutorials/`
+  - Markdown tutorials covering the implemented language subset
 - `docs/`
   - language proposal and supporting documentation
 - `work/`
   - persistent task board and implementation notes
 
 Compiler build and direct binary usage are documented in [crates/aura/README.md](/Users/johnolafenwa/source2/Aurora/crates/aura/README.md).
+Compiler library testing notes live in [crates/aurora-compiler/README.md](/Users/johnolafenwa/source2/Aurora/crates/aurora-compiler/README.md).
+The categorized example library is documented in [examples/README.md](/Users/johnolafenwa/source2/Aurora/examples/README.md).
+The tutorial track lives in [tutorials/README.md](/Users/johnolafenwa/source2/Aurora/tutorials/README.md).
+The repo testing strategy is documented in [docs/testing_strategy.md](/Users/johnolafenwa/source2/Aurora/docs/testing_strategy.md).
 
 Current editor tooling:
 
@@ -29,6 +35,79 @@ Current editor tooling:
   - VS Code extension for Aurora syntax highlighting and LSP client integration
 - `tools/aurora-language-server`
   - Aurora Language Server Protocol implementation
+
+Current bootstrap compiler workflow:
+
+- `cargo run -p aura -- check examples/classes/point_distance.au`
+  - parse and type check a program
+- `cargo run -p aura -- run examples/control_flow/while_break_continue.au`
+  - execute the interpreter-backed bootstrap runtime
+- `cargo run -p aura -- run examples/classes/methods.au`
+  - execute user-defined instance and associated methods
+- `cargo run -p aura -- run examples/enums/result_match.au`
+  - execute enum construction plus exhaustive `match`
+- `cargo run -p aura -- run examples/enums/result_option.au`
+  - execute built-in `Result[T, E]` and `Option[T]` values with exhaustive `match`
+- `cargo run -p aura -- run examples/error_handling/try_result.au`
+  - execute `try expr` over `Result[T, E]`
+- `cargo run -p aura -- run examples/generics/box_and_wrapper.au`
+  - execute user-defined generic classes, enums, and functions
+- `cargo run -p aura -- run examples/basics/default_arguments.au`
+  - execute default parameter values on ordinary functions
+- `cargo run -p aura -- run examples/basics/pass_keyword.au`
+  - execute the `pass` no-op statement in intentionally empty blocks
+- `cargo run -p aura -- run examples/modules/simple_import.au`
+  - execute local file modules with `import`, `from ... import ...`, and `public` module boundaries
+- `cargo run -p aura -- run examples/traits/greeter.au`
+  - execute trait declarations, `impl Trait for Type`, and bounded generic calls
+- `cargo run -p aura -- run examples/numbers/numeric_casts.au`
+  - execute explicit numeric casts with `expr as Type`
+- `cargo run -p aura -- run examples/resources/with_resource.au`
+  - execute deterministic scoped cleanup with `with`
+- `cargo run -p aura -- run examples/concurrency/channels_spawn.au`
+  - execute bootstrap channels and spawned tasks
+- `cargo run -p aura -- run examples/concurrency/sleep_builtin.au`
+  - execute `sleep(duration)` delays in the bootstrap runtime and MIR path
+- `cargo run -p aura -- run-mir examples/classes/methods.au`
+  - execute the current MIR runtime path for the current implemented Aurora surface
+- `cargo run -p aura -- build -o ./target/aurora-point examples/point.au`
+  - compile a standalone bootstrap binary through the current backend path
+- `cargo run -p aura -- ast examples/classes/point_distance.au`
+  - print the parsed syntax tree
+- `cargo run -p aura -- ast-json examples/classes/point_distance.au`
+  - print the parsed syntax tree as machine-readable JSON
+- `cargo run -p aura -- mir examples/control_flow/while_break_continue.au`
+  - print the lowered MIR for the checked program
+- `cargo run -p aura -- analyze examples/classes/point_distance.au`
+  - print machine-readable compiler analysis for diagnostics, symbols, hover, and definition
+- `cat examples/modules/simple_import.au | cargo run -p aura -- analyze --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au`
+  - analyze an editor-style buffer while still resolving local imports relative to the supplied path
+- `cargo run -p aura -- complete --line 5 --character 11 --trigger . examples/point.au`
+  - print machine-readable completion items at a source position
+  - `--line` and `--character` are zero-based
+  - member completion expects the cursor positioned just after `.`
+  - the CLI tolerates the common incomplete-editor state where the current buffer contains a dangling member access such as `counter.`
+  - stdin-backed completion now also resolves local imported modules relative to the supplied file path
+- `npm run coverage:compiler`
+  - measure current Rust compiler-library coverage with `cargo-llvm-cov`
+- `npm run coverage:compiler:check`
+  - enforce the current compiler coverage floor
+- `npm run coverage:lsp:check`
+  - enforce the current LSP coverage floor
+- `npm run ci`
+  - run the current repo-quality gate locally
+
+Current `build` status:
+
+- `aura build` now produces a standalone native binary by generating and compiling a small Rust launcher linked against `aurora-compiler`
+- the generated launcher now embeds checked MIR and runs it directly through `aurora_compiler::run_mir(...)`
+- this is still a bootstrap artifact path, not the final MIR-native code generation backend yet
+
+Current `run-mir` status:
+
+- `aura run-mir` executes programs natively through the MIR runtime for the current implemented Aurora surface
+- `spawn`, `select`, channels, task groups, `try`, and `with` now run through MIR
+- the next backend step is replacing the bootstrap launcher build with real MIR-native code generation
 
 ## VS Code install
 
@@ -40,7 +119,9 @@ Development install:
 4. Open the repo in VS Code.
 5. Open `tools/vscode-aurora`.
 6. Press `F5` to launch an Extension Development Host.
-7. Open an `.au` file such as `examples/point.au` in the Extension Development Host.
+7. Open an `.au` file such as `examples/classes/point_distance.au` in the Extension Development Host.
+
+The language server now prefers compiler-owned analysis from `aura analyze` and `aura complete` for diagnostics, document symbols, hover, go-to-definition, and completions. That compiler path now understands local module imports for file-backed and stdin-backed buffers. It falls back to the in-repo JS analysis layer when the compiler cannot analyze the current buffer.
 
 Packaged install:
 

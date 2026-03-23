@@ -1,0 +1,5 @@
+error: integer value `128` does not fit in `int8`
+ --> crates/aurora-compiler/tests/fixtures/run-fail/int8_overflow_add_assign.au:3:5
+  |
+3 |     value += 1
+  |     ^

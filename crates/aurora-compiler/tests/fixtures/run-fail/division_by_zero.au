@@ -1,0 +1,4 @@
+def main() -> int32:
+    value: int32 = 10 / 0
+    print(value)
+    return 0

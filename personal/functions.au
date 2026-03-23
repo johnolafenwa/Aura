@@ -1,0 +1,29 @@
+def distance(a: int32, b: int32) -> int32:
+    
+    c = a + b 
+    
+    return c
+    
+class Point:
+    
+    x: float64
+    y: float64
+    
+
+def point_distance(a: Point, b: Point) -> float64:
+    
+    dx = a.x - b.x 
+    dy = a.y - b.y 
+    
+    return (dx * dx + dy * dy).sqrt()
+    
+def main():
+    
+    point1 = Point(x = 5.0, y = 4.5)
+    point2 = Point(x = 10.8, y = 3.2)
+    
+    distance = point_distance(point1, point2)
+    
+    print(distance)
+    
+

@@ -1,0 +1,63 @@
+# Modules And Visibility
+
+Aurora now supports local file modules plus `public` module boundaries.
+
+## Importing A Module
+
+Use Python-style import syntax:
+
+```python
+import helpers.math
+```
+
+Then call public functions through the module path:
+
+```python
+print(helpers.math.double(value=5))
+```
+
+## Importing Names Directly
+
+Use `from ... import ...` when you want a direct local binding:
+
+```python
+from helpers.counter import Counter
+```
+
+This is also the current way to bring types into annotations and constructors without repeating a module path.
+
+## `public`
+
+Top-level items are private by default. Mark exported APIs explicitly:
+
+```python
+public def double(value: int32) -> int32:
+    return value * 2
+```
+
+```python
+public class Counter:
+    public value: int32
+
+    public def read(borrow self) -> int32:
+        return self.value
+```
+
+Across module boundaries:
+
+- importing a private top-level item is rejected
+- reading a private field is rejected
+- calling a private method is rejected
+- keyword construction only exposes participating `public` fields
+
+Within the same module, private members remain usable.
+
+## Maintained Example
+
+See [examples/modules/simple_import.au](../examples/modules/simple_import.au) with its helper modules under [examples/modules/helpers](../examples/modules/helpers).
+
+## Current Limits
+
+- module resolution is local-file based for now
+- package manifests and external dependency resolution are still proposal-only
+- module-qualified type annotations are not implemented yet; import types with `from ... import Type`

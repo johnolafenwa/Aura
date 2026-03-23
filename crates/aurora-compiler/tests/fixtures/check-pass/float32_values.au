@@ -1,0 +1,15 @@
+class Measurement:
+    value: float32
+
+def double(x: float32) -> float32:
+    return x + x
+
+def main() -> int32:
+    a: float32 = 3.25
+    b: float32 = 1.5 + 0.5
+    measurement = Measurement(value=2.5)
+
+    print(a)
+    print(b)
+    print(double(x=measurement.value))
+    return 0

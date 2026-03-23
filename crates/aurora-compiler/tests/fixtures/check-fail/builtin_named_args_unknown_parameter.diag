@@ -1,0 +1,5 @@
+error: `print` has no parameter named `text`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/builtin_named_args_unknown_parameter.au:2:11
+  |
+2 |     print(text=1)
+  |           ^

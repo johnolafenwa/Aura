@@ -1,0 +1,19 @@
+# bindings
+
+# mutable
+
+mut counter: int32 = 0
+counter = counter + 1
+
+counter += 5
+
+print(counter)
+
+a: float64 = 45.8
+b: float64 = 100.0
+
+c = a + b
+
+print(c)
+
+

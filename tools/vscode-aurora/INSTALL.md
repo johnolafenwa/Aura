@@ -6,6 +6,7 @@ This guide covers both development use from this monorepo and installing Aurora 
 
 - Node.js 22 or later
 - VS Code 1.90 or later
+- Rust toolchain if you want compiler-backed diagnostics/navigation from the repo workspace
 
 ## Install From This Repo For Development
 
@@ -25,9 +26,23 @@ This guide covers both development use from this monorepo and installing Aurora 
    - `tools/vscode-aurora`
 7. Press `F5` to launch an Extension Development Host.
 8. In the Extension Development Host, open an Aurora file such as:
-   - `examples/point.au`
+   - `examples/classes/point_distance.au`
 
 The Aurora extension will activate automatically for `.au` files and start the bundled Aurora language server.
+
+For compiler-backed diagnostics, symbols, hover, go-to-definition, and completions in this repo workspace, also build the Aurora CLI at least once:
+
+- `cargo build -p aura`
+
+The language server will look for:
+
+- `AURORA_LSP_AURA_PATH`
+- `target/debug/aura`
+- `target/release/aura`
+- `cargo run -q -p aura --` inside the repo workspace
+- `aura` on `PATH`
+
+If no compiler command is available, the extension falls back to the bundled JS document analysis layer.
 
 ## Package A VSIX From This Repo
 
@@ -70,5 +85,8 @@ The Aurora VS Code tooling currently provides:
 - document symbols
 - top-level completions
 - member completions after `.`
+- hover
+- go-to-definition
+- document diagnostics
 
 The LSP implementation currently comes from `tools/aurora-language-server`, and the extension bundles that server into its own `dist/` output during build.

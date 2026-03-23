@@ -1,0 +1,8 @@
+class Point:
+    x: float64
+    y: float64
+
+def distance(a: Point, b: Point) -> float64:
+    dx = a.x - b.x
+    dy = a.y - b.y
+    return (dx * dx + dy * dy).sqrt()

@@ -156,7 +156,7 @@
       "patterns": [
         {
           "name": "keyword.control.aurora",
-          "match": "\\b(import|return|if|elif|else|while|for|in|match|case|with|select|try|spawn|break|continue|impl|as)\\b"
+          "match": "\\b(import|return|if|elif|else|while|for|in|match|case|with|select|try|spawn|and|or|not|break|continue|pass|impl|as)\\b"
         },
         {
           "name": "storage.modifier.aurora",
@@ -172,7 +172,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.aurora",
-          "match": "\\b(bool|int8|int16|int32|int64|int128|intsize|uint8|uint16|uint32|uint64|uint128|uintsize|float32|float64|String|Option|Result|Channel|Vec)\\b"
+          "match": "\\b(bool|int8|int16|int32|int64|int128|intsize|uint8|uint16|uint32|uint64|uint128|uintsize|float32|float64|String|Duration|Option|Result|SendError|Channel|Task|TaskGroup|Vec)\\b"
         }
       ]
     },

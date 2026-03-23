@@ -1,0 +1,11 @@
+def main() -> int32:
+    ready = true
+    blocked = false
+
+    if ready and not blocked:
+        print("ready")
+    else:
+        print("blocked")
+
+    print((ready and not blocked) or false)
+    return 0

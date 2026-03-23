@@ -1,0 +1,6 @@
+a = 56
+b = 100
+
+total = a + b
+
+print(total)

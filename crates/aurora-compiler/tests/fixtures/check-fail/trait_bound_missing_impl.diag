@@ -1,0 +1,5 @@
+error: type `User` does not implement trait `Greeter`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/trait_bound_missing_impl.au:11:5
+   |
+11 |     speak(value=User(name="aurora"))
+   |     ^

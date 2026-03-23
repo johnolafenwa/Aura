@@ -1,0 +1,11 @@
+def main() -> int32:
+    mut total: int32 = 0
+
+    for value in range(stop=3):
+        total += value
+
+    for value in range(start=3, stop=5):
+        total += value
+
+    print(value=total)
+    return 0

@@ -1,0 +1,8 @@
+class Counter:
+    value: int32
+
+    def read(borrow self) -> int32:
+        return self.value
+
+    def zero() -> Counter:
+        return Counter(value=0)

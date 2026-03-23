@@ -1,0 +1,4 @@
+def main():
+
+    name = "Hello world"
+    print(name)

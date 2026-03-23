@@ -1,0 +1,10 @@
+class Empty:
+    pass
+
+def noop():
+    pass
+
+def main() -> int32:
+    noop()
+    print(0)
+    return 0

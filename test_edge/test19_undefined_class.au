@@ -1,0 +1,3 @@
+def main():
+    p = UnknownClass(x=1)
+    print(p)

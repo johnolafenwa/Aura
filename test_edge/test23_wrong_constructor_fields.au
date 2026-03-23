@@ -1,0 +1,7 @@
+class Point:
+    x: float64
+    y: float64
+
+def main():
+    p = Point(x=1.0, z=2.0)
+    print(p.x)

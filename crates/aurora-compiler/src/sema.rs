@@ -1,24 +1,37 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::ast::{
-    Argument, AssignStmt, BinaryOp, ClassDecl, Expr, ExprKind, FunctionDecl, Item, Module, Stmt,
-    TypeRef,
+    Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, EnumDecl, Expr, ExprKind,
+    FunctionDecl, ImplDecl, Item, MatchStmt, Module, Param, Pattern, ReceiverKind, SelectStmt,
+    Stmt, TraitDecl, TypeRef, UnaryOp, WithStmt,
+};
+use crate::call::{
+    bind_call_arguments, callable_params_from_decl, BuiltinFunction, BuiltinMember, CallConvention,
 };
 use crate::diag::{Diagnostic, Result};
 
 #[derive(Clone, Debug)]
 pub struct Program {
     pub module: Module,
+    pub module_name: String,
     pub classes: BTreeMap<String, ClassInfo>,
+    pub enums: BTreeMap<String, EnumInfo>,
     pub functions: BTreeMap<String, FunctionInfo>,
+    pub traits: BTreeMap<String, TraitInfo>,
+    pub trait_impls: Vec<TraitImplInfo>,
+    pub imported_modules: BTreeMap<String, ModuleNamespace>,
     pub top_level_stmts: Vec<Stmt>,
 }
 
 #[derive(Clone, Debug)]
 pub struct ClassInfo {
+    pub module_name: String,
     pub decl: ClassDecl,
     pub fields: BTreeMap<String, FieldInfo>,
+    pub methods: BTreeMap<String, MethodInfo>,
 }
 
 #[derive(Clone, Debug)]
@@ -28,9 +41,85 @@ pub struct FieldInfo {
 }
 
 #[derive(Clone, Debug)]
+pub struct EnumInfo {
+    pub module_name: String,
+    pub decl: EnumDecl,
+    pub variants: BTreeMap<String, EnumVariantInfo>,
+}
+
+#[derive(Clone, Debug)]
+pub struct EnumVariantInfo {
+    pub payload: Option<Type>,
+}
+
+#[derive(Clone, Debug)]
 pub struct FunctionInfo {
+    pub module_name: String,
     pub decl: FunctionDecl,
     pub signature: FunctionSignature,
+    pub type_param_bounds: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MethodInfo {
+    pub decl: FunctionDecl,
+    pub signature: FunctionSignature,
+    pub type_param_bounds: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TraitInfo {
+    pub module_name: String,
+    pub decl: TraitDecl,
+    pub methods: BTreeMap<String, TraitMethodInfo>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TraitMethodInfo {
+    pub decl: FunctionDecl,
+    pub signature: FunctionSignature,
+    pub type_param_bounds: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TraitImplInfo {
+    pub decl: ImplDecl,
+    pub trait_name: String,
+    pub for_type: Type,
+    pub methods: BTreeMap<String, TraitImplMethodInfo>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TraitImplMethodInfo {
+    pub decl: FunctionDecl,
+    pub signature: FunctionSignature,
+    pub type_param_bounds: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Clone, Debug)]
+pub enum ImportedBinding {
+    Function(FunctionInfo),
+    Class(ClassInfo),
+    Enum(EnumInfo),
+    Trait(TraitInfo),
+    Module(ModuleNamespace),
+}
+
+#[derive(Clone, Debug)]
+pub struct ModuleNamespace {
+    pub name: String,
+    pub path: String,
+    pub modules: BTreeMap<String, ModuleNamespace>,
+    pub functions: BTreeMap<String, FunctionInfo>,
+    pub classes: BTreeMap<String, ClassInfo>,
+    pub enums: BTreeMap<String, EnumInfo>,
+    pub traits: BTreeMap<String, TraitInfo>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ModuleContext {
+    pub module_name: String,
+    pub imported_bindings: BTreeMap<String, ImportedBinding>,
 }
 
 #[derive(Clone, Debug)]
@@ -39,9 +128,11 @@ pub struct FunctionSignature {
     pub return_type: Type,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Type {
     Named(String, Vec<Type>),
+    TypeParam(String),
+    Module(String),
     Unit,
 }
 
@@ -53,6 +144,8 @@ impl Type {
     pub fn is_copy(&self) -> bool {
         match self {
             Type::Unit => true,
+            Type::Module(_) => false,
+            Type::TypeParam(_) => false,
             Type::Named(name, args) => {
                 args.is_empty()
                     && matches!(
@@ -72,6 +165,7 @@ impl Type {
                             | "uintsize"
                             | "float32"
                             | "float64"
+                            | "Duration"
                     )
             }
         }
@@ -82,6 +176,8 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Type::Unit => write!(f, "None"),
+            Type::Module(name) => write!(f, "module {}", name),
+            Type::TypeParam(name) => write!(f, "{}", name),
             Type::Named(name, args) if args.is_empty() => write!(f, "{}", name),
             Type::Named(name, args) => {
                 write!(f, "{}[", name)?;
@@ -98,24 +194,102 @@ impl fmt::Display for Type {
 }
 
 pub fn check(module: Module) -> Result<Program> {
-    let mut class_names = BTreeMap::<String, crate::diag::Span>::new();
+    check_with_context(module, ModuleContext::default())
+}
+
+pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
+    let module_name = if context.module_name.is_empty() {
+        "<main>".to_string()
+    } else {
+        context.module_name.clone()
+    };
+    let mut type_names = BTreeMap::<String, crate::diag::Span>::new();
+    let mut type_arities = BTreeMap::<String, usize>::new();
     let mut function_names = BTreeMap::<String, crate::diag::Span>::new();
+    let mut item_names = BTreeMap::<String, (&'static str, crate::diag::Span)>::new();
+    let mut imported_modules = BTreeMap::new();
+
+    let mut imported_functions = BTreeMap::new();
+    let mut imported_classes = BTreeMap::new();
+    let mut imported_enums = BTreeMap::new();
+    let mut imported_traits = BTreeMap::new();
+
+    for (name, binding) in &context.imported_bindings {
+        match binding {
+            ImportedBinding::Function(function) => {
+                function_names.insert(name.clone(), function.decl.span);
+                item_names.insert(name.clone(), ("function", function.decl.span));
+                imported_functions.insert(name.clone(), function.clone());
+            }
+            ImportedBinding::Class(class_info) => {
+                type_names.insert(name.clone(), class_info.decl.span);
+                type_arities.insert(name.clone(), class_info.decl.type_params.len());
+                item_names.insert(name.clone(), ("class", class_info.decl.span));
+                imported_classes.insert(name.clone(), class_info.clone());
+            }
+            ImportedBinding::Enum(enum_info) => {
+                type_names.insert(name.clone(), enum_info.decl.span);
+                type_arities.insert(name.clone(), enum_info.decl.type_params.len());
+                item_names.insert(name.clone(), ("enum", enum_info.decl.span));
+                imported_enums.insert(name.clone(), enum_info.clone());
+            }
+            ImportedBinding::Trait(trait_info) => {
+                type_names.insert(name.clone(), trait_info.decl.span);
+                type_arities.insert(name.clone(), trait_info.decl.type_params.len());
+                item_names.insert(name.clone(), ("trait", trait_info.decl.span));
+                imported_traits.insert(name.clone(), trait_info.clone());
+            }
+            ImportedBinding::Module(namespace) => {
+                item_names.insert(name.clone(), ("module", crate::diag::Span::new(1, 1)));
+                imported_modules.insert(name.clone(), namespace.clone());
+            }
+        }
+    }
 
     for item in &module.items {
         match item {
             Item::Class(class_decl) => {
-                if let Some(existing) = class_names.insert(class_decl.name.clone(), class_decl.span)
+                if let Some((kind, existing)) =
+                    item_names.insert(class_decl.name.clone(), ("class", class_decl.span))
                 {
                     return Err(Diagnostic::at(
                         class_decl.span,
                         format!(
-                            "duplicate class `{}` (previously declared at {})",
-                            class_decl.name, existing
+                            "duplicate item `{}` (previously declared as {} at {})",
+                            class_decl.name, kind, existing
                         ),
                     ));
                 }
+                type_names.insert(class_decl.name.clone(), class_decl.span);
+                type_arities.insert(class_decl.name.clone(), class_decl.type_params.len());
+            }
+            Item::Enum(enum_decl) => {
+                if let Some((kind, existing)) =
+                    item_names.insert(enum_decl.name.clone(), ("enum", enum_decl.span))
+                {
+                    return Err(Diagnostic::at(
+                        enum_decl.span,
+                        format!(
+                            "duplicate item `{}` (previously declared as {} at {})",
+                            enum_decl.name, kind, existing
+                        ),
+                    ));
+                }
+                type_names.insert(enum_decl.name.clone(), enum_decl.span);
+                type_arities.insert(enum_decl.name.clone(), enum_decl.type_params.len());
             }
             Item::Function(function_decl) => {
+                if let Some((kind, existing)) =
+                    item_names.insert(function_decl.name.clone(), ("function", function_decl.span))
+                {
+                    return Err(Diagnostic::at(
+                        function_decl.span,
+                        format!(
+                            "duplicate item `{}` (previously declared as {} at {})",
+                            function_decl.name, kind, existing
+                        ),
+                    ));
+                }
                 if let Some(existing) =
                     function_names.insert(function_decl.name.clone(), function_decl.span)
                 {
@@ -128,24 +302,143 @@ pub fn check(module: Module) -> Result<Program> {
                     ));
                 }
             }
+            Item::Trait(trait_decl) => {
+                if let Some((kind, existing)) =
+                    item_names.insert(trait_decl.name.clone(), ("trait", trait_decl.span))
+                {
+                    return Err(Diagnostic::at(
+                        trait_decl.span,
+                        format!(
+                            "duplicate item `{}` (previously declared as {} at {})",
+                            trait_decl.name, kind, existing
+                        ),
+                    ));
+                }
+            }
+            Item::Impl(_) => {}
         }
     }
 
-    let mut classes = BTreeMap::new();
-    let empty_functions = BTreeMap::new();
+    let mut traits = imported_traits.clone();
+    for item in &module.items {
+        let Item::Trait(trait_decl) = item else {
+            continue;
+        };
+        validate_type_params(&trait_decl.type_params, trait_decl.span, "trait")?;
+        let trait_type_param_scope = type_param_scope(&trait_decl.type_params);
+        let mut methods = BTreeMap::new();
+        for method in &trait_decl.methods {
+            validate_type_params(&method.type_params, method.span, "trait method")?;
+            let method_type_param_scope =
+                merged_type_param_scope(&trait_type_param_scope, &method.type_params);
+            let params = method
+                .params
+                .iter()
+                .map(|param| {
+                    lower_type(
+                        &param.ty,
+                        &type_names,
+                        &type_arities,
+                        &method_type_param_scope,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let return_type = lower_type(
+                &method.return_type,
+                &type_names,
+                &type_arities,
+                &method_type_param_scope,
+            )?;
+            let type_param_bounds =
+                lower_trait_bounds(&method.type_param_bounds, &traits, method.span)?;
+            if methods
+                .insert(
+                    method.name.clone(),
+                    TraitMethodInfo {
+                        decl: method.clone(),
+                        signature: FunctionSignature {
+                            params,
+                            return_type,
+                        },
+                        type_param_bounds,
+                    },
+                )
+                .is_some()
+            {
+                return Err(Diagnostic::at(
+                    method.span,
+                    format!(
+                        "duplicate method `{}` in trait `{}`",
+                        method.name, trait_decl.name
+                    ),
+                ));
+            }
+        }
+        traits.insert(
+            trait_decl.name.clone(),
+            TraitInfo {
+                module_name: module_name.clone(),
+                decl: trait_decl.clone(),
+                methods,
+            },
+        );
+    }
+
+    let mut enums = imported_enums.clone();
+    for item in &module.items {
+        let Item::Enum(enum_decl) = item else {
+            continue;
+        };
+        validate_type_params(&enum_decl.type_params, enum_decl.span, "enum")?;
+        let mut variants = BTreeMap::new();
+        let type_param_scope = type_param_scope(&enum_decl.type_params);
+        for variant in &enum_decl.variants {
+            let payload = variant
+                .payload
+                .as_ref()
+                .map(|payload| lower_type(payload, &type_names, &type_arities, &type_param_scope))
+                .transpose()?;
+            if variants
+                .insert(variant.name.clone(), EnumVariantInfo { payload })
+                .is_some()
+            {
+                return Err(Diagnostic::at(
+                    variant.span,
+                    format!(
+                        "duplicate variant `{}` in enum `{}`",
+                        variant.name, enum_decl.name
+                    ),
+                ));
+            }
+        }
+        enums.insert(
+            enum_decl.name.clone(),
+            EnumInfo {
+                module_name: module_name.clone(),
+                decl: enum_decl.clone(),
+                variants,
+            },
+        );
+    }
+
+    let mut classes = imported_classes.clone();
     for item in &module.items {
         let Item::Class(class_decl) = item else {
             continue;
         };
+        validate_type_params(&class_decl.type_params, class_decl.span, "class")?;
         let mut fields = BTreeMap::new();
+        let mut methods = BTreeMap::new();
+        let class_type_param_scope = type_param_scope(&class_decl.type_params);
         for field in &class_decl.fields {
-            let lowered = lower_type(&field.ty, &class_names)?;
+            let lowered =
+                lower_type(&field.ty, &type_names, &type_arities, &class_type_param_scope)?;
             if fields
                 .insert(
                     field.name.clone(),
                     FieldInfo {
                         public: field.public,
-                        ty: lowered.clone(),
+                        ty: lowered,
                     },
                 )
                 .is_some()
@@ -158,58 +451,266 @@ pub fn check(module: Module) -> Result<Program> {
                     ),
                 ));
             }
+        }
 
-            if let Some(default) = &field.default {
-                let checker = FunctionChecker::new(&class_names, &classes, &empty_functions);
-                let default_ty = checker.type_of_expr(default, &mut HashMap::new())?;
-                if default_ty != lowered {
-                    return Err(Diagnostic::at(
-                        field.span,
-                        format!(
-                            "default value for field `{}` has type `{}`, expected `{}`",
-                            field.name, default_ty, lowered
-                        ),
-                    ));
-                }
+        for method in &class_decl.methods {
+            validate_type_params(&method.type_params, method.span, "method")?;
+            let method_type_param_scope =
+                merged_type_param_scope(&class_type_param_scope, &method.type_params);
+            let type_param_bounds =
+                lower_trait_bounds(&method.type_param_bounds, &traits, method.span)?;
+            let params = method
+                .params
+                .iter()
+                .map(|param| {
+                    lower_type(
+                        &param.ty,
+                        &type_names,
+                        &type_arities,
+                        &method_type_param_scope,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let return_type = lower_type(
+                &method.return_type,
+                &type_names,
+                &type_arities,
+                &method_type_param_scope,
+            )?;
+            if methods
+                .insert(
+                    method.name.clone(),
+                    MethodInfo {
+                        decl: method.clone(),
+                        signature: FunctionSignature {
+                            params,
+                            return_type,
+                        },
+                        type_param_bounds,
+                    },
+                )
+                .is_some()
+            {
+                return Err(Diagnostic::at(
+                    method.span,
+                    format!(
+                        "duplicate method `{}` in class `{}`",
+                        method.name, class_decl.name
+                    ),
+                ));
             }
         }
 
         classes.insert(
             class_decl.name.clone(),
             ClassInfo {
+                module_name: module_name.clone(),
                 decl: class_decl.clone(),
                 fields,
+                methods,
             },
         );
     }
 
-    let mut functions = BTreeMap::new();
+    let empty_functions = BTreeMap::new();
+    let empty_trait_impls = Vec::new();
+    let default_checker = FunctionChecker::new(
+        &module_name,
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &empty_functions,
+        &traits,
+        &empty_trait_impls,
+        &imported_modules,
+    );
+    for class in classes.values() {
+        let class_type_param_scope = type_param_scope(&class.decl.type_params);
+        for field in &class.decl.fields {
+            let Some(default) = &field.default else {
+                continue;
+            };
+            let lowered = class.fields.get(&field.name).unwrap().ty.clone();
+            let default_ty =
+                default_checker
+                    .with_type_params(class_type_param_scope.clone(), BTreeMap::new())
+                    .type_of_expr_hint(default, &mut HashMap::new(), Some(&lowered))?;
+            if default_ty != lowered {
+                return Err(Diagnostic::at(
+                    field.span,
+                    format!(
+                        "default value for field `{}` has type `{}`, expected `{}`",
+                        field.name, default_ty, lowered
+                    ),
+                ));
+            }
+        }
+    }
+
+    let mut functions = imported_functions.clone();
     for item in &module.items {
         let Item::Function(function_decl) = item else {
             continue;
         };
+        validate_type_params(&function_decl.type_params, function_decl.span, "function")?;
+        let function_type_param_scope = type_param_scope(&function_decl.type_params);
+        let type_param_bounds =
+            lower_trait_bounds(&function_decl.type_param_bounds, &traits, function_decl.span)?;
         let params = function_decl
             .params
             .iter()
-            .map(|param| lower_type(&param.ty, &class_names))
+            .map(|param| {
+                lower_type(
+                    &param.ty,
+                    &type_names,
+                    &type_arities,
+                    &function_type_param_scope,
+                )
+            })
             .collect::<Result<Vec<_>>>()?;
-        let return_type = lower_type(&function_decl.return_type, &class_names)?;
+        let return_type = lower_type(
+            &function_decl.return_type,
+            &type_names,
+            &type_arities,
+            &function_type_param_scope,
+        )?;
         functions.insert(
             function_decl.name.clone(),
             FunctionInfo {
+                module_name: module_name.clone(),
                 decl: function_decl.clone(),
                 signature: FunctionSignature {
                     params,
                     return_type,
                 },
+                type_param_bounds,
             },
         );
     }
 
+    let mut trait_impls = Vec::new();
+    for item in &module.items {
+        let Item::Impl(impl_decl) = item else {
+            continue;
+        };
+        let trait_info = traits.get(&impl_decl.trait_name).ok_or_else(|| {
+            Diagnostic::at(
+                impl_decl.span,
+                format!("unknown trait `{}`", impl_decl.trait_name),
+            )
+        })?;
+        let for_type = lower_type(&impl_decl.for_type, &type_names, &type_arities, &BTreeMap::new())?;
+        if matches!(for_type, Type::TypeParam(_)) {
+            return Err(Diagnostic::at(
+                impl_decl.span,
+                "trait impl target must be a concrete type",
+            ));
+        }
+        if trait_impls
+            .iter()
+            .any(|existing: &TraitImplInfo| existing.trait_name == impl_decl.trait_name && existing.for_type == for_type)
+        {
+            return Err(Diagnostic::at(
+                impl_decl.span,
+                format!(
+                    "duplicate impl of trait `{}` for `{}`",
+                    impl_decl.trait_name, for_type
+                ),
+            ));
+        }
+
+        let mut methods = BTreeMap::new();
+        for method in &impl_decl.methods {
+            let Some(trait_method) = trait_info.methods.get(&method.name) else {
+                return Err(Diagnostic::at(
+                    method.span,
+                    format!(
+                        "method `{}` is not part of trait `{}`",
+                        method.name, impl_decl.trait_name
+                    ),
+                ));
+            };
+            if method.receiver != trait_method.decl.receiver {
+                return Err(Diagnostic::at(
+                    method.span,
+                    format!(
+                        "method `{}` receiver does not match trait `{}`",
+                        method.name, impl_decl.trait_name
+                    ),
+                ));
+            }
+            validate_type_params(&method.type_params, method.span, "impl method")?;
+            let type_param_bounds =
+                lower_trait_bounds(&method.type_param_bounds, &traits, method.span)?;
+            let method_type_param_scope = type_param_scope(&method.type_params);
+            let params = method
+                .params
+                .iter()
+                .map(|param| {
+                    lower_type(
+                        &param.ty,
+                        &type_names,
+                        &type_arities,
+                        &method_type_param_scope,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let return_type = lower_type(
+                &method.return_type,
+                &type_names,
+                &type_arities,
+                &method_type_param_scope,
+            )?;
+            if params != trait_method.signature.params || return_type != trait_method.signature.return_type {
+                return Err(Diagnostic::at(
+                    method.span,
+                    format!(
+                        "method `{}` in impl of `{}` does not match the trait signature",
+                        method.name, impl_decl.trait_name
+                    ),
+                ));
+            }
+            methods.insert(
+                method.name.clone(),
+                TraitImplMethodInfo {
+                    decl: method.clone(),
+                    signature: FunctionSignature {
+                        params,
+                        return_type,
+                    },
+                    type_param_bounds,
+                },
+            );
+        }
+        for trait_method_name in trait_info.methods.keys() {
+            if !methods.contains_key(trait_method_name) {
+                return Err(Diagnostic::at(
+                    impl_decl.span,
+                    format!(
+                        "impl of `{}` for `{}` is missing method `{}`",
+                        impl_decl.trait_name, for_type, trait_method_name
+                    ),
+                ));
+            }
+        }
+        trait_impls.push(TraitImplInfo {
+            decl: impl_decl.clone(),
+            trait_name: impl_decl.trait_name.clone(),
+            for_type,
+            methods,
+        });
+    }
+
     let program = Program {
         module: module.clone(),
+        module_name,
         classes,
+        enums,
         functions,
+        traits,
+        trait_impls,
+        imported_modules,
         top_level_stmts: module.top_level_stmts.clone(),
     };
 
@@ -221,9 +722,53 @@ pub fn check(module: Module) -> Result<Program> {
         ));
     }
 
-    let checker = FunctionChecker::new(&class_names, &program.classes, &program.functions);
+    if let Some(main) = program.functions.get("main") {
+        if !main.signature.params.is_empty() {
+            return Err(Diagnostic::at(
+                main.decl.span,
+                "`main` must not take parameters in the bootstrap runtime",
+            ));
+        }
+    }
+
+    let checker = FunctionChecker::new(
+        &program.module_name,
+        &type_names,
+        &type_arities,
+        &program.classes,
+        &program.enums,
+        &program.functions,
+        &program.traits,
+        &program.trait_impls,
+        &program.imported_modules,
+    );
+    for trait_info in program.traits.values() {
+        let trait_type_param_scope = type_param_scope(&trait_info.decl.type_params);
+        for method in trait_info.methods.values() {
+            let method_type_param_scope =
+                merged_type_param_scope(&trait_type_param_scope, &method.decl.type_params);
+            checker.check_param_defaults(
+                &method.decl.params,
+                &method_type_param_scope,
+                false,
+                "trait method",
+            )?;
+        }
+    }
     for function in program.functions.values() {
         checker.check_function(&function.decl)?;
+    }
+
+    for class in program.classes.values() {
+        for method in class.methods.values() {
+            checker.check_method(&class.decl, &method.decl)?;
+        }
+    }
+
+    for trait_impl in &program.trait_impls {
+        for method in trait_impl.methods.values() {
+            checker.check_trait_impl_method(&trait_impl.for_type, &method.decl)?;
+        }
     }
 
     checker.check_top_level(&program.top_level_stmts)?;
@@ -233,8 +778,20 @@ pub fn check(module: Module) -> Result<Program> {
 
 fn lower_type(
     type_ref: &TypeRef,
-    class_names: &BTreeMap<String, crate::diag::Span>,
+    type_names: &BTreeMap<String, crate::diag::Span>,
+    type_arities: &BTreeMap<String, usize>,
+    type_params: &BTreeMap<String, ()>,
 ) -> Result<Type> {
+    if type_params.contains_key(&type_ref.name) {
+        if !type_ref.args.is_empty() {
+            return Err(Diagnostic::at(
+                type_ref.span,
+                format!("type parameter `{}` does not take type arguments", type_ref.name),
+            ));
+        }
+        return Ok(Type::TypeParam(type_ref.name.clone()));
+    }
+
     if type_ref.name == "None" {
         if !type_ref.args.is_empty() {
             return Err(Diagnostic::at(
@@ -248,16 +805,290 @@ fn lower_type(
     let args = type_ref
         .args
         .iter()
-        .map(|arg| lower_type(arg, class_names))
+        .map(|arg| lower_type(arg, type_names, type_arities, type_params))
         .collect::<Result<Vec<_>>>()?;
 
-    if is_builtin_type(&type_ref.name) || class_names.contains_key(&type_ref.name) {
+    if type_ref.name == "Option" {
+        if args.len() != 1 {
+            return Err(Diagnostic::at(
+                type_ref.span,
+                "`Option` expects exactly one type argument",
+            ));
+        }
+        return Ok(Type::Named(type_ref.name.clone(), args));
+    }
+
+    if type_ref.name == "Result" {
+        if args.len() != 2 {
+            return Err(Diagnostic::at(
+                type_ref.span,
+                "`Result` expects exactly two type arguments",
+            ));
+        }
+        return Ok(Type::Named(type_ref.name.clone(), args));
+    }
+
+    if type_ref.name == "Channel" || type_ref.name == "Task" || type_ref.name == "SendError" {
+        if args.len() != 1 {
+            return Err(Diagnostic::at(
+                type_ref.span,
+                format!("`{}` expects exactly one type argument", type_ref.name),
+            ));
+        }
+        return Ok(Type::Named(type_ref.name.clone(), args));
+    }
+
+    if type_ref.name == "TaskGroup" || type_ref.name == "Duration" {
+        if !args.is_empty() {
+            return Err(Diagnostic::at(
+                type_ref.span,
+                format!("`{}` does not take type arguments", type_ref.name),
+            ));
+        }
+        return Ok(Type::Named(type_ref.name.clone(), args));
+    }
+
+    if let Some(expected_arity) = type_arities.get(&type_ref.name) {
+        if args.len() != *expected_arity {
+            return Err(Diagnostic::at(
+                type_ref.span,
+                format!(
+                    "`{}` expects exactly {} type argument{}, found {}",
+                    type_ref.name,
+                    expected_arity,
+                    if *expected_arity == 1 { "" } else { "s" },
+                    args.len()
+                ),
+            ));
+        }
+    } else if is_builtin_type(&type_ref.name) || type_names.contains_key(&type_ref.name) {
+        if !args.is_empty() {
+            return Err(Diagnostic::at(
+                type_ref.span,
+                format!("`{}` does not take type arguments", type_ref.name),
+            ));
+        }
+    }
+
+    if is_builtin_type(&type_ref.name) || type_names.contains_key(&type_ref.name) {
         Ok(Type::Named(type_ref.name.clone(), args))
     } else {
         Err(Diagnostic::at(
             type_ref.span,
             format!("unknown type `{}`", type_ref.name),
         ))
+    }
+}
+
+fn validate_type_params(
+    type_params: &[String],
+    span: crate::diag::Span,
+    owner: &str,
+) -> Result<()> {
+    let mut seen = BTreeMap::new();
+    for name in type_params {
+        if seen.insert(name.clone(), ()).is_some() {
+            return Err(Diagnostic::at(
+                span,
+                format!("duplicate type parameter `{}` on {}", name, owner),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn type_param_scope(type_params: &[String]) -> BTreeMap<String, ()> {
+    type_params
+        .iter()
+        .cloned()
+        .map(|name| (name, ()))
+        .collect::<BTreeMap<_, _>>()
+}
+
+fn merged_type_param_scope(
+    parent: &BTreeMap<String, ()>,
+    added: &[String],
+) -> BTreeMap<String, ()> {
+    let mut merged = parent.clone();
+    for name in added {
+        merged.insert(name.clone(), ());
+    }
+    merged
+}
+
+fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Name(name) => param_names
+            .iter()
+            .find(|param_name| *param_name == name)
+            .cloned(),
+        ExprKind::Group(inner) | ExprKind::Try(inner) => {
+            default_argument_references_param(inner, param_names)
+        }
+        ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } => {
+            default_argument_references_param(expr, param_names)
+        }
+        ExprKind::Spawn { value, .. } => default_argument_references_param(value, param_names),
+        ExprKind::Member { object, .. } => default_argument_references_param(object, param_names),
+        ExprKind::Call { callee, args } => default_argument_references_param(callee, param_names)
+            .or_else(|| {
+                args.iter().find_map(|argument| {
+                    default_argument_references_param(&argument.value, param_names)
+                })
+            }),
+        ExprKind::Binary { left, right, .. } => {
+            default_argument_references_param(left, param_names)
+                .or_else(|| default_argument_references_param(right, param_names))
+        }
+        ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Bool(_)
+        | ExprKind::String(_)
+        | ExprKind::DurationMillis(_) => None,
+    }
+}
+
+fn lower_trait_bounds(
+    bounds: &BTreeMap<String, Vec<TypeRef>>,
+    traits: &BTreeMap<String, TraitInfo>,
+    _span: crate::diag::Span,
+) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut lowered = BTreeMap::new();
+    for (type_param, trait_bounds) in bounds {
+        let mut names = Vec::new();
+        for bound in trait_bounds {
+            if !bound.args.is_empty() {
+                return Err(Diagnostic::at(
+                    bound.span,
+                    "generic trait bounds are not implemented yet",
+                ));
+            }
+            if !traits.contains_key(&bound.name) {
+                return Err(Diagnostic::at(
+                    bound.span,
+                    format!("unknown trait `{}`", bound.name),
+                ));
+            }
+            names.push(bound.name.clone());
+        }
+        lowered.insert(type_param.clone(), names);
+    }
+    Ok(lowered)
+}
+
+fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
+    match ty {
+        Type::Unit => Type::Unit,
+        Type::Module(name) => Type::Module(name.clone()),
+        Type::TypeParam(name) => substitutions
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| Type::TypeParam(name.clone())),
+        Type::Named(name, args) => Type::Named(
+            name.clone(),
+            args.iter()
+                .map(|arg| substitute_type(arg, substitutions))
+                .collect(),
+        ),
+    }
+}
+
+fn has_unresolved_type_params(ty: &Type) -> bool {
+    match ty {
+        Type::Unit => false,
+        Type::Module(_) => false,
+        Type::TypeParam(_) => true,
+        Type::Named(_, args) => args.iter().any(has_unresolved_type_params),
+    }
+}
+
+fn collect_unresolved_type_params(ty: &Type, out: &mut Vec<String>) {
+    match ty {
+        Type::Unit => {}
+        Type::Module(_) => {}
+        Type::TypeParam(name) => {
+            if !out.contains(name) {
+                out.push(name.clone());
+            }
+        }
+        Type::Named(_, args) => {
+            for arg in args {
+                collect_unresolved_type_params(arg, out);
+            }
+        }
+    }
+}
+
+fn substitutions_from_decl_type_args(
+    type_params: &[String],
+    actual_args: &[Type],
+) -> HashMap<String, Type> {
+    type_params
+        .iter()
+        .cloned()
+        .zip(actual_args.iter().cloned())
+        .collect()
+}
+
+fn unify_type_pattern(
+    pattern: &Type,
+    actual: &Type,
+    substitutions: &mut HashMap<String, Type>,
+) -> Result<()> {
+    match pattern {
+        Type::Unit => {
+            if actual == &Type::Unit {
+                Ok(())
+            } else {
+                Err(Diagnostic::new(format!(
+                    "expected `None`, found `{}`",
+                    actual
+                )))
+            }
+        }
+        Type::Module(name) => {
+            if actual == &Type::Module(name.clone()) {
+                Ok(())
+            } else {
+                Err(Diagnostic::new(format!(
+                    "expected `module {}`, found `{}`",
+                    name, actual
+                )))
+            }
+        }
+        Type::TypeParam(name) => {
+            if let Some(existing) = substitutions.get(name) {
+                if existing == actual {
+                    Ok(())
+                } else {
+                    Err(Diagnostic::new(format!(
+                        "conflicting inferred types for `{}`: `{}` and `{}`",
+                        name, existing, actual
+                    )))
+                }
+            } else {
+                substitutions.insert(name.clone(), actual.clone());
+                Ok(())
+            }
+        }
+        Type::Named(name, args) => {
+            let Type::Named(actual_name, actual_args) = actual else {
+                return Err(Diagnostic::new(format!(
+                    "expected `{}`, found `{}`",
+                    pattern, actual
+                )));
+            };
+            if name != actual_name || args.len() != actual_args.len() {
+                return Err(Diagnostic::new(format!(
+                    "expected `{}`, found `{}`",
+                    pattern, actual
+                )));
+            }
+            for (pattern_arg, actual_arg) in args.iter().zip(actual_args.iter()) {
+                unify_type_pattern(pattern_arg, actual_arg, substitutions)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -280,69 +1111,335 @@ fn is_builtin_type(name: &str) -> bool {
             | "float32"
             | "float64"
             | "String"
+            | "Range"
+            | "Channel"
+            | "Task"
+            | "SendError"
+            | "TaskGroup"
+            | "Duration"
     )
 }
 
+pub(crate) fn integer_type_bounds(ty: &Type) -> Option<(i128, i128)> {
+    match ty {
+        Type::Unit => None,
+        Type::Module(_) => None,
+        Type::TypeParam(_) => None,
+        Type::Named(_, args) if !args.is_empty() => None,
+        Type::Named(name, _) => match name.as_str() {
+            "int8" => Some((i8::MIN as i128, i8::MAX as i128)),
+            "int16" => Some((i16::MIN as i128, i16::MAX as i128)),
+            "int32" => Some((i32::MIN as i128, i32::MAX as i128)),
+            "int64" => Some((i64::MIN as i128, i64::MAX as i128)),
+            "int128" => Some((i128::MIN, i128::MAX)),
+            "intsize" => Some((isize::MIN as i128, isize::MAX as i128)),
+            "uint8" => Some((u8::MIN as i128, u8::MAX as i128)),
+            "uint16" => Some((u16::MIN as i128, u16::MAX as i128)),
+            "uint32" => Some((u32::MIN as i128, u32::MAX as i128)),
+            "uint64" => Some((u64::MIN as i128, u64::MAX as i128)),
+            "uint128" => Some((u128::MIN as i128, i128::MAX)),
+            "uintsize" => Some((usize::MIN as i128, usize::MAX as i128)),
+            _ => None,
+        },
+    }
+}
+
+fn is_integer_type(ty: &Type) -> bool {
+    integer_type_bounds(ty).is_some()
+}
+
+fn is_float_type(ty: &Type) -> bool {
+    matches!(ty, Type::Named(name, args) if args.is_empty() && matches!(name.as_str(), "float32" | "float64"))
+}
+
+fn is_numeric_type(ty: &Type) -> bool {
+    is_integer_type(ty) || is_float_type(ty)
+}
+
+#[derive(Clone)]
 struct LocalBinding {
     ty: Type,
     mutable: bool,
+    moved: bool,
 }
 
 struct FunctionChecker<'a> {
-    class_names: &'a BTreeMap<String, crate::diag::Span>,
+    module_name: &'a str,
+    type_names: &'a BTreeMap<String, crate::diag::Span>,
+    type_arities: &'a BTreeMap<String, usize>,
     classes: &'a BTreeMap<String, ClassInfo>,
+    enums: &'a BTreeMap<String, EnumInfo>,
     functions: &'a BTreeMap<String, FunctionInfo>,
+    traits: &'a BTreeMap<String, TraitInfo>,
+    trait_impls: &'a [TraitImplInfo],
+    imported_modules: &'a BTreeMap<String, ModuleNamespace>,
+    current_return_type: Option<Type>,
+    type_params: BTreeMap<String, ()>,
+    type_param_bounds: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum BlockFlow {
+    FallsThrough,
+    AlwaysReturns,
 }
 
 impl<'a> FunctionChecker<'a> {
-    fn new(
-        class_names: &'a BTreeMap<String, crate::diag::Span>,
-        classes: &'a BTreeMap<String, ClassInfo>,
-        functions: &'a BTreeMap<String, FunctionInfo>,
-    ) -> Self {
-        Self {
-            class_names,
-            classes,
-            functions,
+    fn seed_imported_modules(&self, locals: &mut HashMap<String, LocalBinding>) {
+        for (name, namespace) in self.imported_modules {
+            locals.insert(
+                name.clone(),
+                LocalBinding {
+                    ty: Type::Module(namespace.path.clone()),
+                    mutable: false,
+                    moved: false,
+                },
+            );
         }
     }
 
-    fn check_function(&self, function: &FunctionDecl) -> Result<()> {
-        let return_type = lower_type(&function.return_type, self.class_names)?;
-        let mut locals = HashMap::new();
-        for param in &function.params {
-            let ty = lower_type(&param.ty, self.class_names)?;
-            locals.insert(param.name.clone(), LocalBinding { ty, mutable: false });
+    fn new(
+        module_name: &'a str,
+        type_names: &'a BTreeMap<String, crate::diag::Span>,
+        type_arities: &'a BTreeMap<String, usize>,
+        classes: &'a BTreeMap<String, ClassInfo>,
+        enums: &'a BTreeMap<String, EnumInfo>,
+        functions: &'a BTreeMap<String, FunctionInfo>,
+        traits: &'a BTreeMap<String, TraitInfo>,
+        trait_impls: &'a [TraitImplInfo],
+        imported_modules: &'a BTreeMap<String, ModuleNamespace>,
+    ) -> Self {
+        Self {
+            module_name,
+            type_names,
+            type_arities,
+            classes,
+            enums,
+            functions,
+            traits,
+            trait_impls,
+            imported_modules,
+            current_return_type: None,
+            type_params: BTreeMap::new(),
+            type_param_bounds: BTreeMap::new(),
         }
+    }
 
-        let mut saw_return = false;
-        for stmt in &function.body {
-            match stmt {
-                Stmt::Assign(assign) => self.check_assign(assign, &mut locals)?,
-                Stmt::Return(return_stmt) => {
-                    let ty = if let Some(value) = &return_stmt.value {
-                        self.type_of_expr(value, &mut locals)?
-                    } else {
-                        Type::Unit
-                    };
-                    if ty != return_type {
+    fn with_return_type(&self, return_type: Type) -> Self {
+        Self {
+            module_name: self.module_name,
+            type_names: self.type_names,
+            type_arities: self.type_arities,
+            classes: self.classes,
+            enums: self.enums,
+            functions: self.functions,
+            traits: self.traits,
+            trait_impls: self.trait_impls,
+            imported_modules: self.imported_modules,
+            current_return_type: Some(return_type),
+            type_params: self.type_params.clone(),
+            type_param_bounds: self.type_param_bounds.clone(),
+        }
+    }
+
+    fn with_type_params(
+        &self,
+        type_params: BTreeMap<String, ()>,
+        type_param_bounds: BTreeMap<String, Vec<String>>,
+    ) -> Self {
+        Self {
+            module_name: self.module_name,
+            type_names: self.type_names,
+            type_arities: self.type_arities,
+            classes: self.classes,
+            enums: self.enums,
+            functions: self.functions,
+            traits: self.traits,
+            trait_impls: self.trait_impls,
+            imported_modules: self.imported_modules,
+            current_return_type: self.current_return_type.clone(),
+            type_params,
+            type_param_bounds,
+        }
+    }
+
+    fn validate_integer_literal(
+        &self,
+        value: i64,
+        target_ty: &Type,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        let Some((min, max)) = integer_type_bounds(target_ty) else {
+            return Ok(());
+        };
+        let value = value as i128;
+        if value < min || value > max {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "integer literal `{}` does not fit in `{}`",
+                    value, target_ty
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_negative_integer_literal(
+        &self,
+        value: i64,
+        target_ty: &Type,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        let Some((min, _max)) = integer_type_bounds(target_ty) else {
+            return Ok(());
+        };
+        let negative = -(value as i128);
+        if negative < min {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "integer literal `-{}` does not fit in `{}`",
+                    value, target_ty
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn consume_binding(
+        &self,
+        name: &str,
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let binding = locals
+            .get_mut(name)
+            .ok_or_else(|| Diagnostic::at(span, format!("unknown name `{}`", name)))?;
+        if binding.ty.is_copy() {
+            return Ok(());
+        }
+        if binding.moved {
+            return Err(Diagnostic::at(span, format!("use of moved value `{}`", name)));
+        }
+        binding.moved = true;
+        Ok(())
+    }
+
+    fn consume_value_expr(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        match &expr.kind {
+            ExprKind::Name(name) => self.consume_binding(name, expr.span, locals),
+            ExprKind::Group(inner) => self.consume_value_expr(inner, locals),
+            ExprKind::Cast { expr, .. } => self.consume_value_expr(expr, locals),
+            _ => Ok(()),
+        }
+    }
+
+    fn check_param_defaults(
+        &self,
+        params: &[Param],
+        type_param_scope: &BTreeMap<String, ()>,
+        allow_defaults: bool,
+        owner: &str,
+    ) -> Result<()> {
+        let mut saw_default = false;
+        let param_names = params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<Vec<_>>();
+
+        for param in params {
+            let lowered = lower_type(
+                &param.ty,
+                self.type_names,
+                self.type_arities,
+                type_param_scope,
+            )?;
+            match &param.default {
+                Some(default) => {
+                    if !allow_defaults {
                         return Err(Diagnostic::at(
-                            return_stmt.span,
+                            param.span,
                             format!(
-                                "return type mismatch: expected `{}`, found `{}`",
-                                return_type, ty
+                                "default arguments are not allowed in {} declarations",
+                                owner
                             ),
                         ));
                     }
-                    saw_return = true;
+                    saw_default = true;
+                    if let Some(name) = default_argument_references_param(default, &param_names) {
+                        return Err(Diagnostic::at(
+                            default.span,
+                            format!(
+                                "default argument for parameter `{}` may not reference parameter `{}`",
+                                param.name, name
+                            ),
+                        ));
+                    }
+                    let default_ty =
+                        self.type_of_expr_hint(default, &mut HashMap::new(), Some(&lowered))?;
+                    if default_ty != lowered {
+                        return Err(Diagnostic::at(
+                            default.span,
+                            format!(
+                                "default argument for parameter `{}` has type `{}`, expected `{}`",
+                                param.name, default_ty, lowered
+                            ),
+                        ));
+                    }
                 }
-                Stmt::Expr(expr_stmt) => {
-                    self.type_of_expr(&expr_stmt.expr, &mut locals)?;
+                None if saw_default => {
+                    return Err(Diagnostic::at(
+                        param.span,
+                        "parameters with default arguments must come after required parameters",
+                    ));
                 }
+                None => {}
             }
         }
 
-        if return_type != Type::Unit && !saw_return {
+        Ok(())
+    }
+
+    fn check_function(&self, function: &FunctionDecl) -> Result<()> {
+        let type_param_scope = type_param_scope(&function.type_params);
+        let type_param_bounds =
+            lower_trait_bounds(&function.type_param_bounds, self.traits, function.span)?;
+        let return_type = lower_type(
+            &function.return_type,
+            self.type_names,
+            self.type_arities,
+            &type_param_scope,
+        )?;
+        let checker = self
+            .with_type_params(type_param_scope.clone(), type_param_bounds)
+            .with_return_type(return_type.clone());
+        checker.check_param_defaults(&function.params, &type_param_scope, true, "function")?;
+        let mut locals = HashMap::new();
+        checker.seed_imported_modules(&mut locals);
+        for param in &function.params {
+            let ty = lower_type(
+                &param.ty,
+                self.type_names,
+                self.type_arities,
+                &type_param_scope,
+            )?;
+            locals.insert(
+                param.name.clone(),
+                LocalBinding {
+                    ty,
+                    mutable: false,
+                    moved: false,
+                },
+            );
+        }
+
+        let flow = checker.check_block(&function.body, &mut locals, &return_type, 0, true)?;
+        if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
             return Err(Diagnostic::at(
                 function.span,
                 format!("function `{}` is missing a return", function.name),
@@ -352,25 +1449,535 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    fn check_method(&self, class_decl: &ClassDecl, method: &FunctionDecl) -> Result<()> {
+        let class_type_param_scope = type_param_scope(&class_decl.type_params);
+        let method_type_param_scope =
+            merged_type_param_scope(&class_type_param_scope, &method.type_params);
+        let type_param_bounds =
+            lower_trait_bounds(&method.type_param_bounds, self.traits, method.span)?;
+        let return_type = lower_type(
+            &method.return_type,
+            self.type_names,
+            self.type_arities,
+            &method_type_param_scope,
+        )?;
+        let checker = self
+            .with_type_params(method_type_param_scope.clone(), type_param_bounds)
+            .with_return_type(return_type.clone());
+        checker.check_param_defaults(&method.params, &method_type_param_scope, true, "method")?;
+        let mut locals = HashMap::new();
+        checker.seed_imported_modules(&mut locals);
+        if let Some(receiver_kind) = method.receiver {
+            locals.insert(
+                "self".to_string(),
+                LocalBinding {
+                    ty: Type::Named(
+                        class_decl.name.clone(),
+                        class_decl
+                            .type_params
+                            .iter()
+                            .cloned()
+                            .map(Type::TypeParam)
+                            .collect(),
+                    ),
+                    mutable: receiver_kind == ReceiverKind::BorrowMut,
+                    moved: false,
+                },
+            );
+        }
+        for param in &method.params {
+            let ty = lower_type(
+                &param.ty,
+                self.type_names,
+                self.type_arities,
+                &method_type_param_scope,
+            )?;
+            locals.insert(
+                param.name.clone(),
+                LocalBinding {
+                    ty,
+                    mutable: false,
+                    moved: false,
+                },
+            );
+        }
+
+        let flow = checker.check_block(&method.body, &mut locals, &return_type, 0, true)?;
+        if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
+            return Err(Diagnostic::at(
+                method.span,
+                format!("method `{}` is missing a return", method.name),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn check_trait_impl_method(&self, for_type: &Type, method: &FunctionDecl) -> Result<()> {
+        let type_param_scope = type_param_scope(&method.type_params);
+        let type_param_bounds =
+            lower_trait_bounds(&method.type_param_bounds, self.traits, method.span)?;
+        let return_type = lower_type(
+            &method.return_type,
+            self.type_names,
+            self.type_arities,
+            &type_param_scope,
+        )?;
+        let checker = self
+            .with_type_params(type_param_scope.clone(), type_param_bounds)
+            .with_return_type(return_type.clone());
+        checker.check_param_defaults(&method.params, &type_param_scope, false, "impl method")?;
+        let mut locals = HashMap::new();
+        checker.seed_imported_modules(&mut locals);
+        if let Some(receiver_kind) = method.receiver {
+            locals.insert(
+                "self".to_string(),
+                LocalBinding {
+                    ty: for_type.clone(),
+                    mutable: receiver_kind == ReceiverKind::BorrowMut,
+                    moved: false,
+                },
+            );
+        }
+        for param in &method.params {
+            let ty = lower_type(
+                &param.ty,
+                self.type_names,
+                self.type_arities,
+                &type_param_scope,
+            )?;
+            locals.insert(
+                param.name.clone(),
+                LocalBinding {
+                    ty,
+                    mutable: false,
+                    moved: false,
+                },
+            );
+        }
+        let flow = checker.check_block(&method.body, &mut locals, &return_type, 0, true)?;
+        if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
+            return Err(Diagnostic::at(
+                method.span,
+                format!("method `{}` is missing a return", method.name),
+            ));
+        }
+        Ok(())
+    }
+
     fn check_top_level(&self, body: &[Stmt]) -> Result<()> {
         let mut locals = HashMap::new();
+        self.seed_imported_modules(&mut locals);
+        self.check_block(body, &mut locals, &Type::Unit, 0, false)?;
+        Ok(())
+    }
+
+    fn check_block(
+        &self,
+        body: &[Stmt],
+        locals: &mut HashMap<String, LocalBinding>,
+        return_type: &Type,
+        loop_depth: usize,
+        allow_return: bool,
+    ) -> Result<BlockFlow> {
+        let mut flow = BlockFlow::FallsThrough;
 
         for stmt in body {
             match stmt {
-                Stmt::Assign(assign) => self.check_assign(assign, &mut locals)?,
+                Stmt::Assign(assign) => self.check_assign(assign, locals)?,
+                Stmt::Pass(_) => {}
                 Stmt::Expr(expr_stmt) => {
-                    self.type_of_expr(&expr_stmt.expr, &mut locals)?;
+                    self.type_of_expr(&expr_stmt.expr, locals)?;
+                    self.consume_value_expr(&expr_stmt.expr, locals)?;
                 }
                 Stmt::Return(return_stmt) => {
-                    return Err(Diagnostic::at(
-                        return_stmt.span,
-                        "`return` is only allowed inside a function body",
-                    ));
+                    if !allow_return {
+                        return Err(Diagnostic::at(
+                            return_stmt.span,
+                            "`return` is only allowed inside a function body",
+                        ));
+                    }
+                    let ty = if let Some(value) = &return_stmt.value {
+                        self.type_of_expr_hint(value, locals, Some(return_type))?
+                    } else {
+                        Type::Unit
+                    };
+                    if &ty != return_type {
+                        return Err(Diagnostic::at(
+                            return_stmt.span,
+                            format!(
+                                "return type mismatch: expected `{}`, found `{}`",
+                                return_type, ty
+                            ),
+                        ));
+                    }
+                    if let Some(value) = &return_stmt.value {
+                        self.consume_value_expr(value, locals)?;
+                    }
+                    flow = BlockFlow::AlwaysReturns;
+                    break;
+                }
+                Stmt::If(if_stmt) => {
+                    for branch in &if_stmt.branches {
+                        let condition_ty = self.type_of_expr(&branch.condition, locals)?;
+                        if condition_ty != Type::named("bool") {
+                            return Err(Diagnostic::at(
+                                branch.span,
+                                format!(
+                                    "`if` condition must have type `bool`, found `{}`",
+                                    condition_ty
+                                ),
+                            ));
+                        }
+                    }
+
+                    let mut all_return = true;
+                    for branch in &if_stmt.branches {
+                        let mut branch_locals = locals.clone();
+                        let branch_flow = self.check_block(
+                            &branch.body,
+                            &mut branch_locals,
+                            return_type,
+                            loop_depth,
+                            allow_return,
+                        )?;
+                        if branch_flow != BlockFlow::AlwaysReturns {
+                            all_return = false;
+                        }
+                    }
+
+                    if let Some(else_body) = &if_stmt.else_body {
+                        let mut else_locals = locals.clone();
+                        let else_flow = self.check_block(
+                            else_body,
+                            &mut else_locals,
+                            return_type,
+                            loop_depth,
+                            allow_return,
+                        )?;
+                        if else_flow != BlockFlow::AlwaysReturns {
+                            all_return = false;
+                        }
+                    } else {
+                        all_return = false;
+                    }
+
+                    if all_return {
+                        flow = BlockFlow::AlwaysReturns;
+                        break;
+                    }
+                }
+                Stmt::Match(match_stmt) => {
+                    let match_flow = self.check_match(
+                        match_stmt,
+                        locals,
+                        return_type,
+                        loop_depth,
+                        allow_return,
+                    )?;
+                    if match_flow == BlockFlow::AlwaysReturns {
+                        flow = BlockFlow::AlwaysReturns;
+                        break;
+                    }
+                }
+                Stmt::For(for_stmt) => {
+                    let iterable_ty = self.type_of_expr(&for_stmt.iterable, locals)?;
+                    if iterable_ty != Type::named("Range") {
+                        return Err(Diagnostic::at(
+                            for_stmt.span,
+                            format!(
+                                "`for` currently requires a `Range` iterable, found `{}`",
+                                iterable_ty
+                            ),
+                        ));
+                    }
+                    if locals.contains_key(&for_stmt.binding) {
+                        return Err(Diagnostic::at(
+                            for_stmt.span,
+                            format!(
+                                "loop binding `{}` would shadow an existing name",
+                                for_stmt.binding
+                            ),
+                        ));
+                    }
+                    let mut body_locals = locals.clone();
+                    body_locals.insert(
+                        for_stmt.binding.clone(),
+                        LocalBinding {
+                            ty: Type::named("int32"),
+                            mutable: false,
+                            moved: false,
+                        },
+                    );
+                    self.check_block(
+                        &for_stmt.body,
+                        &mut body_locals,
+                        return_type,
+                        loop_depth + 1,
+                        allow_return,
+                    )?;
+                }
+                Stmt::With(with_stmt) => {
+                    let with_flow =
+                        self.check_with(with_stmt, locals, return_type, loop_depth, allow_return)?;
+                    if with_flow == BlockFlow::AlwaysReturns {
+                        flow = BlockFlow::AlwaysReturns;
+                        break;
+                    }
+                }
+                Stmt::Select(select_stmt) => {
+                    let select_flow = self.check_select(
+                        select_stmt,
+                        locals,
+                        return_type,
+                        loop_depth,
+                        allow_return,
+                    )?;
+                    if select_flow == BlockFlow::AlwaysReturns {
+                        flow = BlockFlow::AlwaysReturns;
+                        break;
+                    }
+                }
+                Stmt::While(while_stmt) => {
+                    let condition_ty = self.type_of_expr(&while_stmt.condition, locals)?;
+                    if condition_ty != Type::named("bool") {
+                        return Err(Diagnostic::at(
+                            while_stmt.span,
+                            format!(
+                                "`while` condition must have type `bool`, found `{}`",
+                                condition_ty
+                            ),
+                        ));
+                    }
+                    let mut body_locals = locals.clone();
+                    self.check_block(
+                        &while_stmt.body,
+                        &mut body_locals,
+                        return_type,
+                        loop_depth + 1,
+                        allow_return,
+                    )?;
+                }
+                Stmt::Break(break_stmt) => {
+                    if loop_depth == 0 {
+                        return Err(Diagnostic::at(
+                            break_stmt.span,
+                            "`break` is only allowed inside a loop",
+                        ));
+                    }
+                }
+                Stmt::Continue(continue_stmt) => {
+                    if loop_depth == 0 {
+                        return Err(Diagnostic::at(
+                            continue_stmt.span,
+                            "`continue` is only allowed inside a loop",
+                        ));
+                    }
                 }
             }
         }
 
-        Ok(())
+        Ok(flow)
+    }
+
+    fn check_with(
+        &self,
+        with_stmt: &WithStmt,
+        locals: &mut HashMap<String, LocalBinding>,
+        return_type: &Type,
+        loop_depth: usize,
+        allow_return: bool,
+    ) -> Result<BlockFlow> {
+        if locals.contains_key(&with_stmt.binding) {
+            return Err(Diagnostic::at(
+                with_stmt.span,
+                format!(
+                    "with binding `{}` would shadow an existing name",
+                    with_stmt.binding
+                ),
+            ));
+        }
+
+        let value_ty = self.type_of_expr(&with_stmt.value, locals)?;
+        self.require_with_resource(&value_ty, with_stmt.span)?;
+        self.consume_value_expr(&with_stmt.value, locals)?;
+
+        let mut body_locals = locals.clone();
+        body_locals.insert(
+            with_stmt.binding.clone(),
+            LocalBinding {
+                ty: value_ty,
+                mutable: true,
+                moved: false,
+            },
+        );
+        self.check_block(
+            &with_stmt.body,
+            &mut body_locals,
+            return_type,
+            loop_depth,
+            allow_return,
+        )
+    }
+
+    fn check_select(
+        &self,
+        select_stmt: &SelectStmt,
+        locals: &mut HashMap<String, LocalBinding>,
+        return_type: &Type,
+        loop_depth: usize,
+        allow_return: bool,
+    ) -> Result<BlockFlow> {
+        if select_stmt.arms.is_empty() {
+            return Err(Diagnostic::at(
+                select_stmt.span,
+                "`select` requires at least one `case` arm",
+            ));
+        }
+
+        let mut all_return = true;
+        for arm in &select_stmt.arms {
+            let binding_ty = self.select_arm_binding_type(&arm.expr, locals)?;
+            match (&arm.binding, binding_ty) {
+                (Some(_), None) => {
+                    return Err(Diagnostic::at(
+                        arm.span,
+                        "`after(...)` select arms cannot bind a value",
+                    ));
+                }
+                (None, _) => {}
+                (Some(binding), Some(ty)) => {
+                    let mut arm_locals = locals.clone();
+                    if arm_locals.contains_key(binding) {
+                        return Err(Diagnostic::at(
+                            arm.span,
+                            format!("select binding `{}` would shadow an existing name", binding),
+                        ));
+                    }
+                    arm_locals.insert(
+                        binding.clone(),
+                        LocalBinding {
+                            ty,
+                            mutable: false,
+                            moved: false,
+                        },
+                    );
+                    let arm_flow = self.check_block(
+                        &arm.body,
+                        &mut arm_locals,
+                        return_type,
+                        loop_depth,
+                        allow_return,
+                    )?;
+                    if arm_flow != BlockFlow::AlwaysReturns {
+                        all_return = false;
+                    }
+                    continue;
+                }
+            }
+
+            let mut arm_locals = locals.clone();
+            let arm_flow = self.check_block(
+                &arm.body,
+                &mut arm_locals,
+                return_type,
+                loop_depth,
+                allow_return,
+            )?;
+            if arm_flow != BlockFlow::AlwaysReturns {
+                all_return = false;
+            }
+        }
+
+        if all_return {
+            Ok(BlockFlow::AlwaysReturns)
+        } else {
+            Ok(BlockFlow::FallsThrough)
+        }
+    }
+
+    fn select_arm_binding_type(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Option<Type>> {
+        let ExprKind::Call { callee, args } = &expr.kind else {
+            return Err(Diagnostic::at(
+                expr.span,
+                "`select` currently supports `recv()`, `send(...)`, and `after(...)` arms",
+            ));
+        };
+
+        match &callee.kind {
+            ExprKind::Name(name) if name == "after" => {
+                let ordered_args = BuiltinFunction::After.bind_args(args, expr.span)?;
+                let duration_arg = ordered_args[0].expect("`after` requires exactly one argument");
+                let duration_ty = self.type_of_expr(&duration_arg.value, locals)?;
+                if duration_ty != Type::named("Duration") {
+                    return Err(Diagnostic::at(
+                        duration_arg.span,
+                        format!("`after(...)` expects a `Duration`, found `{}`", duration_ty),
+                    ));
+                }
+                Ok(None)
+            }
+            ExprKind::Member { object, field } if field == "recv" => {
+                BuiltinMember::ChannelRecv.bind_args(args, expr.span)?;
+                let receiver_ty = self.type_of_expr(object, locals)?;
+                let Type::Named(name, type_args) = receiver_ty else {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        "`select` receive arms require `Channel[T].recv()`",
+                    ));
+                };
+                if name != "Channel" || type_args.len() != 1 {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        "`select` receive arms require `Channel[T].recv()`",
+                    ));
+                }
+                Ok(Some(Type::Named(
+                    "Option".to_string(),
+                    vec![type_args[0].clone()],
+                )))
+            }
+            ExprKind::Member { object, field } if field == "send" => {
+                let ordered_args = BuiltinMember::ChannelSend.bind_args(args, expr.span)?;
+                let send_arg = ordered_args[0].expect("`send` requires exactly one argument");
+                let receiver_ty = self.type_of_expr(object, locals)?;
+                let Type::Named(name, type_args) = receiver_ty else {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        "`select` send arms require `Channel[T].send(value)`",
+                    ));
+                };
+                if name != "Channel" || type_args.len() != 1 {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        "`select` send arms require `Channel[T].send(value)`",
+                    ));
+                }
+                let actual =
+                    self.type_of_expr_hint(&send_arg.value, locals, Some(&type_args[0]))?;
+                if actual != type_args[0] {
+                    return Err(Diagnostic::at(
+                        send_arg.span,
+                        format!("`send()` expects `{}`, found `{}`", type_args[0], actual),
+                    ));
+                }
+                Ok(Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Unit,
+                        Type::Named("SendError".to_string(), vec![type_args[0].clone()]),
+                    ],
+                )))
+            }
+            _ => Err(Diagnostic::at(
+                expr.span,
+                "`select` currently supports `recv()`, `send(...)`, and `after(...)` arms",
+            )),
+        }
     }
 
     fn check_assign(
@@ -378,20 +1985,94 @@ impl<'a> FunctionChecker<'a> {
         assign: &AssignStmt,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
-        let value_ty = self.type_of_expr(&assign.value, locals)?;
+        if let AssignTarget::Member { object, field } = &assign.target {
+            if assign.mutable {
+                return Err(Diagnostic::at(
+                    assign.span,
+                    "`mut` can only be used when introducing a new binding",
+                ));
+            }
+
+            if assign.annotation.is_some() {
+                return Err(Diagnostic::at(
+                    assign.span,
+                    "member assignment cannot include a type annotation",
+                ));
+            }
+
+            if !self.is_mutable_place(object, locals)? {
+                return Err(Diagnostic::at(
+                    assign.span,
+                    format!(
+                        "cannot assign through immutable place `{}`",
+                        self.render_member_target(object, field)
+                    ),
+                ));
+            }
+
+            let target_ty = self.resolve_member_target_type(object, field, assign.span, locals)?;
+            let value_ty = self.type_of_expr_hint(&assign.value, locals, Some(&target_ty))?;
+            let final_value_ty = if let Some(op) = assign.op {
+                self.type_of_binary(assign.span, op, target_ty.clone(), value_ty.clone())?
+            } else {
+                value_ty
+            };
+
+            if final_value_ty != target_ty {
+                return Err(Diagnostic::at(
+                    assign.span,
+                    format!(
+                        "cannot assign value of type `{}` to member `{}` of type `{}`",
+                        final_value_ty,
+                        self.render_member_target(object, field),
+                        target_ty
+                    ),
+                ));
+            }
+
+            return Ok(());
+        }
+
+        let binding_name = match &assign.target {
+            AssignTarget::Name(name) => name,
+            AssignTarget::Member { .. } => unreachable!("handled above"),
+        };
         let annotation_ty = assign
             .annotation
             .as_ref()
-            .map(|annotation| lower_type(annotation, self.class_names))
+            .map(|annotation| {
+                lower_type(
+                    annotation,
+                    self.type_names,
+                    self.type_arities,
+                    &self.type_params,
+                )
+            })
             .transpose()?;
+        let existing_ty = locals.get(binding_name).map(|binding| binding.ty.clone());
+        let value_ty = self.type_of_expr_hint(
+            &assign.value,
+            locals,
+            existing_ty.as_ref().or(annotation_ty.as_ref()),
+        )?;
 
-        if let Some(existing) = locals.get_mut(&assign.name) {
+        if let Some(existing) = locals.get(binding_name).cloned() {
             if assign.mutable {
                 return Err(Diagnostic::at(
                     assign.span,
                     format!(
                         "`{}` is already declared; `mut` cannot redeclare an existing binding",
-                        assign.name
+                        binding_name
+                    ),
+                ));
+            }
+
+            if assign.annotation.is_some() && assign.op.is_some() {
+                return Err(Diagnostic::at(
+                    assign.span,
+                    format!(
+                        "compound assignment to `{}` cannot include a type annotation",
+                        binding_name
                     ),
                 ));
             }
@@ -399,7 +2080,14 @@ impl<'a> FunctionChecker<'a> {
             if !existing.mutable {
                 return Err(Diagnostic::at(
                     assign.span,
-                    format!("cannot assign to immutable binding `{}`", assign.name),
+                    format!("cannot assign to immutable binding `{}`", binding_name),
+                ));
+            }
+
+            if existing.moved && assign.op.is_some() {
+                return Err(Diagnostic::at(
+                    assign.span,
+                    format!("cannot read moved value `{}` in compound assignment", binding_name),
                 ));
             }
 
@@ -409,23 +2097,43 @@ impl<'a> FunctionChecker<'a> {
                         assign.span,
                         format!(
                             "reassignment annotation for `{}` has type `{}`, expected `{}`",
-                            assign.name, annotation_ty, existing.ty
+                            binding_name, annotation_ty, existing.ty
                         ),
                     ));
                 }
             }
 
-            if value_ty != existing.ty {
+            let final_value_ty = if let Some(op) = assign.op {
+                self.type_of_binary(assign.span, op, existing.ty.clone(), value_ty.clone())?
+            } else {
+                value_ty.clone()
+            };
+
+            if final_value_ty != existing.ty {
                 return Err(Diagnostic::at(
                     assign.span,
                     format!(
                         "cannot assign value of type `{}` to `{}` of type `{}`",
-                        value_ty, assign.name, existing.ty
+                        final_value_ty, binding_name, existing.ty
                     ),
                 ));
             }
 
+            self.consume_value_expr(&assign.value, locals)?;
+            if let Some(existing) = locals.get_mut(binding_name) {
+                existing.moved = false;
+            }
             return Ok(());
+        }
+
+        if assign.op.is_some() {
+            return Err(Diagnostic::at(
+                assign.span,
+                format!(
+                    "compound assignment requires an existing mutable binding `{}`",
+                    binding_name
+                ),
+            ));
         }
 
         let final_ty = annotation_ty.unwrap_or_else(|| value_ty.clone());
@@ -434,16 +2142,18 @@ impl<'a> FunctionChecker<'a> {
                 assign.span,
                 format!(
                     "binding `{}` has annotated type `{}`, but value has type `{}`",
-                    assign.name, final_ty, value_ty
+                    binding_name, final_ty, value_ty
                 ),
             ));
         }
 
+        self.consume_value_expr(&assign.value, locals)?;
         locals.insert(
-            assign.name.clone(),
+            binding_name.clone(),
             LocalBinding {
                 ty: final_ty,
                 mutable: assign.mutable,
+                moved: false,
             },
         );
         Ok(())
@@ -454,46 +2164,280 @@ impl<'a> FunctionChecker<'a> {
         expr: &Expr,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
+        self.type_of_expr_hint(expr, locals, None)
+    }
+
+    fn type_of_expr_hint(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Type> {
         match &expr.kind {
-            ExprKind::Name(name) => locals
-                .get(name)
-                .map(|binding| binding.ty.clone())
-                .ok_or_else(|| Diagnostic::at(expr.span, format!("unknown name `{}`", name))),
-            ExprKind::Int(_) => Ok(Type::named("int32")),
-            ExprKind::Float(_) => Ok(Type::named("float64")),
-            ExprKind::Group(inner) => self.type_of_expr(inner, locals),
-            ExprKind::Binary { op, left, right } => {
-                let left_ty = self.type_of_expr(left, locals)?;
-                let right_ty = self.type_of_expr(right, locals)?;
-                if left_ty != right_ty {
+            ExprKind::Name(name) if name == "None" => {
+                if let Some(expected_ty) = expected {
+                    if matches!(expected_ty, Type::Named(enum_name, args) if enum_name == "Option" && args.len() == 1)
+                    {
+                        return Ok(expected_ty.clone());
+                    }
+                }
+                Ok(Type::Unit)
+            }
+            ExprKind::Name(name) => {
+                let binding = locals
+                    .get(name)
+                    .ok_or_else(|| Diagnostic::at(expr.span, format!("unknown name `{}`", name)))?;
+                if binding.moved {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        format!("use of moved value `{}`", name),
+                    ));
+                }
+                Ok(binding.ty.clone())
+            }
+            ExprKind::Int(value) => {
+                let target_ty = expected
+                    .filter(|ty| is_integer_type(ty))
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("int32"));
+                self.validate_integer_literal(*value, &target_ty, expr.span)?;
+                Ok(target_ty)
+            }
+            ExprKind::DurationMillis(_) => Ok(Type::named("Duration")),
+            ExprKind::Float(_) => Ok(expected
+                .filter(|ty| is_float_type(ty))
+                .cloned()
+                .unwrap_or_else(|| Type::named("float64"))),
+            ExprKind::Bool(_) => Ok(Type::named("bool")),
+            ExprKind::String(_) => Ok(Type::named("String")),
+            ExprKind::Group(inner) => self.type_of_expr_hint(inner, locals, expected),
+            ExprKind::Cast { expr: value, ty } => {
+                let target_ty =
+                    lower_type(ty, self.type_names, self.type_arities, &self.type_params)?;
+                let source_ty = self.type_of_expr_hint(value, locals, Some(&target_ty))?;
+                if !is_numeric_type(&source_ty) || !is_numeric_type(&target_ty) {
                     return Err(Diagnostic::at(
                         expr.span,
                         format!(
-                            "binary operator operands must match, found `{}` and `{}`",
-                            left_ty, right_ty
+                            "casts are only supported between numeric types, found `{}` and `{}`",
+                            source_ty, target_ty
                         ),
                     ));
                 }
-                match (op, &left_ty) {
-                    (
-                        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div,
-                        Type::Named(name, args),
-                    ) if args.is_empty()
-                        && matches!(name.as_str(), "int32" | "float64") =>
-                    {
-                        Ok(left_ty)
+                Ok(target_ty)
+            }
+            ExprKind::Unary { op, expr: value } => match op {
+                UnaryOp::Not => {
+                    let value_ty = self.type_of_expr(value, locals)?;
+                    if value_ty != Type::named("bool") {
+                        return Err(Diagnostic::at(
+                            expr.span,
+                            format!("`not` expects `bool`, found `{}`", value_ty),
+                        ));
                     }
-                    _ => Err(Diagnostic::at(
+                    Ok(Type::named("bool"))
+                }
+                UnaryOp::Neg => {
+                    let value_ty = match &value.kind {
+                        ExprKind::Int(inner) => {
+                            let target_ty = expected
+                                .filter(|ty| is_integer_type(ty))
+                                .cloned()
+                                .unwrap_or_else(|| Type::named("int32"));
+                            self.validate_negative_integer_literal(*inner, &target_ty, expr.span)?;
+                            target_ty
+                        }
+                        _ => self.type_of_expr_hint(value, locals, expected)?,
+                    };
+                    if is_integer_type(&value_ty) || is_float_type(&value_ty) {
+                        Ok(value_ty)
+                    } else {
+                        Err(Diagnostic::at(
+                            expr.span,
+                            format!("unary `-` expects a numeric value, found `{}`", value_ty),
+                        ))
+                    }
+                }
+            },
+            ExprKind::Spawn { detached, value } => {
+                let ExprKind::Call { callee, args } = &value.kind else {
+                    return Err(Diagnostic::at(
                         expr.span,
-                        format!("unsupported operands for binary expression: `{}`", left_ty),
-                    )),
+                        "`spawn` requires a function or method call expression",
+                    ));
+                };
+                let return_ty = self.type_of_call(callee, args, value.span, locals, None)?;
+                if *detached {
+                    Ok(Type::Unit)
+                } else {
+                    Ok(Type::Named("Task".to_string(), vec![return_ty]))
                 }
             }
+            ExprKind::Try(inner) => {
+                let current_return_type = self.current_return_type.as_ref().ok_or_else(|| {
+                    Diagnostic::at(expr.span, "`try` is only allowed inside a function body")
+                })?;
+                let inner_ty = self.type_of_expr(inner, locals)?;
+                let Type::Named(inner_name, inner_args) = &inner_ty else {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        format!("`try` requires a `Result[T, E]`, found `{}`", inner_ty),
+                    ));
+                };
+                if inner_name != "Result" || inner_args.len() != 2 {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        format!("`try` requires a `Result[T, E]`, found `{}`", inner_ty),
+                    ));
+                }
+
+                let Type::Named(return_name, return_args) = current_return_type else {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        format!(
+                            "`try` requires the enclosing function to return `Result`, found `{}`",
+                            current_return_type
+                        ),
+                    ));
+                };
+                if return_name != "Result" || return_args.len() != 2 {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        format!(
+                            "`try` requires the enclosing function to return `Result`, found `{}`",
+                            current_return_type
+                        ),
+                    ));
+                }
+
+                if inner_args[1] != return_args[1] {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        format!(
+                            "`try` error type `{}` does not match enclosing `Result` error type `{}`",
+                            inner_args[1], return_args[1]
+                        ),
+                    ));
+                }
+
+                Ok(inner_args[0].clone())
+            }
+            ExprKind::Binary { op, left, right } => {
+                if matches!(op, BinaryOp::And | BinaryOp::Or) {
+                    let left_ty = self.type_of_expr(left, locals)?;
+                    let right_ty = self.type_of_expr(right, locals)?;
+                    return self.type_of_binary(expr.span, *op, left_ty, right_ty);
+                }
+                let mut left_ty = self.type_of_expr_hint(left, locals, expected)?;
+                let mut right_ty = self.type_of_expr_hint(right, locals, Some(&left_ty))?;
+                if left_ty != right_ty && matches!(left.kind, ExprKind::Int(_) | ExprKind::Float(_)) {
+                    left_ty = self.type_of_expr_hint(left, locals, Some(&right_ty))?;
+                }
+                if left_ty != right_ty && matches!(right.kind, ExprKind::Int(_) | ExprKind::Float(_)) {
+                    right_ty = self.type_of_expr_hint(right, locals, Some(&left_ty))?;
+                }
+                self.type_of_binary(expr.span, *op, left_ty, right_ty)
+            }
             ExprKind::Member { object, field } => {
+                if let ExprKind::Name(enum_name) = &object.kind {
+                    if let Some(expected_ty) = expected {
+                        if let Some(payload_ty) =
+                            self.builtin_enum_variant_payload(expected_ty, enum_name, field)
+                        {
+                            if payload_ty.is_some() {
+                                return Err(Diagnostic::at(
+                                    expr.span,
+                                    format!(
+                                        "variant `{}` of enum `{}` requires a payload",
+                                        field, enum_name
+                                    ),
+                                ));
+                            }
+                            return Ok(expected_ty.clone());
+                        }
+                    }
+                    if let Some(enum_info) = self.enums.get(enum_name) {
+                        let variant = enum_info.variants.get(field).ok_or_else(|| {
+                            Diagnostic::at(
+                                expr.span,
+                                format!("enum `{}` has no variant `{}`", enum_name, field),
+                            )
+                        })?;
+                        if variant.payload.is_some() {
+                            return Err(Diagnostic::at(
+                                expr.span,
+                                format!(
+                                    "variant `{}` of enum `{}` requires a payload",
+                                    field, enum_name
+                                ),
+                            ));
+                        }
+                        return Ok(Type::named(enum_name));
+                    }
+                }
                 let object_ty = self.type_of_expr(object, locals)?;
                 self.resolve_member_type(&object_ty, field, expr.span)
             }
-            ExprKind::Call { callee, args } => self.type_of_call(callee, args, expr.span, locals),
+            ExprKind::Call { callee, args } => {
+                self.type_of_call(callee, args, expr.span, locals, expected)
+            }
+        }
+    }
+
+    fn type_of_binary(
+        &self,
+        span: crate::diag::Span,
+        op: BinaryOp,
+        left_ty: Type,
+        right_ty: Type,
+    ) -> Result<Type> {
+        if left_ty != right_ty {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "binary operator operands must match, found `{}` and `{}`",
+                    left_ty, right_ty
+                ),
+            ));
+        }
+
+        match (op, &left_ty) {
+            (BinaryOp::And | BinaryOp::Or, Type::Named(name, args))
+                if args.is_empty() && name == "bool" =>
+            {
+                Ok(Type::named("bool"))
+            }
+            (BinaryOp::Add, Type::Named(name, args))
+                if args.is_empty()
+                    && (is_integer_type(&left_ty)
+                        || is_float_type(&left_ty)
+                        || name == "String") =>
+            {
+                Ok(left_ty)
+            }
+            (BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod, _)
+                if is_integer_type(&left_ty) || is_float_type(&left_ty) =>
+            {
+                Ok(left_ty)
+            }
+            (BinaryOp::Eq | BinaryOp::NotEq, Type::Named(name, args))
+                if (args.is_empty()
+                    && (is_integer_type(&left_ty)
+                        || is_float_type(&left_ty)
+                        || matches!(name.as_str(), "bool" | "String")))
+                    || self.enum_variants_for_type(&left_ty).is_some() =>
+            {
+                Ok(Type::named("bool"))
+            }
+            (BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq, _)
+                if is_integer_type(&left_ty) || is_float_type(&left_ty) =>
+            {
+                Ok(Type::named("bool"))
+            }
+            _ => Err(Diagnostic::at(
+                span,
+                format!("unsupported operands for binary expression: `{}`", left_ty),
+            )),
         }
     }
 
@@ -503,58 +2447,106 @@ impl<'a> FunctionChecker<'a> {
         args: &[Argument],
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
     ) -> Result<Type> {
         match &callee.kind {
-            ExprKind::Name(name) if name == "print" => {
-                if args.len() != 1 {
-                    return Err(Diagnostic::at(
-                        span,
-                        "`print` expects exactly one argument",
-                    ));
+            ExprKind::Name(name) if BuiltinFunction::from_name(name).is_some() => {
+                let builtin = BuiltinFunction::from_name(name).unwrap();
+                let ordered_args = builtin.bind_args(args, span)?;
+                match builtin {
+                    BuiltinFunction::Print => {
+                        self.type_of_expr(
+                            &ordered_args[0]
+                                .expect("`print` requires exactly one argument")
+                                .value,
+                            locals,
+                        )?;
+                        Ok(Type::Unit)
+                    }
+                    BuiltinFunction::Range => {
+                        for argument in ordered_args.into_iter().flatten() {
+                            let actual = self.type_of_expr(&argument.value, locals)?;
+                            if actual != Type::named("int32") {
+                                return Err(Diagnostic::at(
+                                    argument.span,
+                                    format!(
+                                        "`range` arguments must have type `int32`, found `{}`",
+                                        actual
+                                    ),
+                                ));
+                            }
+                        }
+                        Ok(Type::named("Range"))
+                    }
+                    BuiltinFunction::Channel => {
+                        let Some(expected_ty) = expected else {
+                            return Err(Diagnostic::at(
+                                span,
+                                "`channel()` requires an expected `Channel[T]` type annotation in the bootstrap compiler",
+                            ));
+                        };
+                        let Type::Named(name, args) = expected_ty else {
+                            return Err(Diagnostic::at(
+                                span,
+                                "`channel()` requires an expected `Channel[T]` type annotation in the bootstrap compiler",
+                            ));
+                        };
+                        if name != "Channel" || args.len() != 1 {
+                            return Err(Diagnostic::at(
+                                span,
+                                "`channel()` requires an expected `Channel[T]` type annotation in the bootstrap compiler",
+                            ));
+                        }
+                        Ok(expected_ty.clone())
+                    }
+                    BuiltinFunction::TaskGroup => Ok(Type::named("TaskGroup")),
+                    BuiltinFunction::Cancelled => Ok(Type::named("bool")),
+                    BuiltinFunction::After => {
+                        let duration_arg =
+                            ordered_args[0].expect("`after` requires exactly one argument");
+                        let duration_ty = self.type_of_expr(&duration_arg.value, locals)?;
+                        if duration_ty != Type::named("Duration") {
+                            return Err(Diagnostic::at(
+                                duration_arg.span,
+                                format!(
+                                    "`after(...)` expects a `Duration`, found `{}`",
+                                    duration_ty
+                                ),
+                            ));
+                        }
+                        Ok(Type::named("Duration"))
+                    }
+                    BuiltinFunction::Sleep => {
+                        let duration_arg =
+                            ordered_args[0].expect("`sleep` requires exactly one argument");
+                        let duration_ty = self.type_of_expr(&duration_arg.value, locals)?;
+                        if duration_ty != Type::named("Duration") {
+                            return Err(Diagnostic::at(
+                                duration_arg.span,
+                                format!(
+                                    "`sleep(...)` expects a `Duration`, found `{}`",
+                                    duration_ty
+                                ),
+                            ));
+                        }
+                        Ok(Type::Unit)
+                    }
                 }
-                if args[0].name.is_some() {
-                    return Err(Diagnostic::at(
-                        span,
-                        "`print` does not take keyword arguments",
-                    ));
-                }
-                self.type_of_expr(&args[0].value, locals)?;
-                Ok(Type::Unit)
             }
             ExprKind::Name(name) if self.functions.contains_key(name) => {
                 let function = self.functions.get(name).unwrap();
-                if args.len() != function.signature.params.len() {
-                    return Err(Diagnostic::at(
-                        span,
-                        format!(
-                            "function `{}` expects {} arguments, found {}",
-                            name,
-                            function.signature.params.len(),
-                            args.len()
-                        ),
-                    ));
-                }
-
-                for (argument, expected) in args.iter().zip(&function.signature.params) {
-                    if argument.name.is_some() {
-                        return Err(Diagnostic::at(
-                            argument.span,
-                            format!("function `{}` does not support keyword arguments yet", name),
-                        ));
-                    }
-                    let actual = self.type_of_expr(&argument.value, locals)?;
-                    if &actual != expected {
-                        return Err(Diagnostic::at(
-                            argument.span,
-                            format!(
-                                "argument type mismatch for `{}`: expected `{}`, found `{}`",
-                                name, expected, actual
-                            ),
-                        ));
-                    }
-                }
-
-                Ok(function.signature.return_type.clone())
+                self.type_check_callable_args(
+                    &format!("function `{}`", name),
+                    &function.decl.params,
+                    &function.signature.params,
+                    &function.signature.return_type,
+                    &function.type_param_bounds,
+                    args,
+                    span,
+                    locals,
+                    expected,
+                    HashMap::new(),
+                )
             }
             ExprKind::Name(name) if self.classes.contains_key(name) => {
                 let class = self.classes.get(name).unwrap();
@@ -569,6 +2561,18 @@ impl<'a> FunctionChecker<'a> {
                 }
 
                 let mut provided = HashMap::new();
+                let mut substitutions = match expected {
+                    Some(Type::Named(expected_name, expected_args))
+                        if expected_name == name
+                            && expected_args.len() == class.decl.type_params.len() =>
+                    {
+                        substitutions_from_decl_type_args(
+                            &class.decl.type_params,
+                            expected_args,
+                        )
+                    }
+                    _ => HashMap::new(),
+                };
                 for argument in args {
                     let field_name = argument.name.as_ref().unwrap();
                     let Some(field_info) = class.fields.get(field_name) else {
@@ -577,6 +2581,15 @@ impl<'a> FunctionChecker<'a> {
                             format!("class `{}` has no field named `{}`", name, field_name),
                         ));
                     };
+                    if self.is_external_module(&class.module_name) && !field_info.public {
+                        return Err(Diagnostic::at(
+                            argument.span,
+                            format!(
+                                "field `{}` is private on `{}`",
+                                field_name, class.decl.name
+                            ),
+                        ));
+                    }
                     if provided.insert(field_name.clone(), ()).is_some() {
                         return Err(Diagnostic::at(
                             argument.span,
@@ -584,20 +2597,39 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
 
-                    let actual = self.type_of_expr(&argument.value, locals)?;
-                    if actual != field_info.ty {
+                    let hinted_field_ty = substitute_type(&field_info.ty, &substitutions);
+                    let actual = if has_unresolved_type_params(&hinted_field_ty) {
+                        self.type_of_expr(&argument.value, locals)?
+                    } else {
+                        self.type_of_expr_hint(&argument.value, locals, Some(&hinted_field_ty))?
+                    };
+                    if let Err(error) =
+                        unify_type_pattern(&field_info.ty, &actual, &mut substitutions)
+                    {
                         return Err(Diagnostic::at(
                             argument.span,
                             format!(
-                                "field `{}` expects `{}`, found `{}`",
-                                field_name, field_info.ty, actual
+                                "field `{}` expects `{}`, found `{}` ({})",
+                                field_name, hinted_field_ty, actual, error.message
                             ),
                         ));
+                    }
+                    if !actual.is_copy() {
+                        self.consume_value_expr(&argument.value, locals)?;
                     }
                 }
 
                 for field in &class.decl.fields {
                     if !provided.contains_key(&field.name) && field.default.is_none() {
+                        if self.is_external_module(&class.module_name) && !field.public {
+                            return Err(Diagnostic::at(
+                                span,
+                                format!(
+                                    "class constructor `{}` cannot initialize private field `{}` from another module",
+                                    class.decl.name, field.name
+                                ),
+                            ));
+                        }
                         return Err(Diagnostic::at(
                             span,
                             format!(
@@ -608,23 +2640,520 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
 
-                Ok(Type::named(name))
+                let resolved_args = class
+                    .decl
+                    .type_params
+                    .iter()
+                    .map(|type_param| {
+                        substitutions.get(type_param).cloned().ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                format!(
+                                    "cannot infer type parameter `{}` for class constructor `{}`",
+                                    type_param, name
+                                ),
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                Ok(Type::Named(name.clone(), resolved_args))
             }
             ExprKind::Member { object, field } => {
+                if let ExprKind::Name(class_name) = &object.kind {
+                    if let Some(class_info) = self.classes.get(class_name) {
+                        if let Some(method) = class_info.methods.get(field) {
+                            if method.decl.receiver.is_some() {
+                                return Err(Diagnostic::at(
+                                    span,
+                                    format!(
+                                        "method `{}` on class `{}` requires an instance receiver",
+                                        field, class_name
+                                    ),
+                                ));
+                            }
+                            return self.type_check_callable_args(
+                                &format!("method `{}`", field),
+                                &method.decl.params,
+                                &method.signature.params,
+                                &method.signature.return_type,
+                                &method.type_param_bounds,
+                                args,
+                                span,
+                                locals,
+                                expected,
+                                HashMap::new(),
+                            );
+                        }
+                    }
+                }
+
+                if let ExprKind::Name(enum_name) = &object.kind {
+                    if let Some(expected_ty) = expected {
+                        if let Some(variant_payload) =
+                            self.builtin_enum_variant_payload(expected_ty, enum_name, field)
+                        {
+                            if args.iter().any(|argument| argument.name.is_some()) {
+                                return Err(Diagnostic::at(
+                                    span,
+                                    "enum variant constructors do not take keyword arguments",
+                                ));
+                            }
+                            match variant_payload {
+                                Some(payload_ty) => {
+                                    if args.len() != 1 {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "variant `{}` of enum `{}` expects exactly one payload argument",
+                                                field, enum_name
+                                            ),
+                                        ));
+                                    }
+                                let actual = self.type_of_expr_hint(
+                                    &args[0].value,
+                                    locals,
+                                    Some(&payload_ty),
+                                )?;
+                                    if actual != payload_ty {
+                                        return Err(Diagnostic::at(
+                                            args[0].span,
+                                            format!(
+                                                "variant `{}` of enum `{}` expects `{}`, found `{}`",
+                                                field, enum_name, payload_ty, actual
+                                            ),
+                                        ));
+                                    }
+                                    if !payload_ty.is_copy() {
+                                        self.consume_value_expr(&args[0].value, locals)?;
+                                    }
+                                }
+                                None => {
+                                    return Err(Diagnostic::at(
+                                        span,
+                                        format!(
+                                            "variant `{}` of enum `{}` does not take a payload",
+                                            field, enum_name
+                                        ),
+                                    ));
+                                }
+                            }
+                            return Ok(expected_ty.clone());
+                        }
+                    }
+                    if let Some(enum_info) = self.enums.get(enum_name) {
+                        let variant = enum_info.variants.get(field).ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                format!("enum `{}` has no variant `{}`", enum_name, field),
+                            )
+                        })?;
+                        if args.iter().any(|argument| argument.name.is_some()) {
+                            return Err(Diagnostic::at(
+                                span,
+                                "enum variant constructors do not take keyword arguments",
+                            ));
+                        }
+                        let mut substitutions = match expected {
+                            Some(Type::Named(expected_name, expected_args))
+                                if expected_name == enum_name
+                                    && expected_args.len() == enum_info.decl.type_params.len() =>
+                            {
+                                substitutions_from_decl_type_args(
+                                    &enum_info.decl.type_params,
+                                    expected_args,
+                                )
+                            }
+                            _ => HashMap::new(),
+                        };
+                        match &variant.payload {
+                            Some(payload_ty) => {
+                                if args.len() != 1 {
+                                    return Err(Diagnostic::at(
+                                        span,
+                                        format!(
+                                            "variant `{}` of enum `{}` expects exactly one payload argument",
+                                            field, enum_name
+                                        ),
+                                    ));
+                                }
+                                let hinted_payload_ty = substitute_type(payload_ty, &substitutions);
+                                let actual = if has_unresolved_type_params(&hinted_payload_ty) {
+                                    self.type_of_expr(&args[0].value, locals)?
+                                } else {
+                                    self.type_of_expr_hint(
+                                        &args[0].value,
+                                        locals,
+                                        Some(&hinted_payload_ty),
+                                    )?
+                                };
+                                if let Err(error) =
+                                    unify_type_pattern(payload_ty, &actual, &mut substitutions)
+                                {
+                                    return Err(Diagnostic::at(
+                                        args[0].span,
+                                        format!(
+                                            "variant `{}` of enum `{}` expects `{}`, found `{}` ({})",
+                                            field, enum_name, hinted_payload_ty, actual, error.message
+                                        ),
+                                    ));
+                                    }
+                                    if !actual.is_copy() {
+                                        self.consume_value_expr(&args[0].value, locals)?;
+                                    }
+                                }
+                            None => {
+                                return Err(Diagnostic::at(
+                                    span,
+                                    format!(
+                                        "variant `{}` of enum `{}` does not take a payload",
+                                        field, enum_name
+                                    ),
+                                ));
+                            }
+                        }
+                        let resolved_args = enum_info
+                            .decl
+                            .type_params
+                            .iter()
+                            .map(|type_param| {
+                                substitutions.get(type_param).cloned().ok_or_else(|| {
+                                    Diagnostic::at(
+                                        span,
+                                        format!(
+                                            "cannot infer type parameter `{}` for enum variant `{}.{}`",
+                                            type_param, enum_name, field
+                                        ),
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        return Ok(Type::Named(enum_name.clone(), resolved_args));
+                    }
+                }
+
                 let receiver_ty = self.type_of_expr(object, locals)?;
+                if let Type::Module(module_path) = &receiver_ty {
+                    let namespace = self.module_namespace(module_path).ok_or_else(|| {
+                        Diagnostic::at(
+                            span,
+                            format!("unknown module namespace `{}`", module_path),
+                        )
+                    })?;
+                    if let Some(function) = namespace.functions.get(field) {
+                        return self.type_check_callable_args(
+                            &format!("function `{}`", function.decl.name),
+                            &function.decl.params,
+                            &function.signature.params,
+                            &function.signature.return_type,
+                            &function.type_param_bounds,
+                            args,
+                            span,
+                            locals,
+                            expected,
+                            HashMap::new(),
+                        );
+                    }
+                    if let Some(class) = namespace.classes.get(field) {
+                        if args.iter().any(|argument| argument.name.is_none()) {
+                            return Err(Diagnostic::at(
+                                span,
+                                format!(
+                                    "class constructor `{}` currently requires keyword arguments",
+                                    class.decl.name
+                                ),
+                            ));
+                        }
+
+                        let mut provided = HashMap::new();
+                        for argument in args {
+                            let field_name = argument.name.as_ref().unwrap();
+                            let Some(field_info) = class.fields.get(field_name) else {
+                                return Err(Diagnostic::at(
+                                    argument.span,
+                                    format!(
+                                        "class `{}` has no field named `{}`",
+                                        class.decl.name, field_name
+                                    ),
+                                ));
+                            };
+                            if !field_info.public {
+                                return Err(Diagnostic::at(
+                                    argument.span,
+                                    format!(
+                                        "field `{}` is private on `{}`",
+                                        field_name, class.decl.name
+                                    ),
+                                ));
+                            }
+                            if provided.insert(field_name.clone(), ()).is_some() {
+                                return Err(Diagnostic::at(
+                                    argument.span,
+                                    format!("field `{}` was provided more than once", field_name),
+                                ));
+                            }
+                            let actual = self.type_of_expr_hint(
+                                &argument.value,
+                                locals,
+                                Some(&field_info.ty),
+                            )?;
+                            if actual != field_info.ty {
+                                return Err(Diagnostic::at(
+                                    argument.span,
+                                    format!(
+                                        "field `{}` expects `{}`, found `{}`",
+                                        field_name, field_info.ty, actual
+                                    ),
+                                ));
+                            }
+                            if !actual.is_copy() {
+                                self.consume_value_expr(&argument.value, locals)?;
+                            }
+                        }
+
+                        for field in &class.decl.fields {
+                            if !provided.contains_key(&field.name) && field.default.is_none() {
+                                if !field.public {
+                                    return Err(Diagnostic::at(
+                                        span,
+                                        format!(
+                                            "class constructor `{}` cannot initialize private field `{}` from another module",
+                                            class.decl.name, field.name
+                                        ),
+                                    ));
+                                }
+                                return Err(Diagnostic::at(
+                                    span,
+                                    format!(
+                                        "class constructor `{}` is missing required field `{}`",
+                                        class.decl.name, field.name
+                                    ),
+                                ));
+                            }
+                        }
+
+                        return Ok(Type::named(class.decl.name.clone()));
+                    }
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "module `{}` has no callable member `{}`",
+                            module_path, field
+                        ),
+                    ));
+                }
+                if let Type::Named(receiver_name, receiver_args) = &receiver_ty {
+                    if receiver_name == "String" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::StringClone => Ok(Type::named("String")),
+                                _ => unreachable!("unexpected string builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "Channel" && receiver_args.len() == 1 {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::ChannelClone => Ok(receiver_ty.clone()),
+                                BuiltinMember::ChannelSend => {
+                                    let send_arg = ordered_args[0]
+                                        .expect("`send` requires exactly one argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &send_arg.value,
+                                        locals,
+                                        Some(&receiver_args[0]),
+                                    )?;
+                                    if actual != receiver_args[0] {
+                                        return Err(Diagnostic::at(
+                                            send_arg.span,
+                                            format!(
+                                                "`send` expects `{}`, found `{}`",
+                                                receiver_args[0], actual
+                                            ),
+                                        ));
+                                    }
+                                    if !receiver_args[0].is_copy() {
+                                        self.consume_value_expr(&send_arg.value, locals)?;
+                                    }
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Unit,
+                                            Type::Named(
+                                                "SendError".to_string(),
+                                                vec![receiver_args[0].clone()],
+                                            ),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::ChannelRecv => Ok(Type::Named(
+                                    "Option".to_string(),
+                                    vec![receiver_args[0].clone()],
+                                )),
+                                BuiltinMember::ChannelClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected channel builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "Task" && receiver_args.len() == 1 {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::TaskClone => Ok(receiver_ty.clone()),
+                                BuiltinMember::TaskJoin => Ok(receiver_args[0].clone()),
+                                _ => unreachable!("unexpected task builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "TaskGroup" && receiver_args.is_empty() {
+                        match field.as_str() {
+                            "spawn" => {
+                                if args.is_empty() {
+                                    return Err(Diagnostic::at(
+                                        span,
+                                        "`spawn` expects a target function followed by its arguments",
+                                    ));
+                                }
+                                if args[0].name.is_some() {
+                                    return Err(Diagnostic::at(
+                                        args[0].span,
+                                        "`spawn` does not take keyword arguments",
+                                    ));
+                                }
+                                let ExprKind::Name(function_name) = &args[0].value.kind else {
+                                    return Err(Diagnostic::at(
+                                        args[0].span,
+                                        "`spawn` currently requires a named function target",
+                                    ));
+                                };
+                                let function =
+                                    self.functions.get(function_name).ok_or_else(|| {
+                                        Diagnostic::at(
+                                            args[0].span,
+                                            format!("unknown function `{}`", function_name),
+                                        )
+                                    })?;
+                                let spawn_args = &args[1..];
+                                self.type_check_callable_args(
+                                    &format!("function `{}`", function_name),
+                                    &function.decl.params,
+                                    &function.signature.params,
+                                    &function.signature.return_type,
+                                    &function.type_param_bounds,
+                                    spawn_args,
+                                    span,
+                                    locals,
+                                    None,
+                                    HashMap::new(),
+                                )?;
+                                return Ok(Type::Named(
+                                    "Task".to_string(),
+                                    vec![function.signature.return_type.clone()],
+                                ));
+                            }
+                            "cancel" | "close" => {
+                                BuiltinMember::TaskGroupCancel.bind_args(args, span)?;
+                                return Ok(Type::Unit);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if let Type::Named(class_name, type_args) = &receiver_ty {
+                    if let Some(class_info) = self.classes.get(class_name) {
+                        if let Some(method) = class_info.methods.get(field) {
+                            if self.is_external_module(&class_info.module_name)
+                                && !method.decl.public
+                            {
+                                return Err(Diagnostic::at(
+                                    span,
+                                    format!(
+                                        "method `{}` is private on `{}`",
+                                        field, class_info.decl.name
+                                    ),
+                                ));
+                            }
+                            if method.decl.receiver.is_none() {
+                                return Err(Diagnostic::at(
+                                    span,
+                                    format!(
+                                        "associated method `{}` on class `{}` must be called through the class name",
+                                        field, class_name
+                                    ),
+                                ));
+                            }
+                            if method.decl.receiver == Some(ReceiverKind::BorrowMut)
+                                && !self.is_mutable_place(object, locals)?
+                            {
+                                return Err(Diagnostic::at(
+                                    span,
+                                    format!("method `{}` requires a mutable receiver", field),
+                                ));
+                            }
+                            if method.decl.receiver == Some(ReceiverKind::Value) {
+                                self.consume_value_expr(object, locals)?;
+                            }
+                            return self.type_check_callable_args(
+                                &format!("method `{}`", field),
+                                &method.decl.params,
+                                &method.signature.params,
+                                &method.signature.return_type,
+                                &method.type_param_bounds,
+                                args,
+                                span,
+                                locals,
+                                expected,
+                                substitutions_from_decl_type_args(
+                                    &class_info.decl.type_params,
+                                    type_args,
+                                ),
+                            );
+                        }
+                    }
+                }
+                if let Type::TypeParam(type_param_name) = &receiver_ty {
+                    if let Ok(method) = self.trait_method_from_type_param(type_param_name, field) {
+                        return self.type_check_callable_args(
+                            &format!("method `{}`", field),
+                            &method.decl.params,
+                            &method.signature.params,
+                            &method.signature.return_type,
+                            &method.type_param_bounds,
+                            args,
+                            span,
+                            locals,
+                            expected,
+                            HashMap::new(),
+                        );
+                    }
+                }
+                if let Some((_trait_impl, method)) =
+                    self.trait_method_for_concrete_type(&receiver_ty, field)
+                {
+                    return self.type_check_callable_args(
+                        &format!("method `{}`", field),
+                        &method.decl.params,
+                        &method.signature.params,
+                        &method.signature.return_type,
+                        &method.type_param_bounds,
+                        args,
+                        span,
+                        locals,
+                        expected,
+                        HashMap::new(),
+                    );
+                }
                 match (&receiver_ty, field.as_str()) {
                     (Type::Named(name, type_args), "sqrt")
                         if type_args.is_empty() && name == "float64" =>
                     {
-                        if args.iter().any(|argument| argument.name.is_some()) {
-                            return Err(Diagnostic::at(
-                                span,
-                                "`sqrt` does not take keyword arguments",
-                            ));
-                        }
-                        if !args.is_empty() {
-                            return Err(Diagnostic::at(span, "`sqrt` does not take arguments"));
-                        }
+                        BuiltinMember::FloatSqrt.bind_args(args, span)?;
                         Ok(Type::named("float64"))
                     }
                     _ => Err(Diagnostic::at(
@@ -637,25 +3166,226 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn check_match(
+        &self,
+        match_stmt: &MatchStmt,
+        locals: &mut HashMap<String, LocalBinding>,
+        return_type: &Type,
+        loop_depth: usize,
+        allow_return: bool,
+    ) -> Result<BlockFlow> {
+        let scrutinee_ty = self.type_of_expr(&match_stmt.scrutinee, locals)?;
+        let Type::Named(enum_name, _type_args) = &scrutinee_ty else {
+            return Err(Diagnostic::at(
+                match_stmt.span,
+                format!(
+                    "`match` currently requires an enum scrutinee, found `{}`",
+                    scrutinee_ty
+                ),
+            ));
+        };
+
+        let Some(variants) = self.enum_variants_for_type(&scrutinee_ty) else {
+            return Err(Diagnostic::at(
+                match_stmt.span,
+                format!(
+                    "`match` currently requires an enum scrutinee, found `{}`",
+                    scrutinee_ty
+                ),
+            ));
+        };
+
+        if match_stmt.arms.is_empty() {
+            return Err(Diagnostic::at(
+                match_stmt.span,
+                "`match` requires at least one `case` arm",
+            ));
+        }
+
+        let mut covered = BTreeMap::<String, crate::diag::Span>::new();
+        let mut all_return = true;
+
+        for arm in &match_stmt.arms {
+            let Pattern::Variant(pattern) = &arm.pattern;
+            if pattern.enum_name != *enum_name {
+                return Err(Diagnostic::at(
+                    pattern.span,
+                    format!(
+                        "match arm expects enum `{}`, found pattern for `{}`",
+                        enum_name, pattern.enum_name
+                    ),
+                ));
+            }
+
+            let Some(variant_payload) = variants
+                .iter()
+                .find(|(name, _)| name == &pattern.variant_name)
+                .map(|(_, payload)| payload.clone())
+            else {
+                return Err(Diagnostic::at(
+                    pattern.span,
+                    format!(
+                        "enum `{}` has no variant `{}`",
+                        enum_name, pattern.variant_name
+                    ),
+                ));
+            };
+
+            if let Some(previous) = covered.insert(pattern.variant_name.clone(), pattern.span) {
+                return Err(Diagnostic::at(
+                    pattern.span,
+                    format!(
+                        "duplicate match arm for `{}.{}` (previously matched at {})",
+                        enum_name, pattern.variant_name, previous
+                    ),
+                ));
+            }
+
+            match (&variant_payload, &pattern.binding) {
+                (Some(_), None) => {
+                    return Err(Diagnostic::at(
+                        pattern.span,
+                        format!(
+                            "variant `{}.{}` carries a payload and must bind it",
+                            enum_name, pattern.variant_name
+                        ),
+                    ));
+                }
+                (None, Some(_)) => {
+                    return Err(Diagnostic::at(
+                        pattern.span,
+                        format!(
+                            "variant `{}.{}` does not carry a payload",
+                            enum_name, pattern.variant_name
+                        ),
+                    ));
+                }
+                _ => {}
+            }
+
+            let mut arm_locals = locals.clone();
+            if let (Some(payload_ty), Some(binding)) = (&variant_payload, &pattern.binding) {
+                if arm_locals.contains_key(binding) {
+                    return Err(Diagnostic::at(
+                        pattern.span,
+                        format!(
+                            "pattern binding `{}` would shadow an existing name",
+                            binding
+                        ),
+                    ));
+                }
+                arm_locals.insert(
+                    binding.clone(),
+                    LocalBinding {
+                        ty: payload_ty.clone(),
+                        mutable: false,
+                        moved: false,
+                    },
+                );
+            }
+
+            let arm_flow = self.check_block(
+                &arm.body,
+                &mut arm_locals,
+                return_type,
+                loop_depth,
+                allow_return,
+            )?;
+            if arm_flow != BlockFlow::AlwaysReturns {
+                all_return = false;
+            }
+        }
+
+        let missing = variants
+            .iter()
+            .filter(|(name, _)| !covered.contains_key(name))
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            let rendered = missing
+                .iter()
+                .map(|name| format!("`{}`", name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(Diagnostic::at(
+                match_stmt.span,
+                format!(
+                    "non-exhaustive match over `{}`: missing {}",
+                    enum_name, rendered
+                ),
+            ));
+        }
+
+        if all_return {
+            Ok(BlockFlow::AlwaysReturns)
+        } else {
+            Ok(BlockFlow::FallsThrough)
+        }
+    }
+
     fn resolve_member_type(
         &self,
         object_ty: &Type,
         field: &str,
         span: crate::diag::Span,
     ) -> Result<Type> {
-        let Type::Named(name, args) = object_ty else {
-            return Err(Diagnostic::at(
-                span,
-                format!("cannot access field `{}` on `{}`", field, object_ty),
-            ));
+        let (name, args) = match object_ty {
+            Type::Module(path) => {
+                let namespace = self.module_namespace(path).ok_or_else(|| {
+                    Diagnostic::at(span, format!("unknown module namespace `{}`", path))
+                })?;
+                if let Some(child) = namespace.modules.get(field) {
+                    return Ok(Type::Module(child.path.clone()));
+                }
+                if namespace.functions.contains_key(field) {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "function `{}` from module `{}` must be called with `(...)`",
+                            field, path
+                        ),
+                    ));
+                }
+                if namespace.classes.contains_key(field) {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "class `{}` from module `{}` must be constructed with `(...)`",
+                            field, path
+                        ),
+                    ));
+                }
+                return Err(Diagnostic::at(
+                    span,
+                    format!("module `{}` has no member `{}`", path, field),
+                ));
+            }
+            Type::Named(name, args) => (name, args),
+            Type::TypeParam(type_param_name) => {
+                return self
+                    .trait_method_from_type_param(type_param_name, field)
+                    .map(|method| method.signature.return_type.clone())
+                    .map_err(|_| {
+                        Diagnostic::at(
+                            span,
+                            format!("cannot access field `{}` on `{}`", field, object_ty),
+                        )
+                    });
+            }
+            Type::Unit => {
+                return Err(Diagnostic::at(
+                    span,
+                    format!("cannot access field `{}` on `{}`", field, object_ty),
+                ));
+            }
         };
 
-        if !args.is_empty() {
+        if BuiltinMember::resolve(name, field).is_some() {
             return Err(Diagnostic::at(
                 span,
                 format!(
-                    "generic type `{}` is not implemented in this bootstrap compiler",
-                    name
+                    "method `{}` on `{}` must be called with `(...)`",
+                    field, object_ty
                 ),
             ));
         }
@@ -666,12 +3396,399 @@ impl<'a> FunctionChecker<'a> {
                 format!("type `{}` has no field `{}`", name, field),
             ));
         };
-        class_info
-            .fields
-            .get(field)
-            .map(|info| info.ty.clone())
-            .ok_or_else(|| {
-                Diagnostic::at(span, format!("class `{}` has no field `{}`", name, field))
-            })
+        let substitutions = substitutions_from_decl_type_args(&class_info.decl.type_params, args);
+        if let Some(field_info) = class_info.fields.get(field) {
+            if self.is_external_module(&class_info.module_name) && !field_info.public {
+                return Err(Diagnostic::at(
+                    span,
+                    format!("field `{}` is private on `{}`", field, class_info.decl.name),
+                ));
+            }
+            let field_ty = substitute_type(&field_info.ty, &substitutions);
+            return Ok(field_ty);
+        }
+        if let Some(method) = class_info.methods.get(field) {
+            if self.is_external_module(&class_info.module_name) && !method.decl.public {
+                return Err(Diagnostic::at(
+                    span,
+                    format!("method `{}` is private on `{}`", field, class_info.decl.name),
+                ));
+            }
+        }
+        if let Some((_trait_impl, method)) = self.trait_method_for_concrete_type(object_ty, field) {
+            return Ok(method.signature.return_type.clone());
+        }
+        Err(Diagnostic::at(
+            span,
+            format!("class `{}` has no field `{}`", name, field),
+        ))
+    }
+
+    fn resolve_member_target_type(
+        &self,
+        object: &Expr,
+        field: &str,
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Type> {
+        let object_ty = self.type_of_expr(object, locals)?;
+        self.resolve_member_type(&object_ty, field, span)
+    }
+
+    fn is_mutable_place(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<bool> {
+        match &expr.kind {
+            ExprKind::Name(name) => Ok(locals
+                .get(name)
+                .map(|binding| binding.mutable)
+                .unwrap_or(false)),
+            ExprKind::Group(inner) => self.is_mutable_place(inner, locals),
+            ExprKind::Member { object, field } => {
+                self.resolve_member_target_type(object, field, expr.span, locals)?;
+                self.is_mutable_place(object, locals)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    fn render_member_target(&self, object: &Expr, field: &str) -> String {
+        format!("{}.{}", self.render_place_expr(object), field)
+    }
+
+    fn render_place_expr(&self, expr: &Expr) -> String {
+        match &expr.kind {
+            ExprKind::Name(name) => name.clone(),
+            ExprKind::Group(inner) => self.render_place_expr(inner),
+            ExprKind::Member { object, field } => {
+                format!("{}.{}", self.render_place_expr(object), field)
+            }
+            _ => "<place>".to_string(),
+        }
+    }
+
+    fn module_namespace(&self, path: &str) -> Option<&ModuleNamespace> {
+        let mut segments = path.split('.');
+        let first = segments.next()?;
+        let mut namespace = self.imported_modules.get(first)?;
+        for segment in segments {
+            namespace = namespace.modules.get(segment)?;
+        }
+        Some(namespace)
+    }
+
+    fn is_external_module(&self, owner_module: &str) -> bool {
+        owner_module != self.module_name
+    }
+
+    fn type_implements_trait(&self, ty: &Type, trait_name: &str) -> bool {
+        self.trait_impls
+            .iter()
+            .any(|trait_impl| &trait_impl.for_type == ty && trait_impl.trait_name == trait_name)
+    }
+
+    fn assert_type_satisfies_bounds(
+        &self,
+        ty: &Type,
+        bounds: &[String],
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        for bound in bounds {
+            match ty {
+                Type::TypeParam(name) => {
+                    let current_bounds =
+                        self.type_param_bounds.get(name).cloned().unwrap_or_default();
+                    if !current_bounds.iter().any(|current| current == bound) {
+                        return Err(Diagnostic::at(
+                            span,
+                            format!(
+                                "type parameter `{}` does not satisfy trait bound `{}`",
+                                name, bound
+                            ),
+                        ));
+                    }
+                }
+                _ => {
+                    if !self.type_implements_trait(ty, bound) {
+                        return Err(Diagnostic::at(
+                            span,
+                            format!("type `{}` does not implement trait `{}`", ty, bound),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn trait_method_from_type_param(
+        &self,
+        type_param_name: &str,
+        method_name: &str,
+    ) -> Result<&TraitMethodInfo> {
+        let mut matches = Vec::new();
+        for trait_name in self
+            .type_param_bounds
+            .get(type_param_name)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(trait_info) = self.traits.get(trait_name) {
+                if let Some(method) = trait_info.methods.get(method_name) {
+                    matches.push(method);
+                }
+            }
+        }
+        match matches.len() {
+            1 => Ok(matches[0]),
+            0 => Err(Diagnostic::new(format!(
+                "type parameter `{}` has no method `{}` in its trait bounds",
+                type_param_name, method_name
+            ))),
+            _ => Err(Diagnostic::new(format!(
+                "method `{}` is ambiguous for type parameter `{}`",
+                method_name, type_param_name
+            ))),
+        }
+    }
+
+    fn trait_method_for_concrete_type(
+        &self,
+        ty: &Type,
+        method_name: &str,
+    ) -> Option<(&TraitImplInfo, &TraitImplMethodInfo)> {
+        self.trait_impls.iter().find_map(|trait_impl| {
+            if &trait_impl.for_type != ty {
+                return None;
+            }
+            trait_impl
+                .methods
+                .get(method_name)
+                .map(|method| (trait_impl, method))
+        })
+    }
+
+    fn type_check_callable_args(
+        &self,
+        callee_name: &str,
+        param_decls: &[Param],
+        param_types: &[Type],
+        return_type: &Type,
+        callee_type_param_bounds: &BTreeMap<String, Vec<String>>,
+        args: &[Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected_return: Option<&Type>,
+        seed_substitutions: HashMap<String, Type>,
+    ) -> Result<Type> {
+        let ordered_args = bind_call_arguments(
+            callee_name,
+            &callable_params_from_decl(param_decls),
+            args,
+            span,
+            CallConvention::PositionalOrNamed,
+        )?;
+
+        let mut substitutions = seed_substitutions;
+        let mut resolved_args = Vec::new();
+        for ((argument, expected), param_decl) in ordered_args
+            .into_iter()
+            .zip(param_types.iter())
+            .zip(param_decls.iter())
+        {
+            let hinted_expected = substitute_type(expected, &substitutions);
+            let actual = if let Some(argument) = argument {
+                if has_unresolved_type_params(&hinted_expected) {
+                    self.type_of_expr(&argument.value, locals)?
+                } else {
+                    self.type_of_expr_hint(&argument.value, locals, Some(&hinted_expected))?
+                }
+            } else {
+                let default = param_decl
+                    .default
+                    .as_ref()
+                    .expect("optional parameter should provide a default expression");
+                if has_unresolved_type_params(&hinted_expected) {
+                    self.type_of_expr(default, locals)?
+                } else {
+                    self.type_of_expr_hint(default, locals, Some(&hinted_expected))?
+                }
+            };
+            if let Err(error) = unify_type_pattern(expected, &actual, &mut substitutions) {
+                let span = argument.map(|argument| argument.span).unwrap_or(param_decl.span);
+                return Err(Diagnostic::at(
+                    span,
+                    format!("argument type mismatch for {}: {}", callee_name, error.message),
+                ));
+            }
+            resolved_args.push((argument, actual));
+        }
+
+        if let Some(expected_return) = expected_return {
+            if let Err(error) = unify_type_pattern(return_type, expected_return, &mut substitutions) {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "result type mismatch for {}: {}",
+                        callee_name, error.message
+                    ),
+                ));
+            }
+        }
+
+        let mut unresolved = Vec::new();
+        for ty in param_types {
+            collect_unresolved_type_params(&substitute_type(ty, &substitutions), &mut unresolved);
+        }
+        collect_unresolved_type_params(&substitute_type(return_type, &substitutions), &mut unresolved);
+        if let Some(name) = unresolved.first() {
+            return Err(Diagnostic::at(
+                span,
+                format!("cannot infer type parameter `{}` for {}", name, callee_name),
+            ));
+        }
+
+        for (type_param, bounds) in callee_type_param_bounds {
+            let Some(resolved_ty) = substitutions.get(type_param) else {
+                continue;
+            };
+            self.assert_type_satisfies_bounds(resolved_ty, bounds, span)?;
+        }
+
+        for (((argument, actual), expected), param_decl) in resolved_args
+            .into_iter()
+            .zip(param_types.iter())
+            .zip(param_decls.iter())
+        {
+            let expected = substitute_type(expected, &substitutions);
+            if actual != expected {
+                let span = argument.map(|argument| argument.span).unwrap_or(param_decl.span);
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "argument type mismatch for {}: expected `{}`, found `{}`",
+                        callee_name, expected, actual
+                    ),
+                ));
+            }
+            if let Some(argument) = argument.filter(|_| !expected.is_copy()) {
+                self.consume_value_expr(&argument.value, locals)?;
+            }
+        }
+
+        Ok(substitute_type(return_type, &substitutions))
+    }
+
+    fn enum_variants_for_type(&self, ty: &Type) -> Option<Vec<(String, Option<Type>)>> {
+        match ty {
+            Type::Named(name, args) if name == "Option" && args.len() == 1 => Some(vec![
+                ("Some".to_string(), Some(args[0].clone())),
+                ("None".to_string(), None),
+            ]),
+            Type::Named(name, args) if name == "Result" && args.len() == 2 => Some(vec![
+                ("Ok".to_string(), Some(args[0].clone())),
+                ("Err".to_string(), Some(args[1].clone())),
+            ]),
+            Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
+                Some(vec![("Closed".to_string(), Some(args[0].clone()))])
+            }
+            Type::Named(name, args) => self.enums.get(name).map(|enum_info| {
+                let substitutions =
+                    substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
+                enum_info
+                    .decl
+                    .variants
+                    .iter()
+                    .map(|variant| {
+                        (
+                            variant.name.clone(),
+                            enum_info.variants.get(&variant.name).and_then(|info| {
+                                info.payload
+                                    .as_ref()
+                                    .map(|payload| substitute_type(payload, &substitutions))
+                            }),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }),
+            _ => None,
+        }
+    }
+
+    fn builtin_enum_variant_payload(
+        &self,
+        expected: &Type,
+        enum_name: &str,
+        variant_name: &str,
+    ) -> Option<Option<Type>> {
+        let Type::Named(expected_name, args) = expected else {
+            return None;
+        };
+        if expected_name != enum_name {
+            return None;
+        }
+        match (enum_name, variant_name, args.as_slice()) {
+            ("Option", "Some", [inner]) => Some(Some(inner.clone())),
+            ("Option", "None", [_]) => Some(None),
+            ("Result", "Ok", [ok, _err]) => Some(Some(ok.clone())),
+            ("Result", "Err", [_ok, err]) => Some(Some(err.clone())),
+            ("SendError", "Closed", [value]) => Some(Some(value.clone())),
+            _ => None,
+        }
+    }
+
+    fn require_with_resource(&self, value_ty: &Type, span: crate::diag::Span) -> Result<()> {
+        let Type::Named(name, args) = value_ty else {
+            return Err(Diagnostic::at(
+                span,
+                format!("`with` requires a class resource, found `{}`", value_ty),
+            ));
+        };
+        if name == "TaskGroup" && args.is_empty() {
+            return Ok(());
+        }
+        if !args.is_empty() {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "`with` does not yet support generic resource types in the bootstrap compiler, found `{}`",
+                    value_ty
+                ),
+            ));
+        }
+
+        let Some(class_info) = self.classes.get(name) else {
+            return Err(Diagnostic::at(
+                span,
+                format!("`with` requires a class resource, found `{}`", value_ty),
+            ));
+        };
+
+        let Some(method) = class_info.methods.get("close") else {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "class `{}` cannot be used with `with` because it does not define `close(borrow mut self)`",
+                    name
+                ),
+            ));
+        };
+
+        if method.decl.receiver != Some(ReceiverKind::BorrowMut)
+            || !method.signature.params.is_empty()
+            || method.signature.return_type != Type::Unit
+        {
+            return Err(Diagnostic::at(
+                method.decl.span,
+                format!(
+                    "`with` resources must define `close(borrow mut self)` returning `None`; `{}` does not",
+                    name
+                ),
+            ));
+        }
+
+        Ok(())
     }
 }

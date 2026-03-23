@@ -1,0 +1,23 @@
+trait A:
+    def a(borrow self) -> int32
+
+trait B:
+    def b(borrow self) -> int32
+
+class Both:
+    value: int32
+
+impl A for Both:
+    def a(borrow self) -> int32:
+        return self.value
+
+impl B for Both:
+    def b(borrow self) -> int32:
+        return self.value + 1
+
+def use_both[T: A + B](value: T) -> int32:
+    return value.a() + value.b()
+
+def main() -> int32:
+    print(use_both(value=Both(value=4)))
+    return 0

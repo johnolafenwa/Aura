@@ -6,3 +6,4 @@ license.workspace = true
 
 [dependencies]
 aurora-compiler = { path = "../aurora-compiler" }
+serde_json = "1"

@@ -1,14 +1,29 @@
+pub mod analysis;
 pub mod ast;
+pub mod call;
 pub mod diag;
 pub mod interpreter;
 pub mod lexer;
+pub mod mir;
+pub mod mir_runtime;
 pub mod parser;
 pub mod sema;
 
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::{collections::BTreeMap, collections::HashMap};
+
+pub use analysis::{
+    analyze_path_source, analyze_program, analyze_source, complete_path_source, complete_source,
+    AnalysisCompletion, AnalysisOutput,
+};
 pub use diag::{Diagnostic, Result, Span};
 pub use interpreter::{run, RunOutput, Value};
-pub use sema::Program;
+pub use mir::{lower as lower_to_mir, MirModule};
+pub use mir_runtime::run as run_mir;
+pub use sema::{ImportedBinding, ModuleContext, ModuleNamespace, Program};
 
+use ast::{ImportKind, Item};
 pub fn parse_source(source: &str) -> Result<ast::Module> {
     parser::parse(source)
 }
@@ -23,13 +38,445 @@ pub fn run_source(source: &str) -> Result<RunOutput> {
     run(&program)
 }
 
+pub fn run_source_via_mir(source: &str) -> Result<RunOutput> {
+    let program = check_source(source)?;
+    let mir = lower_to_mir(&program);
+    run_mir(&mir)
+}
+
+pub fn lower_source_to_mir(source: &str) -> Result<MirModule> {
+    let program = check_source(source)?;
+    Ok(lower_to_mir(&program))
+}
+
+pub fn check_path(path: &Path) -> Result<Program> {
+    ModuleLoader::new(path)?.load_program(path)
+}
+
+pub fn check_path_with_source(path: &Path, source: &str) -> Result<Program> {
+    ModuleLoader::new(path)?.load_program_with_source(path, source)
+}
+
+pub fn run_path(path: &Path) -> Result<RunOutput> {
+    let program = check_path(path)?;
+    run(&program)
+}
+
+pub fn run_path_via_mir(path: &Path) -> Result<RunOutput> {
+    let program = check_path(path)?;
+    let mir = lower_to_mir(&program);
+    run_mir(&mir)
+}
+
+pub fn lower_path_to_mir(path: &Path) -> Result<MirModule> {
+    let program = check_path(path)?;
+    Ok(lower_to_mir(&program))
+}
+
+#[derive(Clone)]
+struct LoadedModule {
+    program: Program,
+}
+
+struct ModuleLoader {
+    package_root: PathBuf,
+    cache: HashMap<PathBuf, LoadedModule>,
+    stack: Vec<PathBuf>,
+}
+
+impl ModuleLoader {
+    fn new(entry_path: &Path) -> Result<Self> {
+        let absolute_entry = absolutize(entry_path);
+        let package_root = absolute_entry
+            .parent()
+            .ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "cannot determine package root for `{}`",
+                    entry_path.display()
+                ))
+            })?
+            .to_path_buf();
+        Ok(Self {
+            package_root,
+            cache: HashMap::new(),
+            stack: Vec::new(),
+        })
+    }
+
+    fn load_program(&mut self, path: &Path) -> Result<Program> {
+        self.load_program_internal(path, None)
+    }
+
+    fn load_program_with_source(&mut self, path: &Path, source: &str) -> Result<Program> {
+        self.load_program_internal(path, Some(source))
+    }
+
+    fn load_program_internal(&mut self, path: &Path, source_override: Option<&str>) -> Result<Program> {
+        let path = absolutize(path);
+        if let Some(loaded) = self.cache.get(&path) {
+            return Ok(loaded.program.clone());
+        }
+        if self.stack.contains(&path) {
+            return Err(Diagnostic::new(format!(
+                "cyclic import involving `{}`",
+                path.display()
+            )));
+        }
+
+        self.stack.push(path.clone());
+
+        let source = if let Some(source) = source_override {
+            source.to_string()
+        } else {
+            fs::read_to_string(&path).map_err(|error| {
+                Diagnostic::new(format!("failed to read `{}`: {}", path.display(), error))
+            })?
+        };
+        let module = parse_source(&source)?;
+        let module_name = logical_module_name(&self.package_root, &path);
+        let imported_bindings = self.resolve_imports(&module)?;
+        let program = sema::check_with_context(
+            module,
+            ModuleContext {
+                module_name,
+                imported_bindings,
+            },
+        )?;
+
+        self.cache
+            .insert(path.clone(), LoadedModule { program: program.clone() });
+        self.stack.pop();
+        Ok(program)
+    }
+
+    fn resolve_imports(&mut self, module: &ast::Module) -> Result<BTreeMap<String, ImportedBinding>> {
+        let mut bindings = BTreeMap::new();
+        for import in &module.imports {
+            match &import.kind {
+                ImportKind::From { module_path, names } => {
+                    let imported = self.load_imported_module(module_path, import.span)?;
+                    for name in names {
+                        let binding = exported_binding(&imported, name).ok_or_else(|| {
+                            let logical_name = module_path.join(".");
+                            if local_item_exists(&imported, name) {
+                                Diagnostic::at(
+                                    import.span,
+                                    format!("item `{}` is private in module `{}`", name, logical_name),
+                                )
+                            } else {
+                                Diagnostic::at(
+                                    import.span,
+                                    format!("module `{}` has no export named `{}`", logical_name, name),
+                                )
+                            }
+                        })?;
+                        if bindings.insert(name.clone(), binding).is_some() {
+                            return Err(Diagnostic::at(
+                                import.span,
+                                format!("duplicate import binding `{}`", name),
+                            ));
+                        }
+                    }
+                }
+                ImportKind::Module { path } => {
+                    let imported = self.load_imported_module(path, import.span)?;
+                    let leaf = exported_namespace(path, &imported);
+                    insert_namespace_import(&mut bindings, path, leaf, import.span)?;
+                }
+            }
+        }
+        Ok(bindings)
+    }
+
+    fn load_imported_module(&mut self, module_path: &[String], span: Span) -> Result<Program> {
+        let mut path = self.package_root.clone();
+        for segment in module_path {
+            path.push(segment);
+        }
+        path.set_extension("au");
+        if !path.exists() {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "cannot resolve module `{}` at `{}`",
+                    module_path.join("."),
+                    path.display()
+                ),
+            ));
+        }
+        self.load_program(&path)
+    }
+}
+
+fn absolutize(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .expect("current directory should be available")
+            .join(path)
+    }
+}
+
+fn logical_module_name(package_root: &Path, path: &Path) -> String {
+    let relative = path.strip_prefix(package_root).unwrap_or(path);
+    let mut without_extension = relative.to_path_buf();
+    without_extension.set_extension("");
+    without_extension
+        .iter()
+        .map(|segment| segment.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+fn local_item_exists(program: &Program, name: &str) -> bool {
+    program.module.items.iter().any(|item| item.name() == name)
+}
+
+fn exported_binding(program: &Program, name: &str) -> Option<ImportedBinding> {
+    for item in &program.module.items {
+        match item {
+            Item::Function(decl) if decl.name == name && decl.public => {
+                return program
+                    .functions
+                    .get(name)
+                    .cloned()
+                    .map(ImportedBinding::Function);
+            }
+            Item::Class(decl) if decl.name == name && decl.public => {
+                return program.classes.get(name).cloned().map(ImportedBinding::Class);
+            }
+            Item::Enum(decl) if decl.name == name && decl.public => {
+                return program.enums.get(name).cloned().map(ImportedBinding::Enum);
+            }
+            Item::Trait(decl) if decl.name == name && decl.public => {
+                return program.traits.get(name).cloned().map(ImportedBinding::Trait);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
+    let name = path.last().cloned().unwrap_or_else(|| program.module_name.clone());
+    let mut namespace = ModuleNamespace {
+        name,
+        path: path.join("."),
+        modules: BTreeMap::new(),
+        functions: BTreeMap::new(),
+        classes: BTreeMap::new(),
+        enums: BTreeMap::new(),
+        traits: BTreeMap::new(),
+    };
+
+    for item in &program.module.items {
+        match item {
+            Item::Function(decl) if decl.public => {
+                if let Some(info) = program.functions.get(&decl.name) {
+                    namespace.functions.insert(decl.name.clone(), info.clone());
+                }
+            }
+            Item::Class(decl) if decl.public => {
+                if let Some(info) = program.classes.get(&decl.name) {
+                    namespace.classes.insert(decl.name.clone(), info.clone());
+                }
+            }
+            Item::Enum(decl) if decl.public => {
+                if let Some(info) = program.enums.get(&decl.name) {
+                    namespace.enums.insert(decl.name.clone(), info.clone());
+                }
+            }
+            Item::Trait(decl) if decl.public => {
+                if let Some(info) = program.traits.get(&decl.name) {
+                    namespace.traits.insert(decl.name.clone(), info.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    namespace
+}
+
+fn insert_namespace_import(
+    bindings: &mut BTreeMap<String, ImportedBinding>,
+    path: &[String],
+    leaf: ModuleNamespace,
+    span: Span,
+) -> Result<()> {
+    if path.is_empty() {
+        return Ok(());
+    }
+    let root_name = path[0].clone();
+    let root = bindings
+        .entry(root_name.clone())
+        .or_insert_with(|| ImportedBinding::Module(ModuleNamespace {
+            name: root_name.clone(),
+            path: root_name.clone(),
+            modules: BTreeMap::new(),
+            functions: BTreeMap::new(),
+            classes: BTreeMap::new(),
+            enums: BTreeMap::new(),
+            traits: BTreeMap::new(),
+        }));
+    let ImportedBinding::Module(root_namespace) = root else {
+        return Err(Diagnostic::at(
+            span,
+            format!("duplicate import binding `{}`", root_name),
+        ));
+    };
+
+    if path.len() == 1 {
+        *root_namespace = leaf;
+        return Ok(());
+    }
+
+    let mut current = root_namespace;
+    let mut prefix = root_name;
+    for segment in &path[1..path.len() - 1] {
+        prefix = format!("{}.{}", prefix, segment);
+        current = current
+            .modules
+            .entry(segment.clone())
+            .or_insert_with(|| ModuleNamespace {
+                name: segment.clone(),
+                path: prefix.clone(),
+                modules: BTreeMap::new(),
+                functions: BTreeMap::new(),
+                classes: BTreeMap::new(),
+                enums: BTreeMap::new(),
+                traits: BTreeMap::new(),
+            });
+    }
+    current
+        .modules
+        .insert(path.last().cloned().expect("path should be non-empty"), leaf);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{check_source, parse_source, run_source, Value};
+    use super::{
+        check_source, lower_source_to_mir, parse_source, run_mir, run_path, run_path_via_mir,
+        run_source, run_source_via_mir, Value,
+    };
+    use std::path::PathBuf;
 
     const POINT_SOURCE: &str = include_str!("../../../examples/point.au");
     const BASIC_ADDITION_SOURCE: &str = include_str!("../../../examples/basic_addition.au");
     const TOP_LEVEL_ADDITION_SOURCE: &str = include_str!("../../../examples/top_level_addition.au");
+    const CONTROL_FLOW_SOURCE: &str = include_str!("../../../examples/control_flow.au");
+    const EXAMPLE_CASES: &[(&str, &str)] = &[
+        (
+            "examples/basics/top_level_script.au",
+            include_str!("../../../examples/basics/top_level_script.au"),
+        ),
+        (
+            "examples/basics/main_function.au",
+            include_str!("../../../examples/basics/main_function.au"),
+        ),
+        (
+            "examples/basics/mutable_bindings.au",
+            include_str!("../../../examples/basics/mutable_bindings.au"),
+        ),
+        (
+            "examples/basics/default_arguments.au",
+            include_str!("../../../examples/basics/default_arguments.au"),
+        ),
+        (
+            "examples/basics/pass_keyword.au",
+            include_str!("../../../examples/basics/pass_keyword.au"),
+        ),
+        (
+            "examples/classes/point_distance.au",
+            include_str!("../../../examples/classes/point_distance.au"),
+        ),
+        (
+            "examples/classes/default_fields.au",
+            include_str!("../../../examples/classes/default_fields.au"),
+        ),
+        (
+            "examples/classes/methods.au",
+            include_str!("../../../examples/classes/methods.au"),
+        ),
+        (
+            "examples/control_flow/if_elif_else.au",
+            include_str!("../../../examples/control_flow/if_elif_else.au"),
+        ),
+        (
+            "examples/control_flow/for_range.au",
+            include_str!("../../../examples/control_flow/for_range.au"),
+        ),
+        (
+            "examples/control_flow/while_break_continue.au",
+            include_str!("../../../examples/control_flow/while_break_continue.au"),
+        ),
+        (
+            "examples/enums/result_match.au",
+            include_str!("../../../examples/enums/result_match.au"),
+        ),
+        (
+            "examples/enums/result_option.au",
+            include_str!("../../../examples/enums/result_option.au"),
+        ),
+        (
+            "examples/generics/box_and_wrapper.au",
+            include_str!("../../../examples/generics/box_and_wrapper.au"),
+        ),
+        (
+            "examples/traits/greeter.au",
+            include_str!("../../../examples/traits/greeter.au"),
+        ),
+        (
+            "examples/traits/multiple_bounds.au",
+            include_str!("../../../examples/traits/multiple_bounds.au"),
+        ),
+        (
+            "examples/numbers/float_sqrt.au",
+            include_str!("../../../examples/numbers/float_sqrt.au"),
+        ),
+        (
+            "examples/numbers/float32_values.au",
+            include_str!("../../../examples/numbers/float32_values.au"),
+        ),
+        (
+            "examples/numbers/numeric_casts.au",
+            include_str!("../../../examples/numbers/numeric_casts.au"),
+        ),
+        (
+            "examples/strings/greeting.au",
+            include_str!("../../../examples/strings/greeting.au"),
+        ),
+        (
+            "examples/concurrency/task_group_select.au",
+            include_str!("../../../examples/concurrency/task_group_select.au"),
+        ),
+        (
+            "examples/concurrency/task_group_cancel.au",
+            include_str!("../../../examples/concurrency/task_group_cancel.au"),
+        ),
+        (
+            "examples/concurrency/select_timeout.au",
+            include_str!("../../../examples/concurrency/select_timeout.au"),
+        ),
+        (
+            "examples/concurrency/sleep_builtin.au",
+            include_str!("../../../examples/concurrency/sleep_builtin.au"),
+        ),
+        (
+            "examples/concurrency/send_result.au",
+            include_str!("../../../examples/concurrency/send_result.au"),
+        ),
+        (
+            "examples/concurrency/spawn_detached.au",
+            include_str!("../../../examples/concurrency/spawn_detached.au"),
+        ),
+        (
+            "examples/concurrency/select_send.au",
+            include_str!("../../../examples/concurrency/select_send.au"),
+        ),
+    ];
 
     #[test]
     fn parses_the_point_milestone() {
@@ -46,6 +493,13 @@ mod tests {
     #[test]
     fn runs_the_point_milestone() {
         let output = run_source(POINT_SOURCE).expect("point program should run");
+        assert_eq!(output.stdout, "5\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn mir_runtime_runs_the_point_milestone() {
+        let output = run_source_via_mir(POINT_SOURCE).expect("point program should run via MIR");
         assert_eq!(output.stdout, "5\n");
         assert_eq!(output.value, Value::Int(0));
     }
@@ -68,9 +522,485 @@ mod tests {
         assert_eq!(module.items.len(), 0);
         assert_eq!(module.top_level_stmts.len(), 4);
 
-        let output =
-            run_source(TOP_LEVEL_ADDITION_SOURCE).expect("top-level addition should run");
+        let output = run_source(TOP_LEVEL_ADDITION_SOURCE).expect("top-level addition should run");
         assert_eq!(output.stdout, "16\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn control_flow_example_runs() {
+        check_source(CONTROL_FLOW_SOURCE).expect("control flow example should type-check");
+        let output = run_source(CONTROL_FLOW_SOURCE).expect("control flow example should run");
+        assert_eq!(output.stdout, "ok\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn mir_runtime_runs_class_methods_example() {
+        let source = include_str!("../../../examples/classes/methods.au");
+        let output = run_source_via_mir(source).expect("methods example should run via MIR");
+        assert_eq!(output.stdout, "4\n8\n0\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn mir_runtime_runs_enum_match_example() {
+        let source = include_str!("../../../examples/enums/result_match.au");
+        let output = run_source_via_mir(source).expect("enum match example should run via MIR");
+        assert_eq!(output.stdout, "42\nbad\n0\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn mir_runtime_runs_try_example_natively() {
+        let source = include_str!("../../../examples/error_handling/try_result.au");
+        let mir = lower_source_to_mir(source).expect("try example should lower to MIR");
+        let output = run_mir(&mir).expect("try example should run directly through MIR");
+        assert_eq!(output.stdout, "6\ndivision by zero\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn backend_path_runs_try_example_natively() {
+        let source = include_str!("../../../examples/error_handling/try_result.au");
+        let output =
+            run_source_via_mir(source).expect("try example should run through backend path");
+        assert_eq!(output.stdout, "6\ndivision by zero\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn backend_path_runs_with_example_natively() {
+        let source = include_str!("../../../examples/resources/with_resource.au");
+        let output =
+            run_source_via_mir(source).expect("with example should run through backend path");
+        assert_eq!(output.stdout, "demo\nclosed demo\ndone\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn mir_runtime_runs_with_example_natively() {
+        let source = include_str!("../../../examples/resources/with_resource.au");
+        let mir = lower_source_to_mir(source).expect("with example should lower to MIR");
+        let output = run_mir(&mir).expect("with example should run directly through MIR");
+        assert_eq!(output.stdout, "demo\nclosed demo\ndone\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn mir_runtime_runs_channels_example_natively() {
+        let source = include_str!("../../../examples/concurrency/channels_spawn.au");
+        let mir = lower_source_to_mir(source).expect("channels example should lower to MIR");
+        let output = run_mir(&mir).expect("channels example should run directly through MIR");
+        assert_eq!(output.stdout, "2\n4\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn mir_runtime_runs_send_result_example_natively() {
+        let source = include_str!("../../../examples/concurrency/send_result.au");
+        let mir = lower_source_to_mir(source).expect("send_result example should lower to MIR");
+        let output = run_mir(&mir).expect("send_result example should run directly through MIR");
+        assert_eq!(output.stdout, "7\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn mir_runtime_runs_spawn_detached_example_natively() {
+        let source = include_str!("../../../examples/concurrency/spawn_detached.au");
+        let mir = lower_source_to_mir(source).expect("spawn_detached example should lower to MIR");
+        let output = run_mir(&mir).expect("spawn_detached example should run directly through MIR");
+        assert_eq!(output.stdout, "9\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn mir_runtime_runs_select_timeout_example_natively() {
+        let source = include_str!("../../../examples/concurrency/select_timeout.au");
+        let mir = lower_source_to_mir(source).expect("select_timeout example should lower to MIR");
+        let output = run_mir(&mir).expect("select_timeout example should run directly through MIR");
+        assert_eq!(output.stdout, "timeout\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn mir_runtime_runs_select_send_example_natively() {
+        let source = include_str!("../../../examples/concurrency/select_send.au");
+        let mir = lower_source_to_mir(source).expect("select_send example should lower to MIR");
+        let output = run_mir(&mir).expect("select_send example should run directly through MIR");
+        assert_eq!(output.stdout, "sent\n4\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn mir_runtime_runs_task_group_select_example_natively() {
+        let source = include_str!("../../../examples/concurrency/task_group_select.au");
+        let mir =
+            lower_source_to_mir(source).expect("task_group_select example should lower to MIR");
+        let output =
+            run_mir(&mir).expect("task_group_select example should run directly through MIR");
+        assert_eq!(output.stdout, "3\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn mir_runtime_runs_task_group_cancel_example_natively() {
+        let source = include_str!("../../../examples/concurrency/task_group_cancel.au");
+        let mir =
+            lower_source_to_mir(source).expect("task_group_cancel example should lower to MIR");
+        let output =
+            run_mir(&mir).expect("task_group_cancel example should run directly through MIR");
+        assert_eq!(output.stdout, "0\n1\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn backend_path_runs_channels_example_natively() {
+        let source = include_str!("../../../examples/concurrency/channels_spawn.au");
+        let output =
+            run_source_via_mir(source).expect("channels example should run through backend path");
+        assert_eq!(output.stdout, "2\n4\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn mir_lowering_creates_blocks_for_control_flow() {
+        let mir = lower_source_to_mir(CONTROL_FLOW_SOURCE).expect("control flow MIR should lower");
+        let script = mir
+            .top_level
+            .expect("top-level script MIR should be present for control flow example");
+
+        assert!(script.blocks.len() >= 4);
+        assert!(script
+            .blocks
+            .iter()
+            .any(|block| block.label.contains("while_cond")));
+        assert!(script
+            .blocks
+            .iter()
+            .any(|block| block.label.contains("if_then")));
+    }
+
+    #[test]
+    fn categorized_examples_type_check() {
+        for (path, source) in EXAMPLE_CASES {
+            check_source(source).unwrap_or_else(|error| {
+                panic!("{} should type-check: {}", path, error);
+            });
+        }
+    }
+
+    #[test]
+    fn categorized_examples_run_with_expected_output() {
+        let cases = [
+            (
+                "examples/basics/top_level_script.au",
+                EXAMPLE_CASES[0].1,
+                "156\n",
+            ),
+            (
+                "examples/basics/main_function.au",
+                EXAMPLE_CASES[1].1,
+                "16\n",
+            ),
+            (
+                "examples/basics/mutable_bindings.au",
+                EXAMPLE_CASES[2].1,
+                "5\n",
+            ),
+            (
+                "examples/basics/default_arguments.au",
+                EXAMPLE_CASES[3].1,
+                "hello world\nhello aurora\n6\n12\n",
+            ),
+            (
+                "examples/basics/pass_keyword.au",
+                EXAMPLE_CASES[4].1,
+                "0\n",
+            ),
+            (
+                "examples/classes/point_distance.au",
+                EXAMPLE_CASES[5].1,
+                "5\n",
+            ),
+            (
+                "examples/classes/default_fields.au",
+                EXAMPLE_CASES[6].1,
+                "localhost\n8080\n",
+            ),
+            (
+                "examples/classes/methods.au",
+                EXAMPLE_CASES[7].1,
+                "4\n8\n0\n",
+            ),
+            (
+                "examples/control_flow/if_elif_else.au",
+                EXAMPLE_CASES[8].1,
+                "high\n",
+            ),
+            (
+                "examples/control_flow/for_range.au",
+                EXAMPLE_CASES[9].1,
+                "7\n",
+            ),
+            (
+                "examples/control_flow/while_break_continue.au",
+                EXAMPLE_CASES[10].1,
+                "ok\n",
+            ),
+            (
+                "examples/enums/result_match.au",
+                EXAMPLE_CASES[11].1,
+                "42\nbad\n0\n",
+            ),
+            (
+                "examples/enums/result_option.au",
+                EXAMPLE_CASES[12].1,
+                "4\ndivision by zero\n7\n",
+            ),
+            (
+                "examples/generics/box_and_wrapper.au",
+                EXAMPLE_CASES[13].1,
+                "7\nok\n",
+            ),
+            (
+                "examples/traits/greeter.au",
+                EXAMPLE_CASES[14].1,
+                "hello aurora\nhello aurora\n",
+            ),
+            (
+                "examples/traits/multiple_bounds.au",
+                EXAMPLE_CASES[15].1,
+                "9\n",
+            ),
+            ("examples/numbers/float_sqrt.au", EXAMPLE_CASES[16].1, "9\n"),
+            (
+                "examples/numbers/float32_values.au",
+                EXAMPLE_CASES[17].1,
+                "3.25\n2\n5\n",
+            ),
+            (
+                "examples/numbers/numeric_casts.au",
+                EXAMPLE_CASES[18].1,
+                "7\n3\n1.25\n2\n",
+            ),
+            (
+                "examples/strings/greeting.au",
+                EXAMPLE_CASES[19].1,
+                "hello, aurora\n",
+            ),
+            (
+                "examples/concurrency/task_group_select.au",
+                EXAMPLE_CASES[20].1,
+                "3\n",
+            ),
+            (
+                "examples/concurrency/task_group_cancel.au",
+                EXAMPLE_CASES[21].1,
+                "0\n1\n",
+            ),
+            (
+                "examples/concurrency/select_timeout.au",
+                EXAMPLE_CASES[22].1,
+                "timeout\n",
+            ),
+            (
+                "examples/concurrency/sleep_builtin.au",
+                EXAMPLE_CASES[23].1,
+                "start\nend\n",
+            ),
+            (
+                "examples/concurrency/send_result.au",
+                EXAMPLE_CASES[24].1,
+                "7\n",
+            ),
+            (
+                "examples/concurrency/spawn_detached.au",
+                EXAMPLE_CASES[25].1,
+                "9\n",
+            ),
+            (
+                "examples/concurrency/select_send.au",
+                EXAMPLE_CASES[26].1,
+                "sent\n4\n",
+            ),
+        ];
+
+        for (path, source, expected_stdout) in cases {
+            let output = run_source(source).unwrap_or_else(|error| {
+                panic!("{} should run: {}", path, error);
+            });
+            assert_eq!(
+                output.stdout, expected_stdout,
+                "unexpected stdout for {}",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn categorized_examples_run_through_backend_path_with_expected_output() {
+        let cases = [
+            (
+                "examples/basics/top_level_script.au",
+                EXAMPLE_CASES[0].1,
+                "156\n",
+            ),
+            (
+                "examples/basics/main_function.au",
+                EXAMPLE_CASES[1].1,
+                "16\n",
+            ),
+            (
+                "examples/basics/mutable_bindings.au",
+                EXAMPLE_CASES[2].1,
+                "5\n",
+            ),
+            (
+                "examples/basics/default_arguments.au",
+                EXAMPLE_CASES[3].1,
+                "hello world\nhello aurora\n6\n12\n",
+            ),
+            (
+                "examples/basics/pass_keyword.au",
+                EXAMPLE_CASES[4].1,
+                "0\n",
+            ),
+            (
+                "examples/classes/point_distance.au",
+                EXAMPLE_CASES[5].1,
+                "5\n",
+            ),
+            (
+                "examples/classes/default_fields.au",
+                EXAMPLE_CASES[6].1,
+                "localhost\n8080\n",
+            ),
+            (
+                "examples/classes/methods.au",
+                EXAMPLE_CASES[7].1,
+                "4\n8\n0\n",
+            ),
+            (
+                "examples/control_flow/if_elif_else.au",
+                EXAMPLE_CASES[8].1,
+                "high\n",
+            ),
+            (
+                "examples/control_flow/for_range.au",
+                EXAMPLE_CASES[9].1,
+                "7\n",
+            ),
+            (
+                "examples/control_flow/while_break_continue.au",
+                EXAMPLE_CASES[10].1,
+                "ok\n",
+            ),
+            (
+                "examples/enums/result_match.au",
+                EXAMPLE_CASES[11].1,
+                "42\nbad\n0\n",
+            ),
+            (
+                "examples/enums/result_option.au",
+                EXAMPLE_CASES[12].1,
+                "4\ndivision by zero\n7\n",
+            ),
+            (
+                "examples/generics/box_and_wrapper.au",
+                EXAMPLE_CASES[13].1,
+                "7\nok\n",
+            ),
+            (
+                "examples/traits/greeter.au",
+                EXAMPLE_CASES[14].1,
+                "hello aurora\nhello aurora\n",
+            ),
+            (
+                "examples/traits/multiple_bounds.au",
+                EXAMPLE_CASES[15].1,
+                "9\n",
+            ),
+            ("examples/numbers/float_sqrt.au", EXAMPLE_CASES[16].1, "9\n"),
+            (
+                "examples/numbers/float32_values.au",
+                EXAMPLE_CASES[17].1,
+                "3.25\n2\n5\n",
+            ),
+            (
+                "examples/numbers/numeric_casts.au",
+                EXAMPLE_CASES[18].1,
+                "7\n3\n1.25\n2\n",
+            ),
+            (
+                "examples/strings/greeting.au",
+                EXAMPLE_CASES[19].1,
+                "hello, aurora\n",
+            ),
+            (
+                "examples/concurrency/task_group_select.au",
+                EXAMPLE_CASES[20].1,
+                "3\n",
+            ),
+            (
+                "examples/concurrency/task_group_cancel.au",
+                EXAMPLE_CASES[21].1,
+                "0\n1\n",
+            ),
+            (
+                "examples/concurrency/select_timeout.au",
+                EXAMPLE_CASES[22].1,
+                "timeout\n",
+            ),
+            (
+                "examples/concurrency/sleep_builtin.au",
+                EXAMPLE_CASES[23].1,
+                "start\nend\n",
+            ),
+            (
+                "examples/concurrency/send_result.au",
+                EXAMPLE_CASES[24].1,
+                "7\n",
+            ),
+            (
+                "examples/concurrency/spawn_detached.au",
+                EXAMPLE_CASES[25].1,
+                "9\n",
+            ),
+            (
+                "examples/concurrency/select_send.au",
+                EXAMPLE_CASES[26].1,
+                "sent\n4\n",
+            ),
+        ];
+
+        for (path, source, expected_stdout) in cases {
+            let output = run_source_via_mir(source).unwrap_or_else(|error| {
+                panic!("{} should run through backend path: {}", path, error);
+            });
+            assert_eq!(
+                output.stdout, expected_stdout,
+                "unexpected backend-path stdout for {}",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn module_example_runs_with_expected_output() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/modules/simple_import.au");
+        let output = run_path(&path).expect("module example should run");
+        assert_eq!(output.stdout, "10\n2\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn module_example_runs_through_backend_path_with_expected_output() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/modules/simple_import.au");
+        let output = run_path_via_mir(&path).expect("module example should run via MIR");
+        assert_eq!(output.stdout, "10\n2\n");
         assert_eq!(output.value, Value::Int(0));
     }
 }

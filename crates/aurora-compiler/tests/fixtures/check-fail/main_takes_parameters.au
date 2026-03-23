@@ -1,0 +1,2 @@
+def main(code: int32) -> int32:
+    return code

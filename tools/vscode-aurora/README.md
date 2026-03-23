@@ -7,11 +7,15 @@ Current features:
 - `.au` language registration
 - syntax highlighting via TextMate grammar
 - indentation/comment/bracket language configuration
+- Aurora-specific Enter handling so block indentation behaves predictably in off-side code
 - snippets for common Aurora constructs
 - LSP client for the Aurora language server
 - top-level keyword/class/function completions
 - member completions after `.`
 - document symbols for classes, fields, methods, and functions
+- hover for classes, functions, locals, fields, and builtin members
+- go-to-definition for local and top-level symbols
+- document diagnostics for duplicate declarations and obvious unknown names/members
 
 The language intelligence currently comes from the in-repo `aurora-language-server` package.
 
@@ -20,10 +24,13 @@ The VS Code extension now bundles its client and server entrypoints into `tools/
 Current completion scope is intentionally lightweight. The language server understands:
 
 - top-level classes and functions
+- top-level enums and enum variants
+- built-in `Result` and `Option` variants
 - class fields and methods
 - function parameters and simple local bindings
+- method `self`, enum match payload bindings, and `for` loop bindings
 - constructor-style type inference such as `p = Point(...)`
-- basic builtin members like `float64.sqrt`
+- basic builtin helpers such as `range` and `float64.sqrt`
 
 ## Install In VS Code
 
@@ -43,9 +50,10 @@ Current completion scope is intentionally lightweight. The language server under
    - `tools/vscode-aurora`
 6. Press `F5` in VS Code to launch an Extension Development Host.
 7. In the Extension Development Host, open an `.au` file such as:
-   - `examples/point.au`
+   - `examples/classes/point_distance.au`
 
 That will start the Aurora language server automatically and enable syntax highlighting, completions, and document symbols.
+That will start the Aurora language server automatically and enable syntax highlighting, completions, hover, go-to-definition, diagnostics, and document symbols.
 
 ### Install as a packaged extension
 

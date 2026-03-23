@@ -1,0 +1,21 @@
+class FileHandle:
+    name: String
+
+    def read(borrow self) -> String:
+        return self.name
+
+    def close(borrow mut self):
+        print("closed " + self.name)
+
+def use_resource() -> Result[String, String]:
+    with file = FileHandle(name="demo"):
+        print(file.read())
+        return Result.Ok("done")
+
+def main() -> int32:
+    match use_resource():
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(err):
+            print(err)
+    return 0

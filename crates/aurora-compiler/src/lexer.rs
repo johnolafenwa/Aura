@@ -10,7 +10,10 @@ pub struct Token {
 pub enum TokenKind {
     Identifier(String),
     IntLiteral(i64),
+    DurationLiteral(i64),
     FloatLiteral(f64),
+    BoolLiteral(bool),
+    StringLiteral(String),
     Newline,
     Indent,
     Dedent,
@@ -23,16 +26,54 @@ pub enum TokenKind {
     Comma,
     Dot,
     Equal,
+    EqEq,
+    NotEq,
+    Less,
+    LessEq,
+    Greater,
+    GreaterEq,
     Plus,
+    PlusEqual,
     Minus,
+    MinusEqual,
     Star,
+    StarEqual,
     Slash,
+    SlashEqual,
+    Percent,
+    PercentEqual,
     Arrow,
     KwClass,
+    KwEnum,
     KwDef,
+    KwTrait,
+    KwImpl,
+    KwImport,
+    KwFrom,
     KwMut,
+    KwBorrow,
     KwPublic,
     KwReturn,
+    KwIf,
+    KwElif,
+    KwElse,
+    KwAnd,
+    KwOr,
+    KwNot,
+    KwMatch,
+    KwCase,
+    KwFor,
+    KwIn,
+    KwWhile,
+    KwBreak,
+    KwContinue,
+    KwPass,
+    KwTry,
+    KwWith,
+    KwAs,
+    KwSelect,
+    KwSpawn,
+    KwDetached,
 }
 
 pub fn lex(source: &str) -> Result<Vec<Token>> {
@@ -151,29 +192,140 @@ fn tokenize_line(
                 index += 1;
             }
             '=' => {
-                tokens.push(simple(TokenKind::Equal, line_no, column));
-                index += 1;
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::EqEq, line_no, column));
+                    index += 2;
+                } else {
+                    tokens.push(simple(TokenKind::Equal, line_no, column));
+                    index += 1;
+                }
+            }
+            '!' => {
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::NotEq, line_no, column));
+                    index += 2;
+                } else {
+                    return Err(Diagnostic::at(
+                        Span::new(line_no, column),
+                        "unexpected character `!`",
+                    ));
+                }
+            }
+            '<' => {
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::LessEq, line_no, column));
+                    index += 2;
+                } else {
+                    tokens.push(simple(TokenKind::Less, line_no, column));
+                    index += 1;
+                }
+            }
+            '>' => {
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::GreaterEq, line_no, column));
+                    index += 2;
+                } else {
+                    tokens.push(simple(TokenKind::Greater, line_no, column));
+                    index += 1;
+                }
             }
             '+' => {
-                tokens.push(simple(TokenKind::Plus, line_no, column));
-                index += 1;
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::PlusEqual, line_no, column));
+                    index += 2;
+                } else {
+                    tokens.push(simple(TokenKind::Plus, line_no, column));
+                    index += 1;
+                }
             }
             '*' => {
-                tokens.push(simple(TokenKind::Star, line_no, column));
-                index += 1;
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::StarEqual, line_no, column));
+                    index += 2;
+                } else {
+                    tokens.push(simple(TokenKind::Star, line_no, column));
+                    index += 1;
+                }
             }
             '/' => {
-                tokens.push(simple(TokenKind::Slash, line_no, column));
-                index += 1;
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::SlashEqual, line_no, column));
+                    index += 2;
+                } else {
+                    tokens.push(simple(TokenKind::Slash, line_no, column));
+                    index += 1;
+                }
+            }
+            '%' => {
+                if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::PercentEqual, line_no, column));
+                    index += 2;
+                } else {
+                    tokens.push(simple(TokenKind::Percent, line_no, column));
+                    index += 1;
+                }
             }
             '-' => {
                 if let Some((_, '>')) = chars.get(index + 1) {
                     tokens.push(simple(TokenKind::Arrow, line_no, column));
                     index += 2;
+                } else if let Some((_, '=')) = chars.get(index + 1) {
+                    tokens.push(simple(TokenKind::MinusEqual, line_no, column));
+                    index += 2;
                 } else {
                     tokens.push(simple(TokenKind::Minus, line_no, column));
                     index += 1;
                 }
+            }
+            '"' => {
+                index += 1;
+                let mut value = String::new();
+
+                while index < chars.len() {
+                    let (_, current) = chars[index];
+                    if current == '"' {
+                        break;
+                    }
+                    if current == '\\' {
+                        index += 1;
+                        let Some((_, escaped)) = chars.get(index) else {
+                            return Err(Diagnostic::at(
+                                Span::new(line_no, column),
+                                "unterminated string literal",
+                            ));
+                        };
+                        let decoded = match escaped {
+                            'n' => '\n',
+                            't' => '\t',
+                            '"' => '"',
+                            '\\' => '\\',
+                            other => {
+                                return Err(Diagnostic::at(
+                                    Span::new(line_no, column),
+                                    format!("unsupported escape sequence `\\{}`", other),
+                                ));
+                            }
+                        };
+                        value.push(decoded);
+                        index += 1;
+                        continue;
+                    }
+                    value.push(current);
+                    index += 1;
+                }
+
+                if !matches!(chars.get(index), Some((_, '"'))) {
+                    return Err(Diagnostic::at(
+                        Span::new(line_no, column),
+                        "unterminated string literal",
+                    ));
+                }
+
+                index += 1;
+                tokens.push(Token {
+                    kind: TokenKind::StringLiteral(value),
+                    span: Span::new(line_no, column),
+                });
             }
             '0'..='9' => {
                 let start = index;
@@ -213,8 +365,27 @@ fn tokenize_line(
                     let value = text.parse::<i64>().map_err(|_| {
                         Diagnostic::at(Span::new(line_no, column), "invalid integer literal")
                     })?;
+                    let duration_kind = if let Some((_, suffix_start)) = chars.get(index) {
+                        match suffix_start {
+                            'm' => {
+                                if matches!(chars.get(index + 1), Some((_, 's'))) {
+                                    index += 2;
+                                    Some(TokenKind::DurationLiteral(value))
+                                } else {
+                                    None
+                                }
+                            }
+                            's' => {
+                                index += 1;
+                                Some(TokenKind::DurationLiteral(value * 1000))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
                     tokens.push(Token {
-                        kind: TokenKind::IntLiteral(value),
+                        kind: duration_kind.unwrap_or(TokenKind::IntLiteral(value)),
                         span: Span::new(line_no, column),
                     });
                 }
@@ -237,10 +408,38 @@ fn tokenize_line(
                 let text = &content[chars[start].0..end_offset];
                 let kind = match text {
                     "class" => TokenKind::KwClass,
+                    "enum" => TokenKind::KwEnum,
                     "def" => TokenKind::KwDef,
+                    "trait" => TokenKind::KwTrait,
+                    "impl" => TokenKind::KwImpl,
+                    "import" => TokenKind::KwImport,
+                    "from" => TokenKind::KwFrom,
                     "mut" => TokenKind::KwMut,
+                    "borrow" => TokenKind::KwBorrow,
                     "public" => TokenKind::KwPublic,
                     "return" => TokenKind::KwReturn,
+                    "if" => TokenKind::KwIf,
+                    "elif" => TokenKind::KwElif,
+                    "else" => TokenKind::KwElse,
+                    "and" => TokenKind::KwAnd,
+                    "or" => TokenKind::KwOr,
+                    "not" => TokenKind::KwNot,
+                    "match" => TokenKind::KwMatch,
+                    "case" => TokenKind::KwCase,
+                    "for" => TokenKind::KwFor,
+                    "in" => TokenKind::KwIn,
+                    "while" => TokenKind::KwWhile,
+                    "break" => TokenKind::KwBreak,
+                    "continue" => TokenKind::KwContinue,
+                    "pass" => TokenKind::KwPass,
+                    "try" => TokenKind::KwTry,
+                    "with" => TokenKind::KwWith,
+                    "as" => TokenKind::KwAs,
+                    "select" => TokenKind::KwSelect,
+                    "spawn" => TokenKind::KwSpawn,
+                    "detached" => TokenKind::KwDetached,
+                    "true" => TokenKind::BoolLiteral(true),
+                    "false" => TokenKind::BoolLiteral(false),
                     _ => TokenKind::Identifier(text.to_string()),
                 };
                 tokens.push(Token {

@@ -21,16 +21,32 @@ target/release/aura
 After the release build completes, run the binary directly:
 
 ```bash
-./target/release/aura check examples/point.au
-./target/release/aura run examples/point.au
-./target/release/aura ast examples/point.au
+./target/release/aura check examples/classes/point_distance.au
+./target/release/aura run examples/classes/point_distance.au
+./target/release/aura run-mir examples/classes/methods.au
+./target/release/aura run examples/generics/box_and_wrapper.au
+./target/release/aura run examples/basics/default_arguments.au
+./target/release/aura run examples/basics/pass_keyword.au
+./target/release/aura run examples/modules/simple_import.au
+./target/release/aura run examples/traits/greeter.au
+./target/release/aura run examples/numbers/numeric_casts.au
+./target/release/aura run examples/concurrency/sleep_builtin.au
+./target/release/aura build -o ./target/aurora-point examples/point.au
+./target/release/aura ast examples/classes/point_distance.au
+./target/release/aura ast-json examples/classes/point_distance.au
+./target/release/aura mir examples/control_flow/while_break_continue.au
+./target/release/aura analyze examples/classes/point_distance.au
+./target/release/aura complete --line 5 --character 11 --trigger . examples/point.au
 ```
 
 You can do the same with the other current examples:
 
 ```bash
-./target/release/aura run examples/basic_addition.au
-./target/release/aura run examples/top_level_addition.au
+./target/release/aura run examples/basics/main_function.au
+./target/release/aura run examples/basics/top_level_script.au
+./target/release/aura run-mir examples/generics/box_and_wrapper.au
+./target/release/aura run-mir examples/traits/greeter.au
+./target/release/aura run-mir examples/numbers/numeric_casts.au
 ```
 
 ## Install The Binary Somewhere On Your Path
@@ -47,7 +63,7 @@ cp target/release/aura "$HOME/.local/bin/aura"
 Then run:
 
 ```bash
-aura run examples/point.au
+aura run examples/classes/point_distance.au
 ```
 
 ## Command Summary
@@ -56,8 +72,54 @@ aura run examples/point.au
   - parse and type check a program
 - `aura run <file.au>`
   - run a program
+  - this now includes the maintained `pass` statement and `sleep(duration)` builtin
+  - local file imports and `public` module boundaries now work for file-backed programs
+- `aura run-mir <file.au>`
+  - run a program through the current native MIR runtime path
+  - this now includes the current explicit numeric cast surface with `expr as Type`
+- `aura build -o <output> <file.au>`
+  - compile a standalone bootstrap binary for a program
+  - this currently generates a temporary Rust launcher, invokes `rustc`, and embeds checked MIR in the produced binary
+  - it relies on the current workspace build artifacts for `aurora-compiler`
+  - file-backed programs with local module imports now build correctly through this path
 - `aura ast <file.au>`
   - print the parsed syntax tree
+- `aura ast-json <file.au>`
+  - print the parsed syntax tree as JSON
+- `aura mir <file.au>`
+  - print the lowered MIR for the checked program
+- `aura analyze <file.au>`
+  - print machine-readable compiler analysis as JSON
+  - file-backed and stdin-backed analysis now resolve local imports relative to the supplied path
+- `aura complete --line <n> --character <n> [--trigger .] <file.au>`
+  - print machine-readable completion items as JSON
+  - `--line` and `--character` are zero-based
+  - member completion expects the cursor to be positioned just after `.`
+  - the CLI now tolerates the common incomplete-editor state where the buffer currently contains a dangling member access such as `counter.`
+  - local imported modules now participate in compiler-backed completions for both file-backed and stdin-backed buffers
+
+## Stdin Mode
+
+The JSON-oriented commands are also usable from stdin, which is how the Aurora language server queries unsaved editor buffers.
+
+Examples:
+
+```bash
+cat examples/classes/point_distance.au | ./target/release/aura analyze --stdin /virtual/point.au
+cat examples/classes/point_distance.au | ./target/release/aura ast-json --stdin /virtual/point.au
+cat examples/point.au | ./target/release/aura complete --line 5 --character 11 --trigger . --stdin /virtual/point.au
+cat examples/point.au | ./target/release/aura build -o ./target/aurora-point --stdin /virtual/point.au
+cat examples/modules/simple_import.au | ./target/release/aura analyze --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au
+```
+
+## Diagnostics
+
+When `aura check`, `aura run`, `aura ast`, or `aura mir` fails, the CLI now prints:
+
+- the error message
+- file, line, and column
+- the relevant source line
+- a caret under the failure location
 
 ## Current Limitation
 
@@ -67,3 +129,16 @@ The supported build path today is:
 
 1. build once with `cargo build -p aura --release`
 2. use the resulting `aura` binary directly after that
+
+The new `aura build` command is also still a bootstrap path:
+
+1. it produces a standalone native binary
+2. it does that by compiling a generated Rust launcher linked against `aurora-compiler`
+3. the generated launcher embeds checked MIR and executes it directly through `run_mir(...)`
+4. it is not yet the final MIR-native backend/codegen path
+
+The new `aura run-mir` command is now native for the current implemented surface:
+
+1. it is useful for exercising the new backend path directly
+2. it now covers the current implemented Aurora surface, including `spawn`, `select`, channels, task groups, `try`, and `with`
+3. the next backend step is replacing the bootstrap launcher approach with real MIR-native code generation

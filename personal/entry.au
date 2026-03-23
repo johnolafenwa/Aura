@@ -1,0 +1,8 @@
+# simple addition
+mut a = 100
+a = 40
+b = 34
+
+c = a + b
+
+print(c)

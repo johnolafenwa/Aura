@@ -1,0 +1,5 @@
+error: default arguments are not allowed in trait method declarations
+ --> crates/aurora-compiler/tests/fixtures/check-fail/default_arguments_in_trait_method.au:2:15
+  |
+2 |     def greet(name: String = "world") -> String
+  |               ^

@@ -1,0 +1,6 @@
+def ok() -> Result[int32, String]:
+    return Result.Ok(1)
+
+def main() -> int32:
+    value = try ok()
+    return value

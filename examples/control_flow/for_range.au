@@ -1,0 +1,12 @@
+def main() -> int32:
+    mut total: int32 = 0
+
+    for value in range(6):
+        if value == 3:
+            continue
+        if value == 5:
+            break
+        total += value
+
+    print(total)
+    return 0

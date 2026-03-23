@@ -1,0 +1,5 @@
+error: `main` must not take parameters in the bootstrap runtime
+ --> crates/aurora-compiler/tests/fixtures/check-fail/main_takes_parameters.au:1:1
+  |
+1 | def main(code: int32) -> int32:
+  | ^

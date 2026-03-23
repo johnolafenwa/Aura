@@ -1,0 +1,9 @@
+mut n: int32 = 0
+mut total: int32 = 0
+
+while n < 5:
+    n += 1
+    total += n
+
+if total == 15:
+    print("ok")

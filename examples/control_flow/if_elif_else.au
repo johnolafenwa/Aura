@@ -1,0 +1,9 @@
+def main():
+    score: int32 = 90
+
+    if score < 50:
+        print("low")
+    elif score < 80:
+        print("mid")
+    else:
+        print("high")

@@ -6,12 +6,17 @@
     "tools/*"
   ],
   "scripts": {
+    "coverage:compiler": "cargo llvm-cov -p aurora-compiler --summary-only",
+    "coverage:compiler:check": "cargo llvm-cov -p aurora-compiler --summary-only --fail-under-lines 71 --fail-under-functions 78 --fail-under-regions 74",
     "build:extension": "npm --prefix tools/vscode-aurora run build",
     "package:extension": "npm --prefix tools/vscode-aurora run package:vsix",
     "check:lsp": "npm --prefix tools/aurora-language-server run check",
     "test:lsp": "npm --prefix tools/aurora-language-server test",
+    "coverage:lsp": "npm --prefix tools/aurora-language-server run coverage",
+    "coverage:lsp:check": "npm --prefix tools/aurora-language-server run coverage:check",
     "check:extension": "npm --prefix tools/vscode-aurora run check",
     "test:extension": "npm --prefix tools/vscode-aurora test",
+    "ci": "cargo test && npm run test:lsp && npm run check:extension && npm run test:extension && npm run coverage:compiler:check && npm run coverage:lsp:check",
     "postinstall": "npm run build:extension"
   }
 }

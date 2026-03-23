@@ -35,9 +35,25 @@
   "With": {
     "prefix": "with",
     "body": [
-      "with ${1:name} = ${2:expr}:",
+      "with ${1:expr} as ${2:name}:",
       "    ${3:# TODO}"
     ],
     "description": "Aurora with block"
+  },
+  "Select": {
+    "prefix": "select",
+    "body": [
+      "select:",
+      "    case ${1:value} = ${2:channel}.recv():",
+      "    ${3:# TODO}"
+    ],
+    "description": "Aurora select block"
+  },
+  "SpawnDetached": {
+    "prefix": "spawn detached",
+    "body": [
+      "spawn detached ${1:worker}(${2:arg})"
+    ],
+    "description": "Aurora detached task"
   }
 }

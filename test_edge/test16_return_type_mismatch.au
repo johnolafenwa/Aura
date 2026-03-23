@@ -1,0 +1,5 @@
+def add(a: int32, b: int32) -> int32:
+    return "not a number"
+
+def main():
+    print(add(1, 2))

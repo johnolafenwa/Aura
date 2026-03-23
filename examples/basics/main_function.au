@@ -1,0 +1,7 @@
+def main():
+    a: int32 = 6
+    b: int32 = 10
+
+    c: int32 = a + b
+
+    print(c)

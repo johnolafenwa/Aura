@@ -1,0 +1,21 @@
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+enum Wrapper[T]:
+    Item(T)
+
+def identity[T](value: T) -> T:
+    return value
+
+def main() -> int32:
+    boxed: Box[int32] = Box(value=identity(7))
+    wrapped: Wrapper[String] = Wrapper.Item(identity("ok"))
+    print(boxed.get())
+    match wrapped:
+        case Wrapper.Item(value):
+            print(value)
+    return 0
+

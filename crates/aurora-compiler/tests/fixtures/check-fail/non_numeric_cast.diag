@@ -1,0 +1,5 @@
+error: casts are only supported between numeric types, found `String` and `int32`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/non_numeric_cast.au:2:13
+  |
+2 |     value = "hello" as int32
+  |             ^

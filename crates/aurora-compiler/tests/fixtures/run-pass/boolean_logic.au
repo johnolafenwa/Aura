@@ -1,0 +1,9 @@
+def main() -> int32:
+    a = true
+    b = false
+    c = a and not b
+    if a and not b:
+        print(c or false)
+    else:
+        print(false)
+    return 0

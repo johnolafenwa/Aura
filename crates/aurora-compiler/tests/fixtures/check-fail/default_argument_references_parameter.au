@@ -1,0 +1,2 @@
+def scale(value: int32, factor: int32 = value) -> int32:
+    return value * factor

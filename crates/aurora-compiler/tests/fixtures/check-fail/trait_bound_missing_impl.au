@@ -1,0 +1,12 @@
+trait Greeter:
+    def greet(borrow self) -> String
+
+class User:
+    name: String
+
+def speak[T: Greeter](value: T):
+    print(value.greet())
+
+def main() -> int32:
+    speak(value=User(name="aurora"))
+    return 0
