@@ -1,0 +1,20 @@
+class Builder:
+    value: int32
+
+    def get_value(borrow self) -> int32:
+        return self.value
+
+    def doubled(borrow self) -> Builder:
+        return Builder(value=self.value * 2)
+
+    def plus(borrow self, n: int32) -> Builder:
+        return Builder(value=self.value + n)
+
+    def new(v: int32) -> Builder:
+        return Builder(value=v)
+
+def main() -> int32:
+    # Chain: start with 3, double to 6, plus 4 to 10, double to 20
+    result = Builder.new(3).doubled().plus(4).doubled().get_value()
+    print(result)
+    return 0

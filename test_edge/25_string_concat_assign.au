@@ -1,0 +1,9 @@
+def main() -> int32:
+    mut s: String = "hello"
+    s += " world"
+    print(s)
+
+    s += "!"
+    print(s)
+
+    return 0

@@ -1,0 +1,12 @@
+def main():
+    a: int32 = 1
+    b: int32 = 2
+    c: int32 = 3
+    d: int32 = 4
+    e: int32 = 5
+
+    result = a + b * c - d / e
+    print(result)
+
+    result2 = (a + b) * (c - d) / e
+    print(result2)

@@ -1,0 +1,33 @@
+# Test pass in various positions
+def main() -> int32:
+    # pass in if
+    if true:
+        pass
+
+    # pass in else
+    if false:
+        print("unreachable")
+    else:
+        pass
+
+    # pass in elif
+    x: int32 = 5
+    if x < 0:
+        print("neg")
+    elif x < 3:
+        pass
+    else:
+        print("big")
+
+    # pass in while
+    mut i: int32 = 0
+    while i < 3:
+        pass
+        i += 1
+
+    # pass in for
+    for j in range(3):
+        pass
+
+    print("all pass tests done")
+    return 0

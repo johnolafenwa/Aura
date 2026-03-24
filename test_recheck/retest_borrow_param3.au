@@ -1,0 +1,12 @@
+class Label:
+    text: String
+
+def combine(borrow a: Label, b: Label) -> String:
+    return a.text + " " + b.text
+
+def main():
+    x = Label(text="hello")
+    y = Label(text="world")
+    result = combine(x, y)
+    print(result)
+    print(x.text)

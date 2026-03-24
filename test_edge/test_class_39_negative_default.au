@@ -1,0 +1,10 @@
+# Edge: negative default values
+class Config:
+    timeout: int32 = -1
+    threshold: float64 = -0.5
+
+def main() -> int32:
+    c = Config()
+    print(c.timeout)
+    print(c.threshold)
+    return 0

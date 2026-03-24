@@ -1,0 +1,20 @@
+class Res:
+    id: int32
+
+    def close(borrow mut self):
+        print(self.id)
+
+def test() -> Result[String, String]:
+    with a = Res(id=1):
+        with b = Res(id=2):
+            with c = Res(id=3):
+                print(0)
+                return Result.Ok("done")
+
+def main() -> int32:
+    match test():
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+    return 0

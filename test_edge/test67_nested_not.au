@@ -1,0 +1,6 @@
+def main():
+    a = true
+    b = not not a
+    c = not not not a
+    print(b)
+    print(c)

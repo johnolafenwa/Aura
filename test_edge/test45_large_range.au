@@ -1,0 +1,25 @@
+# Test: larger range to verify performance and correctness
+def main() -> int32:
+    # Sum of 0..999
+    mut sum: int32 = 0
+    for i in range(1000):
+        sum += i
+    # 999*1000/2 = 499500
+    print(sum)
+
+    # Count primes up to 100
+    mut prime_count: int32 = 0
+    for n in range(2, 101):
+        mut is_p = true
+        mut d: int32 = 2
+        while d * d <= n:
+            if n % d == 0:
+                is_p = false
+                break
+            d += 1
+        if is_p:
+            prime_count += 1
+    # There are 25 primes up to 100
+    print(prime_count)
+
+    return 0

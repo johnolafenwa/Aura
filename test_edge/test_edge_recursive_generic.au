@@ -1,0 +1,16 @@
+# Test: a class that references itself as a type parameter
+# This is a tricky test - a linked list-like structure
+
+class Node[T]:
+    value: T
+
+def main() -> int32:
+    # Simple node
+    n = Node(value=42)
+    print(n.value)
+
+    # Node containing a node (not recursive self-reference, but nested)
+    n2: Node[Node[int32]] = Node(value=Node(value=99))
+    print(n2.value.value)
+
+    return 0

@@ -1,0 +1,5 @@
+def main() -> int32:
+    s: String = "hello"
+    x = s as int32
+    print(x)
+    return 0

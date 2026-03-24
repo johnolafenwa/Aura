@@ -1,0 +1,20 @@
+# Edge: constructing classes inside if/else branches
+class Result:
+    value: int32
+    ok: bool
+
+def make_result(x: int32) -> Result:
+    if x > 0:
+        return Result(value=x, ok=true)
+    else:
+        return Result(value=0, ok=false)
+
+def main() -> int32:
+    r1 = make_result(42)
+    print(r1.value)
+    print(r1.ok)
+
+    r2 = make_result(-1)
+    print(r2.value)
+    print(r2.ok)
+    return 0

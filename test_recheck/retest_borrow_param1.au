@@ -1,0 +1,12 @@
+class Point:
+    x: int32
+    y: int32
+
+def show(borrow p: Point):
+    print(p.x)
+    print(p.y)
+
+def main():
+    p = Point(x=3, y=4)
+    show(p)
+    print(p.x)

@@ -1,0 +1,27 @@
+trait Named:
+    def name(borrow self) -> String
+
+class User:
+    label: String
+
+impl Named for User:
+    def name(borrow self) -> String:
+        return self.label.clone()
+
+class Wrapper[T: Named]:
+    value: T
+
+enum MaybeNamed[T: Named]:
+    Some(T)
+    Empty
+
+def main() -> int32:
+    wrapped = Wrapper(value=User(label="aurora"))
+    value: MaybeNamed[User] = MaybeNamed.Empty
+    print(wrapped.value.name())
+    match value:
+        case MaybeNamed.Some(inner):
+            print(inner.name())
+        case _:
+            print("empty")
+    return 0

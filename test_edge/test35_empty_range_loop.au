@@ -1,0 +1,28 @@
+# Edge: what happens with empty for loops and adjacent code
+def main() -> int32:
+    mut before: int32 = 42
+
+    # Empty range - should not execute body
+    for i in range(0):
+        before = 999
+
+    print(before)
+
+    # Range where start >= stop (empty)
+    mut count: int32 = 0
+    for i in range(10, 5):
+        count += 1
+    print(count)
+
+    for i in range(5, 5):
+        count += 1
+    print(count)
+
+    # After empty loop, regular code should work fine
+    mut total: int32 = 0
+    for i in range(0):
+        total += 1
+    total += 100
+    print(total)
+
+    return 0

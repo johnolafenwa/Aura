@@ -1,0 +1,3 @@
+def main() -> int32:
+    sleep(2m)
+    return 0

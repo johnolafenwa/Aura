@@ -1,5 +1,5 @@
-use std::path::Path;
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -88,7 +88,9 @@ pub fn analyze_source(source: &str) -> AnalysisOutput {
 }
 
 pub fn analyze_path_source(path: &Path, source: &str) -> AnalysisOutput {
-    analyze_with_checker(source, |candidate| crate::check_path_with_source(path, candidate))
+    analyze_with_checker(source, |candidate| {
+        crate::check_path_with_source(path, candidate)
+    })
 }
 
 pub fn complete_path_source(
@@ -114,7 +116,13 @@ pub fn complete_source(
     character: usize,
     trigger_character: Option<char>,
 ) -> Result<Vec<AnalysisCompletion>> {
-    complete_with_checker(source, line, character, trigger_character, crate::check_source)
+    complete_with_checker(
+        source,
+        line,
+        character,
+        trigger_character,
+        crate::check_source,
+    )
 }
 
 fn analyze_with_checker<F>(source: &str, mut check_program: F) -> AnalysisOutput
@@ -832,7 +840,9 @@ impl<'a> AnalysisBuilder<'a> {
         scrutinee_type: Option<&Type>,
         scope: &mut BTreeMap<String, BindingInfo>,
     ) {
-        let Pattern::Variant(variant) = &arm.pattern;
+        let Pattern::Variant(variant) = &arm.pattern else {
+            return;
+        };
         let Some(binding_name) = &variant.binding else {
             return;
         };
@@ -848,7 +858,9 @@ impl<'a> AnalysisBuilder<'a> {
         scrutinee_type: Option<&Type>,
         scope: &mut BTreeMap<String, BindingInfo>,
     ) {
-        let Pattern::Variant(variant) = &arm.pattern;
+        let Pattern::Variant(variant) = &arm.pattern else {
+            return;
+        };
         let Some(binding_name) = &variant.binding else {
             return;
         };
@@ -2000,7 +2012,9 @@ where
     F: FnMut(&str) -> Result<Program>,
 {
     let sanitized = sanitize_member_completion_source(source, line, character);
-    parser::parse(&sanitized).ok().and_then(|_| check_program(&sanitized).ok())
+    parser::parse(&sanitized)
+        .ok()
+        .and_then(|_| check_program(&sanitized).ok())
 }
 
 fn sanitize_member_completion_source(source: &str, line: usize, character: usize) -> String {

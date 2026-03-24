@@ -1,0 +1,15 @@
+def main() -> int32:
+    original: String = "aurora"
+    copy = original.clone()
+    print(original)
+    print(copy)
+
+    if original == copy:
+        print("clones equal ok")
+    else:
+        print("clones equal fail")
+
+    combined = original + " " + copy
+    print(combined)
+
+    return 0

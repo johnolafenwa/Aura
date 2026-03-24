@@ -1,0 +1,30 @@
+# Test: break from deeply nested control flow inside loop
+def main() -> int32:
+    mut found: int32 = -1
+
+    for i in range(100):
+        if i > 10:
+            if i % 7 == 0:
+                if i % 3 == 0:
+                    found = i
+                    break
+
+    # First number > 10 divisible by both 7 and 3 is 21
+    print(found)
+
+    # Four levels of nesting with break
+    mut result: int32 = 0
+    mut x: int32 = 0
+    while true:
+        if x < 50:
+            if x % 2 == 0:
+                if x % 5 == 0:
+                    if x > 0:
+                        result = x
+                        break
+        x += 1
+
+    # First x > 0, even, divisible by 5: 10
+    print(result)
+
+    return 0

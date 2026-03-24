@@ -1,0 +1,31 @@
+# Test: multiple type params each with trait bounds
+
+trait Show:
+    def show(borrow self) -> String
+
+trait Count:
+    def count(borrow self) -> int32
+
+class Name:
+    text: String
+
+class Qty:
+    n: int32
+
+impl Show for Name:
+    def show(borrow self) -> String:
+        return self.text
+
+impl Count for Qty:
+    def count(borrow self) -> int32:
+        return self.n
+
+def display[A: Show, B: Count](a: A, b: B):
+    print(a.show())
+    print(b.count())
+
+def main() -> int32:
+    n = Name(text="item")
+    q = Qty(n=5)
+    display(a=n, b=q)
+    return 0

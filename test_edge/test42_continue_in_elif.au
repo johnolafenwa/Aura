@@ -1,0 +1,17 @@
+# Edge: continue inside elif branch
+def main() -> int32:
+    mut result: int32 = 0
+    for i in range(10):
+        if i < 3:
+            result += 1
+        elif i < 6:
+            continue
+        else:
+            result += 10
+
+    # i=0,1,2: +1 each => 3
+    # i=3,4,5: continue (skip rest)
+    # i=6,7,8,9: +10 each => 40
+    # total = 43
+    print(result)
+    return 0

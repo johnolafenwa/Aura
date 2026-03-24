@@ -1,0 +1,22 @@
+enum Step:
+    Continue(int32)
+    Done(int32)
+
+def next_step(current: int32) -> Step:
+    if current >= 5:
+        return Step.Done(current)
+    return Step.Continue(current + 1)
+
+def main() -> int32:
+    mut val = 0
+    mut running = true
+    while running:
+        s = next_step(val)
+        match s:
+            case Step.Continue(v):
+                val = v
+            case Step.Done(v):
+                val = v
+                running = false
+    print(val)
+    return 0

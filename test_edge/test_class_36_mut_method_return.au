@@ -1,0 +1,18 @@
+# Edge: mutating method that returns a value
+class Stack:
+    top: int32
+
+    def push(borrow mut self, val: int32) -> int32:
+        old = self.top
+        self.top = val
+        return old
+
+def main() -> int32:
+    mut s = Stack(top=0)
+    old = s.push(10)
+    print(old)
+    print(s.top)
+    old2 = s.push(20)
+    print(old2)
+    print(s.top)
+    return 0

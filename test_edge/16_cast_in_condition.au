@@ -1,0 +1,17 @@
+def main() -> int32:
+    x: int32 = 5
+    y: float64 = 5.0
+
+    if x as float64 == y:
+        print("cast compare ok")
+    else:
+        print("cast compare fail")
+
+    a: float64 = 3.7
+    b: int32 = a as int32
+    if b == 3:
+        print("truncation ok")
+    else:
+        print("truncation fail")
+
+    return 0

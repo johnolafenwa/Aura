@@ -1,0 +1,36 @@
+class Point:
+    x: float64
+    y: float64
+
+    def magnitude(borrow self) -> float64:
+        return (self.x * self.x + self.y * self.y).sqrt()
+
+class Circle:
+    center: Point
+    radius: float64
+
+    def diameter(borrow self) -> float64:
+        return self.radius * 2.0
+
+class Line:
+    start: Point
+    end: Point
+
+    def length(borrow self) -> float64:
+        dx = self.end.x - self.start.x
+        dy = self.end.y - self.start.y
+        return (dx * dx + dy * dy).sqrt()
+
+def main() -> int32:
+    p1 = Point(x=0.0, y=0.0)
+    p2 = Point(x=3.0, y=4.0)
+
+    c = Circle(center=p1, radius=5.0)
+    print(c.diameter())
+
+    line = Line(start=Point(x=0.0, y=0.0), end=Point(x=3.0, y=4.0))
+    print(line.length())
+
+    print(p2.magnitude())
+
+    return 0

@@ -1,0 +1,14 @@
+def producer(out: Channel[int32]):
+    out.send(42)
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    spawn detached producer(ch.clone())
+
+    match ch.recv():
+        case Option.Some(value):
+            print(value)
+        case Option.None:
+            print("error: got None")
+
+    return 0

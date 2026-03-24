@@ -1,0 +1,15 @@
+def main() -> int32:
+    a: int32 = 42
+    b: float64 = a as float64
+    print(b)
+
+    c: float64 = 42.0
+    print(c)
+
+    d: float64 = 0 as float64
+    print(d)
+
+    e: float64 = 0.0
+    print(e)
+
+    return 0

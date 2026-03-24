@@ -1,0 +1,9 @@
+def main():
+    x: float64 = 42.0
+    print(x)
+    y: float64 = 0.0
+    print(y)
+    z = 7 as float64
+    print(z)
+    w: float64 = 3.14
+    print(w)

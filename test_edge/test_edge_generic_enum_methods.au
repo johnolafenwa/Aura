@@ -1,0 +1,19 @@
+# Test: calling methods on a generic enum's contained value after match
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+enum Wrapper[T]:
+    Wrapped(T)
+    Empty
+
+def main() -> int32:
+    w: Wrapper[Box[int32]] = Wrapper.Wrapped(Box(value=42))
+    match w:
+        case Wrapper.Wrapped(box):
+            print(box.get())
+        case Wrapper.Empty:
+            print(0)
+    return 0

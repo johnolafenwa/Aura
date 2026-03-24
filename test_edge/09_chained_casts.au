@@ -1,0 +1,16 @@
+def main() -> int32:
+    a = 10
+    b = 3
+    result = a as float64 / b as float64
+    print(result)
+
+    x = 7 as float64 + 2.5
+    print(x)
+
+    y = 3.9 as int32 + 1
+    print(y)
+
+    area = (4 as float64) * 3.14159
+    print(area)
+
+    return 0

@@ -1,0 +1,2 @@
+public def label() -> String:
+    return "nested module works"

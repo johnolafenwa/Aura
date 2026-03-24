@@ -1,0 +1,6 @@
+def main():
+    a: float64 = -3.14
+    b: float64 = -2.71
+    print(a + b)
+    print(a * b)
+    print(a - b)

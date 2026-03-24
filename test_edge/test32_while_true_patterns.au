@@ -1,0 +1,36 @@
+# Various patterns with while true
+def main() -> int32:
+    # Pattern 1: do-while emulation (execute at least once)
+    mut n: int32 = 0
+    while true:
+        n += 1
+        if n >= 1:
+            break
+    print(n)
+
+    # Pattern 2: input validation loop (find first valid)
+    mut attempt: int32 = 0
+    mut found: int32 = -1
+    while true:
+        if attempt * attempt > 100:
+            found = attempt
+            break
+        attempt += 1
+    # sqrt(100) is 10, so 11*11=121 > 100
+    print(found)
+
+    # Pattern 3: complex exit with multiple conditions
+    mut a: int32 = 0
+    mut b: int32 = 100
+    while true:
+        a += 3
+        b -= 7
+        if a >= b:
+            break
+    # a: 3,6,9,12,15,18,21,24,27,30
+    # b: 93,86,79,72,65,58,51,44,37,30
+    # a>=b when a=30, b=30
+    print(a)
+    print(b)
+
+    return 0

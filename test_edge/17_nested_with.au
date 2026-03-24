@@ -1,0 +1,26 @@
+class Outer:
+    name: String
+
+    def close(borrow mut self):
+        print("outer closed: " + self.name)
+
+class Inner:
+    name: String
+
+    def close(borrow mut self):
+        print("inner closed: " + self.name)
+
+def nested_resources() -> Result[String, String]:
+    with outer = Outer(name="O1"):
+        with inner = Inner(name="I1"):
+            print("using " + outer.name + " and " + inner.name)
+            return Result.Ok("nested done")
+
+def main() -> int32:
+    match nested_resources():
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(err):
+            print(err)
+
+    return 0

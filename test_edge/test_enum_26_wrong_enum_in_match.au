@@ -1,0 +1,18 @@
+enum A:
+    X
+    Y
+
+enum B:
+    X
+    Y
+
+def check(a: A) -> int32:
+    match a:
+        case B.X:
+            return 1
+        case B.Y:
+            return 2
+
+def main() -> int32:
+    print(check(A.X))
+    return 0

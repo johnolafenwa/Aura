@@ -1,0 +1,8 @@
+def main():
+    mut x: int32 = 100
+    x += 10
+    x -= 20
+    x *= 3
+    x /= 9
+    x %= 7
+    print(x)

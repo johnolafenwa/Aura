@@ -1,0 +1,31 @@
+def main() -> int32:
+    a = ""
+    b = ""
+
+    if a != b:
+        print("empty ne empty: BUG")
+    else:
+        print("empty eq empty: ok")
+
+    c = "a"
+    d = "a"
+    if c != d:
+        print("same ne same: BUG")
+    else:
+        print("same eq same: ok")
+
+    e = "abc"
+    f = "abd"
+    if e != f:
+        print("diff ne diff: ok")
+    else:
+        print("diff eq diff: BUG")
+
+    g = "short"
+    h = "shorter"
+    if g != h:
+        print("len diff ne: ok")
+    else:
+        print("len diff eq: BUG")
+
+    return 0

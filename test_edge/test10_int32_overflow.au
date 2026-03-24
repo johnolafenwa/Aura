@@ -1,0 +1,4 @@
+def main():
+    max_val: int32 = 2147483647
+    mut result: int32 = max_val + 1
+    print(result)

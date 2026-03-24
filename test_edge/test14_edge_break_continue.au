@@ -1,0 +1,45 @@
+# Edge case: break immediately in first iteration
+def main() -> int32:
+    # Break on first iteration
+    mut count: int32 = 0
+    for i in range(100):
+        break
+        count += 1
+    print(count)
+
+    # Continue on every iteration (body after continue never executes)
+    mut sum: int32 = 0
+    for i in range(5):
+        continue
+        sum += i
+    print(sum)
+
+    # Break inside nested if inside for
+    mut last_val: int32 = -1
+    for i in range(10):
+        if i > 0:
+            if i % 3 == 0:
+                last_val = i
+                break
+    print(last_val)
+
+    # While loop that never executes
+    mut never: int32 = 0
+    while false:
+        never += 1
+    print(never)
+
+    # continue in while with complex condition
+    mut total: int32 = 0
+    mut n: int32 = 0
+    while n < 20:
+        n += 1
+        if n < 5:
+            continue
+        if n > 10:
+            break
+        total += n
+    # 5+6+7+8+9+10 = 45
+    print(total)
+
+    return 0

@@ -1,0 +1,39 @@
+def maybe_divide(a: int32, b: int32) -> Result[Option[int32], String]:
+    if b == 0:
+        return Result.Err("div by zero")
+    val = a / b
+    if val == 0:
+        return Result.Ok(Option.None)
+    return Result.Ok(Option.Some(val))
+
+def main() -> int32:
+    match maybe_divide(10, 3):
+        case Result.Ok(opt):
+            match opt:
+                case Option.Some(v):
+                    print(v)
+                case Option.None:
+                    print("none")
+        case Result.Err(e):
+            print(e)
+
+    match maybe_divide(10, 0):
+        case Result.Ok(opt):
+            match opt:
+                case Option.Some(v):
+                    print(v)
+                case Option.None:
+                    print("none")
+        case Result.Err(e):
+            print(e)
+
+    match maybe_divide(1, 10):
+        case Result.Ok(opt):
+            match opt:
+                case Option.Some(v):
+                    print(v)
+                case Option.None:
+                    print("none")
+        case Result.Err(e):
+            print(e)
+    return 0

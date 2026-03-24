@@ -1,0 +1,9 @@
+def main():
+    mut a: int32 = 10
+    mut b: int32 = 20
+    mut temp: int32 = a
+    a = b
+    b = temp
+
+    print(a)
+    print(b)

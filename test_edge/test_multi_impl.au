@@ -1,0 +1,43 @@
+trait Serializable:
+    def serialize(borrow self) -> String
+
+trait Validatable:
+    def is_valid(borrow self) -> bool
+
+trait Copyable:
+    def copy(borrow self) -> Email
+
+class Email:
+    address: String
+    verified: bool
+
+impl Serializable for Email:
+    def serialize(borrow self) -> String:
+        return self.address
+
+impl Validatable for Email:
+    def is_valid(borrow self) -> bool:
+        return self.verified
+
+impl Copyable for Email:
+    def copy(borrow self) -> Email:
+        return Email(address=self.address.clone(), verified=self.verified)
+
+def check_and_serialize[T: Serializable + Validatable](item: T):
+    print(item.serialize())
+    print(item.is_valid())
+
+def main() -> int32:
+    e1 = Email(address="test@example.com", verified=true)
+    e2 = Email(address="bad@", verified=false)
+
+    check_and_serialize(item=e1)
+    check_and_serialize(item=e2)
+
+    # Test copy
+    e3 = Email(address="copy@test.com", verified=true)
+    e4 = e3.copy()
+    print(e4.address)
+    print(e4.verified)
+
+    return 0

@@ -1,0 +1,18 @@
+# Test: generic class with default field value
+class Container[T]:
+    value: T
+    label: String = "default"
+
+    def get_label(borrow self) -> String:
+        return self.label
+
+def main() -> int32:
+    c1 = Container(value=42)
+    print(c1.value)
+    print(c1.get_label())
+
+    c2 = Container(value="hello", label="custom")
+    print(c2.value)
+    print(c2.get_label())
+
+    return 0

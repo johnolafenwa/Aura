@@ -1,0 +1,8 @@
+def main():
+    a: int32 = 100
+    b = a as int64
+    print(b)
+
+    c: int64 = 50
+    d = c as int32
+    print(d)

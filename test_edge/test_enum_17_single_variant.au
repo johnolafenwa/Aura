@@ -1,0 +1,12 @@
+enum Singleton:
+    Only(int32)
+
+def get(s: Singleton) -> int32:
+    match s:
+        case Singleton.Only(v):
+            return v
+
+def main() -> int32:
+    s = Singleton.Only(7)
+    print(get(s))
+    return 0

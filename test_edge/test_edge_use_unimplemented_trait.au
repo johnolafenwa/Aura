@@ -1,0 +1,15 @@
+# Test: calling a trait-bounded function with a type that doesn't implement the trait
+
+trait Flyable:
+    def fly(borrow self) -> String
+
+class Rock:
+    weight: int32
+
+def fly_it[T: Flyable](thing: T):
+    print(thing.fly())
+
+def main() -> int32:
+    r = Rock(weight=10)
+    fly_it(thing=r)
+    return 0

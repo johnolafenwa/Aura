@@ -1,0 +1,4 @@
+a: int32 = 10
+b: int32 = 20
+c = a + b
+print(c)

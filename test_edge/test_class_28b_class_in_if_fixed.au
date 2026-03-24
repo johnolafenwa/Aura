@@ -1,0 +1,20 @@
+# Constructing classes inside if/else branches (avoiding "Result" name)
+class Outcome:
+    value: int32
+    ok: bool
+
+def make_outcome(x: int32) -> Outcome:
+    if x > 0:
+        return Outcome(value=x, ok=true)
+    else:
+        return Outcome(value=0, ok=false)
+
+def main() -> int32:
+    r1 = make_outcome(42)
+    print(r1.value)
+    print(r1.ok)
+
+    r2 = make_outcome(-1)
+    print(r2.value)
+    print(r2.ok)
+    return 0

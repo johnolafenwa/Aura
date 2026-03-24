@@ -1,0 +1,10 @@
+def main() -> int32:
+    print("start")
+    sleep(1ms)
+    print("after 1ms")
+
+    select:
+        case after(1s):
+            print("1s timeout")
+
+    return 0

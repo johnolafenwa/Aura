@@ -1,0 +1,38 @@
+# Test zero and boundary conditions
+def main() -> int32:
+    # Comparison with zero
+    z: int32 = 0
+    if z == 0:
+        print("zero eq")
+    if z >= 0:
+        print("zero ge")
+    if z <= 0:
+        print("zero le")
+    if not (z > 0):
+        print("zero not gt")
+    if not (z < 0):
+        print("zero not lt")
+
+    # Range with start == stop (should be empty)
+    mut count: int32 = 0
+    for i in range(5, 5):
+        count += 1
+    print(count)
+
+    # Range where start > stop (should be empty)
+    mut count2: int32 = 0
+    for i in range(10, 5):
+        count2 += 1
+    print(count2)
+
+    # Negative comparisons
+    a: int32 = -5
+    b: int32 = 5
+    if a < b:
+        print("neg lt pos")
+    if a != b:
+        print("neg neq pos")
+    if a <= 0:
+        print("neg le zero")
+
+    return 0

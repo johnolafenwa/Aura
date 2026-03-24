@@ -9,8 +9,8 @@ pub struct Token {
 #[derive(Clone, Debug, PartialEq)]
 pub enum TokenKind {
     Identifier(String),
-    IntLiteral(i64),
-    DurationLiteral(i64),
+    IntLiteral(i128),
+    DurationLiteral(i128),
     FloatLiteral(f64),
     BoolLiteral(bool),
     StringLiteral(String),
@@ -362,7 +362,7 @@ fn tokenize_line(
                         span: Span::new(line_no, column),
                     });
                 } else {
-                    let value = text.parse::<i64>().map_err(|_| {
+                    let value = text.parse::<i128>().map_err(|_| {
                         Diagnostic::at(Span::new(line_no, column), "invalid integer literal")
                     })?;
                     let duration_kind = if let Some((_, suffix_start)) = chars.get(index) {
@@ -372,12 +372,27 @@ fn tokenize_line(
                                     index += 2;
                                     Some(TokenKind::DurationLiteral(value))
                                 } else {
-                                    None
+                                    index += 1;
+                                    Some(TokenKind::DurationLiteral(
+                                        value.checked_mul(60_000).ok_or_else(|| {
+                                            Diagnostic::at(
+                                                Span::new(line_no, column),
+                                                "invalid duration literal",
+                                            )
+                                        })?,
+                                    ))
                                 }
                             }
                             's' => {
                                 index += 1;
-                                Some(TokenKind::DurationLiteral(value * 1000))
+                                Some(TokenKind::DurationLiteral(
+                                    value.checked_mul(1000).ok_or_else(|| {
+                                        Diagnostic::at(
+                                            Span::new(line_no, column),
+                                            "invalid duration literal",
+                                        )
+                                    })?,
+                                ))
                             }
                             _ => None,
                         }

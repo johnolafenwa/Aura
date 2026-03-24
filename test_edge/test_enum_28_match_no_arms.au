@@ -1,0 +1,11 @@
+enum Color:
+    Red
+    Green
+
+def check(c: Color) -> int32:
+    match c:
+    return 0
+
+def main() -> int32:
+    print("hello")
+    return 0

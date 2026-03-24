@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-03-22
+Last updated: 2026-03-24
 
 ## In Progress
 
@@ -15,9 +15,9 @@ Last updated: 2026-03-22
 - Raise the Aurora language-server analysis package to enforced 100% coverage before expanding its semantic surface further.
 - Extend the trait system toward the remaining proposal surface, including generic traits, generic impl headers, and operator traits.
 - Extend compiler-backed `analyze` / `complete` and the LSP from local-module diagnostics/hover/completions to fully correct cross-file definitions for imported items.
-- Replace the new bootstrap MIR-artifact launcher path with true native MIR codegen for macOS and Linux.
-- Add broader product-level backend coverage around native codegen outputs and `run-mir`.
+- Add broader product-level backend coverage around direct native codegen outputs and the `auto`/`mir-runtime` fallback split.
 - Narrow the JS fallback further now that completions, diagnostics, symbols, hover, and definition all have compiler-backed paths.
+- Expand the direct low-level native backend beyond the current scalar/float/plain-class subset so fewer programs need the runtime-linked MIR artifact path.
 
 ## Done
 
@@ -28,7 +28,7 @@ Last updated: 2026-03-22
 - Added `crates/aura/README.md` with release-build and direct binary usage instructions.
 - Added in-repo work tracking under `work/`.
 - Verified `cargo test` passes.
-- Verified `cargo run -p aura -- run examples/point.au` prints `5`.
+- Verified `cargo run -p aura -- run examples/point.au` prints `5.0`.
 - Added support for `def name(...):` as shorthand for `-> None`.
 - Added support for running top-level script statements without an explicit `main`.
 - Renamed primitive language types to explicit spellings like `int32`, `uint64`, and `float64`.
@@ -109,6 +109,23 @@ Last updated: 2026-03-22
 - Added local file module support with `import`, `from ... import ...`, and `public` module boundaries across checking, interpreter execution, MIR execution, CLI run/build, examples, tutorials, and compiler tests.
 - Extended compiler-backed `aura analyze` / `aura complete` and the LSP bridge so stdin/file analysis now resolves local module imports for diagnostics, hover, and completions.
 - Added CI-style repo gates plus enforced baseline coverage thresholds for the compiler and language server.
+- Fixed generic method inference for method calls on generic class instances inside generic functions.
+- Fixed user-defined generic enum unit variants so they retain instantiated type arguments.
+- Fixed specialized generic trait impl dispatch for concrete generic instances such as `impl Trait for Box[String]`.
+- Raised integer and duration literal parsing to `i128`, including minute duration literals with `m`.
+- Added wildcard `case _:` support in statement-form `match`.
+- Added trait bounds on generic class and enum type parameters.
+- Added empty marker traits with `pass`.
+- Rejected direct recursive class fields that would require `indirect` storage, which is still outside the compiler.
+- Fixed direct-expression narrow integer overflow checking so runtime arithmetic respects annotated widths even when values flow straight into calls.
+- Fixed whole-number float rendering so values like `5.0` and `9.0` preserve their `.0` suffix in output.
+- Added ordinary free-function `borrow` and `borrow mut` parameters across the parser, checker, interpreter, MIR runtime, fixtures, examples, tutorials, and LSP fallback analysis.
+- Replaced `aura build`'s generated Rust launcher with a native MIR artifact build path that embeds serialized MIR in a native launcher and links it against a compiled Aurora runtime library.
+- Added product coverage for stdin-backed native builds with local modules and for binaries that still run after the original source file is removed.
+- Added a true direct native backend for a supported scalar/control-flow MIR subset and exposed it through `aura build --backend direct`.
+- Switched `aura build` to a three-way backend matrix with `--backend auto|direct|mir-runtime`, where `auto` now tries direct native codegen first and falls back when needed.
+- Added compiler-side direct-backend coverage so the enforced Rust coverage gate remains green after introducing native codegen modules.
+- Expanded the direct native backend to support floats, plain classes, field access, associated methods, and immutable instance methods, including clean broken-pipe handling for direct-built binaries.
 
 ## Blocked
 

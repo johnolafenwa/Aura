@@ -1,0 +1,23 @@
+# Edge: calling multiple mutating methods in sequence
+class Counter:
+    value: int32
+    name: String
+
+    def bump(borrow mut self):
+        self.value += 1
+
+    def bump_by(borrow mut self, n: int32):
+        self.value = self.value + n
+
+    def set_name(borrow mut self, new_name: String):
+        self.name = new_name
+
+def main() -> int32:
+    mut c = Counter(value=0, name="counter")
+    c.bump()
+    c.bump()
+    c.bump_by(10)
+    c.set_name("updated")
+    print(c.value)
+    print(c.name)
+    return 0

@@ -1,0 +1,11 @@
+def main():
+    a: float64 = 3.14
+    b: float64 = 2.71
+    c: float64 = 3.14
+
+    print(a == c)
+    print(a != b)
+    print(a > b)
+    print(a < b)
+    print(a >= c)
+    print(b <= a)

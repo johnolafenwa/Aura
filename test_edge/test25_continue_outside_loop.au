@@ -1,0 +1,4 @@
+# This should fail: continue outside a loop
+def main() -> int32:
+    continue
+    return 0

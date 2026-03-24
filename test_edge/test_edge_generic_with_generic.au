@@ -1,0 +1,23 @@
+# Test generic class containing another generic class
+class Wrapper[T]:
+    inner: T
+
+class Pair[A, B]:
+    first: A
+    second: B
+
+def main() -> int32:
+    # Wrapper[Pair[int32, String]]
+    p = Pair(first=1, second="hello")
+    w: Wrapper[Pair[int32, String]] = Wrapper(inner=p)
+    print(w.inner.first)
+    print(w.inner.second)
+
+    # Pair[Wrapper[int32], Wrapper[String]]
+    w1 = Wrapper(inner=42)
+    w2 = Wrapper(inner="world")
+    p2: Pair[Wrapper[int32], Wrapper[String]] = Pair(first=w1, second=w2)
+    print(p2.first.inner)
+    print(p2.second.inner)
+
+    return 0

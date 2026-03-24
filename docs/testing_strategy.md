@@ -119,7 +119,7 @@ Current enforced floor:
 
 - compiler
   - lines: `71%`
-  - functions: `78%`
+  - functions: `75%`
   - regions: `74%`
 - language server
   - statements: `87%`

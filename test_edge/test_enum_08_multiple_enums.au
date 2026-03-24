@@ -1,0 +1,49 @@
+enum Animal:
+    Cat
+    Dog
+    Bird
+
+enum Size:
+    Small
+    Medium
+    Large
+
+enum Sound:
+    Meow
+    Bark
+    Chirp
+
+def animal_sound(a: Animal) -> Sound:
+    match a:
+        case Animal.Cat:
+            return Sound.Meow
+        case Animal.Dog:
+            return Sound.Bark
+        case Animal.Bird:
+            return Sound.Chirp
+
+def sound_to_string(s: Sound) -> String:
+    match s:
+        case Sound.Meow:
+            return "meow"
+        case Sound.Bark:
+            return "bark"
+        case Sound.Chirp:
+            return "chirp"
+
+def size_to_string(sz: Size) -> String:
+    match sz:
+        case Size.Small:
+            return "small"
+        case Size.Medium:
+            return "medium"
+        case Size.Large:
+            return "large"
+
+def main() -> int32:
+    print(sound_to_string(animal_sound(Animal.Cat)))
+    print(sound_to_string(animal_sound(Animal.Dog)))
+    print(sound_to_string(animal_sound(Animal.Bird)))
+    print(size_to_string(Size.Small))
+    print(size_to_string(Size.Large))
+    return 0

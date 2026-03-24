@@ -1,0 +1,17 @@
+# Test: implement a trait for a generic class (unbounded, for all T)
+# This may or may not be supported
+
+trait Describable:
+    def describe(borrow self) -> String
+
+class Wrapper[T]:
+    value: T
+
+impl Describable for Wrapper:
+    def describe(borrow self) -> String:
+        return "wrapper"
+
+def main() -> int32:
+    w = Wrapper(value=42)
+    print(w.describe())
+    return 0

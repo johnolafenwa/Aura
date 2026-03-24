@@ -1,0 +1,26 @@
+# CLEAN BUG REPRODUCER:
+# Calling a method on a generic class whose type param comes from the
+# enclosing generic function fails with "cannot infer type parameter".
+#
+# Works: box.value (field access)
+# Fails: box.get() (method call)
+
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+# This WORKS - field access
+def extract_field[T](box: Box[T]) -> T:
+    return box.value
+
+# This FAILS - method call
+def extract_method[T](box: Box[T]) -> T:
+    return box.get()
+
+def main() -> int32:
+    b = Box(value=42)
+    print(extract_field(b))
+    # print(extract_method(b))  # would fail
+    return 0

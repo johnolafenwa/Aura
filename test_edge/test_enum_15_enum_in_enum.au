@@ -1,0 +1,27 @@
+enum Inner:
+    A(int32)
+    B
+
+enum Wrapper:
+    Wrapped(Inner)
+    Plain(int32)
+
+def describe(w: Wrapper) -> int32:
+    match w:
+        case Wrapper.Wrapped(inner):
+            match inner:
+                case Inner.A(v):
+                    return v
+                case Inner.B:
+                    return -1
+        case Wrapper.Plain(v):
+            return v
+
+def main() -> int32:
+    w1 = Wrapper.Wrapped(Inner.A(42))
+    w2 = Wrapper.Wrapped(Inner.B)
+    w3 = Wrapper.Plain(99)
+    print(describe(w1))
+    print(describe(w2))
+    print(describe(w3))
+    return 0

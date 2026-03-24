@@ -1,0 +1,22 @@
+def worker(out: Channel[int32]):
+    mut i: int32 = 0
+    while i < 5:
+        out.send(i * i)
+        i += 1
+    out.close()
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    task = spawn worker(ch.clone())
+
+    mut sum: int32 = 0
+    while true:
+        match ch.recv():
+            case Option.Some(value):
+                sum += value
+            case Option.None:
+                break
+
+    task.join()
+    print(sum)
+    return 0

@@ -1,0 +1,10 @@
+def main() -> int32:
+    result = "a" + "b" + "c" + "d" + "e" + "f" + "g" + "h"
+    print(result)
+
+    if result == "abcdefgh":
+        print("many concat ok")
+    else:
+        print("many concat fail")
+
+    return 0

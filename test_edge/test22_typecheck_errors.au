@@ -1,0 +1,6 @@
+# This should fail type-checking: non-bool condition in if
+def main() -> int32:
+    x: int32 = 5
+    if x:
+        print("truthy")
+    return 0

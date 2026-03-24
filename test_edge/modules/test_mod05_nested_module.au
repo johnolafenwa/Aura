@@ -1,0 +1,5 @@
+import utils.formatters.number_fmt
+
+def main() -> int32:
+    print(utils.formatters.number_fmt.label())
+    return 0

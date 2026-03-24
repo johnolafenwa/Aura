@@ -1,0 +1,19 @@
+def sender(out: Channel[int32]):
+    sleep(5ms)
+    out.send(88)
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    spawn detached sender(ch.clone())
+
+    select:
+        case value = ch.recv():
+            match value:
+                case Option.Some(v):
+                    print(v)
+                case Option.None:
+                    print("error: None")
+        case after(1s):
+            print("error: timeout")
+
+    return 0

@@ -1,0 +1,8 @@
+def worker(out: Channel[int32]):
+    out.send(1)
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    task = spawn detached worker(ch.clone())
+    task.join()
+    return 0

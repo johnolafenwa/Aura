@@ -1,0 +1,17 @@
+def main() -> int32:
+    a = "hello"
+    b = " "
+    c = "world"
+    result = a + b + c
+    print(result)
+
+    part1 = "foo" + "bar" + "baz"
+    print(part1)
+
+    single = "only"
+    print(single)
+
+    triple = "x" + "y" + "z"
+    print(triple)
+
+    return 0

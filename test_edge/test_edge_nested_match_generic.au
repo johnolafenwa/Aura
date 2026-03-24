@@ -1,0 +1,21 @@
+# Test: nested match on generic enums
+
+enum Outer[T]:
+    Some(T)
+    None
+
+def main() -> int32:
+    # Nested Option-like: Outer[Outer[int32]]
+    nested: Outer[Outer[int32]] = Outer.Some(Outer.Some(42))
+
+    match nested:
+        case Outer.Some(inner):
+            match inner:
+                case Outer.Some(v):
+                    print(v)
+                case Outer.None:
+                    print(0)
+        case Outer.None:
+            print(0)
+
+    return 0

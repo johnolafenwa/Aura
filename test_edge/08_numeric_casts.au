@@ -1,0 +1,30 @@
+def main() -> int32:
+    i = 42
+    f = i as float64
+    print(f)
+
+    pi = 3.14159
+    truncated = pi as int32
+    print(truncated)
+
+    small: float32 = 1.5 as float32
+    big = small as float64
+    print(big)
+
+    x: int32 = 255
+    y = x as int64
+    print(y)
+
+    z: int64 = 1000
+    w = z as int32
+    print(w)
+
+    neg = -7
+    neg_f = neg as float64
+    print(neg_f)
+
+    zero = 0
+    zero_f = zero as float64
+    print(zero_f)
+
+    return 0

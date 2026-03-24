@@ -1,0 +1,5 @@
+trait Marker:
+    pass
+
+def main():
+    pass

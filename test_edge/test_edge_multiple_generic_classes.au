@@ -1,0 +1,21 @@
+# Test: multiple generic classes interacting
+
+class First[T]:
+    value: T
+
+class Second[T]:
+    value: T
+
+def transfer[T](src: First[T]) -> Second[T]:
+    return Second(value=src.value)
+
+def main() -> int32:
+    f = First(value=42)
+    s: Second[int32] = transfer(f)
+    print(s.value)
+
+    f2 = First(value="hello")
+    s2: Second[String] = transfer(f2)
+    print(s2.value)
+
+    return 0

@@ -1,0 +1,31 @@
+class Rectangle:
+    width: float64
+    height: float64
+
+    def area(borrow self) -> float64:
+        return self.width * self.height
+
+    def perimeter(borrow self) -> float64:
+        return (self.width + self.height) * 2.0
+
+    def scale(borrow mut self, factor: float64):
+        self.width = self.width * factor
+        self.height = self.height * factor
+
+    def square(side: float64) -> Rectangle:
+        return Rectangle(width=side, height=side)
+
+def main() -> int32:
+    rect = Rectangle(width=3.0, height=4.0)
+    print(rect.area())
+    print(rect.perimeter())
+
+    sq = Rectangle.square(5.0)
+    print(sq.area())
+
+    mut r = Rectangle(width=2.0, height=3.0)
+    r.scale(2.0)
+    print(r.width)
+    print(r.height)
+
+    return 0

@@ -1,0 +1,38 @@
+def find(x: int32) -> Option[int32]:
+    if x > 0:
+        return Option.Some(x * 10)
+    return Option.None
+
+def transform(o: Option[int32]) -> Option[int32]:
+    match o:
+        case Option.Some(v):
+            if v > 50:
+                return Option.Some(v + 1)
+            return Option.None
+        case Option.None:
+            return Option.None
+
+def main() -> int32:
+    a = find(3)
+    b = find(-1)
+    c = find(6)
+
+    match transform(a):
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    match transform(b):
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    match transform(c):
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    return 0

@@ -1,0 +1,3 @@
+def main():
+    max_val: int32 = 2147483647
+    print(max_val)

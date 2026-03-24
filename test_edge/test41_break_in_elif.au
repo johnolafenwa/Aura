@@ -1,0 +1,16 @@
+# Edge: break inside elif branch
+def main() -> int32:
+    mut result: int32 = 0
+    mut i: int32 = 0
+    while i < 100:
+        if i < 5:
+            result += 1
+        elif i == 5:
+            break
+        else:
+            result += 100
+        i += 1
+
+    print(result)
+    print(i)
+    return 0

@@ -1,0 +1,10 @@
+def main():
+    a: bool = true
+    b: bool = false
+
+    print(a and b)
+    print(a or b)
+    print(not a)
+    print(not b)
+    print(a and a)
+    print(b or b)

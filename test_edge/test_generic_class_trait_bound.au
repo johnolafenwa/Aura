@@ -1,0 +1,24 @@
+# Test: generic class with trait-bounded type parameter
+# e.g., class Container[T: Printable]:
+
+trait Printable:
+    def to_string(borrow self) -> String
+
+class Label:
+    text: String
+
+impl Printable for Label:
+    def to_string(borrow self) -> String:
+        return self.text
+
+class Container[T: Printable]:
+    item: T
+
+    def display(borrow self):
+        print(self.item.to_string())
+
+def main() -> int32:
+    l = Label(text="aurora")
+    c = Container(item=l)
+    c.display()
+    return 0

@@ -1,0 +1,8 @@
+def main():
+    a: float32 = 1.5
+    b: float32 = 2.5
+    c: float32 = a + b
+    print(c)
+
+    d: float32 = a * b
+    print(d)

@@ -1,0 +1,7 @@
+def main():
+    a: float64 = 1.0
+    b: float64 = 0.0
+    inf_val: float64 = a / b
+    print(inf_val + 1.0)
+    print(inf_val * 2.0)
+    print(inf_val - inf_val)

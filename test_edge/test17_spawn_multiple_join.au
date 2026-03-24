@@ -1,0 +1,29 @@
+def worker1(out: Channel[int32]):
+    out.send(10)
+
+def worker2(out: Channel[int32]):
+    out.send(20)
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    task1 = spawn worker1(ch.clone())
+    task2 = spawn worker2(ch.clone())
+
+    mut total: int32 = 0
+
+    match ch.recv():
+        case Option.Some(v):
+            total += v
+        case Option.None:
+            print("err")
+
+    match ch.recv():
+        case Option.Some(v):
+            total += v
+        case Option.None:
+            print("err")
+
+    task1.join()
+    task2.join()
+    print(total)
+    return 0

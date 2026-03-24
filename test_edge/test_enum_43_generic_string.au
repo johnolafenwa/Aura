@@ -1,0 +1,16 @@
+enum Wrapper[T]:
+    Some(T)
+    None
+
+def unwrap(w: Wrapper[String]) -> String:
+    match w:
+        case Wrapper.Some(v):
+            return v
+        case Wrapper.None:
+            return "empty"
+
+def main() -> int32:
+    a = Wrapper.Some("hello")
+    print(unwrap(a))
+    print(unwrap(Wrapper.None))
+    return 0

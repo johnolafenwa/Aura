@@ -1,0 +1,20 @@
+# Test: trait method taking a generic class as parameter
+
+class Box[T]:
+    value: T
+
+trait Boxable:
+    def into_box(borrow self) -> Box[int32]
+
+class Number:
+    n: int32
+
+impl Boxable for Number:
+    def into_box(borrow self) -> Box[int32]:
+        return Box(value=self.n)
+
+def main() -> int32:
+    num = Number(n=99)
+    b = num.into_box()
+    print(b.value)
+    return 0

@@ -1,0 +1,40 @@
+def inner_worker(out: Channel[int32]):
+    if cancelled():
+        return
+    out.send(10)
+
+def outer_worker(out: Channel[int32]):
+    if cancelled():
+        return
+    out.send(20)
+
+def main() -> int32:
+    out: Channel[int32] = channel()
+    mut total: int32 = 0
+
+    with task_group() as outer:
+        outer.spawn(outer_worker, out.clone())
+
+        with task_group() as inner:
+            inner.spawn(inner_worker, out.clone())
+
+            select:
+                case value = out.recv():
+                    match value:
+                        case Option.Some(v):
+                            total += v
+                        case Option.None:
+                            print("none")
+
+            select:
+                case value = out.recv():
+                    match value:
+                        case Option.Some(v):
+                            total += v
+                        case Option.None:
+                            print("none")
+                case after(100ms):
+                    print("timeout")
+
+    print(total)
+    return 0

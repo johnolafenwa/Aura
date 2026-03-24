@@ -1,0 +1,18 @@
+# Test: generic function with two independent type parameters
+
+def pair_up[A, B](a: A, b: B) -> String:
+    return "paired"
+
+class Box[T]:
+    value: T
+
+def box_both[A, B](a: A, b: B) -> Box[A]:
+    return Box(value=a)
+
+def main() -> int32:
+    print(pair_up(a=1, b="hello"))
+
+    b: Box[int32] = box_both(a=42, b="ignore")
+    print(b.value)
+
+    return 0

@@ -1,0 +1,21 @@
+def main() -> int32:
+    mut greeting: String = "hello"
+    print(greeting)
+
+    greeting = greeting + " world"
+    print(greeting)
+
+    greeting = greeting + "!"
+    print(greeting)
+
+    mut parts: String = ""
+    parts = parts + "a"
+    parts = parts + "b"
+    parts = parts + "c"
+    print(parts)
+
+    mut name: String = "alice"
+    name = "bob"
+    print(name)
+
+    return 0

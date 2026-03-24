@@ -1,0 +1,24 @@
+def main() -> int32:
+    mut i: int32 = 0
+    mut last: int32 = -1
+
+    while i < 100:
+        if i == 5:
+            last = i
+            break
+        i += 1
+
+    # Should print 5
+    print(last)
+
+    # Test: break when condition never true (loop runs to completion)
+    mut j: int32 = 0
+    mut count: int32 = 0
+    while j < 3:
+        count += 1
+        j += 1
+
+    # Should print 3
+    print(count)
+
+    return 0

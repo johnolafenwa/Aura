@@ -1,0 +1,31 @@
+# Test: combining continue and break in the same loop
+def main() -> int32:
+    # Skip even numbers, break at 7
+    mut sum: int32 = 0
+    for i in range(20):
+        if i % 2 == 0:
+            continue
+        if i >= 7:
+            break
+        sum += i
+    # odd < 7: 1+3+5 = 9
+    print(sum)
+
+    # Nested: continue in outer, break in inner
+    mut result: int32 = 0
+    for i in range(5):
+        if i == 2:
+            continue
+        for j in range(10):
+            if j >= 3:
+                break
+            result += i
+    # i=0: j=0,1,2 => +0+0+0=0
+    # i=1: j=0,1,2 => +1+1+1=3
+    # i=2: skipped
+    # i=3: j=0,1,2 => +3+3+3=9
+    # i=4: j=0,1,2 => +4+4+4=12
+    # total = 0+3+9+12 = 24
+    print(result)
+
+    return 0

@@ -1,0 +1,8 @@
+trait Printable:
+    def to_str(borrow self) -> String
+
+class Container[T: Printable]:
+    item: T
+
+def main():
+    pass

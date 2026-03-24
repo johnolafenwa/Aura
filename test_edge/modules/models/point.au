@@ -1,0 +1,9 @@
+public class Point:
+    public x: int32
+    public y: int32
+
+    public def distance_from_origin(borrow self) -> int32:
+        return self.x * self.x + self.y * self.y
+
+    public def translate(borrow self, dx: int32, dy: int32) -> Point:
+        return Point(x=self.x + dx, y=self.y + dy)

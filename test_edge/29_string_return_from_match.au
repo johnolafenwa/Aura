@@ -1,0 +1,26 @@
+enum Color:
+    Red
+    Green
+    Blue
+
+def color_name(c: Color) -> String:
+    match c:
+        case Color.Red:
+            return "red"
+        case Color.Green:
+            return "green"
+        case Color.Blue:
+            return "blue"
+
+def main() -> int32:
+    print(color_name(Color.Red))
+    print(color_name(Color.Green))
+    print(color_name(Color.Blue))
+
+    r = color_name(Color.Red)
+    if r == "red":
+        print("match return ok")
+    else:
+        print("match return fail")
+
+    return 0

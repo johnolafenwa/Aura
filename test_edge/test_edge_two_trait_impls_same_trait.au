@@ -1,0 +1,29 @@
+# Test: two different classes implementing the same trait,
+# then calling a trait-bounded function with each
+
+trait Greet:
+    def hello(borrow self) -> String
+
+class English:
+    name: String
+
+class Spanish:
+    nombre: String
+
+impl Greet for English:
+    def hello(borrow self) -> String:
+        return "Hello " + self.name
+
+impl Greet for Spanish:
+    def hello(borrow self) -> String:
+        return "Hola " + self.nombre
+
+def greet[T: Greet](person: T):
+    print(person.hello())
+
+def main() -> int32:
+    e = English(name="Alice")
+    s = Spanish(nombre="Carlos")
+    greet(person=e)
+    greet(person=s)
+    return 0

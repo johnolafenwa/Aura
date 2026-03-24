@@ -1,0 +1,12 @@
+# Edge: method with empty body (pass)
+class Logger:
+    level: int32
+
+    def noop(borrow self):
+        pass
+
+def main() -> int32:
+    l = Logger(level=1)
+    l.noop()
+    print(l.level)
+    return 0

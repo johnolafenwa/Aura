@@ -1,0 +1,12 @@
+def divide(a: int32, b: int32) -> Result[int32, String]:
+    if b == 0:
+        return Result.Err("zero")
+    return Result.Ok(a / b)
+
+def bad_usage() -> int32:
+    v = try divide(10, 2)
+    return v
+
+def main() -> int32:
+    print(bad_usage())
+    return 0

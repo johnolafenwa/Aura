@@ -1,0 +1,3 @@
+def main():
+    min_val: int32 = -2147483648
+    print(min_val)

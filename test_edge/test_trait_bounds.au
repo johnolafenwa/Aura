@@ -1,0 +1,44 @@
+trait Printable:
+    def to_string(borrow self) -> String
+
+trait Measurable:
+    def measure(borrow self) -> int32
+
+class Widget:
+    label: String
+    size: int32
+
+impl Printable for Widget:
+    def to_string(borrow self) -> String:
+        return self.label
+
+impl Measurable for Widget:
+    def measure(borrow self) -> int32:
+        return self.size
+
+# Single trait bound
+def show[T: Printable](item: T):
+    print(item.to_string())
+
+# Single trait bound returning int32
+def get_size[T: Measurable](item: T) -> int32:
+    return item.measure()
+
+# Trait bound with multiple generic params
+def compare_sizes[T: Measurable](a: T, b: T) -> int32:
+    if a.measure() > b.measure():
+        return 1
+    return 0
+
+def main() -> int32:
+    w1 = Widget(label="button", size=10)
+    w2 = Widget(label="panel", size=50)
+
+    show(item=w1)
+
+    w3 = Widget(label="x", size=10)
+    w4 = Widget(label="y", size=50)
+    print(get_size(item=w3))
+    print(compare_sizes(a=w4, b=Widget(label="z", size=5)))
+
+    return 0

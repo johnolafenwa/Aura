@@ -1,0 +1,35 @@
+# Test: boolean expressions as loop conditions
+def main() -> int32:
+    mut a: int32 = 0
+    mut b: int32 = 10
+
+    # Compound condition
+    while a < 5 and b > 5:
+        a += 1
+        b -= 1
+
+    # a goes 0->5, b goes 10->5, loop stops when a=5 (a<5 is false)
+    print(a)
+    print(b)
+
+    # Or condition
+    mut x: int32 = 0
+    mut y: int32 = 0
+    # This will loop as long as either x < 3 or y < 3
+    while x < 3 or y < 3:
+        x += 1
+        y += 1
+    # Both reach 3 simultaneously
+    print(x)
+    print(y)
+
+    # Not condition
+    mut done = false
+    mut count: int32 = 0
+    while not done:
+        count += 1
+        if count >= 5:
+            done = true
+    print(count)
+
+    return 0

@@ -1,0 +1,6 @@
+def bad() -> Result[int32, String]:
+    return Result.Ok("wrong type")
+
+def main() -> int32:
+    print("should not compile")
+    return 0

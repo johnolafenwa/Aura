@@ -1,0 +1,18 @@
+# Test: generic class containing a generic enum field
+
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+class Container[T]:
+    value: Maybe[T]
+
+def main() -> int32:
+    c1: Container[int32] = Container(value=Maybe.Just(42))
+    match c1.value:
+        case Maybe.Just(v):
+            print(v)
+        case Maybe.Nothing:
+            print(0)
+
+    return 0

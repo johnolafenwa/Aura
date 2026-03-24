@@ -112,7 +112,7 @@ impl Parser {
     fn parse_class(&mut self, public: bool) -> Result<ClassDecl> {
         let span = self.expect_keyword(TokenKind::KwClass)?.span;
         let name = self.expect_identifier()?;
-        let (type_params, _) = self.parse_optional_type_params(false)?;
+        let (type_params, type_param_bounds) = self.parse_optional_type_params(true)?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
         self.expect_simple(TokenKind::Indent)?;
@@ -146,6 +146,7 @@ impl Parser {
             public,
             name,
             type_params,
+            type_param_bounds,
             fields,
             methods,
             span,
@@ -155,7 +156,7 @@ impl Parser {
     fn parse_enum(&mut self, public: bool) -> Result<EnumDecl> {
         let span = self.expect_keyword(TokenKind::KwEnum)?.span;
         let name = self.expect_identifier()?;
-        let (type_params, _) = self.parse_optional_type_params(false)?;
+        let (type_params, type_param_bounds) = self.parse_optional_type_params(true)?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
         self.expect_simple(TokenKind::Indent)?;
@@ -175,6 +176,7 @@ impl Parser {
             public,
             name,
             type_params,
+            type_param_bounds,
             variants,
             span,
         })
@@ -275,6 +277,10 @@ impl Parser {
                 self.bump();
                 continue;
             }
+            if self.at_simple(&TokenKind::KwPass) {
+                self.parse_pass_stmt()?;
+                continue;
+            }
             methods.push(self.parse_trait_method_signature()?);
         }
 
@@ -301,6 +307,10 @@ impl Parser {
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
             if self.at_simple(&TokenKind::Newline) {
                 self.bump();
+                continue;
+            }
+            if self.at_simple(&TokenKind::KwPass) {
+                self.parse_pass_stmt()?;
                 continue;
             }
             methods.push(self.parse_function_with_receiver(true, false)?);
@@ -348,7 +358,10 @@ impl Parser {
     fn parse_optional_type_params(
         &mut self,
         allow_bounds: bool,
-    ) -> Result<(Vec<String>, std::collections::BTreeMap<String, Vec<TypeRef>>)> {
+    ) -> Result<(
+        Vec<String>,
+        std::collections::BTreeMap<String, Vec<TypeRef>>,
+    )> {
         let mut type_params = Vec::new();
         let mut bounds = std::collections::BTreeMap::new();
         if self.eat_simple(&TokenKind::LBracket).is_none() {
@@ -389,7 +402,7 @@ impl Parser {
 
         loop {
             if allow_receiver && receiver.is_none() {
-                if self.at_simple(&TokenKind::KwBorrow) {
+                if self.at_borrow_receiver_start() {
                     self.bump();
                     let receiver_kind = if self.eat_simple(&TokenKind::KwMut).is_some() {
                         ReceiverKind::BorrowMut
@@ -410,7 +423,7 @@ impl Parser {
                     continue;
                 }
 
-                if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "self") {
+                if self.at_value_receiver_start() {
                     self.bump();
                     receiver = Some(ReceiverKind::Value);
                     if self.eat_simple(&TokenKind::Comma).is_none() {
@@ -421,8 +434,30 @@ impl Parser {
             }
 
             let span = self.current_span();
-            let name = self.expect_identifier()?;
+            let mut passing = ReceiverKind::Value;
+            let name = if self.eat_simple(&TokenKind::KwBorrow).is_some() {
+                passing = if self.eat_simple(&TokenKind::KwMut).is_some() {
+                    ReceiverKind::BorrowMut
+                } else {
+                    ReceiverKind::Borrow
+                };
+                self.expect_identifier()?
+            } else {
+                self.expect_identifier()?
+            };
             self.expect_simple(TokenKind::Colon)?;
+            if passing == ReceiverKind::Value && self.eat_simple(&TokenKind::KwBorrow).is_some() {
+                passing = if self.eat_simple(&TokenKind::KwMut).is_some() {
+                    ReceiverKind::BorrowMut
+                } else {
+                    ReceiverKind::Borrow
+                };
+            } else if passing != ReceiverKind::Value && self.at_simple(&TokenKind::KwBorrow) {
+                return Err(Diagnostic::at(
+                    self.current_span(),
+                    "parameter borrow mode may be written either before the name or after the colon, not both",
+                ));
+            }
             let ty = self.parse_type()?;
             let default = if self.eat_simple(&TokenKind::Equal).is_some() {
                 Some(self.parse_expr()?)
@@ -431,6 +466,7 @@ impl Parser {
             };
             params.push(Param {
                 name,
+                passing,
                 ty,
                 default,
                 span,
@@ -442,6 +478,28 @@ impl Parser {
         }
 
         Ok((receiver, params))
+    }
+
+    fn at_borrow_receiver_start(&self) -> bool {
+        if !self.at_simple(&TokenKind::KwBorrow) {
+            return false;
+        }
+
+        let mut index = self.index + 1;
+        if matches!(self.peek_kind_at(index), Some(TokenKind::KwMut)) {
+            index += 1;
+        }
+        matches!(
+            (self.peek_kind_at(index), self.peek_kind_at(index + 1)),
+            (Some(TokenKind::Identifier(name)), next) if name == "self" && !matches!(next, Some(TokenKind::Colon))
+        )
+    }
+
+    fn at_value_receiver_start(&self) -> bool {
+        matches!(
+            (self.current_kind(), self.peek_kind_at(self.index + 1)),
+            (TokenKind::Identifier(name), next) if name == "self" && !matches!(next, Some(TokenKind::Colon))
+        )
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt> {
@@ -674,6 +732,10 @@ impl Parser {
 
     fn parse_pattern(&mut self) -> Result<Pattern> {
         let span = self.current_span();
+        if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "_") {
+            self.bump();
+            return Ok(Pattern::Wildcard(span));
+        }
         let enum_name = self.expect_identifier()?;
         self.expect_simple(TokenKind::Dot)?;
         let variant_name = self.expect_identifier()?;

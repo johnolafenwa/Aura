@@ -1,0 +1,12 @@
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+def main() -> int32:
+    value: Maybe[int32] = Maybe.Nothing
+    match value:
+        case Maybe.Nothing:
+            print(0)
+        case Maybe.Just(inner):
+            print(inner)
+    return 0

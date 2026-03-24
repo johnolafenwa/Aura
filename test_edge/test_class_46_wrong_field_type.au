@@ -1,0 +1,8 @@
+# Edge: constructing with wrong field types
+class Record:
+    name: String
+    age: int32
+
+def main() -> int32:
+    r = Record(name=42, age="hello")
+    return 0

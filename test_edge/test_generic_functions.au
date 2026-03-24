@@ -1,0 +1,39 @@
+def identity[T](value: T) -> T:
+    return value
+
+def first[T](a: T, b: T) -> T:
+    return a
+
+def second[T](a: T, b: T) -> T:
+    return b
+
+def make_box[T](value: T) -> Box[T]:
+    return Box(value=value)
+
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def main() -> int32:
+    # identity with different types
+    print(identity(42))
+    print(identity("hello"))
+    print(identity(true))
+    print(identity(3.14))
+
+    # first / second
+    print(first(10, 20))
+    print(second(10, 20))
+    print(first("a", "b"))
+    print(second("a", "b"))
+
+    # generic function returning generic class
+    b: Box[int32] = make_box(99)
+    print(b.get())
+
+    b2: Box[String] = make_box("boxed")
+    print(b2.get())
+
+    return 0

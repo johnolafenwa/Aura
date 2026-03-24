@@ -1,0 +1,5 @@
+def main():
+    a: uint32 = 5
+    b: uint32 = 10
+    c: uint32 = a - b
+    print(c)

@@ -1,0 +1,14 @@
+# Test empty trait (marker trait)
+trait Marker:
+    pass
+
+class Foo:
+    value: int32
+
+impl Marker for Foo:
+    pass
+
+def main() -> int32:
+    f = Foo(value=1)
+    print(f.value)
+    return 0

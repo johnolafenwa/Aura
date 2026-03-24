@@ -1,0 +1,23 @@
+# Test: chaining trait method calls
+
+trait Describable:
+    def describe(borrow self) -> String
+
+class Item:
+    name: String
+
+impl Describable for Item:
+    def describe(borrow self) -> String:
+        return self.name
+
+class Container:
+    item: Item
+
+    def get_item(borrow self) -> Item:
+        return self.item
+
+def main() -> int32:
+    c = Container(item=Item(name="test"))
+    # Chain: c.get_item().describe()
+    print(c.get_item().describe())
+    return 0

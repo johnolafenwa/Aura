@@ -1,0 +1,25 @@
+# Test: generic enum with trait-bounded type parameter
+
+trait Printable:
+    def to_str(borrow self) -> String
+
+enum Holder[T: Printable]:
+    Has(T)
+    Empty
+
+class Label:
+    text: String
+
+impl Printable for Label:
+    def to_str(borrow self) -> String:
+        return self.text
+
+def main() -> int32:
+    l = Label(text="test")
+    h: Holder[Label] = Holder.Has(l)
+    match h:
+        case Holder.Has(v):
+            print(v.to_str())
+        case Holder.Empty:
+            print("empty")
+    return 0

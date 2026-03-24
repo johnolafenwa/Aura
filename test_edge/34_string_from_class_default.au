@@ -1,0 +1,19 @@
+class Entry:
+    key: String
+    value: String = "default"
+
+def main() -> int32:
+    e1 = Entry(key="name")
+    print(e1.key)
+    print(e1.value)
+
+    e2 = Entry(key="age", value="30")
+    print(e2.key)
+    print(e2.value)
+
+    if e1.value == "default":
+        print("default ok")
+    else:
+        print("default fail")
+
+    return 0

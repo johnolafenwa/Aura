@@ -1,0 +1,6 @@
+def main():
+    a: int8 = 127
+    print(a)
+
+    b: int8 = -128
+    print(b)

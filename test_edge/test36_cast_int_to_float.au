@@ -1,0 +1,9 @@
+def main():
+    a = 42 as float64
+    print(a)
+
+    b = -10 as float64
+    print(b)
+
+    c = 0 as float64
+    print(c)

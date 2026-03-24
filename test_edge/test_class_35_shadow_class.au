@@ -1,0 +1,9 @@
+# Edge: variable name same as class name
+class Point:
+    x: int32
+    y: int32
+
+def main() -> int32:
+    Point = Point(x=1, y=2)
+    print(Point.x)
+    return 0

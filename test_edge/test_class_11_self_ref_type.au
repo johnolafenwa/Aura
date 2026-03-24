@@ -1,0 +1,9 @@
+# Edge: class with a field of its own type (recursive struct)
+# This should ideally be rejected at compile time (infinite size)
+class Node:
+    value: int32
+    next: Node
+
+def main() -> int32:
+    print("should not reach here")
+    return 0

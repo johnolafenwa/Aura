@@ -1,0 +1,8 @@
+def main():
+    a: int32 = -7
+    b: int32 = 2
+    print(a / b)
+
+    c: int32 = 7
+    d: int32 = -2
+    print(c / d)

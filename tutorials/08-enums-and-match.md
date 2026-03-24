@@ -41,7 +41,7 @@ bad = ParseResult.Failure("bad")
 
 ## Matching Exhaustively
 
-Aurora's current `match` support requires explicit coverage of every enum variant:
+Aurora's current `match` support requires coverage of every enum variant, either explicitly or through a final wildcard arm:
 
 ```python
 def value_or_zero(result: ParseResult) -> int32:
@@ -54,6 +54,16 @@ def value_or_zero(result: ParseResult) -> int32:
 ```
 
 If you leave out a variant, the checker reports a non-exhaustive match error.
+
+Wildcard arms are written with `case _:`:
+
+```python
+match light:
+    case TrafficLight.Red:
+        print("stop")
+    case _:
+        print("not red")
+```
 
 ## Payload Bindings
 
@@ -72,16 +82,16 @@ The bootstrap compiler currently supports:
 - zero-payload and single-payload variants
 - statement-form `match`
 - variant patterns of the form `Enum.Variant` and `Enum.Variant(name)`
+- wildcard patterns with `case _:`
 
 It does not yet support:
 
 - borrowed `match`
 - nested patterns
-- wildcard patterns
 - expression-form `match`
 - keyword arguments for variant payload construction
 - multi-payload variants
 
 Built-in generic enums such as `Result[T, E]`, `Option[T]`, and `SendError[T]` are covered in the next chapter.
 
-See [examples/enums/result_match.au](../examples/enums/result_match.au).
+See [examples/enums/result_match.au](../examples/enums/result_match.au) and [examples/enums/wildcard_match.au](../examples/enums/wildcard_match.au).

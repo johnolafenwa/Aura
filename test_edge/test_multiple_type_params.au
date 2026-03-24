@@ -1,0 +1,38 @@
+class Pair[A, B]:
+    first: A
+    second: B
+
+    def get_first(borrow self) -> A:
+        return self.first
+
+    def get_second(borrow self) -> B:
+        return self.second
+
+class Triple[A, B, C]:
+    x: A
+    y: B
+    z: C
+
+def main() -> int32:
+    # Pair of int32 and String
+    p1 = Pair(first=42, second="hello")
+    print(p1.get_first())
+    print(p1.get_second())
+
+    # Pair of String and bool
+    p2 = Pair(first="ok", second=true)
+    print(p2.get_first())
+    print(p2.get_second())
+
+    # Pair of int32 and int32
+    p3 = Pair(first=1, second=2)
+    print(p3.get_first())
+    print(p3.get_second())
+
+    # Triple
+    t1 = Triple(x=1, y="two", z=3.0)
+    print(t1.x)
+    print(t1.y)
+    print(t1.z)
+
+    return 0

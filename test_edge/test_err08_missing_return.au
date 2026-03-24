@@ -1,0 +1,6 @@
+def compute(a: int32, b: int32) -> int32:
+    c = a + b
+
+def main() -> int32:
+    print(compute(a=1, b=2))
+    return 0

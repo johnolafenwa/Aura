@@ -1,0 +1,18 @@
+def main() -> int32:
+    neg: float64 = -3.7
+    truncated = neg as int32
+    print(truncated)
+
+    large: float64 = 2147483647.0
+    large_int = large as int32
+    print(large_int)
+
+    small_neg: float64 = -0.5
+    small_trunc = small_neg as int32
+    print(small_trunc)
+
+    zero_f: float64 = -0.0
+    zero_i = zero_f as int32
+    print(zero_i)
+
+    return 0

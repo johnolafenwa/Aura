@@ -1,0 +1,8 @@
+# Edge: what other names are reserved? Try Option
+class Option:
+    value: int32
+
+def main() -> int32:
+    o = Option(value=42)
+    print(o.value)
+    return 0

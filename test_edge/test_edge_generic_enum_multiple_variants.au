@@ -1,0 +1,35 @@
+# Test generic enum with many variants
+
+enum Status[T]:
+    Pending(T)
+    Active(T)
+    Completed(T)
+    Failed(String)
+
+def check_status(s: Status[int32]):
+    match s:
+        case Status.Pending(v):
+            print("pending")
+            print(v)
+        case Status.Active(v):
+            print("active")
+            print(v)
+        case Status.Completed(v):
+            print("completed")
+            print(v)
+        case Status.Failed(msg):
+            print("failed")
+            print(msg)
+
+def main() -> int32:
+    s1: Status[int32] = Status.Pending(1)
+    s2: Status[int32] = Status.Active(2)
+    s3: Status[int32] = Status.Completed(3)
+    s4: Status[int32] = Status.Failed("error")
+
+    check_status(s1)
+    check_status(s2)
+    check_status(s3)
+    check_status(s4)
+
+    return 0

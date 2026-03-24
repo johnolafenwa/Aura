@@ -1,0 +1,33 @@
+enum Message:
+    Text(String)
+    Number(int32)
+    Empty
+
+def describe(msg: Message) -> String:
+    match msg:
+        case Message.Text(content):
+            return "text: " + content
+        case Message.Number(n):
+            return "number"
+        case Message.Empty:
+            return "empty"
+
+def main() -> int32:
+    m1 = Message.Text("hello world")
+    m2 = Message.Number(42)
+    m3 = Message.Empty
+
+    print(describe(m1))
+    print(describe(m2))
+    print(describe(m3))
+
+    m4 = Message.Text("another string")
+    match m4:
+        case Message.Text(s):
+            print(s)
+        case Message.Number(n):
+            print(n)
+        case Message.Empty:
+            print("empty")
+
+    return 0

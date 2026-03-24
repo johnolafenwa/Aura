@@ -1,0 +1,70 @@
+# Test trait methods with various return types
+
+trait Stringifier:
+    def to_str(borrow self) -> String
+
+trait Counter:
+    def count(borrow self) -> int32
+
+trait Scorer:
+    def score(borrow self) -> float64
+
+trait Checker:
+    def is_ok(borrow self) -> bool
+
+class Item:
+    name: String
+    qty: int32
+    rating: float64
+    active: bool
+
+impl Stringifier for Item:
+    def to_str(borrow self) -> String:
+        return self.name
+
+impl Counter for Item:
+    def count(borrow self) -> int32:
+        return self.qty
+
+impl Scorer for Item:
+    def score(borrow self) -> float64:
+        return self.rating
+
+impl Checker for Item:
+    def is_ok(borrow self) -> bool:
+        return self.active
+
+def print_str[T: Stringifier](item: T):
+    print(item.to_str())
+
+def print_count[T: Counter](item: T):
+    print(item.count())
+
+def print_score[T: Scorer](item: T):
+    print(item.score())
+
+def print_check[T: Checker](item: T):
+    print(item.is_ok())
+
+def main() -> int32:
+    i = Item(name="widget", qty=10, rating=4.5, active=true)
+    # direct method calls
+    print(i.to_str())
+    print(i.count())
+    print(i.score())
+    print(i.is_ok())
+
+    # via trait-bounded functions
+    i2 = Item(name="gadget", qty=3, rating=2.1, active=false)
+    print_str(item=i2)
+
+    i3 = Item(name="tool", qty=7, rating=3.3, active=true)
+    print_count(item=i3)
+
+    i4 = Item(name="gear", qty=1, rating=5.0, active=false)
+    print_score(item=i4)
+
+    i5 = Item(name="part", qty=0, rating=0.0, active=true)
+    print_check(item=i5)
+
+    return 0

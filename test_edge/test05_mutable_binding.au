@@ -1,0 +1,5 @@
+def main():
+    mut x: int32 = 42
+    print(x)
+    x = 100
+    print(x)

@@ -1,0 +1,20 @@
+def greet(name: String) -> String:
+    return "hello " + name
+
+def shout(msg: String) -> String:
+    return msg + "!"
+
+def chain(a: String, b: String) -> String:
+    return a + " and " + b
+
+def main() -> int32:
+    result = greet("aurora")
+    print(result)
+
+    loud = shout("wow")
+    print(loud)
+
+    both = chain("alpha", "beta")
+    print(both)
+
+    return 0

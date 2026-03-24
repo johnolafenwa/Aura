@@ -1,0 +1,4 @@
+def main():
+    a: int32 = -5
+    b = a as uint32
+    print(b)

@@ -102,6 +102,10 @@ const stringCloneSource = fs.readFileSync(
   path.join(__dirname, "../../../examples/strings/string_clone.au"),
   "utf8"
 );
+const borrowParametersSource = fs.readFileSync(
+  path.join(__dirname, "../../../examples/basics/borrow_parameters.au"),
+  "utf8"
+);
 
 test("analyzeDocument finds classes and functions", () => {
   const moduleInfo = analyzeDocument(pointSource);
@@ -197,6 +201,27 @@ test("hover resolves self inside method bodies", () => {
 
   assert.ok(hover);
   assert.match(hover.value, /param self: Counter/);
+});
+
+test("analysis tracks free-function borrowed parameters in both supported spellings", () => {
+  const moduleInfo = analyzeDocument(borrowParametersSource);
+  const readFunction = moduleInfo.functions.get("read");
+  const showFunction = moduleInfo.functions.get("show");
+
+  assert.ok(readFunction);
+  assert.ok(showFunction);
+  assert.equal(readFunction.params[0].type, "Counter");
+  assert.equal(showFunction.params[0].type, "Counter");
+
+  const lineIndex = borrowParametersSource
+    .split("\n")
+    .findIndex((line) => line.includes("return counter.value"));
+  const lineText = borrowParametersSource.split("\n")[lineIndex];
+  const character = lineText.indexOf("counter");
+  const hover = hoverForPosition(borrowParametersSource, lineIndex, character);
+
+  assert.ok(hover);
+  assert.match(hover.value, /param counter: Counter/);
 });
 
 test("document symbols include enums and variants", () => {

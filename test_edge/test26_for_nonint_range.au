@@ -1,0 +1,5 @@
+# This should fail: non-integer argument to range
+def main() -> int32:
+    for i in range(3.14):
+        print(i)
+    return 0

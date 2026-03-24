@@ -1,0 +1,14 @@
+def main() -> int32:
+    tab = "hello\tworld"
+    print(tab)
+
+    newline = "line1\nline2"
+    print(newline)
+
+    slash = "back\\slash"
+    print(slash)
+
+    quote = "say \"hi\""
+    print(quote)
+
+    return 0

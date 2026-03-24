@@ -1,0 +1,23 @@
+# Edge: every branch is pass
+def main() -> int32:
+    x: int32 = 5
+    if x > 0:
+        pass
+    elif x < 0:
+        pass
+    else:
+        pass
+
+    # For loop with only pass
+    for i in range(100):
+        pass
+
+    # While with only pass (but must eventually exit)
+    mut n: int32 = 0
+    while n < 5:
+        pass
+        n += 1
+
+    print("all pass-only blocks done")
+    print(n)
+    return 0

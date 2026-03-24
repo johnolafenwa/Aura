@@ -1,0 +1,19 @@
+class Counter:
+    value: int32
+
+def read(counter: borrow Counter) -> int32:
+    return counter.value
+
+def bump(counter: borrow mut Counter):
+    counter.value += 1
+
+def show(borrow counter: Counter) -> int32:
+    return counter.value
+
+def main() -> int32:
+    mut counter = Counter(value=41)
+    print(read(counter))
+    bump(counter)
+    print(counter.value)
+    print(show(counter))
+    return 0

@@ -1,0 +1,6 @@
+import helpers.math_utils
+
+def main() -> int32:
+    print(helpers.math_utils.add(a=3, b=7))
+    print(helpers.math_utils.multiply(a=4, b=5))
+    return 0

@@ -1,0 +1,31 @@
+# Test: using built-in Result and Option inside generic functions
+
+def try_divide(a: int32, b: int32) -> Result[int32, String]:
+    if b == 0:
+        return Result.Err("div by zero")
+    return Result.Ok(a / b)
+
+def main() -> int32:
+    r1 = try_divide(10, 2)
+    match r1:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    r2 = try_divide(10, 0)
+    match r2:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Test with Option
+    o1: Option[String] = Option.Some("present")
+    match o1:
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    return 0

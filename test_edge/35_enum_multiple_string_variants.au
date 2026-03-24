@@ -1,0 +1,26 @@
+enum Token:
+    Word(String)
+    Punct(String)
+    Whitespace
+
+def show(t: Token) -> String:
+    match t:
+        case Token.Word(w):
+            return "word(" + w + ")"
+        case Token.Punct(p):
+            return "punct(" + p + ")"
+        case Token.Whitespace:
+            return "ws"
+
+def main() -> int32:
+    t1 = Token.Word("hello")
+    t2 = Token.Punct(",")
+    t3 = Token.Whitespace
+    t4 = Token.Word("world")
+
+    print(show(t1))
+    print(show(t2))
+    print(show(t3))
+    print(show(t4))
+
+    return 0

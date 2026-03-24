@@ -1,0 +1,12 @@
+# BUG: A generic enum's unit variant (no payload) loses its type parameter.
+# Maybe.Nothing is inferred as Maybe instead of Maybe[int32].
+
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+def main() -> int32:
+    # This fails: "binding `m` has annotated type `Maybe[int32]`, but value has type `Maybe`"
+    m: Maybe[int32] = Maybe.Nothing
+    print(0)
+    return 0

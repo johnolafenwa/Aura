@@ -1,0 +1,14 @@
+def main() -> int32:
+    ch: Channel[int32] = channel()
+
+    select:
+        case value = ch.recv():
+            print("error: should not recv on empty channel")
+        case after(10ms):
+            print("timeout 1 ok")
+
+    select:
+        case after(5ms):
+            print("timeout 2 ok")
+
+    return 0

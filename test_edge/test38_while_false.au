@@ -1,0 +1,14 @@
+# Test: while false (body should never execute)
+def main() -> int32:
+    mut x: int32 = 0
+    while false:
+        x = 999
+        print("should not print")
+    print(x)
+
+    # while with immediately false condition
+    while 1 > 2:
+        print("impossible")
+
+    print("survived")
+    return 0

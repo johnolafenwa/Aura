@@ -1,0 +1,12 @@
+enum Many:
+    One
+    Two
+
+def main() -> int32:
+    value = Many.Two
+    match value:
+        case Many.One:
+            print(1)
+        case _:
+            print(2)
+    return 0

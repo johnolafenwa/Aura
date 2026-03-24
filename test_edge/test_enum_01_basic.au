@@ -1,0 +1,34 @@
+enum Color:
+    Red
+    Green
+    Blue
+
+enum Shape:
+    Circle(int32)
+    Rectangle(int32)
+
+def describe_color(c: Color) -> String:
+    match c:
+        case Color.Red:
+            return "red"
+        case Color.Green:
+            return "green"
+        case Color.Blue:
+            return "blue"
+
+def describe_shape(s: Shape) -> String:
+    match s:
+        case Shape.Circle(radius):
+            print(radius)
+            return "circle"
+        case Shape.Rectangle(side):
+            print(side)
+            return "rectangle"
+
+def main() -> int32:
+    print(describe_color(Color.Red))
+    print(describe_color(Color.Green))
+    print(describe_color(Color.Blue))
+    print(describe_shape(Shape.Circle(5)))
+    print(describe_shape(Shape.Rectangle(10)))
+    return 0

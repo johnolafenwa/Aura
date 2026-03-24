@@ -1,0 +1,22 @@
+# Test: accessing a field and calling a method with the same purpose on generic class
+class Wrapper[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def main() -> int32:
+    # Access field directly
+    w1 = Wrapper(value=42)
+    print(w1.value)
+
+    # Access via method
+    w2 = Wrapper(value="hello")
+    print(w2.get())
+
+    # Chained field access on nested generic
+    w3: Wrapper[Wrapper[int32]] = Wrapper(value=Wrapper(value=99))
+    print(w3.value.value)
+    print(w3.value.get())
+
+    return 0

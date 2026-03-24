@@ -1,0 +1,15 @@
+enum Val:
+    A(int32)
+    B(int32)
+
+def process(v: Val) -> int32:
+    match v:
+        case Val.A(x):
+            return x + 1
+        case Val.B(x):
+            return x + 2
+
+def main() -> int32:
+    print(process(Val.A(10)))
+    print(process(Val.B(10)))
+    return 0

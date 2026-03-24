@@ -1,0 +1,25 @@
+# Collatz conjecture - complex loop with conditionals
+def collatz_steps(n: int32) -> int32:
+    mut current: int32 = n
+    mut steps: int32 = 0
+    while current != 1:
+        if current % 2 == 0:
+            current = current / 2
+        else:
+            current = current * 3 + 1
+        steps += 1
+    return steps
+
+def main() -> int32:
+    # Known Collatz step counts:
+    # 1 -> 0 steps
+    # 2 -> 1 step (2->1)
+    # 3 -> 7 steps (3->10->5->16->8->4->2->1)
+    # 6 -> 8 steps
+    # 27 -> 111 steps
+    print(collatz_steps(1))
+    print(collatz_steps(2))
+    print(collatz_steps(3))
+    print(collatz_steps(6))
+    print(collatz_steps(27))
+    return 0

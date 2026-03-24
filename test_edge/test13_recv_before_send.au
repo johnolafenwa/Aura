@@ -1,0 +1,16 @@
+def delayed_sender(out: Channel[int32]):
+    sleep(10ms)
+    out.send(55)
+    out.close()
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    spawn detached delayed_sender(ch.clone())
+
+    match ch.recv():
+        case Option.Some(value):
+            print(value)
+        case Option.None:
+            print("error: got None")
+
+    return 0

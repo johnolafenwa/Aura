@@ -1,0 +1,10 @@
+# Edge: class with only methods, no fields (except pass)
+class Greeter:
+    pass
+
+    def hello() -> String:
+        return "Hello, World!"
+
+def main() -> int32:
+    print(Greeter.hello())
+    return 0

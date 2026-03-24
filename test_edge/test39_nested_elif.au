@@ -1,0 +1,35 @@
+# Test: elif inside elif inside if
+def categorize(x: int32, y: int32) -> String:
+    if x > 0:
+        if y > 0:
+            return "Q1"
+        elif y < 0:
+            return "Q4"
+        else:
+            return "positive x-axis"
+    elif x < 0:
+        if y > 0:
+            return "Q2"
+        elif y < 0:
+            return "Q3"
+        else:
+            return "negative x-axis"
+    else:
+        if y > 0:
+            return "positive y-axis"
+        elif y < 0:
+            return "negative y-axis"
+        else:
+            return "origin"
+
+def main() -> int32:
+    print(categorize(1, 1))
+    print(categorize(1, -1))
+    print(categorize(1, 0))
+    print(categorize(-1, 1))
+    print(categorize(-1, -1))
+    print(categorize(-1, 0))
+    print(categorize(0, 1))
+    print(categorize(0, -1))
+    print(categorize(0, 0))
+    return 0

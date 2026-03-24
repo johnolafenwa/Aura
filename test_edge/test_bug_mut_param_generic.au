@@ -1,0 +1,13 @@
+# BUG: mut parameters in generic functions fail to parse
+
+class Box[T]:
+    value: T
+
+# Test 1: mut param in unbounded generic function
+def set_value[T](mut box: Box[T], new_value: T):
+    box.value = new_value
+
+def main() -> int32:
+    mut b = Box(value=1)
+    print(b.value)
+    return 0

@@ -1,0 +1,6 @@
+from helpers.greeter import greet
+
+def main() -> int32:
+    message = greet(name="Aurora")
+    print(message)
+    return 0

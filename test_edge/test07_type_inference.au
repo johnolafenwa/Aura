@@ -1,0 +1,14 @@
+def main():
+    a = 42
+    b = 3.14
+    c = a + 10
+    d = b * 2.0
+    e = true
+    f = "hello"
+
+    print(a)
+    print(b)
+    print(c)
+    print(d)
+    print(e)
+    print(f)

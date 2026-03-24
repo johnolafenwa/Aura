@@ -1,0 +1,7 @@
+class Empty:
+    pass
+
+def main() -> int32:
+    e = Empty()
+    print("created empty class")
+    return 0

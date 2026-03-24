@@ -1,0 +1,31 @@
+def sender_a(out: Channel[int32]):
+    out.send(1)
+    out.close()
+
+def sender_b(out: Channel[int32]):
+    out.send(2)
+    out.close()
+
+def main() -> int32:
+    ch_a: Channel[int32] = channel()
+    ch_b: Channel[int32] = channel()
+
+    spawn detached sender_a(ch_a.clone())
+    spawn detached sender_b(ch_b.clone())
+
+    mut total: int32 = 0
+
+    match ch_a.recv():
+        case Option.Some(value):
+            total += value
+        case Option.None:
+            print("error a")
+
+    match ch_b.recv():
+        case Option.Some(value):
+            total += value
+        case Option.None:
+            print("error b")
+
+    print(total)
+    return 0

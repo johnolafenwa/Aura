@@ -1,0 +1,41 @@
+def main() -> int32:
+    a = true
+    b = false
+    c = true
+    d = false
+
+    # Test: a and (b or c) and not d => true and (false or true) and not false => true and true and true => true
+    if a and (b or c) and not d:
+        print("test1: pass")
+    else:
+        print("test1: FAIL")
+
+    # Test: not a or b => not true or false => false or false => false
+    if not a or b:
+        print("test2: FAIL")
+    else:
+        print("test2: pass")
+
+    # Test: (a or b) and (c or d) => (true or false) and (true or false) => true and true => true
+    if (a or b) and (c or d):
+        print("test3: pass")
+    else:
+        print("test3: FAIL")
+
+    # Test: not (a and c) => not (true and true) => not true => false
+    if not (a and c):
+        print("test4: FAIL")
+    else:
+        print("test4: pass")
+
+    # Test: nested not not
+    if not not a:
+        print("test5: pass")
+    else:
+        print("test5: FAIL")
+
+    # Test boolean variable assignment from expression
+    result = a and b or c
+    print(result)
+
+    return 0

@@ -1,0 +1,45 @@
+trait Named:
+    def name(borrow self) -> String
+
+trait Aged:
+    def age(borrow self) -> int32
+
+trait Tagged:
+    def tag(borrow self) -> String
+
+class Person:
+    n: String
+    a: int32
+    t: String
+
+impl Named for Person:
+    def name(borrow self) -> String:
+        return self.n
+
+impl Aged for Person:
+    def age(borrow self) -> int32:
+        return self.a
+
+impl Tagged for Person:
+    def tag(borrow self) -> String:
+        return self.t
+
+# Two bounds
+def describe[T: Named + Aged](item: T):
+    print(item.name())
+    print(item.age())
+
+# Three bounds
+def full_describe[T: Named + Aged + Tagged](item: T):
+    print(item.name())
+    print(item.age())
+    print(item.tag())
+
+def main() -> int32:
+    p1 = Person(n="Alice", a=30, t="admin")
+    describe(item=p1)
+
+    p2 = Person(n="Bob", a=25, t="user")
+    full_describe(item=p2)
+
+    return 0

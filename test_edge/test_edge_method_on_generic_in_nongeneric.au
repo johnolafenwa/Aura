@@ -1,0 +1,23 @@
+# Test: calling method on a concrete-typed generic class in non-generic function
+# (should work - the generic type is fully known)
+
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def extract_int(box: Box[int32]) -> int32:
+    return box.get()
+
+def extract_str(box: Box[String]) -> String:
+    return box.get()
+
+def main() -> int32:
+    b1 = Box(value=42)
+    print(extract_int(box=b1))
+
+    b2 = Box(value="hello")
+    print(extract_str(box=b2))
+
+    return 0

@@ -32,6 +32,8 @@ After the release build completes, run the binary directly:
 ./target/release/aura run examples/numbers/numeric_casts.au
 ./target/release/aura run examples/concurrency/sleep_builtin.au
 ./target/release/aura build -o ./target/aurora-point examples/point.au
+./target/release/aura build --backend direct -o ./target/aurora-direct examples/basic_addition.au
+./target/release/aura build --backend mir-runtime -o ./target/aurora-point-runtime examples/point.au
 ./target/release/aura ast examples/classes/point_distance.au
 ./target/release/aura ast-json examples/classes/point_distance.au
 ./target/release/aura mir examples/control_flow/while_break_continue.au
@@ -78,10 +80,14 @@ aura run examples/classes/point_distance.au
   - run a program through the current native MIR runtime path
   - this now includes the current explicit numeric cast surface with `expr as Type`
 - `aura build -o <output> <file.au>`
-  - compile a standalone bootstrap binary for a program
-  - this currently generates a temporary Rust launcher, invokes `rustc`, and embeds checked MIR in the produced binary
-  - it relies on the current workspace build artifacts for `aurora-compiler`
-  - file-backed programs with local module imports now build correctly through this path
+  - compile a standalone native binary for a program
+  - this accepts `--backend auto|direct|mir-runtime`
+  - `auto` is the default and tries the direct native backend first
+  - `direct` forces the new low-level native backend for the current scalar, float, plain-class, and immutable-method subset
+  - `mir-runtime` forces the runtime-linked MIR artifact backend
+  - the runtime-linked backend lowers the program to checked MIR, embeds the serialized MIR plus source context in a native launcher, and links it against a compiled Aurora runtime library
+  - it relies on Cargo/Rust and a host C compiler for the current build step
+  - file-backed and stdin-backed programs with local module imports now build correctly through this path
 - `aura ast <file.au>`
   - print the parsed syntax tree
 - `aura ast-json <file.au>`
@@ -130,15 +136,16 @@ The supported build path today is:
 1. build once with `cargo build -p aura --release`
 2. use the resulting `aura` binary directly after that
 
-The new `aura build` command is also still a bootstrap path:
+The current `aura build` matrix is:
 
-1. it produces a standalone native binary
-2. it does that by compiling a generated Rust launcher linked against `aurora-compiler`
-3. the generated launcher embeds checked MIR and executes it directly through `run_mir(...)`
-4. it is not yet the final MIR-native backend/codegen path
+1. `--backend auto` is the default
+2. `--backend direct` uses the true direct native backend for the supported scalar, float, plain-class, and immutable-method subset
+3. `--backend mir-runtime` uses the runtime-linked MIR artifact backend for the full implemented language surface
+4. built binaries no longer depend on the original `.au` source files at runtime
+5. both backend paths still need Cargo/Rust and a host C compiler during the build step
 
 The new `aura run-mir` command is now native for the current implemented surface:
 
 1. it is useful for exercising the new backend path directly
 2. it now covers the current implemented Aurora surface, including `spawn`, `select`, channels, task groups, `try`, and `with`
-3. the next backend step is replacing the bootstrap launcher approach with real MIR-native code generation
+3. the next backend step is expanding the direct native backend so fewer programs need the runtime-linked MIR artifact fallback for traits, generic data, resource cleanup, and concurrency

@@ -1,0 +1,17 @@
+# Edge: 4 levels of nesting
+class A:
+    val: int32
+
+class B:
+    a: A
+
+class C:
+    b: B
+
+class D:
+    c: C
+
+def main() -> int32:
+    d = D(c=C(b=B(a=A(val=42))))
+    print(d.c.b.a.val)
+    return 0

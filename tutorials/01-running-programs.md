@@ -11,6 +11,8 @@ cargo run -p aura -- check examples/classes/point_distance.au
 cargo run -p aura -- run examples/classes/point_distance.au
 cargo run -p aura -- run-mir examples/classes/methods.au
 cargo run -p aura -- build -o ./target/aurora-point examples/point.au
+cargo run -p aura -- build --backend direct -o ./target/aurora-direct examples/basic_addition.au
+cargo run -p aura -- build --backend mir-runtime -o ./target/aurora-point-runtime examples/point.au
 cargo run -p aura -- ast examples/classes/point_distance.au
 cargo run -p aura -- ast-json examples/classes/point_distance.au
 cargo run -p aura -- mir examples/control_flow/while_break_continue.au
@@ -26,10 +28,13 @@ cargo run -p aura -- complete --line 5 --character 11 --trigger . examples/point
   - execute it through the current native MIR runtime path
   - it now covers the current implemented Aurora surface, including `spawn`, `select`, channels, task groups, `try`, and `with`
 - `build`
-  - compile a standalone bootstrap binary
-  - the current implementation generates a temporary Rust launcher and invokes `rustc`
-  - the generated binary embeds checked MIR and runs it through the same MIR runtime used by `run-mir`
-  - this is not yet the final MIR-native backend
+  - compile a standalone native binary
+  - `--backend auto` is the default
+  - `--backend direct` forces the true direct native backend for the current scalar, float, plain-class, and immutable-method subset
+  - `--backend mir-runtime` forces the runtime-linked MIR artifact backend
+  - the runtime-linked backend lowers to checked MIR at build time, embeds that MIR in a native launcher, and links it against the Aurora runtime library
+  - the generated binary does not depend on the original `.au` source file at runtime
+  - the current build step still requires Cargo/Rust and a host C compiler
 - `ast`
   - print the parsed syntax tree
 - `ast-json`

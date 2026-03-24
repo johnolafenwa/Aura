@@ -1,0 +1,37 @@
+def main() -> int32:
+    x: int32 = 10
+    mut result: int32 = 0
+
+    if x > 0:
+        mut i: int32 = 0
+        while i < x:
+            if i % 2 == 0:
+                if i > 4:
+                    result += i * 10
+                else:
+                    result += i
+            i += 1
+
+    # even i's: 0,2,4,6,8
+    # i<=4: 0+2+4 = 6
+    # i>4: 60+80 = 140
+    # total: 146
+    print(result)
+
+    # Triple nesting: if > while > for > if
+    mut total: int32 = 0
+    if true:
+        mut k: int32 = 0
+        while k < 3:
+            for m in range(3):
+                if m > k:
+                    total += 1
+            k += 1
+
+    # k=0: m=1,2 => +2
+    # k=1: m=2 => +1
+    # k=2: none => +0
+    # total = 3
+    print(total)
+
+    return 0

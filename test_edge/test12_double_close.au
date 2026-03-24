@@ -1,0 +1,6 @@
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    ch.close()
+    ch.close()
+    print("double close ok")
+    return 0

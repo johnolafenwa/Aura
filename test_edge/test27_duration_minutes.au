@@ -1,0 +1,7 @@
+def main() -> int32:
+    select:
+        case after(1ms):
+            print("fast timeout")
+
+    print("done")
+    return 0

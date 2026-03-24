@@ -1,0 +1,21 @@
+enum Toggle:
+    On
+    Off
+
+def is_on(t: Toggle) -> bool:
+    match t:
+        case Toggle.On:
+            return true
+        case Toggle.Off:
+            return false
+
+def main() -> int32:
+    t1 = Toggle.On
+    t2 = Toggle.Off
+    if is_on(t1):
+        print("on")
+    if is_on(t2):
+        print("on")
+    else:
+        print("off")
+    return 0

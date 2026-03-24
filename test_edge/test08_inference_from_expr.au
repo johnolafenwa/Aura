@@ -1,0 +1,5 @@
+def main():
+    x: int32 = 10
+    y = x + 5
+    z = y * 2
+    print(z)

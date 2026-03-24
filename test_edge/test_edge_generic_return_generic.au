@@ -1,0 +1,32 @@
+# Test generic function returning a generic class
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def wrap[T](value: T) -> Box[T]:
+    return Box(value=value)
+
+def unwrap[T](box: Box[T]) -> T:
+    return box.value
+
+def rewrap[T](box: Box[T]) -> Box[Box[T]]:
+    return Box(value=box)
+
+def main() -> int32:
+    b1: Box[int32] = wrap(42)
+    print(b1.get())
+
+    b2: Box[String] = wrap("wrapped")
+    print(b2.get())
+
+    v1: int32 = unwrap(b1)
+    print(v1)
+
+    # Nested wrapping
+    b3: Box[int32] = wrap(99)
+    nested: Box[Box[int32]] = rewrap(b3)
+    print(nested.get().get())
+
+    return 0

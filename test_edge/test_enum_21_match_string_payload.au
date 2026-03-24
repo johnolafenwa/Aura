@@ -1,0 +1,22 @@
+enum Message:
+    Hello(String)
+    Goodbye(String)
+    Empty
+
+def greet(m: Message) -> String:
+    match m:
+        case Message.Hello(name):
+            return name
+        case Message.Goodbye(name):
+            return name
+        case Message.Empty:
+            return "nobody"
+
+def main() -> int32:
+    m1 = Message.Hello("Alice")
+    m2 = Message.Goodbye("Bob")
+    m3 = Message.Empty
+    print(greet(m1))
+    print(greet(m2))
+    print(greet(m3))
+    return 0

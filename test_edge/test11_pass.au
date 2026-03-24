@@ -1,0 +1,37 @@
+class EmptyClass:
+    pass
+
+def do_nothing():
+    pass
+
+def sometimes_act(x: int32):
+    if x > 0:
+        print("positive")
+    else:
+        pass
+
+def main() -> int32:
+    do_nothing()
+
+    # pass in if/else
+    sometimes_act(5)
+    sometimes_act(-1)
+
+    # pass in loop
+    for i in range(3):
+        if i == 1:
+            pass
+        else:
+            print(i)
+
+    # pass in while
+    mut n: int32 = 0
+    while n < 3:
+        n += 1
+        if n == 2:
+            pass
+        else:
+            print(n)
+
+    print("done")
+    return 0

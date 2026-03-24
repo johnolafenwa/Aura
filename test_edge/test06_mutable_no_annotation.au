@@ -1,0 +1,5 @@
+def main():
+    mut x = 42
+    print(x)
+    x = 100
+    print(x)

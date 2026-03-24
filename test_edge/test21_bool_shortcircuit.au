@@ -1,0 +1,50 @@
+# Test short-circuit vs eager evaluation of boolean operators
+# We use the approach: test if the RHS of and/or gets evaluated
+# by using a function that modifies a global mut
+
+# Approach: simple behavioral test - check result values are correct
+
+# false and true => false
+result1 = false and true
+print(result1)
+
+# true and false => false
+result2 = true and false
+print(result2)
+
+# true and true => true
+result3 = true and true
+print(result3)
+
+# false and false => false
+result4 = false and false
+print(result4)
+
+# true or false => true
+result5 = true or false
+print(result5)
+
+# false or true => true
+result6 = false or true
+print(result6)
+
+# false or false => false
+result7 = false or false
+print(result7)
+
+# true or true => true
+result8 = true or true
+print(result8)
+
+# not true => false
+result9 = not true
+print(result9)
+
+# not false => true
+result10 = not false
+print(result10)
+
+# Complex: not (true and false) or (false and true)
+# => not false or false => true or false => true
+result11 = not (true and false) or (false and true)
+print(result11)

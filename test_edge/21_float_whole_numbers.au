@@ -1,0 +1,19 @@
+def main() -> int32:
+    a: float64 = 1.0
+    b: float64 = 2.0
+    c: float64 = 100.0
+    d: float64 = -5.0
+    e: float64 = 0.0
+
+    print(a)
+    print(b)
+    print(c)
+    print(d)
+    print(e)
+
+    f: float64 = 1.5
+    g: float64 = 3.14
+    print(f)
+    print(g)
+
+    return 0

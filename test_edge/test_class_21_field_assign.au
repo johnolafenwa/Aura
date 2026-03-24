@@ -1,0 +1,12 @@
+# Edge: direct field assignment on a mutable binding
+class Pair:
+    first: int32
+    second: int32
+
+def main() -> int32:
+    mut p = Pair(first=1, second=2)
+    p.first = 10
+    p.second = 20
+    print(p.first)
+    print(p.second)
+    return 0

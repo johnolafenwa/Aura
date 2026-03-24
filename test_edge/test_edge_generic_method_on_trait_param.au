@@ -1,0 +1,20 @@
+# BUG TEST: calling a method on a generic class inside a generic function
+# This is related to the swap bug - method calls on generic params fail
+
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def extract[T](box: Box[T]) -> T:
+    return box.get()
+
+def main() -> int32:
+    b = Box(value=42)
+    print(extract(b))
+
+    b2 = Box(value="hello")
+    print(extract(b2))
+
+    return 0

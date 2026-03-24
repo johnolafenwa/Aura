@@ -1,0 +1,13 @@
+class Inner:
+    value: int32
+
+class Middle:
+    inner: Inner
+
+class Outer:
+    middle: Middle
+
+def main() -> int32:
+    o = Outer(middle=Middle(inner=Inner(value=99)))
+    print(o.middle.inner.value)
+    return 0

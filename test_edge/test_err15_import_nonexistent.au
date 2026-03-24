@@ -1,0 +1,4 @@
+import nonexistent.module
+
+def main() -> int32:
+    return 0

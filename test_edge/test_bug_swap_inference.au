@@ -1,0 +1,23 @@
+# BUG: calling methods on a generic parameter inside a generic function
+# fails type inference for the method's return type
+
+class Pair[A, B]:
+    first: A
+    second: B
+
+    def get_first(borrow self) -> A:
+        return self.first
+
+    def get_second(borrow self) -> B:
+        return self.second
+
+# This fails: "cannot infer type parameter `B` for method `get_second`"
+def swap[A, B](pair: Pair[A, B]) -> Pair[B, A]:
+    return Pair(first=pair.get_second(), second=pair.get_first())
+
+def main() -> int32:
+    p = Pair(first=1, second="hello")
+    swapped: Pair[String, int32] = swap(p)
+    print(swapped.first)
+    print(swapped.second)
+    return 0

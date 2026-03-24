@@ -1,0 +1,18 @@
+enum Color:
+    Red
+    Green
+    Blue
+
+def color_code(c: Color) -> int32:
+    match c:
+        case Color.Red:
+            return 1
+        case Color.Green:
+            return 2
+        case Color.Blue:
+            return 3
+
+def main() -> int32:
+    colors_sum = color_code(Color.Red) + color_code(Color.Green) + color_code(Color.Blue)
+    print(colors_sum)
+    return 0

@@ -1,0 +1,24 @@
+# Test: if without else or elif
+def main() -> int32:
+    x: int32 = 5
+
+    # Standalone if
+    if x > 0:
+        print("positive")
+
+    # If followed by unrelated code
+    if x > 10:
+        print("big")
+    print("after if")
+
+    # Multiple consecutive standalone ifs
+    if x > 0:
+        print("a")
+    if x > 1:
+        print("b")
+    if x > 2:
+        print("c")
+    if x > 10:
+        print("d")
+
+    return 0

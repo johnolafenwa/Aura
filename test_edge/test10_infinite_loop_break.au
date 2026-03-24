@@ -1,0 +1,24 @@
+def main() -> int32:
+    # Classic infinite loop with break
+    mut counter: int32 = 0
+    while true:
+        counter += 1
+        if counter == 10:
+            break
+
+    print(counter)
+
+    # Infinite loop with complex exit condition
+    mut a: int32 = 1
+    mut b: int32 = 1
+    while true:
+        mut temp: int32 = a + b
+        a = b
+        b = temp
+        if b > 50:
+            break
+
+    # Fibonacci: 1,1,2,3,5,8,13,21,34,55 -> b stops at 55
+    print(b)
+
+    return 0

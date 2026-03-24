@@ -1,0 +1,27 @@
+# Test chaining method calls on generic types
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+class Pair[A, B]:
+    first: A
+    second: B
+
+    def get_first(borrow self) -> A:
+        return self.first
+
+    def get_second(borrow self) -> B:
+        return self.second
+
+def main() -> int32:
+    # Chain: Box containing Pair, access Pair's fields via methods
+    p = Pair(first=10, second=20)
+    b: Box[Pair[int32, int32]] = Box(value=p)
+
+    # This chains: b.get() returns Pair, then .first field access
+    print(b.get().first)
+    print(b.get().second)
+
+    return 0

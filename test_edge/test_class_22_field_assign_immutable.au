@@ -1,0 +1,10 @@
+# Edge: field assignment on an immutable binding (should be error)
+class Pair:
+    first: int32
+    second: int32
+
+def main() -> int32:
+    p = Pair(first=1, second=2)
+    p.first = 10
+    print(p.first)
+    return 0

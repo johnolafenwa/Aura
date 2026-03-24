@@ -1,0 +1,42 @@
+# Custom generic enums (separate from built-in Result/Option)
+# Note: user-defined unit variant (Nothing) bug, so we test payload variants
+
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+enum Either[L, R]:
+    Left(L)
+    Right(R)
+
+def describe_either(value: Either[int32, String]):
+    match value:
+        case Either.Left(n):
+            print(n)
+        case Either.Right(s):
+            print(s)
+
+def main() -> int32:
+    # Maybe with int32 - Just variant
+    m1: Maybe[int32] = Maybe.Just(42)
+    match m1:
+        case Maybe.Just(v):
+            print(v)
+        case Maybe.Nothing:
+            print(0)
+
+    # Maybe with String
+    m3: Maybe[String] = Maybe.Just("found")
+    match m3:
+        case Maybe.Just(v):
+            print(v)
+        case Maybe.Nothing:
+            print("default")
+
+    # Either
+    e1: Either[int32, String] = Either.Left(10)
+    e2: Either[int32, String] = Either.Right("right")
+    describe_either(e1)
+    describe_either(e2)
+
+    return 0

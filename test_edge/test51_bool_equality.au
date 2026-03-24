@@ -1,0 +1,9 @@
+def main():
+    a: bool = true
+    b: bool = true
+    c: bool = false
+
+    print(a == b)
+    print(a == c)
+    print(a != c)
+    print(c != c)

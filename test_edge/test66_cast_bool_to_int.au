@@ -1,0 +1,4 @@
+def main():
+    a: bool = true
+    b = a as int32
+    print(b)

@@ -1,0 +1,20 @@
+enum Foo:
+    Value(int32)
+
+enum Bar:
+    Value(int32)
+
+def get_foo(f: Foo) -> int32:
+    match f:
+        case Foo.Value(v):
+            return v
+
+def get_bar(b: Bar) -> int32:
+    match b:
+        case Bar.Value(v):
+            return v
+
+def main() -> int32:
+    print(get_foo(Foo.Value(1)))
+    print(get_bar(Bar.Value(2)))
+    return 0

@@ -120,7 +120,7 @@
       "patterns": [
         {
           "name": "constant.numeric.aurora",
-          "match": "\\b\\d+(?:\\.\\d+)?\\b"
+          "match": "\\b\\d+(?:\\.\\d+)?(?:ms|s|m)?\\b"
         }
       ]
     },

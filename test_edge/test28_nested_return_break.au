@@ -1,0 +1,20 @@
+# Test: return from deeply nested loops
+def search_matrix(target: int32) -> int32:
+    # Simulate a 2D search
+    for i in range(5):
+        for j in range(5):
+            value: int32 = i * 5 + j
+            if value == target:
+                return value
+    return -1
+
+def main() -> int32:
+    # Find 13 (at i=2, j=3)
+    print(search_matrix(13))
+    # Find 0 (at i=0, j=0)
+    print(search_matrix(0))
+    # Find 24 (at i=4, j=4)
+    print(search_matrix(24))
+    # Find 25 (not in range)
+    print(search_matrix(25))
+    return 0

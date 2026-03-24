@@ -1,0 +1,7 @@
+# Edge: duplicate field names (should be an error)
+class Bad:
+    x: int32
+    x: float64
+
+def main() -> int32:
+    return 0

@@ -1,0 +1,5 @@
+def main():
+    a: int8 = 100
+    b: int8 = 100
+    c: int8 = a + b
+    print(c)

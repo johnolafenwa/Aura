@@ -1,0 +1,19 @@
+class Address:
+    street: String
+    city: String
+    zip: String
+
+class Person:
+    name: String
+    age: int32
+    address: Address
+
+def main() -> int32:
+    addr = Address(street="123 Main St", city="Springfield", zip="62701")
+    person = Person(name="Bob", age=42, address=addr)
+    print(person.name)
+    print(person.age)
+    print(person.address.street)
+    print(person.address.city)
+    print(person.address.zip)
+    return 0

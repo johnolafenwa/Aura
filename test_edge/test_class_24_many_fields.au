@@ -1,0 +1,22 @@
+# Edge: class with many fields
+class BigRecord:
+    a: int32
+    b: int32
+    c: int32
+    d: int32
+    e: int32
+    f: int32
+    g: int32
+    h: int32
+    i: String
+    j: float64
+    k: bool
+
+def main() -> int32:
+    r = BigRecord(a=1, b=2, c=3, d=4, e=5, f=6, g=7, h=8, i="hello", j=3.14, k=true)
+    print(r.a)
+    print(r.h)
+    print(r.i)
+    print(r.j)
+    print(r.k)
+    return 0

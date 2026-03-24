@@ -630,12 +630,16 @@ function parseCallableParams(rawLine, rawParams, line, selfType) {
       endCharacter: paramsOffset + receiverMatch[0].indexOf("self") + 4
     });
   }
-  const pattern = /([a-zA-Z_][A-Za-z0-9_]*)\s*:\s*([^=,\)]+(?:\[[^\]]+\])?)/g;
+  const pattern = /(?:borrow\s+(?:mut\s+)?)?([a-zA-Z_][A-Za-z0-9_]*)\s*:\s*((?:borrow\s+(?:mut\s+)?)?[^=,\)]+(?:\[[^\]]+\])?)/g;
   let match = pattern.exec(rawParams);
   while (match) {
+    if (match[1] === "self" && selfType) {
+      match = pattern.exec(rawParams);
+      continue;
+    }
     params.push({
       name: match[1],
-      type: normalizeType(match[2]),
+      type: normalizeParamType(match[2]),
       line,
       startCharacter: paramsOffset + match.index,
       endCharacter: paramsOffset + match.index + match[1].length
@@ -647,6 +651,10 @@ function parseCallableParams(rawLine, rawParams, line, selfType) {
 
 function parseParamTypes(rawParams) {
   return parseCallableParams(`(${rawParams})`, rawParams, 0, null).map((param) => param.type);
+}
+
+function normalizeParamType(rawType) {
+  return normalizeType(rawType).replace(/^borrow(?: mut)?\s+/, "");
 }
 
 function populateFunctionLocals(functionInfo, lines, moduleInfo) {

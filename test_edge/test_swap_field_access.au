@@ -1,0 +1,14 @@
+# Try swap using field access instead of methods
+class Pair[A, B]:
+    first: A
+    second: B
+
+def swap[A, B](pair: Pair[A, B]) -> Pair[B, A]:
+    return Pair(first=pair.second, second=pair.first)
+
+def main() -> int32:
+    p = Pair(first=1, second="hello")
+    swapped: Pair[String, int32] = swap(p)
+    print(swapped.first)
+    print(swapped.second)
+    return 0

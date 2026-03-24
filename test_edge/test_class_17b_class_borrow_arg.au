@@ -1,0 +1,13 @@
+# Classes passed as function arguments with borrow
+class Vec2:
+    x: float64
+    y: float64
+
+def dot(a: Vec2, b: Vec2) -> float64:
+    return a.x * b.x + a.y * b.y
+
+def main() -> int32:
+    v1 = Vec2(x=1.0, y=2.0)
+    v2 = Vec2(x=3.0, y=4.0)
+    print(dot(v1, v2))
+    return 0

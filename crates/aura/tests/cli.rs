@@ -47,6 +47,41 @@ impl Drop for TempDir {
     }
 }
 
+fn assert_direct_backend_example_runs(example: &str, binary_name: &str, expected_stdout: &str) {
+    let fixture = repo_root().join(example);
+    let output_dir = TempDir::new("aurora-build-direct-full");
+    let output_path = output_dir.path().join(binary_name);
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura build --backend direct");
+
+    assert!(
+        build.status.success(),
+        "direct backend should support {}, stderr was:\n{}",
+        example,
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run direct-backend binary");
+
+    assert!(
+        run.status.success(),
+        "direct-backend binary for {} should exit successfully, stderr was:\n{}",
+        example,
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected_stdout);
+}
+
 #[test]
 fn ast_exits_cleanly_when_stdout_pipe_closes() {
     let fixture = repo_root().join("examples/point.au");
@@ -175,7 +210,10 @@ fn analyze_stdin_resolves_local_module_imports() {
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("analyze should return valid JSON");
     assert_eq!(
-        json["diagnostics"].as_array().expect("diagnostics should be an array").len(),
+        json["diagnostics"]
+            .as_array()
+            .expect("diagnostics should be an array")
+            .len(),
         0,
         "analysis should not report diagnostics for a valid local-module program"
     );
@@ -202,8 +240,7 @@ fn complete_stdin_resolves_local_module_member_completions() {
     )
     .expect("failed to write helper module");
     let main_path = temp.path().join("main.au");
-    let source =
-        "import helpers.math\n\ndef main() -> int32:\n    helpers.math.\n    return 0\n";
+    let source = "import helpers.math\n\ndef main() -> int32:\n    helpers.math.\n    return 0\n";
 
     let mut child = Command::new(aura_bin())
         .arg("complete")
@@ -278,7 +315,167 @@ fn build_produces_a_runnable_binary() {
         "built binary should exit successfully, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "5.0\n");
+}
+
+#[test]
+fn build_with_direct_backend_produces_runnable_binary_for_supported_program() {
+    let temp = TempDir::new("aurora-build-direct");
+    let source_path = temp.path().join("main.au");
+    fs::write(
+        &source_path,
+        "def helper(value: int32) -> int32:\n    return value + 2\n\n\
+def main() -> int32:\n    mut current: int32 = 1\n    if current < 5:\n        current = helper(value=current)\n    print(current)\n    return 0\n",
+    )
+    .expect("failed to write direct-backend source");
+    let output_path = temp.path().join("direct-main");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build --backend direct");
+
+    assert!(
+        build.status.success(),
+        "direct backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run direct-backend binary");
+
+    assert!(
+        run.status.success(),
+        "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
+}
+
+#[test]
+fn build_with_direct_backend_rejects_unsupported_programs() {
+    let fixture = repo_root().join("examples/concurrency/channels_spawn.au");
+    let output_dir = TempDir::new("aurora-build-direct-unsupported");
+    let output_path = output_dir.path().join("channels-direct");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura build --backend direct on unsupported program");
+
+    assert!(
+        !build.status.success(),
+        "direct backend should reject unsupported programs"
+    );
+    assert!(
+        String::from_utf8_lossy(&build.stderr).contains("direct backend"),
+        "unsupported direct backend errors should mention the direct backend, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_point_example() {
+    let fixture = repo_root().join("examples/point.au");
+    let output_dir = TempDir::new("aurora-build-direct-point");
+    let output_path = output_dir.path().join("point-direct");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura build --backend direct on point example");
+
+    assert!(
+        build.status.success(),
+        "direct backend should support point example, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run direct-backend point binary");
+
+    assert!(
+        run.status.success(),
+        "direct-backend point binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "5.0\n");
+}
+
+#[test]
+fn build_with_direct_backend_supports_class_methods_example() {
+    assert_direct_backend_example_runs("examples/classes/methods.au", "methods-direct", "4\n8\n0\n");
+}
+
+#[test]
+fn build_with_direct_backend_supports_string_example() {
+    assert_direct_backend_example_runs(
+        "examples/strings/greeting.au",
+        "greeting-direct",
+        "hello, aurora\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_try_and_result_example() {
+    assert_direct_backend_example_runs(
+        "examples/error_handling/try_result.au",
+        "try-result-direct",
+        "6\ndivision by zero\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_with_cleanup_example() {
+    assert_direct_backend_example_runs(
+        "examples/resources/with_resource.au",
+        "with-direct",
+        "demo\nclosed demo\ndone\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_trait_dispatch_example() {
+    assert_direct_backend_example_runs(
+        "examples/traits/greeter.au",
+        "greeter-direct",
+        "hello aurora\nhello aurora\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_generic_data_example() {
+    assert_direct_backend_example_runs(
+        "examples/generics/box_and_wrapper.au",
+        "generic-direct",
+        "7\nok\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_concurrency_example() {
+    assert_direct_backend_example_runs(
+        "examples/concurrency/channels_spawn.au",
+        "channels-direct",
+        "2\n4\n",
+    );
 }
 
 #[test]
@@ -311,6 +508,135 @@ fn build_produces_runnable_concurrency_binary() {
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n4\n");
+}
+
+#[test]
+fn build_from_stdin_produces_runnable_module_binary() {
+    let temp = TempDir::new("aurora-cli-stdin-build-modules");
+    fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
+    fs::write(
+        temp.path().join("helpers/math.au"),
+        "public def triple(value: int32) -> int32:\n    return value * 3\n",
+    )
+    .expect("failed to write helper module");
+    let main_path = temp.path().join("main.au");
+    let source = "import helpers.math\n\ndef main() -> int32:\n    print(helpers.math.triple(value=5))\n    return 0\n";
+    let output_path = temp.path().join("stdin-built-modules");
+
+    let mut child = Command::new(aura_bin())
+        .arg("build")
+        .arg("-o")
+        .arg(&output_path)
+        .arg("--stdin")
+        .arg(&main_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura build for stdin module program");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(source.as_bytes())
+        .expect("failed to write source");
+
+    let build = child
+        .wait_with_output()
+        .expect("failed to collect stdin build output");
+
+    assert!(
+        build.status.success(),
+        "stdin build should succeed for module program, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run built stdin module program");
+
+    assert!(
+        run.status.success(),
+        "built stdin module binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "15\n");
+}
+
+#[test]
+fn built_binary_runs_after_source_file_is_removed() {
+    let temp = TempDir::new("aurora-cli-build-source-removal");
+    let source_path = temp.path().join("main.au");
+    fs::write(
+        &source_path,
+        "def main() -> int32:\n    print(value=21 * 2)\n    return 0\n",
+    )
+    .expect("failed to write source program");
+    let output_path = temp.path().join("no-source-needed");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build for source-removal test");
+
+    assert!(
+        build.status.success(),
+        "build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    fs::remove_file(&source_path).expect("failed to remove source after build");
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run built binary after source removal");
+
+    assert!(
+        run.status.success(),
+        "built binary should not depend on source files at runtime, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+}
+
+#[test]
+fn built_binary_exits_cleanly_when_stdout_pipe_closes() {
+    let fixture = repo_root().join("examples/point.au");
+    let output_dir = TempDir::new("aurora-build-broken-pipe");
+    let output_path = output_dir.path().join("point");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura build");
+
+    assert!(
+        build.status.success(),
+        "build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let mut child = Command::new(&output_path)
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn built binary");
+
+    drop(child.stdout.take());
+
+    let status = child
+        .wait()
+        .expect("failed to wait for built binary after broken pipe");
+    assert!(
+        status.success(),
+        "built binary should exit cleanly when stdout closes early"
+    );
 }
 
 #[test]

@@ -1,0 +1,22 @@
+# Test trait with exactly one method
+trait Togglable:
+    def toggle(borrow mut self)
+
+class Switch:
+    on: bool
+
+impl Togglable for Switch:
+    def toggle(borrow mut self):
+        if self.on:
+            self.on = false
+        else:
+            self.on = true
+
+def main() -> int32:
+    mut s = Switch(on=false)
+    print(s.on)
+    s.toggle()
+    print(s.on)
+    s.toggle()
+    print(s.on)
+    return 0

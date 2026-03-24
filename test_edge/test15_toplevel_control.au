@@ -1,0 +1,33 @@
+# Top-level script with control flow (no main function)
+mut x: int32 = 42
+
+if x > 40:
+    if x > 50:
+        print("big")
+    else:
+        print("medium")
+elif x > 20:
+    print("small")
+else:
+    print("tiny")
+
+# Top-level while
+mut i: int32 = 0
+mut sum: int32 = 0
+while i < 5:
+    sum += i
+    i += 1
+print(sum)
+
+# Top-level for
+mut total: int32 = 0
+for v in range(4):
+    total += v * v
+# 0+1+4+9 = 14
+print(total)
+
+# Top-level boolean
+a = true
+b = false
+if a and not b:
+    print("logic ok")

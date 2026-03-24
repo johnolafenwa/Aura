@@ -1,0 +1,25 @@
+# Test deeply nested generics: Box[Box[int32]], Box[Box[Box[String]]], etc.
+
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def main() -> int32:
+    # Box[Box[int32]]
+    inner: Box[int32] = Box(value=42)
+    outer: Box[Box[int32]] = Box(value=inner)
+    print(outer.get().get())
+
+    # Box[Box[Box[String]]]
+    b1: Box[String] = Box(value="deep")
+    b2: Box[Box[String]] = Box(value=b1)
+    b3: Box[Box[Box[String]]] = Box(value=b2)
+    print(b3.get().get().get())
+
+    # Box[Box[bool]]
+    bb: Box[Box[bool]] = Box(value=Box(value=true))
+    print(bb.get().get())
+
+    return 0

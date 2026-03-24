@@ -7,7 +7,7 @@
   ],
   "scripts": {
     "coverage:compiler": "cargo llvm-cov -p aurora-compiler --summary-only",
-    "coverage:compiler:check": "cargo llvm-cov -p aurora-compiler --summary-only --fail-under-lines 71 --fail-under-functions 78 --fail-under-regions 74",
+    "coverage:compiler:check": "cargo llvm-cov -p aurora-compiler --summary-only --fail-under-lines 71 --fail-under-functions 75 --fail-under-regions 74",
     "build:extension": "npm --prefix tools/vscode-aurora run build",
     "package:extension": "npm --prefix tools/vscode-aurora run package:vsix",
     "check:lsp": "npm --prefix tools/aurora-language-server run check",

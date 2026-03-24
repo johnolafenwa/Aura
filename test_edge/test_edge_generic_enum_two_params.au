@@ -1,0 +1,27 @@
+# Test generic enum with two type parameters
+enum Result2[T, E]:
+    Ok(T)
+    Err(E)
+
+def divide(a: int32, b: int32) -> Result2[int32, String]:
+    if b == 0:
+        return Result2.Err("division by zero")
+    return Result2.Ok(a / b)
+
+def main() -> int32:
+    r1: Result2[int32, String] = divide(10, 2)
+    r2: Result2[int32, String] = divide(10, 0)
+
+    match r1:
+        case Result2.Ok(v):
+            print(v)
+        case Result2.Err(e):
+            print(e)
+
+    match r2:
+        case Result2.Ok(v):
+            print(v)
+        case Result2.Err(e):
+            print(e)
+
+    return 0

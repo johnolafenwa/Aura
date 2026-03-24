@@ -1,0 +1,4 @@
+def main() -> int32
+    x: int32 = 5
+    print(x)
+    return 0

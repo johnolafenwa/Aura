@@ -1,0 +1,30 @@
+# Top-level script with deeply nested control flow
+mut total: int32 = 0
+
+for i in range(5):
+    if i % 2 == 0:
+        mut j: int32 = 0
+        while j < i:
+            if j > 0:
+                total += j
+            j += 1
+
+# i=0: even, j<0 => no iterations
+# i=2: even, j=0(skip),j=1(+1) => +1
+# i=4: even, j=0(skip),j=1(+1),j=2(+2),j=3(+3) => +6
+# total = 7
+print(total)
+
+# Nested while in while at top level
+mut a: int32 = 1
+mut product: int32 = 0
+while a <= 3:
+    mut b: int32 = 1
+    while b <= 3:
+        if a != b:
+            product += a * b
+        b += 1
+    a += 1
+
+# (1,2)=2 (1,3)=3 (2,1)=2 (2,3)=6 (3,1)=3 (3,2)=6 => 22
+print(product)

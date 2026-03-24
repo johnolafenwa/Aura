@@ -1,0 +1,12 @@
+# Test: assigning a generic enum's unit variant without type annotation
+# (should it infer the type?)
+
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+def main() -> int32:
+    # Without annotation - can compiler infer Maybe[???]?
+    m = Maybe.Nothing
+    print(0)
+    return 0

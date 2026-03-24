@@ -1,0 +1,9 @@
+from models.point import Point
+
+def main() -> int32:
+    p = Point(x=3, y=4)
+    print(p.distance_from_origin())
+    p2 = p.translate(dx=1, dy=1)
+    print(p2.x)
+    print(p2.y)
+    return 0

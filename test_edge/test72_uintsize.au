@@ -1,0 +1,5 @@
+def main():
+    a: uintsize = 100
+    b: uintsize = 50
+    print(a + b)
+    print(a - b)

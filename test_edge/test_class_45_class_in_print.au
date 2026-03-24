@@ -1,0 +1,9 @@
+# Edge: printing a class instance directly
+class Point:
+    x: int32
+    y: int32
+
+def main() -> int32:
+    p = Point(x=1, y=2)
+    print(p)
+    return 0

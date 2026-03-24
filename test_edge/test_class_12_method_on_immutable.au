@@ -1,0 +1,12 @@
+# Edge: calling a mutating method on an immutable binding
+class Counter:
+    value: int32
+
+    def bump(borrow mut self):
+        self.value += 1
+
+def main() -> int32:
+    counter = Counter(value=0)
+    counter.bump()
+    print(counter.value)
+    return 0

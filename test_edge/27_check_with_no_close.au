@@ -1,0 +1,14 @@
+class NoClose:
+    value: int32
+
+def test() -> Result[String, String]:
+    with r = NoClose(value=1):
+        return Result.Ok("done")
+
+def main() -> int32:
+    match test():
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+    return 0

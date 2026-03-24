@@ -1,0 +1,21 @@
+class Point:
+    x: int32
+    y: int32
+
+enum Shape:
+    Circle(int32)
+    Dot(Point)
+
+def area_hint(s: Shape) -> int32:
+    match s:
+        case Shape.Circle(r):
+            return r * r
+        case Shape.Dot(p):
+            return p.x + p.y
+
+def main() -> int32:
+    c = Shape.Circle(5)
+    d = Shape.Dot(Point(x=3, y=4))
+    print(area_hint(c))
+    print(area_hint(d))
+    return 0

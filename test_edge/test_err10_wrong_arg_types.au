@@ -1,0 +1,6 @@
+def double(n: int32) -> int32:
+    return n * 2
+
+def main() -> int32:
+    print(double(n="hello"))
+    return 0

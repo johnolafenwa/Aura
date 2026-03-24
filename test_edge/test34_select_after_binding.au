@@ -1,0 +1,5 @@
+def main() -> int32:
+    select:
+        case t = after(5ms):
+            print("bad")
+    return 0

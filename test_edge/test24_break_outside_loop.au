@@ -1,0 +1,4 @@
+# This should fail: break outside a loop
+def main() -> int32:
+    break
+    return 0

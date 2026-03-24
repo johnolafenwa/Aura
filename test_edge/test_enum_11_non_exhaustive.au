@@ -1,0 +1,15 @@
+enum Fruit:
+    Apple
+    Banana
+    Cherry
+
+def name(f: Fruit) -> String:
+    match f:
+        case Fruit.Apple:
+            return "apple"
+        case Fruit.Banana:
+            return "banana"
+
+def main() -> int32:
+    print(name(Fruit.Apple))
+    return 0

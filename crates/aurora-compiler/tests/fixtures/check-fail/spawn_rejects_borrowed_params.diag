@@ -1,0 +1,5 @@
+error: `spawn` does not yet support borrowed parameter `counter` on function `show`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/spawn_rejects_borrowed_params.au:9:18
+  |
+9 |     task = spawn show(counter)
+  |                  ^

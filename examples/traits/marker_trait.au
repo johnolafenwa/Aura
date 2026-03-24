@@ -1,0 +1,15 @@
+trait Marker:
+    pass
+
+class Token:
+    value: int32
+
+impl Marker for Token:
+    pass
+
+def accept[T: Marker](value: T) -> int32:
+    return 1
+
+def main() -> int32:
+    print(accept(value=Token(value=7)))
+    return 0

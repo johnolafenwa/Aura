@@ -1,0 +1,19 @@
+# Edge: method with while loop inside
+class Fibonacci:
+    limit: int32
+
+    def compute(borrow self) -> int32:
+        mut a = 0
+        mut b = 1
+        mut count = 0
+        while a < self.limit:
+            mut temp = b
+            b = a + b
+            a = temp
+            count += 1
+        return count
+
+def main() -> int32:
+    f = Fibonacci(limit=100)
+    print(f.compute())
+    return 0

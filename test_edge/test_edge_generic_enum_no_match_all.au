@@ -1,0 +1,13 @@
+# Test: matching on a generic enum where we only match one variant
+# (should fail - non-exhaustive)
+
+enum Choice[T]:
+    Yes(T)
+    No(T)
+
+def main() -> int32:
+    c: Choice[int32] = Choice.Yes(1)
+    match c:
+        case Choice.Yes(v):
+            print(v)
+    return 0

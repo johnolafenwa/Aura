@@ -1,0 +1,20 @@
+enum Event:
+    Click(int32)
+    Key(String)
+    Close
+
+def handle(e: Event) -> String:
+    match e:
+        case Event.Click(pos):
+            print(pos)
+            return "click"
+        case Event.Key(k):
+            return k
+        case Event.Close:
+            return "close"
+
+def main() -> int32:
+    print(handle(Event.Click(42)))
+    print(handle(Event.Key("enter")))
+    print(handle(Event.Close))
+    return 0

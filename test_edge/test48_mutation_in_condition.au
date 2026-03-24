@@ -1,0 +1,38 @@
+# Test: using comparison operators with expressions
+def main() -> int32:
+    a: int32 = 3
+    b: int32 = 7
+
+    # Test compound expressions in conditions
+    if a + b > 9:
+        print("sum > 9: pass")
+    else:
+        print("sum > 9: FAIL")
+
+    if a * b == 21:
+        print("product == 21: pass")
+    else:
+        print("product == 21: FAIL")
+
+    if b - a < 5:
+        print("diff < 5: pass")
+    else:
+        print("diff < 5: FAIL")
+
+    if b / a >= 2:
+        print("div >= 2: pass")
+    else:
+        print("div >= 2: FAIL")
+
+    if b % a <= 1:
+        print("mod <= 1: pass")
+    else:
+        print("mod <= 1: FAIL")
+
+    # Nested expressions in conditions
+    if (a + 1) * (b - 1) != 24:
+        print("complex != : FAIL")
+    else:
+        print("complex != : pass")
+
+    return 0

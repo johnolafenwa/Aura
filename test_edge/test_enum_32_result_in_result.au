@@ -1,0 +1,29 @@
+def inner(x: int32) -> Result[int32, String]:
+    if x == 0:
+        return Result.Err("zero")
+    return Result.Ok(x)
+
+def outer(x: int32) -> Result[int32, String]:
+    v = try inner(x)
+    v2 = try inner(v + 1)
+    return Result.Ok(v2)
+
+def main() -> int32:
+    match outer(5):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    match outer(0):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    match outer(-1):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+    return 0

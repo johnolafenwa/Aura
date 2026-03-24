@@ -1,0 +1,7 @@
+# This should fail: mixing top-level statements with main
+x: int32 = 5
+print(x)
+
+def main() -> int32:
+    print("hello")
+    return 0

@@ -1,0 +1,45 @@
+class Color:
+    r: int32
+    g: int32
+    b: int32
+
+    def red() -> Color:
+        return Color(r=255, g=0, b=0)
+
+    def green() -> Color:
+        return Color(r=0, g=255, b=0)
+
+    def blue() -> Color:
+        return Color(r=0, g=0, b=255)
+
+    def black() -> Color:
+        return Color(r=0, g=0, b=0)
+
+    def white() -> Color:
+        return Color(r=255, g=255, b=255)
+
+    def gray(level: int32) -> Color:
+        return Color(r=level, g=level, b=level)
+
+    def is_bright(borrow self) -> bool:
+        total = self.r + self.g + self.b
+        return total > 382
+
+def main() -> int32:
+    r = Color.red()
+    print(r.r)
+    print(r.g)
+    print(r.b)
+
+    w = Color.white()
+    print(w.is_bright())
+
+    bk = Color.black()
+    print(bk.is_bright())
+
+    g = Color.gray(128)
+    print(g.r)
+    print(g.g)
+    print(g.b)
+
+    return 0

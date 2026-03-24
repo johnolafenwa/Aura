@@ -1,0 +1,7 @@
+def main() -> int32:
+    print("before sleep")
+    sleep(5ms)
+    print("after 5ms")
+    sleep(10ms)
+    print("after 10ms")
+    return 0

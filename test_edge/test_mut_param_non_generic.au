@@ -1,0 +1,12 @@
+# Test whether mut parameters work in non-generic functions
+class Box:
+    value: int32
+
+def set_value(mut box: Box, new_value: int32):
+    box.value = new_value
+
+def main() -> int32:
+    mut b = Box(value=1)
+    set_value(box=b, new_value=99)
+    print(b.value)
+    return 0

@@ -1,0 +1,23 @@
+class Address:
+    street: String
+    city: String
+
+    def full(borrow self) -> String:
+        return self.street + ", " + self.city
+
+class Contact:
+    name: String
+    address: Address
+
+    def summary(borrow self) -> String:
+        return self.name + " at " + self.address.full()
+
+def main() -> int32:
+    addr = Address(street="123 Main St", city="Springfield")
+    person = Contact(name="Alice", address=addr)
+
+    print(person.summary())
+    print(person.name)
+    print(person.address.full())
+
+    return 0

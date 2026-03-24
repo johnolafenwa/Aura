@@ -1,0 +1,34 @@
+trait Describable:
+    def describe(borrow self) -> String
+
+class Dog:
+    name: String
+    age: int32
+
+impl Describable for Dog:
+    def describe(borrow self) -> String:
+        return "Dog: " + self.name
+
+class Cat:
+    name: String
+
+impl Describable for Cat:
+    def describe(borrow self) -> String:
+        return "Cat: " + self.name
+
+def print_description[T: Describable](value: T):
+    print(value.describe())
+
+def main() -> int32:
+    dog = Dog(name="Rex", age=5)
+    cat = Cat(name="Whiskers")
+
+    # Direct method call first
+    print(Dog(name="Buddy", age=3).describe())
+    print(Cat(name="Felix").describe())
+
+    # Via trait-bounded function
+    print_description(value=dog)
+    print_description(value=cat)
+
+    return 0

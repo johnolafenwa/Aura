@@ -1,0 +1,11 @@
+def check(o: Option[int32]) -> int32:
+    match o:
+        case Option.Some(v):
+            return v
+        case Option.None:
+            return -1
+
+def main() -> int32:
+    print(check(Option.None))
+    print(check(Option.Some(42)))
+    return 0

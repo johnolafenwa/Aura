@@ -1,0 +1,17 @@
+# Edge: while loop that executes exactly once
+def main() -> int32:
+    mut i: int32 = 0
+    while i < 1:
+        print("once")
+        i += 1
+    print(i)
+
+    # While with immediate false on second check
+    mut done = false
+    mut count: int32 = 0
+    while not done:
+        count += 1
+        done = true
+    print(count)
+
+    return 0

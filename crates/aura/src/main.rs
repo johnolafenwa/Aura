@@ -5,15 +5,22 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
 use aurora_compiler::{
-    analyze_path_source, check_path, check_source, complete_path_source, lower_path_to_mir,
-    lower_source_to_mir, parse_source, run_path, run_path_via_mir, run_source, run_source_via_mir,
-    Diagnostic, MirModule, Value,
+    analyze_path_source, check_path, check_source, complete_path_source, emit_host_native_object,
+    lower_path_to_mir, lower_path_with_source_to_mir, lower_source_to_mir, parse_source, run_path,
+    run_path_via_mir, run_source, run_source_via_mir, Diagnostic, MirModule, Value,
 };
 
 struct Input {
     path: String,
     source: String,
     from_stdin: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BuildBackend {
+    Auto,
+    Direct,
+    MirRuntime,
 }
 
 fn main() {
@@ -81,18 +88,22 @@ fn main() {
         }
         "build" => {
             let remaining = args.collect::<Vec<_>>();
-            let (output_path, input_args) = parse_build_args(remaining);
+            let (output_path, backend, input_args) = parse_build_args(remaining);
             let input = read_input(&mut input_args.into_iter());
             let result = if input.from_stdin {
-                lower_source_to_mir(&input.source)
+                lower_path_with_source_to_mir(Path::new(&input.path), &input.source)
             } else {
                 lower_path_to_mir(Path::new(&input.path))
             };
             match result {
                 Ok(mir) => {
-                    if let Err(message) =
-                        build_bootstrap_runner(&input.path, &input.source, &mir, &output_path)
-                    {
+                    if let Err(message) = build_binary_with_backend(
+                        &input.path,
+                        &input.source,
+                        &mir,
+                        &output_path,
+                        backend,
+                    ) {
                         eprintln!("{}", message);
                         process::exit(1);
                     }
@@ -234,8 +245,9 @@ fn parse_complete_args(args: Vec<String>) -> (usize, usize, Option<char>, Vec<St
     )
 }
 
-fn parse_build_args(args: Vec<String>) -> (PathBuf, Vec<String>) {
+fn parse_build_args(args: Vec<String>) -> (PathBuf, BuildBackend, Vec<String>) {
     let mut output = None;
+    let mut backend = BuildBackend::Auto;
     let mut input_args = Vec::new();
     let mut index = 0;
 
@@ -250,6 +262,20 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, Vec<String>) {
                 ));
                 index += 1;
             }
+            "--backend" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| print_usage_and_exit());
+                backend = match value.as_str() {
+                    "auto" => BuildBackend::Auto,
+                    "direct" => BuildBackend::Direct,
+                    "mir-runtime" => BuildBackend::MirRuntime,
+                    _ => print_usage_and_exit(),
+                };
+                index += 1;
+            }
             _ => {
                 input_args.push(args[index].clone());
                 index += 1;
@@ -262,7 +288,7 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, Vec<String>) {
         print_usage_and_exit();
     }
 
-    (output, input_args)
+    (output, backend, input_args)
 }
 
 fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
@@ -312,7 +338,79 @@ fn render_error(path: &str, source: &str, error: &Diagnostic) -> String {
     error.render_with_source(path, source)
 }
 
-fn build_bootstrap_runner(
+fn build_binary_with_backend(
+    path: &str,
+    source: &str,
+    mir: &MirModule,
+    output_path: &Path,
+    backend: BuildBackend,
+) -> std::result::Result<(), String> {
+    match backend {
+        BuildBackend::Direct => build_direct_native_binary(mir, output_path),
+        BuildBackend::MirRuntime => build_runtime_artifact_binary(path, source, mir, output_path),
+        BuildBackend::Auto => match build_direct_native_binary(mir, output_path) {
+            Ok(()) => Ok(()),
+            Err(message) if message.starts_with("direct backend does not") => {
+                build_runtime_artifact_binary(path, source, mir, output_path)
+            }
+            Err(message) => Err(message),
+        },
+    }
+}
+
+fn build_direct_native_binary(
+    mir: &MirModule,
+    output_path: &Path,
+) -> std::result::Result<(), String> {
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create output directory `{}`: {}",
+                parent.display(),
+                error
+            )
+        })?;
+    }
+
+    let native_runtime = ensure_native_runtime_artifacts()?;
+    let object_bytes = emit_host_native_object(mir)?;
+    let temp_object = temporary_direct_object_path(output_path);
+    fs::write(&temp_object, object_bytes).map_err(|error| {
+        format!(
+            "failed to write direct backend object `{}`: {}",
+            temp_object.display(),
+            error
+        )
+    })?;
+
+    let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let mut command = Command::new(cc);
+    command
+        .arg(&temp_object)
+        .arg(&native_runtime.staticlib)
+        .arg("-o")
+        .arg(output_path);
+    for arg in &native_runtime.native_link_args {
+        command.arg(arg);
+    }
+
+    let result = command
+        .output()
+        .map_err(|error| format!("failed to run native linker for direct backend: {}", error));
+
+    let _ = fs::remove_file(&temp_object);
+
+    let output = result?;
+    if !output.status.success() {
+        return Err(format!(
+            "direct backend link failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
+fn build_runtime_artifact_binary(
     path: &str,
     source: &str,
     mir: &MirModule,
@@ -328,41 +426,41 @@ fn build_bootstrap_runner(
         })?;
     }
 
-    let deps_dir = compiler_deps_dir()?;
-    let compiler_rlib = find_compiler_rlib(&deps_dir)?;
-    let serde_json_rlib = find_named_rlib(&deps_dir, "serde_json")?;
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let temp_source = temporary_runner_path(output_path);
-    let runner_source = render_bootstrap_runner(path, source, mir);
+    let native_runtime = ensure_native_runtime_artifacts()?;
+    let temp_source = temporary_native_launcher_path(output_path);
+    let launcher_source = render_native_launcher_source(path, source, mir);
 
-    fs::write(&temp_source, runner_source).map_err(|error| {
+    fs::write(&temp_source, launcher_source).map_err(|error| {
         format!(
-            "failed to write temporary runner source `{}`: {}",
+            "failed to write native launcher source `{}`: {}",
             temp_source.display(),
             error
         )
     })?;
 
-    let result = Command::new(rustc)
-        .arg("--edition=2021")
-        .arg("-L")
-        .arg(format!("dependency={}", deps_dir.display()))
-        .arg("--extern")
-        .arg(format!("aurora_compiler={}", compiler_rlib.display()))
-        .arg("--extern")
-        .arg(format!("serde_json={}", serde_json_rlib.display()))
-        .arg("-o")
-        .arg(output_path)
+    let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let mut command = Command::new(cc);
+    command
+        .arg("-std=c99")
+        .arg("-O2")
         .arg(&temp_source)
+        .arg(&native_runtime.staticlib)
+        .arg("-o")
+        .arg(output_path);
+    for arg in &native_runtime.native_link_args {
+        command.arg(arg);
+    }
+
+    let result = command
         .output()
-        .map_err(|error| format!("failed to run rustc for `aura build`: {}", error));
+        .map_err(|error| format!("failed to run native compiler for `aura build`: {}", error));
 
     let _ = fs::remove_file(&temp_source);
 
     let output = result?;
     if !output.status.success() {
         return Err(format!(
-            "bootstrap build failed:\n{}",
+            "native build failed:\n{}",
             String::from_utf8_lossy(&output.stderr)
         ));
     }
@@ -370,13 +468,30 @@ fn build_bootstrap_runner(
     Ok(())
 }
 
-fn temporary_runner_path(output_path: &Path) -> PathBuf {
+fn temporary_native_launcher_path(output_path: &Path) -> PathBuf {
     let file_name = output_path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("aurora-output");
     let unique = format!(
-        "aurora-build-{}-{}-{}.rs",
+        "aurora-native-build-{}-{}-{}.c",
+        file_name,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos()
+    );
+    std::env::temp_dir().join(unique)
+}
+
+fn temporary_direct_object_path(output_path: &Path) -> PathBuf {
+    let file_name = output_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("aurora-output");
+    let unique = format!(
+        "aurora-direct-object-{}-{}-{}.o",
         file_name,
         std::process::id(),
         std::time::SystemTime::now()
@@ -395,117 +510,145 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn compiler_deps_dir() -> std::result::Result<PathBuf, String> {
-    let mut candidates = Vec::new();
-
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(parent) = current_exe.parent() {
-            if parent.file_name().and_then(|name| name.to_str()) == Some("deps") {
-                candidates.push(parent.to_path_buf());
-            } else {
-                candidates.push(parent.join("deps"));
-            }
-        }
-    }
-
-    let repo_target = repo_root().join("target");
-    candidates.push(repo_target.join("debug").join("deps"));
-    candidates.push(repo_target.join("release").join("deps"));
-
-    for candidate in candidates {
-        if find_compiler_rlib_in_dir(&candidate).is_some() {
-            return Ok(candidate);
-        }
-    }
-
-    Err(format!(
-        "failed to locate Cargo dependency artifacts for `aurora_compiler`; run `cargo build -p aura` first"
-    ))
+struct NativeRuntimeArtifacts {
+    staticlib: PathBuf,
+    native_link_args: Vec<String>,
 }
 
-fn find_compiler_rlib(deps_dir: &Path) -> std::result::Result<PathBuf, String> {
-    find_named_rlib(deps_dir, "aurora_compiler")
-}
+fn ensure_native_runtime_artifacts() -> std::result::Result<NativeRuntimeArtifacts, String> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut command = Command::new(cargo);
+    command.current_dir(repo_root());
+    command
+        .arg("rustc")
+        .arg("-q")
+        .arg("-p")
+        .arg("aurora-compiler")
+        .arg("--lib");
+    if current_profile() == "release" {
+        command.arg("--release");
+    }
+    command.arg("--").arg("--print").arg("native-static-libs");
 
-fn find_named_rlib(deps_dir: &Path, crate_name: &str) -> std::result::Result<PathBuf, String> {
-    find_named_rlib_in_dir(deps_dir, crate_name).ok_or_else(|| {
-        format!(
-            "failed to locate `{}` build artifacts in `{}`; run `cargo build -p aura` first",
-            crate_name,
-            deps_dir.display(),
-        )
+    let output = command
+        .output()
+        .map_err(|error| format!("failed to build Aurora runtime artifacts: {}", error))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "failed to build Aurora runtime artifacts:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let staticlib = repo_root()
+        .join("target")
+        .join(current_profile())
+        .join(static_library_file_name());
+    if !staticlib.exists() {
+        return Err(format!(
+            "failed to locate compiled Aurora runtime library `{}` after build",
+            staticlib.display()
+        ));
+    }
+
+    let native_link_args = parse_native_static_libs(&String::from_utf8_lossy(&output.stderr));
+
+    Ok(NativeRuntimeArtifacts {
+        staticlib,
+        native_link_args,
     })
 }
 
-fn find_compiler_rlib_in_dir(deps_dir: &Path) -> Option<PathBuf> {
-    find_named_rlib_in_dir(deps_dir, "aurora_compiler")
+fn current_profile() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    }
 }
 
-fn find_named_rlib_in_dir(deps_dir: &Path, crate_name: &str) -> Option<PathBuf> {
-    let prefix = format!("lib{}-", crate_name.replace('-', "_"));
-    let mut candidates = fs::read_dir(deps_dir)
-        .ok()?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let path = entry.path();
-            let name = path.file_name()?.to_str()?;
-            if !name.starts_with(&prefix) || !name.ends_with(".rlib") {
-                return None;
-            }
-            let modified = entry
-                .metadata()
-                .ok()
-                .and_then(|metadata| metadata.modified().ok());
-            Some((modified, path))
+fn static_library_file_name() -> &'static str {
+    "libaurora_compiler.a"
+}
+
+fn parse_native_static_libs(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .rev()
+        .find_map(|line| line.split_once("native-static-libs:"))
+        .map(|(_, libs)| {
+            libs.split_whitespace()
+                .map(|item| item.to_string())
+                .collect()
         })
-        .collect::<Vec<_>>();
-
-    candidates.sort_by(|left, right| right.0.cmp(&left.0));
-    candidates.into_iter().map(|(_, path)| path).next()
+        .unwrap_or_default()
 }
 
-fn render_bootstrap_runner(path: &str, source: &str, mir: &MirModule) -> String {
-    let mir_json = serde_json::to_string(mir).expect("MIR should serialize to JSON");
+fn render_native_launcher_source(path: &str, source: &str, mir: &MirModule) -> String {
+    let mir_json = serde_json::to_vec(mir).expect("MIR should serialize to JSON bytes");
     format!(
-        r#"use std::io::{{self, Write}};
-use std::process;
+        r#"#include <signal.h>
+#include <stddef.h>
+#include <stdint.h>
 
-const MIR_JSON: &str = {mir_json_literal};
-const SOURCE_PATH: &str = {path_literal};
-const SOURCE: &str = {source_literal};
+extern int aurora_native_run(
+    const uint8_t* mir_json,
+    size_t mir_json_len,
+    const uint8_t* source_path,
+    size_t source_path_len,
+    const uint8_t* source,
+    size_t source_len
+);
 
-fn write_stdout(text: &str) {{
-    let mut stdout = io::stdout().lock();
-    if let Err(error) = stdout.write_all(text.as_bytes()).and_then(|_| stdout.flush()) {{
-        if error.kind() == io::ErrorKind::BrokenPipe {{
-            process::exit(0);
-        }}
-        eprintln!("failed to write to stdout: {{}}", error);
-        process::exit(1);
-    }}
-}}
+static const uint8_t AURORA_MIR_BYTES[] = {{
+{mir_bytes}
+}};
 
-fn main() {{
-    let mir: aurora_compiler::MirModule =
-        serde_json::from_str(MIR_JSON).expect("embedded MIR should deserialize");
-    match aurora_compiler::run_mir(&mir) {{
-        Ok(output) => {{
-            write_stdout(&output.stdout);
-            if let aurora_compiler::Value::Int(code) = output.value {{
-                process::exit(code as i32);
-            }}
-        }}
-        Err(error) => {{
-            eprintln!("{{}}", error.render_with_source(SOURCE_PATH, SOURCE));
-            process::exit(1);
-        }}
-    }}
+static const uint8_t AURORA_SOURCE_PATH_BYTES[] = {{
+{path_bytes}
+}};
+
+static const uint8_t AURORA_SOURCE_BYTES[] = {{
+{source_bytes}
+}};
+
+int main(void) {{
+    signal(SIGPIPE, SIG_IGN);
+    return aurora_native_run(
+        AURORA_MIR_BYTES,
+        sizeof(AURORA_MIR_BYTES),
+        AURORA_SOURCE_PATH_BYTES,
+        sizeof(AURORA_SOURCE_PATH_BYTES),
+        AURORA_SOURCE_BYTES,
+        sizeof(AURORA_SOURCE_BYTES)
+    );
 }}
 "#,
-        mir_json_literal = format!("{:?}", mir_json),
-        source_literal = format!("{:?}", source),
-        path_literal = format!("{:?}", path),
+        mir_bytes = render_c_byte_array(&mir_json),
+        source_bytes = render_c_byte_array(source.as_bytes()),
+        path_bytes = render_c_byte_array(path.as_bytes()),
     )
+}
+
+fn render_c_byte_array(bytes: &[u8]) -> String {
+    let mut rendered = String::new();
+    for (index, byte) in bytes.iter().enumerate() {
+        if index % 12 == 0 {
+            rendered.push_str("    ");
+        }
+        rendered.push_str(&format!("0x{:02x}", byte));
+        if index + 1 != bytes.len() {
+            rendered.push_str(", ");
+        }
+        if index % 12 == 11 && index + 1 != bytes.len() {
+            rendered.push('\n');
+        }
+    }
+    if bytes.is_empty() {
+        rendered.push_str("    0x00");
+    }
+    rendered
 }
 
 fn write_stdout(text: &str) {
@@ -527,8 +670,8 @@ fn print_usage_and_exit() -> ! {
     eprintln!(
         "   or: aura <check|run|run-mir|build|ast|ast-json|mir|analyze> --stdin <virtual-path>"
     );
-    eprintln!("   or: aura build -o <output> <file.au>");
-    eprintln!("   or: aura build -o <output> --stdin <virtual-path>");
+    eprintln!("   or: aura build [-o <output>] [--backend auto|direct|mir-runtime] <file.au>");
+    eprintln!("   or: aura build [-o <output>] [--backend auto|direct|mir-runtime] --stdin <virtual-path>");
     eprintln!("   or: aura complete --line <n> --character <n> [--trigger .] <file.au>");
     eprintln!(
         "   or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>"
@@ -540,19 +683,19 @@ fn print_usage_and_exit() -> ! {
 mod tests {
     use aurora_compiler::lower_source_to_mir;
 
-    use super::render_bootstrap_runner;
+    use super::render_native_launcher_source;
 
     #[test]
-    fn bootstrap_runner_uses_mir_first_backend_path() {
+    fn native_launcher_embeds_serialized_mir_and_calls_runtime_entrypoint() {
         let mir = lower_source_to_mir("print(value=1)\n").expect("source should lower to MIR");
-        let runner = render_bootstrap_runner("/virtual/test.au", "print(value=1)\n", &mir);
+        let runner = render_native_launcher_source("/virtual/test.au", "print(value=1)\n", &mir);
         assert!(
-            runner.contains("aurora_compiler::run_mir(&mir)"),
-            "bootstrap runner should execute embedded MIR directly"
+            runner.contains("aurora_native_run"),
+            "native launcher should call the compiled Aurora runtime entrypoint"
         );
         assert!(
-            runner.contains("const MIR_JSON: &str"),
-            "bootstrap runner should embed serialized MIR"
+            runner.contains("static const uint8_t AURORA_MIR_BYTES[]"),
+            "native launcher should embed serialized MIR bytes"
         );
     }
 }

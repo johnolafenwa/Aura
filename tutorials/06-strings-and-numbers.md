@@ -52,6 +52,8 @@ def main():
 
 See [examples/numbers/float_sqrt.au](../examples/numbers/float_sqrt.au).
 
+Whole-number floating-point values keep a trailing `.0` when printed, so `5.0` remains visually distinct from `5`.
+
 The bootstrap compiler also supports ordinary `float32` values through typed contexts:
 
 ```python
@@ -142,6 +144,8 @@ long_wait: Duration = 2m
 ```
 
 These values are mainly used with `after(...)` inside `select`.
+
+When printed directly, a `Duration` currently renders in milliseconds with an `ms` suffix.
 
 ## Numeric Type Names
 

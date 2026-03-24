@@ -1,0 +1,29 @@
+enum Outer:
+    A(int32)
+    B(int32)
+
+enum Inner:
+    X
+    Y
+
+def nested_match(o: Outer, i: Inner) -> int32:
+    match o:
+        case Outer.A(val):
+            match i:
+                case Inner.X:
+                    return val + 1
+                case Inner.Y:
+                    return val + 2
+        case Outer.B(val):
+            match i:
+                case Inner.X:
+                    return val + 10
+                case Inner.Y:
+                    return val + 20
+
+def main() -> int32:
+    print(nested_match(Outer.A(100), Inner.X))
+    print(nested_match(Outer.A(100), Inner.Y))
+    print(nested_match(Outer.B(200), Inner.X))
+    print(nested_match(Outer.B(200), Inner.Y))
+    return 0

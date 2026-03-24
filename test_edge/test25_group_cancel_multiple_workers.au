@@ -1,0 +1,40 @@
+def slow_worker(out: Channel[int32]):
+    mut i: int32 = 0
+    while i < 1000000:
+        if cancelled():
+            out.send(-1)
+            return
+        i += 1
+    out.send(999)
+
+def fast_worker(out: Channel[int32]):
+    out.send(42)
+
+def main() -> int32:
+    out: Channel[int32] = channel()
+
+    with task_group() as group:
+        group.spawn(slow_worker, out.clone())
+        group.spawn(fast_worker, out.clone())
+
+        select:
+            case value = out.recv():
+                match value:
+                    case Option.Some(v):
+                        print(v)
+                    case Option.None:
+                        print("none")
+
+        group.cancel()
+
+    select:
+        case value = out.recv():
+            match value:
+                case Option.Some(v):
+                    print(v)
+                case Option.None:
+                    print("none after cancel")
+        case after(100ms):
+            print("timeout after cancel")
+
+    return 0

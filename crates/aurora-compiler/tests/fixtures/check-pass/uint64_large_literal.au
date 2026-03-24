@@ -1,0 +1,4 @@
+def main() -> int32:
+    value: uint64 = 18446744073709551615
+    print(value)
+    return 0

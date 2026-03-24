@@ -30,6 +30,7 @@ pub struct Program {
 pub struct ClassInfo {
     pub module_name: String,
     pub decl: ClassDecl,
+    pub type_param_bounds: BTreeMap<String, Vec<String>>,
     pub fields: BTreeMap<String, FieldInfo>,
     pub methods: BTreeMap<String, MethodInfo>,
 }
@@ -44,6 +45,7 @@ pub struct FieldInfo {
 pub struct EnumInfo {
     pub module_name: String,
     pub decl: EnumDecl,
+    pub type_param_bounds: BTreeMap<String, Vec<String>>,
     pub variants: BTreeMap<String, EnumVariantInfo>,
 }
 
@@ -390,6 +392,8 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             continue;
         };
         validate_type_params(&enum_decl.type_params, enum_decl.span, "enum")?;
+        let type_param_bounds =
+            lower_trait_bounds(&enum_decl.type_param_bounds, &traits, enum_decl.span)?;
         let mut variants = BTreeMap::new();
         let type_param_scope = type_param_scope(&enum_decl.type_params);
         for variant in &enum_decl.variants {
@@ -416,6 +420,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             EnumInfo {
                 module_name: module_name.clone(),
                 decl: enum_decl.clone(),
+                type_param_bounds,
                 variants,
             },
         );
@@ -427,12 +432,27 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             continue;
         };
         validate_type_params(&class_decl.type_params, class_decl.span, "class")?;
+        let type_param_bounds =
+            lower_trait_bounds(&class_decl.type_param_bounds, &traits, class_decl.span)?;
         let mut fields = BTreeMap::new();
         let mut methods = BTreeMap::new();
         let class_type_param_scope = type_param_scope(&class_decl.type_params);
         for field in &class_decl.fields {
-            let lowered =
-                lower_type(&field.ty, &type_names, &type_arities, &class_type_param_scope)?;
+            let lowered = lower_type(
+                &field.ty,
+                &type_names,
+                &type_arities,
+                &class_type_param_scope,
+            )?;
+            if type_contains_named(&lowered, &class_decl.name) {
+                return Err(Diagnostic::at(
+                    field.span,
+                    format!(
+                        "recursive field `{}` on class `{}` requires `indirect`, which is not implemented yet in the compiler",
+                        field.name, class_decl.name
+                    ),
+                ));
+            }
             if fields
                 .insert(
                     field.name.clone(),
@@ -457,8 +477,10 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             validate_type_params(&method.type_params, method.span, "method")?;
             let method_type_param_scope =
                 merged_type_param_scope(&class_type_param_scope, &method.type_params);
-            let type_param_bounds =
-                lower_trait_bounds(&method.type_param_bounds, &traits, method.span)?;
+            let type_param_bounds = merge_trait_bounds(
+                &type_param_bounds,
+                &lower_trait_bounds(&method.type_param_bounds, &traits, method.span)?,
+            );
             let params = method
                 .params
                 .iter()
@@ -506,6 +528,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             ClassInfo {
                 module_name: module_name.clone(),
                 decl: class_decl.clone(),
+                type_param_bounds,
                 fields,
                 methods,
             },
@@ -532,10 +555,9 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 continue;
             };
             let lowered = class.fields.get(&field.name).unwrap().ty.clone();
-            let default_ty =
-                default_checker
-                    .with_type_params(class_type_param_scope.clone(), BTreeMap::new())
-                    .type_of_expr_hint(default, &mut HashMap::new(), Some(&lowered))?;
+            let default_ty = default_checker
+                .with_type_params(class_type_param_scope.clone(), BTreeMap::new())
+                .type_of_expr_hint(default, &mut HashMap::new(), Some(&lowered))?;
             if default_ty != lowered {
                 return Err(Diagnostic::at(
                     field.span,
@@ -555,8 +577,11 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         };
         validate_type_params(&function_decl.type_params, function_decl.span, "function")?;
         let function_type_param_scope = type_param_scope(&function_decl.type_params);
-        let type_param_bounds =
-            lower_trait_bounds(&function_decl.type_param_bounds, &traits, function_decl.span)?;
+        let type_param_bounds = lower_trait_bounds(
+            &function_decl.type_param_bounds,
+            &traits,
+            function_decl.span,
+        )?;
         let params = function_decl
             .params
             .iter()
@@ -600,17 +625,21 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 format!("unknown trait `{}`", impl_decl.trait_name),
             )
         })?;
-        let for_type = lower_type(&impl_decl.for_type, &type_names, &type_arities, &BTreeMap::new())?;
+        let for_type = lower_type(
+            &impl_decl.for_type,
+            &type_names,
+            &type_arities,
+            &BTreeMap::new(),
+        )?;
         if matches!(for_type, Type::TypeParam(_)) {
             return Err(Diagnostic::at(
                 impl_decl.span,
                 "trait impl target must be a concrete type",
             ));
         }
-        if trait_impls
-            .iter()
-            .any(|existing: &TraitImplInfo| existing.trait_name == impl_decl.trait_name && existing.for_type == for_type)
-        {
+        if trait_impls.iter().any(|existing: &TraitImplInfo| {
+            existing.trait_name == impl_decl.trait_name && existing.for_type == for_type
+        }) {
             return Err(Diagnostic::at(
                 impl_decl.span,
                 format!(
@@ -662,7 +691,9 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &type_arities,
                 &method_type_param_scope,
             )?;
-            if params != trait_method.signature.params || return_type != trait_method.signature.return_type {
+            if params != trait_method.signature.params
+                || return_type != trait_method.signature.return_type
+            {
                 return Err(Diagnostic::at(
                     method.span,
                     format!(
@@ -786,7 +817,10 @@ fn lower_type(
         if !type_ref.args.is_empty() {
             return Err(Diagnostic::at(
                 type_ref.span,
-                format!("type parameter `{}` does not take type arguments", type_ref.name),
+                format!(
+                    "type parameter `{}` does not take type arguments",
+                    type_ref.name
+                ),
             ));
         }
         return Ok(Type::TypeParam(type_ref.name.clone()));
@@ -976,7 +1010,30 @@ fn lower_trait_bounds(
     Ok(lowered)
 }
 
-fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
+fn merge_trait_bounds(
+    left: &BTreeMap<String, Vec<String>>,
+    right: &BTreeMap<String, Vec<String>>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut merged = left.clone();
+    for (type_param, bounds) in right {
+        merged
+            .entry(type_param.clone())
+            .or_default()
+            .extend(bounds.iter().cloned());
+    }
+    merged
+}
+
+fn type_contains_named(ty: &Type, target: &str) -> bool {
+    match ty {
+        Type::Named(name, args) => {
+            name == target || args.iter().any(|arg| type_contains_named(arg, target))
+        }
+        Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+    }
+}
+
+pub(crate) fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) -> Type {
     match ty {
         Type::Unit => Type::Unit,
         Type::Module(name) => Type::Module(name.clone()),
@@ -1002,24 +1059,7 @@ fn has_unresolved_type_params(ty: &Type) -> bool {
     }
 }
 
-fn collect_unresolved_type_params(ty: &Type, out: &mut Vec<String>) {
-    match ty {
-        Type::Unit => {}
-        Type::Module(_) => {}
-        Type::TypeParam(name) => {
-            if !out.contains(name) {
-                out.push(name.clone());
-            }
-        }
-        Type::Named(_, args) => {
-            for arg in args {
-                collect_unresolved_type_params(arg, out);
-            }
-        }
-    }
-}
-
-fn substitutions_from_decl_type_args(
+pub(crate) fn substitutions_from_decl_type_args(
     type_params: &[String],
     actual_args: &[Type],
 ) -> HashMap<String, Type> {
@@ -1159,7 +1199,9 @@ fn is_numeric_type(ty: &Type) -> bool {
 #[derive(Clone)]
 struct LocalBinding {
     ty: Type,
-    mutable: bool,
+    assignable: bool,
+    mutable_place: bool,
+    passing: ReceiverKind,
     moved: bool,
 }
 
@@ -1191,7 +1233,9 @@ impl<'a> FunctionChecker<'a> {
                 name.clone(),
                 LocalBinding {
                     ty: Type::Module(namespace.path.clone()),
-                    mutable: false,
+                    assignable: false,
+                    mutable_place: false,
+                    passing: ReceiverKind::Value,
                     moved: false,
                 },
             );
@@ -1265,14 +1309,13 @@ impl<'a> FunctionChecker<'a> {
 
     fn validate_integer_literal(
         &self,
-        value: i64,
+        value: i128,
         target_ty: &Type,
         span: crate::diag::Span,
     ) -> Result<()> {
         let Some((min, max)) = integer_type_bounds(target_ty) else {
             return Ok(());
         };
-        let value = value as i128;
         if value < min || value > max {
             return Err(Diagnostic::at(
                 span,
@@ -1287,14 +1330,14 @@ impl<'a> FunctionChecker<'a> {
 
     fn validate_negative_integer_literal(
         &self,
-        value: i64,
+        value: i128,
         target_ty: &Type,
         span: crate::diag::Span,
     ) -> Result<()> {
         let Some((min, _max)) = integer_type_bounds(target_ty) else {
             return Ok(());
         };
-        let negative = -(value as i128);
+        let negative = -value;
         if negative < min {
             return Err(Diagnostic::at(
                 span,
@@ -1319,8 +1362,17 @@ impl<'a> FunctionChecker<'a> {
         if binding.ty.is_copy() {
             return Ok(());
         }
+        if binding.passing != ReceiverKind::Value {
+            return Err(Diagnostic::at(
+                span,
+                format!("cannot move borrowed value `{}`", name),
+            ));
+        }
         if binding.moved {
-            return Err(Diagnostic::at(span, format!("use of moved value `{}`", name)));
+            return Err(Diagnostic::at(
+                span,
+                format!("use of moved value `{}`", name),
+            ));
         }
         binding.moved = true;
         Ok(())
@@ -1353,6 +1405,15 @@ impl<'a> FunctionChecker<'a> {
             .collect::<Vec<_>>();
 
         for param in params {
+            if param.passing != ReceiverKind::Value && param.default.is_some() {
+                return Err(Diagnostic::at(
+                    param.span,
+                    format!(
+                        "borrowed parameter `{}` may not have a default value",
+                        param.name
+                    ),
+                ));
+            }
             let lowered = lower_type(
                 &param.ty,
                 self.type_names,
@@ -1432,7 +1493,9 @@ impl<'a> FunctionChecker<'a> {
                 param.name.clone(),
                 LocalBinding {
                     ty,
-                    mutable: false,
+                    assignable: false,
+                    mutable_place: param.passing == ReceiverKind::BorrowMut,
+                    passing: param.passing,
                     moved: false,
                 },
             );
@@ -1453,8 +1516,15 @@ impl<'a> FunctionChecker<'a> {
         let class_type_param_scope = type_param_scope(&class_decl.type_params);
         let method_type_param_scope =
             merged_type_param_scope(&class_type_param_scope, &method.type_params);
-        let type_param_bounds =
-            lower_trait_bounds(&method.type_param_bounds, self.traits, method.span)?;
+        let class_type_param_bounds = self
+            .classes
+            .get(&class_decl.name)
+            .map(|class_info| class_info.type_param_bounds.clone())
+            .unwrap_or_default();
+        let type_param_bounds = merge_trait_bounds(
+            &class_type_param_bounds,
+            &lower_trait_bounds(&method.type_param_bounds, self.traits, method.span)?,
+        );
         let return_type = lower_type(
             &method.return_type,
             self.type_names,
@@ -1480,7 +1550,9 @@ impl<'a> FunctionChecker<'a> {
                             .map(Type::TypeParam)
                             .collect(),
                     ),
-                    mutable: receiver_kind == ReceiverKind::BorrowMut,
+                    assignable: false,
+                    mutable_place: receiver_kind == ReceiverKind::BorrowMut,
+                    passing: receiver_kind,
                     moved: false,
                 },
             );
@@ -1496,7 +1568,9 @@ impl<'a> FunctionChecker<'a> {
                 param.name.clone(),
                 LocalBinding {
                     ty,
-                    mutable: false,
+                    assignable: false,
+                    mutable_place: param.passing == ReceiverKind::BorrowMut,
+                    passing: param.passing,
                     moved: false,
                 },
             );
@@ -1534,7 +1608,9 @@ impl<'a> FunctionChecker<'a> {
                 "self".to_string(),
                 LocalBinding {
                     ty: for_type.clone(),
-                    mutable: receiver_kind == ReceiverKind::BorrowMut,
+                    assignable: false,
+                    mutable_place: receiver_kind == ReceiverKind::BorrowMut,
+                    passing: receiver_kind,
                     moved: false,
                 },
             );
@@ -1550,7 +1626,9 @@ impl<'a> FunctionChecker<'a> {
                 param.name.clone(),
                 LocalBinding {
                     ty,
-                    mutable: false,
+                    assignable: false,
+                    mutable_place: param.passing == ReceiverKind::BorrowMut,
+                    passing: param.passing,
                     moved: false,
                 },
             );
@@ -1705,7 +1783,9 @@ impl<'a> FunctionChecker<'a> {
                         for_stmt.binding.clone(),
                         LocalBinding {
                             ty: Type::named("int32"),
-                            mutable: false,
+                            assignable: false,
+                            mutable_place: false,
+                            passing: ReceiverKind::Value,
                             moved: false,
                         },
                     );
@@ -1807,7 +1887,9 @@ impl<'a> FunctionChecker<'a> {
             with_stmt.binding.clone(),
             LocalBinding {
                 ty: value_ty,
-                mutable: true,
+                assignable: true,
+                mutable_place: true,
+                passing: ReceiverKind::Value,
                 moved: false,
             },
         );
@@ -1858,7 +1940,9 @@ impl<'a> FunctionChecker<'a> {
                         binding.clone(),
                         LocalBinding {
                             ty,
-                            mutable: false,
+                            assignable: false,
+                            mutable_place: false,
+                            passing: ReceiverKind::Value,
                             moved: false,
                         },
                     );
@@ -2077,7 +2161,7 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
 
-            if !existing.mutable {
+            if !existing.assignable {
                 return Err(Diagnostic::at(
                     assign.span,
                     format!("cannot assign to immutable binding `{}`", binding_name),
@@ -2087,7 +2171,10 @@ impl<'a> FunctionChecker<'a> {
             if existing.moved && assign.op.is_some() {
                 return Err(Diagnostic::at(
                     assign.span,
-                    format!("cannot read moved value `{}` in compound assignment", binding_name),
+                    format!(
+                        "cannot read moved value `{}` in compound assignment",
+                        binding_name
+                    ),
                 ));
             }
 
@@ -2152,7 +2239,9 @@ impl<'a> FunctionChecker<'a> {
             binding_name.clone(),
             LocalBinding {
                 ty: final_ty,
-                mutable: assign.mutable,
+                assignable: assign.mutable,
+                mutable_place: assign.mutable,
+                passing: ReceiverKind::Value,
                 moved: false,
             },
         );
@@ -2266,6 +2355,15 @@ impl<'a> FunctionChecker<'a> {
                         "`spawn` requires a function or method call expression",
                     ));
                 };
+                if let ExprKind::Name(function_name) = &callee.kind {
+                    if let Some(function) = self.functions.get(function_name) {
+                        self.require_spawnable_function(
+                            function_name,
+                            &function.decl.params,
+                            callee.span,
+                        )?;
+                    }
+                }
                 let return_ty = self.type_of_call(callee, args, value.span, locals, None)?;
                 if *detached {
                     Ok(Type::Unit)
@@ -2330,10 +2428,13 @@ impl<'a> FunctionChecker<'a> {
                 }
                 let mut left_ty = self.type_of_expr_hint(left, locals, expected)?;
                 let mut right_ty = self.type_of_expr_hint(right, locals, Some(&left_ty))?;
-                if left_ty != right_ty && matches!(left.kind, ExprKind::Int(_) | ExprKind::Float(_)) {
+                if left_ty != right_ty && matches!(left.kind, ExprKind::Int(_) | ExprKind::Float(_))
+                {
                     left_ty = self.type_of_expr_hint(left, locals, Some(&right_ty))?;
                 }
-                if left_ty != right_ty && matches!(right.kind, ExprKind::Int(_) | ExprKind::Float(_)) {
+                if left_ty != right_ty
+                    && matches!(right.kind, ExprKind::Int(_) | ExprKind::Float(_))
+                {
                     right_ty = self.type_of_expr_hint(right, locals, Some(&left_ty))?;
                 }
                 self.type_of_binary(expr.span, *op, left_ty, right_ty)
@@ -2372,11 +2473,43 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        return Ok(Type::named(enum_name));
+                        if let Some(Type::Named(expected_name, _)) = expected {
+                            if expected_name == enum_name {
+                                return Ok(expected.unwrap().clone());
+                            }
+                        }
+                        if enum_info.decl.type_params.is_empty() {
+                            return Ok(Type::named(enum_name));
+                        }
+                        let missing = enum_info
+                            .decl
+                            .type_params
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "T".to_string());
+                        return Err(Diagnostic::at(
+                            expr.span,
+                            format!(
+                                "cannot infer type parameter `{}` for enum variant `{}.{}`",
+                                missing, enum_name, field
+                            ),
+                        ));
                     }
                 }
                 let object_ty = self.type_of_expr(object, locals)?;
-                self.resolve_member_type(&object_ty, field, expr.span)
+                let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
+                if !member_ty.is_copy() {
+                    if let Some(name) = self.borrowed_root_binding_name(object, locals) {
+                        return Err(Diagnostic::at(
+                            expr.span,
+                            format!(
+                                "cannot move non-copy field `{}` out of borrowed value `{}`",
+                                field, name
+                            ),
+                        ));
+                    }
+                }
+                Ok(member_ty)
             }
             ExprKind::Call { callee, args } => {
                 self.type_of_call(callee, args, expr.span, locals, expected)
@@ -2537,6 +2670,7 @@ impl<'a> FunctionChecker<'a> {
                 let function = self.functions.get(name).unwrap();
                 self.type_check_callable_args(
                     &format!("function `{}`", name),
+                    &function.decl.type_params,
                     &function.decl.params,
                     &function.signature.params,
                     &function.signature.return_type,
@@ -2566,10 +2700,7 @@ impl<'a> FunctionChecker<'a> {
                         if expected_name == name
                             && expected_args.len() == class.decl.type_params.len() =>
                     {
-                        substitutions_from_decl_type_args(
-                            &class.decl.type_params,
-                            expected_args,
-                        )
+                        substitutions_from_decl_type_args(&class.decl.type_params, expected_args)
                     }
                     _ => HashMap::new(),
                 };
@@ -2584,10 +2715,7 @@ impl<'a> FunctionChecker<'a> {
                     if self.is_external_module(&class.module_name) && !field_info.public {
                         return Err(Diagnostic::at(
                             argument.span,
-                            format!(
-                                "field `{}` is private on `{}`",
-                                field_name, class.decl.name
-                            ),
+                            format!("field `{}` is private on `{}`", field_name, class.decl.name),
                         ));
                     }
                     if provided.insert(field_name.clone(), ()).is_some() {
@@ -2656,6 +2784,16 @@ impl<'a> FunctionChecker<'a> {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
+                for (type_param, bounds) in &class.type_param_bounds {
+                    let resolved_ty = resolved_args[class
+                        .decl
+                        .type_params
+                        .iter()
+                        .position(|name| name == type_param)
+                        .expect("class type parameter should exist")]
+                    .clone();
+                    self.assert_type_satisfies_bounds(&resolved_ty, bounds, span)?;
+                }
 
                 Ok(Type::Named(name.clone(), resolved_args))
             }
@@ -2674,6 +2812,7 @@ impl<'a> FunctionChecker<'a> {
                             }
                             return self.type_check_callable_args(
                                 &format!("method `{}`", field),
+                                &method.decl.type_params,
                                 &method.decl.params,
                                 &method.signature.params,
                                 &method.signature.return_type,
@@ -2710,11 +2849,11 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                let actual = self.type_of_expr_hint(
-                                    &args[0].value,
-                                    locals,
-                                    Some(&payload_ty),
-                                )?;
+                                    let actual = self.type_of_expr_hint(
+                                        &args[0].value,
+                                        locals,
+                                        Some(&payload_ty),
+                                    )?;
                                     if actual != payload_ty {
                                         return Err(Diagnostic::at(
                                             args[0].span,
@@ -2752,6 +2891,29 @@ impl<'a> FunctionChecker<'a> {
                             return Err(Diagnostic::at(
                                 span,
                                 "enum variant constructors do not take keyword arguments",
+                            ));
+                        }
+                        if variant.payload.is_none() && args.is_empty() {
+                            if let Some(Type::Named(expected_name, _)) = expected {
+                                if expected_name == enum_name {
+                                    return Ok(expected.unwrap().clone());
+                                }
+                            }
+                            if enum_info.decl.type_params.is_empty() {
+                                return Ok(Type::named(enum_name));
+                            }
+                            let missing = enum_info
+                                .decl
+                                .type_params
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| "T".to_string());
+                            return Err(Diagnostic::at(
+                                span,
+                                format!(
+                                    "cannot infer type parameter `{}` for enum variant `{}.{}`",
+                                    missing, enum_name, field
+                                ),
                             ));
                         }
                         let mut substitutions = match expected {
@@ -2797,11 +2959,11 @@ impl<'a> FunctionChecker<'a> {
                                             field, enum_name, hinted_payload_ty, actual, error.message
                                         ),
                                     ));
-                                    }
-                                    if !actual.is_copy() {
-                                        self.consume_value_expr(&args[0].value, locals)?;
-                                    }
                                 }
+                                if !actual.is_copy() {
+                                    self.consume_value_expr(&args[0].value, locals)?;
+                                }
+                            }
                             None => {
                                 return Err(Diagnostic::at(
                                     span,
@@ -2828,6 +2990,16 @@ impl<'a> FunctionChecker<'a> {
                                 })
                             })
                             .collect::<Result<Vec<_>>>()?;
+                        for (type_param, bounds) in &enum_info.type_param_bounds {
+                            let resolved_ty = resolved_args[enum_info
+                                .decl
+                                .type_params
+                                .iter()
+                                .position(|name| name == type_param)
+                                .expect("enum type parameter should exist")]
+                            .clone();
+                            self.assert_type_satisfies_bounds(&resolved_ty, bounds, span)?;
+                        }
                         return Ok(Type::Named(enum_name.clone(), resolved_args));
                     }
                 }
@@ -2835,14 +3007,12 @@ impl<'a> FunctionChecker<'a> {
                 let receiver_ty = self.type_of_expr(object, locals)?;
                 if let Type::Module(module_path) = &receiver_ty {
                     let namespace = self.module_namespace(module_path).ok_or_else(|| {
-                        Diagnostic::at(
-                            span,
-                            format!("unknown module namespace `{}`", module_path),
-                        )
+                        Diagnostic::at(span, format!("unknown module namespace `{}`", module_path))
                     })?;
                     if let Some(function) = namespace.functions.get(field) {
                         return self.type_check_callable_args(
                             &format!("function `{}`", function.decl.name),
+                            &function.decl.type_params,
                             &function.decl.params,
                             &function.signature.params,
                             &function.signature.return_type,
@@ -3038,9 +3208,15 @@ impl<'a> FunctionChecker<'a> {
                                             format!("unknown function `{}`", function_name),
                                         )
                                     })?;
+                                self.require_spawnable_function(
+                                    function_name,
+                                    &function.decl.params,
+                                    args[0].span,
+                                )?;
                                 let spawn_args = &args[1..];
                                 self.type_check_callable_args(
                                     &format!("function `{}`", function_name),
+                                    &function.decl.type_params,
                                     &function.decl.params,
                                     &function.signature.params,
                                     &function.signature.return_type,
@@ -3101,6 +3277,7 @@ impl<'a> FunctionChecker<'a> {
                             }
                             return self.type_check_callable_args(
                                 &format!("method `{}`", field),
+                                &method.decl.type_params,
                                 &method.decl.params,
                                 &method.signature.params,
                                 &method.signature.return_type,
@@ -3121,6 +3298,7 @@ impl<'a> FunctionChecker<'a> {
                     if let Ok(method) = self.trait_method_from_type_param(type_param_name, field) {
                         return self.type_check_callable_args(
                             &format!("method `{}`", field),
+                            &method.decl.type_params,
                             &method.decl.params,
                             &method.signature.params,
                             &method.signature.return_type,
@@ -3138,6 +3316,7 @@ impl<'a> FunctionChecker<'a> {
                 {
                     return self.type_check_callable_args(
                         &format!("method `{}`", field),
+                        &method.decl.type_params,
                         &method.decl.params,
                         &method.signature.params,
                         &method.signature.return_type,
@@ -3203,85 +3382,106 @@ impl<'a> FunctionChecker<'a> {
         }
 
         let mut covered = BTreeMap::<String, crate::diag::Span>::new();
+        let mut wildcard_span = None;
         let mut all_return = true;
 
-        for arm in &match_stmt.arms {
-            let Pattern::Variant(pattern) = &arm.pattern;
-            if pattern.enum_name != *enum_name {
-                return Err(Diagnostic::at(
-                    pattern.span,
-                    format!(
-                        "match arm expects enum `{}`, found pattern for `{}`",
-                        enum_name, pattern.enum_name
-                    ),
-                ));
-            }
-
-            let Some(variant_payload) = variants
-                .iter()
-                .find(|(name, _)| name == &pattern.variant_name)
-                .map(|(_, payload)| payload.clone())
-            else {
-                return Err(Diagnostic::at(
-                    pattern.span,
-                    format!(
-                        "enum `{}` has no variant `{}`",
-                        enum_name, pattern.variant_name
-                    ),
-                ));
-            };
-
-            if let Some(previous) = covered.insert(pattern.variant_name.clone(), pattern.span) {
-                return Err(Diagnostic::at(
-                    pattern.span,
-                    format!(
-                        "duplicate match arm for `{}.{}` (previously matched at {})",
-                        enum_name, pattern.variant_name, previous
-                    ),
-                ));
-            }
-
-            match (&variant_payload, &pattern.binding) {
-                (Some(_), None) => {
-                    return Err(Diagnostic::at(
-                        pattern.span,
-                        format!(
-                            "variant `{}.{}` carries a payload and must bind it",
-                            enum_name, pattern.variant_name
-                        ),
-                    ));
-                }
-                (None, Some(_)) => {
-                    return Err(Diagnostic::at(
-                        pattern.span,
-                        format!(
-                            "variant `{}.{}` does not carry a payload",
-                            enum_name, pattern.variant_name
-                        ),
-                    ));
-                }
-                _ => {}
-            }
-
+        for (index, arm) in match_stmt.arms.iter().enumerate() {
             let mut arm_locals = locals.clone();
-            if let (Some(payload_ty), Some(binding)) = (&variant_payload, &pattern.binding) {
-                if arm_locals.contains_key(binding) {
-                    return Err(Diagnostic::at(
-                        pattern.span,
-                        format!(
-                            "pattern binding `{}` would shadow an existing name",
-                            binding
-                        ),
-                    ));
+            match &arm.pattern {
+                Pattern::Wildcard(span) => {
+                    if wildcard_span.is_some() {
+                        return Err(Diagnostic::at(*span, "duplicate wildcard match arm"));
+                    }
+                    if index + 1 != match_stmt.arms.len() {
+                        return Err(Diagnostic::at(
+                            *span,
+                            "wildcard match arm must be the final `case`",
+                        ));
+                    }
+                    wildcard_span = Some(*span);
                 }
-                arm_locals.insert(
-                    binding.clone(),
-                    LocalBinding {
-                        ty: payload_ty.clone(),
-                        mutable: false,
-                        moved: false,
-                    },
-                );
+                Pattern::Variant(pattern) => {
+                    if pattern.enum_name != *enum_name {
+                        return Err(Diagnostic::at(
+                            pattern.span,
+                            format!(
+                                "match arm expects enum `{}`, found pattern for `{}`",
+                                enum_name, pattern.enum_name
+                            ),
+                        ));
+                    }
+
+                    let Some(variant_payload) = variants
+                        .iter()
+                        .find(|(name, _)| name == &pattern.variant_name)
+                        .map(|(_, payload)| payload.clone())
+                    else {
+                        return Err(Diagnostic::at(
+                            pattern.span,
+                            format!(
+                                "enum `{}` has no variant `{}`",
+                                enum_name, pattern.variant_name
+                            ),
+                        ));
+                    };
+
+                    if let Some(previous) =
+                        covered.insert(pattern.variant_name.clone(), pattern.span)
+                    {
+                        return Err(Diagnostic::at(
+                            pattern.span,
+                            format!(
+                                "duplicate match arm for `{}.{}` (previously matched at {})",
+                                enum_name, pattern.variant_name, previous
+                            ),
+                        ));
+                    }
+
+                    match (&variant_payload, &pattern.binding) {
+                        (Some(_), None) => {
+                            return Err(Diagnostic::at(
+                                pattern.span,
+                                format!(
+                                    "variant `{}.{}` carries a payload and must bind it",
+                                    enum_name, pattern.variant_name
+                                ),
+                            ));
+                        }
+                        (None, Some(_)) => {
+                            return Err(Diagnostic::at(
+                                pattern.span,
+                                format!(
+                                    "variant `{}.{}` does not carry a payload",
+                                    enum_name, pattern.variant_name
+                                ),
+                            ));
+                        }
+                        _ => {}
+                    }
+
+                    if let (Some(payload_ty), Some(binding)) = (&variant_payload, &pattern.binding)
+                    {
+                        if arm_locals.contains_key(binding) {
+                            return Err(Diagnostic::at(
+                                pattern.span,
+                                format!(
+                                    "pattern binding `{}` would shadow an existing name",
+                                    binding
+                                ),
+                            ));
+                        }
+                        arm_locals.insert(
+                            binding.clone(),
+                            LocalBinding {
+                                ty: payload_ty.clone(),
+                                assignable: false,
+                                mutable_place: false,
+                                passing: ReceiverKind::Value,
+                                moved: false,
+                            },
+                        );
+                    }
+                }
             }
 
             let arm_flow = self.check_block(
@@ -3301,7 +3501,7 @@ impl<'a> FunctionChecker<'a> {
             .filter(|(name, _)| !covered.contains_key(name))
             .map(|(name, _)| name.clone())
             .collect::<Vec<_>>();
-        if !missing.is_empty() {
+        if wildcard_span.is_none() && !missing.is_empty() {
             let rendered = missing
                 .iter()
                 .map(|name| format!("`{}`", name))
@@ -3411,7 +3611,10 @@ impl<'a> FunctionChecker<'a> {
             if self.is_external_module(&class_info.module_name) && !method.decl.public {
                 return Err(Diagnostic::at(
                     span,
-                    format!("method `{}` is private on `{}`", field, class_info.decl.name),
+                    format!(
+                        "method `{}` is private on `{}`",
+                        field, class_info.decl.name
+                    ),
                 ));
             }
         }
@@ -3443,7 +3646,7 @@ impl<'a> FunctionChecker<'a> {
         match &expr.kind {
             ExprKind::Name(name) => Ok(locals
                 .get(name)
-                .map(|binding| binding.mutable)
+                .map(|binding| binding.mutable_place)
                 .unwrap_or(false)),
             ExprKind::Group(inner) => self.is_mutable_place(inner, locals),
             ExprKind::Member { object, field } => {
@@ -3466,6 +3669,22 @@ impl<'a> FunctionChecker<'a> {
                 format!("{}.{}", self.render_place_expr(object), field)
             }
             _ => "<place>".to_string(),
+        }
+    }
+
+    fn borrowed_root_binding_name(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Name(name) => locals
+                .get(name)
+                .filter(|binding| binding.passing != ReceiverKind::Value && name != "self")
+                .map(|_| name.clone()),
+            ExprKind::Group(inner) => self.borrowed_root_binding_name(inner, locals),
+            ExprKind::Member { object, .. } => self.borrowed_root_binding_name(object, locals),
+            _ => None,
         }
     }
 
@@ -3498,8 +3717,11 @@ impl<'a> FunctionChecker<'a> {
         for bound in bounds {
             match ty {
                 Type::TypeParam(name) => {
-                    let current_bounds =
-                        self.type_param_bounds.get(name).cloned().unwrap_or_default();
+                    let current_bounds = self
+                        .type_param_bounds
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_default();
                     if !current_bounds.iter().any(|current| current == bound) {
                         return Err(Diagnostic::at(
                             span,
@@ -3573,6 +3795,7 @@ impl<'a> FunctionChecker<'a> {
     fn type_check_callable_args(
         &self,
         callee_name: &str,
+        callee_type_params: &[String],
         param_decls: &[Param],
         param_types: &[Type],
         return_type: &Type,
@@ -3617,17 +3840,23 @@ impl<'a> FunctionChecker<'a> {
                 }
             };
             if let Err(error) = unify_type_pattern(expected, &actual, &mut substitutions) {
-                let span = argument.map(|argument| argument.span).unwrap_or(param_decl.span);
+                let span = argument
+                    .map(|argument| argument.span)
+                    .unwrap_or(param_decl.span);
                 return Err(Diagnostic::at(
                     span,
-                    format!("argument type mismatch for {}: {}", callee_name, error.message),
+                    format!(
+                        "argument type mismatch for {}: {}",
+                        callee_name, error.message
+                    ),
                 ));
             }
             resolved_args.push((argument, actual));
         }
 
         if let Some(expected_return) = expected_return {
-            if let Err(error) = unify_type_pattern(return_type, expected_return, &mut substitutions) {
+            if let Err(error) = unify_type_pattern(return_type, expected_return, &mut substitutions)
+            {
                 return Err(Diagnostic::at(
                     span,
                     format!(
@@ -3638,16 +3867,25 @@ impl<'a> FunctionChecker<'a> {
             }
         }
 
-        let mut unresolved = Vec::new();
-        for ty in param_types {
-            collect_unresolved_type_params(&substitute_type(ty, &substitutions), &mut unresolved);
-        }
-        collect_unresolved_type_params(&substitute_type(return_type, &substitutions), &mut unresolved);
-        if let Some(name) = unresolved.first() {
-            return Err(Diagnostic::at(
-                span,
-                format!("cannot infer type parameter `{}` for {}", name, callee_name),
-            ));
+        for type_param in callee_type_params {
+            let Some(resolved) = substitutions.get(type_param) else {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "cannot infer type parameter `{}` for {}",
+                        type_param, callee_name
+                    ),
+                ));
+            };
+            if matches!(resolved, Type::TypeParam(name) if name == type_param) {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "cannot infer type parameter `{}` for {}",
+                        type_param, callee_name
+                    ),
+                ));
+            }
         }
 
         for (type_param, bounds) in callee_type_param_bounds {
@@ -3664,7 +3902,9 @@ impl<'a> FunctionChecker<'a> {
         {
             let expected = substitute_type(expected, &substitutions);
             if actual != expected {
-                let span = argument.map(|argument| argument.span).unwrap_or(param_decl.span);
+                let span = argument
+                    .map(|argument| argument.span)
+                    .unwrap_or(param_decl.span);
                 return Err(Diagnostic::at(
                     span,
                     format!(
@@ -3673,8 +3913,26 @@ impl<'a> FunctionChecker<'a> {
                     ),
                 ));
             }
-            if let Some(argument) = argument.filter(|_| !expected.is_copy()) {
-                self.consume_value_expr(&argument.value, locals)?;
+            if let Some(argument) = argument {
+                match param_decl.passing {
+                    ReceiverKind::Value => {
+                        if !expected.is_copy() {
+                            self.consume_value_expr(&argument.value, locals)?;
+                        }
+                    }
+                    ReceiverKind::Borrow => {}
+                    ReceiverKind::BorrowMut => {
+                        if !self.is_mutable_place(&argument.value, locals)? {
+                            return Err(Diagnostic::at(
+                                argument.span,
+                                format!(
+                                    "argument for parameter `{}` in {} must be a mutable place",
+                                    param_decl.name, callee_name
+                                ),
+                            ));
+                        }
+                    }
+                }
             }
         }
 
@@ -3789,6 +4047,27 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
 
+        Ok(())
+    }
+
+    fn require_spawnable_function(
+        &self,
+        function_name: &str,
+        params: &[Param],
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        if let Some(param) = params
+            .iter()
+            .find(|param| param.passing != ReceiverKind::Value)
+        {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "`spawn` does not yet support borrowed parameter `{}` on function `{}`",
+                    param.name, function_name
+                ),
+            ));
+        }
         Ok(())
     }
 }

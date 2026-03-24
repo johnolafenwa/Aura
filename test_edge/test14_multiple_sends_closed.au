@@ -1,0 +1,24 @@
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    ch.close()
+
+    send_result1 = ch.send(1)
+    match send_result1:
+        case Result.Ok(done):
+            print("error1")
+        case Result.Err(err):
+            match err:
+                case SendError.Closed(value):
+                    print(value)
+
+    send_result2 = ch.send(2)
+    match send_result2:
+        case Result.Ok(done):
+            print("error2")
+        case Result.Err(err):
+            match err:
+                case SendError.Closed(value):
+                    print(value)
+
+    print("multiple sends on closed ok")
+    return 0

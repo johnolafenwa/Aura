@@ -1,8 +1,13 @@
 use std::collections::{BTreeMap, HashMap};
+use std::io::{self, Write};
+use std::panic;
+use std::slice;
+use std::str;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
+use crate::ast::UnaryOp;
 use crate::diag::{Diagnostic, Result};
 use crate::interpreter::{
     cast_numeric_value, CancellationContext, ChannelValue, EnumVariantValue, InstanceValue,
@@ -12,7 +17,6 @@ use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirFunction, MirMethod, MirModule, MirParam,
     MirReceiverKind, MirSelectKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
-use crate::ast::UnaryOp;
 use crate::sema::Type;
 
 pub fn run(module: &MirModule) -> Result<RunOutput> {
@@ -30,6 +34,106 @@ pub fn run(module: &MirModule) -> Result<RunOutput> {
     })
 }
 
+pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> Result<RunOutput> {
+    let module = serde_json::from_slice::<MirModule>(mir_json).map_err(|error| {
+        Diagnostic::new(format!("failed to deserialize embedded MIR: {}", error))
+    })?;
+    let _ = source_path;
+    let _ = source;
+    run(&module)
+}
+
+fn render_runtime_error(path: &str, source: &str, error: &Diagnostic) -> String {
+    error.render_with_source(path, source)
+}
+
+fn write_stream(mut stream: impl Write, text: &str) -> io::Result<()> {
+    stream
+        .write_all(text.as_bytes())
+        .and_then(|_| stream.flush())
+}
+
+fn run_serialized_mir_entrypoint(mir_json: &[u8], source_path: &str, source: &str) -> i32 {
+    match run_serialized_mir(mir_json, source_path, source) {
+        Ok(output) => {
+            if let Err(error) = write_stream(io::stdout().lock(), &output.stdout) {
+                if error.kind() == io::ErrorKind::BrokenPipe {
+                    return 0;
+                }
+                let _ = writeln!(io::stderr().lock(), "failed to write to stdout: {}", error);
+                return 1;
+            }
+            if let Value::Int(code) = output.value {
+                return code as i32;
+            }
+            0
+        }
+        Err(error) => {
+            let rendered = render_runtime_error(source_path, source, &error);
+            let _ = writeln!(io::stderr().lock(), "{}", rendered);
+            1
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_native_run(
+    mir_ptr: *const u8,
+    mir_len: usize,
+    source_path_ptr: *const u8,
+    source_path_len: usize,
+    source_ptr: *const u8,
+    source_len: usize,
+) -> i32 {
+    let result = panic::catch_unwind(|| {
+        if mir_ptr.is_null() || source_path_ptr.is_null() || source_ptr.is_null() {
+            let _ = writeln!(
+                io::stderr().lock(),
+                "aurora native runtime received a null input"
+            );
+            return 1;
+        }
+
+        let mir_json = unsafe { slice::from_raw_parts(mir_ptr, mir_len) };
+        let source_path_bytes = unsafe { slice::from_raw_parts(source_path_ptr, source_path_len) };
+        let source_bytes = unsafe { slice::from_raw_parts(source_ptr, source_len) };
+
+        let source_path = match str::from_utf8(source_path_bytes) {
+            Ok(text) => text,
+            Err(error) => {
+                let _ = writeln!(
+                    io::stderr().lock(),
+                    "embedded source path is not valid UTF-8: {}",
+                    error
+                );
+                return 1;
+            }
+        };
+
+        let source = match str::from_utf8(source_bytes) {
+            Ok(text) => text,
+            Err(error) => {
+                let _ = writeln!(
+                    io::stderr().lock(),
+                    "embedded source is not valid UTF-8: {}",
+                    error
+                );
+                return 1;
+            }
+        };
+
+        run_serialized_mir_entrypoint(mir_json, source_path, source)
+    });
+
+    match result {
+        Ok(code) => code,
+        Err(_) => {
+            let _ = writeln!(io::stderr().lock(), "aurora native runtime panicked");
+            1
+        }
+    }
+}
+
 struct MirRuntime {
     module: Arc<MirModule>,
     functions: HashMap<String, MirFunction>,
@@ -42,6 +146,14 @@ struct MirRuntime {
 struct CallOutcome {
     value: Value,
     updated_receiver: Option<Value>,
+    updated_params: Vec<(usize, Value)>,
+}
+
+#[derive(Clone)]
+struct EvaluatedMirArg {
+    name: Option<String>,
+    value: Value,
+    writeback_place: Option<String>,
 }
 
 enum RvalueOutcome {
@@ -175,17 +287,38 @@ impl MirRuntime {
         }
     }
 
-    fn find_trait_impl_method(
-        &self,
-        receiver_ty: &Type,
-        field: &str,
-    ) -> Option<&MirMethod> {
+    fn find_trait_impl_method(&self, receiver_ty: &Type, field: &str) -> Option<&MirMethod> {
         self.trait_impls.iter().find_map(|trait_impl| {
             if &trait_impl.for_type != receiver_ty {
                 return None;
             }
-            trait_impl.methods.iter().find(|method| method.name == field)
+            trait_impl
+                .methods
+                .iter()
+                .find(|method| method.name == field)
         })
+    }
+
+    fn find_trait_impl_method_for_class_name(
+        &self,
+        class_name: &str,
+        field: &str,
+    ) -> Option<&MirMethod> {
+        let mut matches =
+            self.trait_impls
+                .iter()
+                .filter_map(|trait_impl| match &trait_impl.for_type {
+                    Type::Named(name, _) if name == class_name => trait_impl
+                        .methods
+                        .iter()
+                        .find(|method| method.name == field),
+                    _ => None,
+                });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(first)
     }
 
     fn run_main(&mut self) -> Result<Value> {
@@ -242,10 +375,11 @@ impl MirRuntime {
     fn resolve_place_type(&self, place: &str, env: &Env) -> Option<Type> {
         let mut segments = place.split('.');
         let root = segments.next()?;
-        let mut current = env
-            .place_type(root)
-            .cloned()
-            .or_else(|| env.read_place(root).ok().and_then(|value| Self::infer_value_type(&value)))?;
+        let mut current = env.place_type(root).cloned().or_else(|| {
+            env.read_place(root)
+                .ok()
+                .and_then(|value| Self::infer_value_type(&value))
+        })?;
 
         for segment in segments {
             let Type::Named(class_name, args) = current else {
@@ -266,7 +400,7 @@ impl MirRuntime {
         &mut self,
         function: &MirFunction,
         receiver: Option<Value>,
-        args: Vec<(Option<String>, Value)>,
+        args: Vec<EvaluatedMirArg>,
     ) -> Result<CallOutcome> {
         let mut env = Env::default();
         for local in &function.local_types {
@@ -285,9 +419,9 @@ impl MirRuntime {
         }
 
         let bound_args = bind_args(&function.params, args)?;
-        for (param, value) in function.params.iter().zip(bound_args) {
-            self.validate_value_fits_type(&value, &param.ty, None)?;
-            env.define_typed(&param.name, param.ty.clone(), value);
+        for (param, argument) in function.params.iter().zip(bound_args.iter()) {
+            self.validate_value_fits_type(&argument.value, &param.ty, None)?;
+            env.define_typed(&param.name, param.ty.clone(), argument.value.clone());
         }
 
         let value = self.execute_function(function, &mut env)?;
@@ -296,9 +430,16 @@ impl MirRuntime {
         } else {
             None
         };
+        let mut updated_params = Vec::new();
+        for (index, param) in function.params.iter().enumerate() {
+            if param.passing == MirReceiverKind::BorrowMut {
+                updated_params.push((index, env.read_place(&param.name)?));
+            }
+        }
         Ok(CallOutcome {
             value,
             updated_receiver,
+            updated_params,
         })
     }
 
@@ -310,7 +451,7 @@ impl MirRuntime {
             .map(|(index, block)| (block.label.clone(), index))
             .collect::<HashMap<_, _>>();
         let mut current_label = function.entry.clone();
-        let mut loop_state = HashMap::<String, i64>::new();
+        let mut loop_state = HashMap::<String, i128>::new();
         let mut cleanup_stack = Vec::<String>::new();
 
         loop {
@@ -397,7 +538,7 @@ impl MirRuntime {
         block_label: &str,
         terminator: &Terminator,
         env: &mut Env,
-        loop_state: &mut HashMap<String, i64>,
+        loop_state: &mut HashMap<String, i128>,
         _cleanup_stack: &mut Vec<String>,
     ) -> Result<BlockOutcome> {
         match terminator {
@@ -456,8 +597,9 @@ impl MirRuntime {
                     )));
                 };
                 for arm in arms {
-                    if arm.enum_name == variant.enum_name
-                        && arm.variant_name == variant.variant_name
+                    if arm.wildcard
+                        || (arm.enum_name.as_deref() == Some(variant.enum_name.as_str())
+                            && arm.variant_name.as_deref() == Some(variant.variant_name.as_str()))
                     {
                         return Ok(BlockOutcome::Goto(arm.label.clone()));
                     }
@@ -633,7 +775,12 @@ impl MirRuntime {
             } => {
                 let left = self.evaluate_operand(left, env)?;
                 let right = self.evaluate_operand(right, env)?;
-                Ok(RvalueOutcome::Value(self.eval_binary(*op, left, right, Some(*span))?))
+                Ok(RvalueOutcome::Value(self.eval_binary(
+                    *op,
+                    left,
+                    right,
+                    Some(*span),
+                )?))
             }
             Rvalue::Call { callee, args } => {
                 Ok(RvalueOutcome::Value(self.evaluate_call(callee, args, env)?))
@@ -711,7 +858,7 @@ impl MirRuntime {
                 if name == "print" {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(&["value"], values)?;
-                    let rendered = bound[0].render();
+                    let rendered = bound[0].value.render();
                     self.stdout.lock().unwrap().push_str(&rendered);
                     self.stdout.lock().unwrap().push('\n');
                     return Ok(Value::Unit);
@@ -743,10 +890,13 @@ impl MirRuntime {
                 if name == "after" {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(&["duration"], values)?;
-                    let Value::Int(duration) = bound[0].clone() else {
-                        return Err(Diagnostic::new(
-                            "`after(...)` expects an integer duration in MIR runtime",
-                        ));
+                    let duration = match bound[0].value.clone() {
+                        Value::Int(duration) | Value::Duration(duration) => duration,
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "`after(...)` expects a duration value in MIR runtime",
+                            ))
+                        }
                     };
                     return Ok(Value::Duration(duration));
                 }
@@ -754,12 +904,21 @@ impl MirRuntime {
                 if name == "sleep" {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(&["duration"], values)?;
-                    let Value::Int(duration) = bound[0].clone() else {
-                        return Err(Diagnostic::new(
-                            "`sleep(...)` expects an integer duration in MIR runtime",
-                        ));
+                    let duration = match bound[0].value.clone() {
+                        Value::Int(duration) | Value::Duration(duration) => duration,
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "`sleep(...)` expects a duration value in MIR runtime",
+                            ))
+                        }
                     };
-                    std::thread::sleep(std::time::Duration::from_millis(duration as u64));
+                    let duration = u64::try_from(duration).map_err(|_| {
+                        Diagnostic::new(format!(
+                            "duration `{}ms` does not fit in the MIR runtime timer range",
+                            duration
+                        ))
+                    })?;
+                    std::thread::sleep(std::time::Duration::from_millis(duration));
                     return Ok(Value::Unit);
                 }
 
@@ -767,9 +926,15 @@ impl MirRuntime {
                     self.functions.get(name).cloned().ok_or_else(|| {
                         Diagnostic::new(format!("unknown MIR function `{}`", name))
                     })?;
-                Ok(self
-                    .call_function(&function, None, evaluate_named_args(args, env)?)?
-                    .value)
+                let evaluated_args = evaluate_named_args(args, env)?;
+                let outcome = self.call_function(&function, None, evaluated_args.clone())?;
+                self.apply_borrowed_param_writebacks(
+                    &function.params,
+                    &evaluated_args,
+                    &outcome.updated_params,
+                    env,
+                )?;
+                Ok(outcome.value)
             }
             CallTarget::Member {
                 object,
@@ -801,27 +966,35 @@ impl MirRuntime {
                         return self.evaluate_task_group_method(group.clone(), field, args, env);
                     }
                     Value::Instance(instance) => {
+                        let resolved_receiver_ty = receiver_place
+                            .as_ref()
+                            .and_then(|place| self.resolve_place_type(place, env))
+                            .filter(|ty| !matches!(ty, Type::TypeParam(_)))
+                            .unwrap_or_else(|| Type::named(&instance.class_name));
                         let class =
                             self.classes
                                 .get(&instance.class_name)
                                 .cloned()
                                 .ok_or_else(|| {
                                     Diagnostic::new(format!(
-                                "unknown MIR class `{}`",
-                                instance.class_name
-                            ))
-                        })?;
+                                        "unknown MIR class `{}`",
+                                        instance.class_name
+                                    ))
+                                })?;
                         let method = class
                             .methods
                             .iter()
                             .find(|method| method.name == *field)
                             .cloned()
                             .or_else(|| {
-                                self.find_trait_impl_method(
-                                    &Type::named(&instance.class_name),
-                                    field,
-                                )
-                                .cloned()
+                                self.find_trait_impl_method(&resolved_receiver_ty, field)
+                                    .or_else(|| {
+                                        self.find_trait_impl_method_for_class_name(
+                                            &instance.class_name,
+                                            field,
+                                        )
+                                    })
+                                    .cloned()
                             })
                             .ok_or_else(|| {
                                 Diagnostic::new(format!(
@@ -839,10 +1012,11 @@ impl MirRuntime {
                                     method.function_name
                                 ))
                             })?;
+                        let evaluated_args = evaluate_named_args(args, env)?;
                         let outcome = self.call_function(
                             &function,
                             Some(receiver.clone()),
-                            evaluate_named_args(args, env)?,
+                            evaluated_args.clone(),
                         )?;
                         if method.receiver == Some(MirReceiverKind::BorrowMut) {
                             let updated = outcome.updated_receiver.ok_or_else(|| {
@@ -855,6 +1029,12 @@ impl MirRuntime {
                                 env.write_place(place, updated)?;
                             }
                         }
+                        self.apply_borrowed_param_writebacks(
+                            &function.params,
+                            &evaluated_args,
+                            &outcome.updated_params,
+                            env,
+                        )?;
                         Ok(outcome.value)
                     }
                     _ => Err(Diagnostic::new(format!(
@@ -880,6 +1060,7 @@ impl MirRuntime {
             .get(function)
             .cloned()
             .ok_or_else(|| Diagnostic::new(format!("unknown MIR function `{}`", function)))?;
+        self.require_spawnable_function(&function)?;
         let bound_args = evaluate_named_args(args, env)?;
 
         let group_value = if let Some(group) = task_group {
@@ -925,6 +1106,48 @@ impl MirRuntime {
         }
     }
 
+    fn apply_borrowed_param_writebacks(
+        &mut self,
+        params: &[MirParam],
+        evaluated_args: &[EvaluatedMirArg],
+        updated_params: &[(usize, Value)],
+        env: &mut Env,
+    ) -> Result<()> {
+        for (index, value) in updated_params {
+            let Some(param) = params.get(*index) else {
+                continue;
+            };
+            if param.passing != MirReceiverKind::BorrowMut {
+                continue;
+            }
+            let place = evaluated_args
+                .get(*index)
+                .and_then(|argument| argument.writeback_place.as_deref())
+                .ok_or_else(|| {
+                    Diagnostic::new(format!(
+                        "mutable borrowed MIR parameter `{}` requires a writeback place",
+                        param.name
+                    ))
+                })?;
+            env.write_place(place, value.clone())?;
+        }
+        Ok(())
+    }
+
+    fn require_spawnable_function(&self, function: &MirFunction) -> Result<()> {
+        if let Some(param) = function
+            .params
+            .iter()
+            .find(|param| param.passing != MirReceiverKind::Value)
+        {
+            return Err(Diagnostic::new(format!(
+                "`spawn` does not yet support borrowed parameter `{}` on function `{}` in MIR runtime",
+                param.name, function.name
+            )));
+        }
+        Ok(())
+    }
+
     fn evaluate_channel_method(
         &mut self,
         channel: ChannelValue,
@@ -942,7 +1165,11 @@ impl MirRuntime {
             "send" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["value"], values)?;
-                let value = bound.into_iter().next().expect("send should bind one arg");
+                let value = bound
+                    .into_iter()
+                    .next()
+                    .expect("send should bind one arg")
+                    .value;
                 match channel.send(value) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(value) => Ok(result_err(send_error_closed(value))),
@@ -1082,9 +1309,15 @@ impl MirRuntime {
                             )))
                         }
                     };
+                    let millis = u64::try_from(millis).map_err(|_| {
+                        Diagnostic::new(format!(
+                            "duration `{}ms` does not fit in the MIR runtime timer range",
+                            millis
+                        ))
+                    })?;
                     Ok(Some(
                         Instant::now()
-                            .checked_add(StdDuration::from_millis(millis as u64))
+                            .checked_add(StdDuration::from_millis(millis))
                             .unwrap_or_else(Instant::now),
                     ))
                 }
@@ -1153,6 +1386,7 @@ impl MirRuntime {
         match operand {
             Operand::Place(place) => env.read_place(place),
             Operand::Int(value) => Ok(Value::Int(*value)),
+            Operand::Duration(value) => Ok(Value::Duration(*value)),
             Operand::Float(value) => Ok(Value::Float(*value)),
             Operand::Bool(value) => Ok(Value::Bool(*value)),
             Operand::String(value) => Ok(Value::String(value.clone())),
@@ -1185,15 +1419,14 @@ impl MirRuntime {
             BinaryOp::Eq => Ok(Value::Bool(left == right)),
             BinaryOp::NotEq => Ok(Value::Bool(left != right)),
             BinaryOp::Add => match (left, right) {
-                (Value::Int(left), Value::Int(right)) => left
-                    .checked_add(right)
-                    .map(Value::Int)
-                    .ok_or_else(|| {
+                (Value::Int(left), Value::Int(right)) => {
+                    left.checked_add(right).map(Value::Int).ok_or_else(|| {
                         span.map_or_else(
                             || Diagnostic::new("integer overflow"),
                             |span| Diagnostic::at(span, "integer overflow"),
                         )
-                    }),
+                    })
+                }
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + right)),
                 (Value::String(left), Value::String(right)) => Ok(Value::String(left + &right)),
                 _ => Err(Diagnostic::new(
@@ -1201,30 +1434,28 @@ impl MirRuntime {
                 )),
             },
             BinaryOp::Sub => match (left, right) {
-                (Value::Int(left), Value::Int(right)) => left
-                    .checked_sub(right)
-                    .map(Value::Int)
-                    .ok_or_else(|| {
+                (Value::Int(left), Value::Int(right)) => {
+                    left.checked_sub(right).map(Value::Int).ok_or_else(|| {
                         span.map_or_else(
                             || Diagnostic::new("integer overflow"),
                             |span| Diagnostic::at(span, "integer overflow"),
                         )
-                    }),
+                    })
+                }
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left - right)),
                 _ => Err(Diagnostic::new(
                     "MIR binary subtraction requires matching numeric operands",
                 )),
             },
             BinaryOp::Mul => match (left, right) {
-                (Value::Int(left), Value::Int(right)) => left
-                    .checked_mul(right)
-                    .map(Value::Int)
-                    .ok_or_else(|| {
+                (Value::Int(left), Value::Int(right)) => {
+                    left.checked_mul(right).map(Value::Int).ok_or_else(|| {
                         span.map_or_else(
                             || Diagnostic::new("integer overflow"),
                             |span| Diagnostic::at(span, "integer overflow"),
                         )
-                    }),
+                    })
+                }
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left * right)),
                 _ => Err(Diagnostic::new(
                     "MIR binary multiplication requires matching numeric operands",
@@ -1235,15 +1466,14 @@ impl MirRuntime {
                     || Diagnostic::new("division by zero"),
                     |span| Diagnostic::at(span, "division by zero"),
                 )),
-                (Value::Int(left), Value::Int(right)) => left
-                    .checked_div(right)
-                    .map(Value::Int)
-                    .ok_or_else(|| {
+                (Value::Int(left), Value::Int(right)) => {
+                    left.checked_div(right).map(Value::Int).ok_or_else(|| {
                         span.map_or_else(
                             || Diagnostic::new("integer overflow"),
                             |span| Diagnostic::at(span, "integer overflow"),
                         )
-                    }),
+                    })
+                }
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left / right)),
                 _ => Err(Diagnostic::new(
                     "MIR binary division requires matching numeric operands",
@@ -1254,24 +1484,43 @@ impl MirRuntime {
                     || Diagnostic::new("division by zero"),
                     |span| Diagnostic::at(span, "division by zero"),
                 )),
-                (Value::Int(left), Value::Int(right)) => left
-                    .checked_rem(right)
-                    .map(Value::Int)
-                    .ok_or_else(|| {
+                (Value::Int(left), Value::Int(right)) => {
+                    left.checked_rem(right).map(Value::Int).ok_or_else(|| {
                         span.map_or_else(
                             || Diagnostic::new("integer overflow"),
                             |span| Diagnostic::at(span, "integer overflow"),
                         )
-                    }),
+                    })
+                }
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left % right)),
                 _ => Err(Diagnostic::new(
                     "MIR binary remainder requires matching numeric operands",
                 )),
             },
-            BinaryOp::Less => eval_ordering(left, right, |left, right| left < right),
-            BinaryOp::LessEq => eval_ordering(left, right, |left, right| left <= right),
-            BinaryOp::Greater => eval_ordering(left, right, |left, right| left > right),
-            BinaryOp::GreaterEq => eval_ordering(left, right, |left, right| left >= right),
+            BinaryOp::Less => eval_ordering(
+                left,
+                right,
+                |left, right| left < right,
+                |left, right| left < right,
+            ),
+            BinaryOp::LessEq => eval_ordering(
+                left,
+                right,
+                |left, right| left <= right,
+                |left, right| left <= right,
+            ),
+            BinaryOp::Greater => eval_ordering(
+                left,
+                right,
+                |left, right| left > right,
+                |left, right| left > right,
+            ),
+            BinaryOp::GreaterEq => eval_ordering(
+                left,
+                right,
+                |left, right| left >= right,
+                |left, right| left >= right,
+            ),
         }
     }
 }
@@ -1321,23 +1570,28 @@ fn send_error_closed(value: Value) -> Value {
     })
 }
 
-fn evaluate_named_args(args: &[MirArg], env: &Env) -> Result<Vec<(Option<String>, Value)>> {
+fn evaluate_named_args(args: &[MirArg], env: &Env) -> Result<Vec<EvaluatedMirArg>> {
     args.iter()
         .map(|arg| {
             let value = match &arg.value {
                 Operand::Place(place) => env.read_place(place)?,
                 Operand::Int(value) => Value::Int(*value),
+                Operand::Duration(value) => Value::Duration(*value),
                 Operand::Float(value) => Value::Float(*value),
                 Operand::Bool(value) => Value::Bool(*value),
                 Operand::String(value) => Value::String(value.clone()),
                 Operand::Unit => Value::Unit,
             };
-            Ok((arg.name.clone(), value))
+            Ok(EvaluatedMirArg {
+                name: arg.name.clone(),
+                value,
+                writeback_place: arg.writeback_place.clone(),
+            })
         })
         .collect()
 }
 
-fn bind_args(params: &[MirParam], args: Vec<(Option<String>, Value)>) -> Result<Vec<Value>> {
+fn bind_args(params: &[MirParam], args: Vec<EvaluatedMirArg>) -> Result<Vec<EvaluatedMirArg>> {
     let names = params
         .iter()
         .map(|param| param.name.as_str())
@@ -1347,12 +1601,17 @@ fn bind_args(params: &[MirParam], args: Vec<(Option<String>, Value)>) -> Result<
 
 fn bind_builtin_args(
     expected_names: &[&str],
-    args: Vec<(Option<String>, Value)>,
-) -> Result<Vec<Value>> {
+    args: Vec<EvaluatedMirArg>,
+) -> Result<Vec<EvaluatedMirArg>> {
     let mut values = vec![None; expected_names.len()];
     let mut next_positional = 0;
 
-    for (name, value) in args {
+    for argument in args {
+        let EvaluatedMirArg {
+            name,
+            value,
+            writeback_place,
+        } = argument;
         if let Some(name) = name {
             let Some(index) = expected_names
                 .iter()
@@ -1360,7 +1619,11 @@ fn bind_builtin_args(
             else {
                 return Err(Diagnostic::new(format!("unknown MIR argument `{}`", name)));
             };
-            values[index] = Some(value);
+            values[index] = Some(EvaluatedMirArg {
+                name: Some(name),
+                value,
+                writeback_place,
+            });
             continue;
         }
 
@@ -1370,7 +1633,11 @@ fn bind_builtin_args(
         if next_positional >= values.len() {
             return Err(Diagnostic::new("too many MIR arguments"));
         }
-        values[next_positional] = Some(value);
+        values[next_positional] = Some(EvaluatedMirArg {
+            name: None,
+            value,
+            writeback_place,
+        });
         next_positional += 1;
     }
 
@@ -1380,12 +1647,13 @@ fn bind_builtin_args(
         .collect()
 }
 
-fn build_range(args: Vec<(Option<String>, Value)>) -> Result<Value> {
+fn build_range(args: Vec<EvaluatedMirArg>) -> Result<Value> {
     let mut start = None;
     let mut stop = None;
     let mut next_positional = 0;
 
-    for (name, value) in args {
+    for argument in args {
+        let EvaluatedMirArg { name, value, .. } = argument;
         let Value::Int(value) = value else {
             return Err(Diagnostic::new(
                 "`range` requires integer arguments in MIR runtime",
@@ -1426,13 +1694,12 @@ fn build_range(args: Vec<(Option<String>, Value)>) -> Result<Value> {
 fn eval_ordering(
     left: Value,
     right: Value,
-    compare: impl FnOnce(f64, f64) -> bool + Copy,
+    compare_int: impl FnOnce(i128, i128) -> bool + Copy,
+    compare_float: impl FnOnce(f64, f64) -> bool + Copy,
 ) -> Result<Value> {
     match (left, right) {
-        (Value::Int(left), Value::Int(right)) => {
-            Ok(Value::Bool(compare(left as f64, right as f64)))
-        }
-        (Value::Float(left), Value::Float(right)) => Ok(Value::Bool(compare(left, right))),
+        (Value::Int(left), Value::Int(right)) => Ok(Value::Bool(compare_int(left, right))),
+        (Value::Float(left), Value::Float(right)) => Ok(Value::Bool(compare_float(left, right))),
         _ => Err(Diagnostic::new(
             "MIR ordering comparisons require matching numeric operands",
         )),

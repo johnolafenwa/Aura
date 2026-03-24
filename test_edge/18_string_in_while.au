@@ -1,0 +1,16 @@
+def main() -> int32:
+    mut result: String = ""
+    mut i: int32 = 0
+
+    while i < 5:
+        result = result + "x"
+        i += 1
+
+    print(result)
+
+    if result == "xxxxx":
+        print("loop build ok")
+    else:
+        print("loop build fail")
+
+    return 0

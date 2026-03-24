@@ -1,0 +1,15 @@
+# Edge: constructing classes inside a while loop
+class Acc:
+    total: int32
+
+    def add(borrow mut self, n: int32):
+        self.total = self.total + n
+
+def main() -> int32:
+    mut acc = Acc(total=0)
+    mut i = 0
+    while i < 5:
+        acc.add(i)
+        i += 1
+    print(acc.total)
+    return 0

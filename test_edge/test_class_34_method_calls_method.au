@@ -1,0 +1,14 @@
+# Edge: one method calling another method on self
+class Calculator:
+    value: float64
+
+    def get(borrow self) -> float64:
+        return self.value
+
+    def double_get(borrow self) -> float64:
+        return self.get() + self.get()
+
+def main() -> int32:
+    c = Calculator(value=21.0)
+    print(c.double_get())
+    return 0

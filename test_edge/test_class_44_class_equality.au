@@ -1,0 +1,13 @@
+# Edge: comparing class instances (should this work?)
+class Point:
+    x: int32
+    y: int32
+
+def main() -> int32:
+    p1 = Point(x=1, y=2)
+    p2 = Point(x=1, y=2)
+    if p1 == p2:
+        print("equal")
+    else:
+        print("not equal")
+    return 0

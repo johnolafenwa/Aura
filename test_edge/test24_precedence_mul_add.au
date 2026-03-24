@@ -1,0 +1,6 @@
+def main():
+    a: int32 = 2 + 3 * 4
+    print(a)
+
+    b: int32 = (2 + 3) * 4
+    print(b)

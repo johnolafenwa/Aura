@@ -1,0 +1,19 @@
+# Test: generic class with static (non-self) method
+
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+    def create(value: T) -> Box[T]:
+        return Box(value=value)
+
+def main() -> int32:
+    b1: Box[int32] = Box.create(value=42)
+    print(b1.get())
+
+    b2: Box[String] = Box.create(value="static")
+    print(b2.get())
+
+    return 0

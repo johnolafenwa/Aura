@@ -1,0 +1,17 @@
+# Test: implementing a trait but missing one method (should error)
+
+trait FullTrait:
+    def method_a(borrow self) -> int32
+    def method_b(borrow self) -> String
+
+class Incomplete:
+    value: int32
+
+impl FullTrait for Incomplete:
+    def method_a(borrow self) -> int32:
+        return self.value
+
+def main() -> int32:
+    i = Incomplete(value=1)
+    print(i.method_a())
+    return 0

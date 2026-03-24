@@ -1,0 +1,8 @@
+def main():
+    a: int32 = 5
+    b: int32 = -a
+    print(b)
+
+    c: float64 = 3.14
+    d: float64 = -c
+    print(d)

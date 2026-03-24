@@ -1,0 +1,12 @@
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def extract[T](box: Box[T]) -> T:
+    return box.get()
+
+def main():
+    b = Box(value=42)
+    print(extract(b))

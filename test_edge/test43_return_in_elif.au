@@ -1,0 +1,15 @@
+# Edge: return inside elif branch
+def classify(n: int32) -> String:
+    if n % 15 == 0:
+        return "fizzbuzz"
+    elif n % 3 == 0:
+        return "fizz"
+    elif n % 5 == 0:
+        return "buzz"
+    else:
+        return "none"
+
+def main() -> int32:
+    for i in range(1, 16):
+        print(classify(i))
+    return 0

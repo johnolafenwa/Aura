@@ -1,0 +1,7 @@
+class Wrapper:
+    value: int32
+
+def main() -> int32:
+    w = Wrapper(value=42)
+    print(w.value)
+    return 0

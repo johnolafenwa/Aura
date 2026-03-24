@@ -1,0 +1,13 @@
+enum Color:
+    Red
+    Green
+    Blue
+
+c = Color.Red
+match c:
+    case Color.Red:
+        print("red")
+    case Color.Green:
+        print("green")
+    case Color.Blue:
+        print("blue")

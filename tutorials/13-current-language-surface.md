@@ -102,12 +102,17 @@ Ordinary functions, instance methods, and associated methods support:
 - named arguments
 - mixed calls where positional arguments come first and named arguments come after
 - default parameter values on ordinary functions and class methods
+- ordinary borrowed parameters with `value: borrow T` and `value: borrow mut T`
 - builtin named arguments for `print(value=...)`, `range(...)`, and `after(duration=...)`
+
+Borrowed ordinary parameters currently work for normal calls, but `spawn` and `TaskGroup.spawn(...)` still require by-value parameters.
 
 Top-level declarations may also be generic:
 
 - `class Box[T]: ...`
+- `class Box[T: Trait]: ...`
 - `enum Wrapper[T]: ...`
+- `enum Wrapper[T: Trait]: ...`
 - `def identity[T](value: T) -> T: ...`
 
 Generic functions and methods may use inline trait bounds:
@@ -146,9 +151,10 @@ The current compiler supports:
 
 - `Enum.Variant`
 - `Enum.Variant(name)`
+- `case _:`
 - exhaustive statement-form `match`
 
-It does not yet support wildcard, nested, or expression-form matches.
+It does not yet support nested or expression-form matches.
 
 ## Concurrency
 
@@ -168,11 +174,20 @@ The current CLI commands are:
 
 - `check`
 - `run`
+- `run-mir`
+- `build`
 - `ast`
 - `ast-json`
 - `mir`
 - `analyze`
 - `complete`
+
+Current backend/tooling notes:
+
+- `build` accepts `--backend auto|direct|mir-runtime`
+- `auto` is the default
+- `direct` currently covers the scalar, float, plain-class, and immutable-method subset
+- `mir-runtime` remains the broader runtime-linked backend path for the implemented language surface
 
 The current VS Code tooling is compiler-backed for:
 
@@ -186,11 +201,11 @@ The current VS Code tooling is compiler-backed for:
 
 Not yet implemented:
 
-- wildcard and nested patterns
 - positional class constructor arguments
 - keyword arguments for enum variant payloads
-- final standalone code generation beyond the current bootstrap MIR-artifact launcher
 - non-numeric casts
+- direct recursive fields without `indirect`
+- borrowed return types and explicit lifetime syntax
 
 Current module/import limitations:
 

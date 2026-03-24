@@ -1,0 +1,5 @@
+def main():
+    a: int64 = 1000000000
+    b: int64 = 2000000000
+    c: int64 = a * b
+    print(c)

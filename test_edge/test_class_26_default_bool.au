@@ -1,0 +1,21 @@
+# Edge: all-defaults class with various types
+class Flags:
+    verbose: bool = false
+    debug: bool = false
+    trace: bool = false
+    count: int32 = 0
+    ratio: float64 = 1.0
+    name: String = "default"
+
+def main() -> int32:
+    f = Flags()
+    print(f.verbose)
+    print(f.count)
+    print(f.ratio)
+    print(f.name)
+
+    f2 = Flags(verbose=true, count=5)
+    print(f2.verbose)
+    print(f2.count)
+    print(f2.name)
+    return 0

@@ -1,0 +1,19 @@
+# Edge: calling a method on a nested field's class
+class Engine:
+    horsepower: int32
+
+    def is_powerful(borrow self) -> bool:
+        return self.horsepower > 200
+
+class Car:
+    name: String
+    engine: Engine
+
+    def get_engine(borrow self) -> Engine:
+        return self.engine
+
+def main() -> int32:
+    car = Car(name="Turbo", engine=Engine(horsepower=300))
+    print(car.engine.is_powerful())
+    print(car.get_engine().is_powerful())
+    return 0

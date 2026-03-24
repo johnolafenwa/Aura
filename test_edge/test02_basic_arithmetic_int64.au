@@ -1,0 +1,9 @@
+def main():
+    a: int64 = 100
+    b: int64 = 7
+
+    print(a + b)
+    print(a - b)
+    print(a * b)
+    print(a / b)
+    print(a % b)

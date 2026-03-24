@@ -1,0 +1,14 @@
+enum Data:
+    Num(int32)
+    Txt(String)
+
+def main() -> int32:
+    d = Data.Num(7)
+    mut result = 0
+    match d:
+        case Data.Num(v):
+            result = v * 3
+        case Data.Txt(s):
+            print(s)
+    print(result)
+    return 0

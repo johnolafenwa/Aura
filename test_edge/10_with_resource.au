@@ -1,0 +1,45 @@
+class Connection:
+    name: String
+    active: bool = true
+
+    def query(borrow self) -> String:
+        return "result from " + self.name
+
+    def close(borrow mut self):
+        print("closing " + self.name)
+
+class Logger:
+    prefix: String
+
+    def log(borrow self, msg: String):
+        print(self.prefix + ": " + msg)
+
+    def close(borrow mut self):
+        print("logger closed")
+
+def use_connection() -> Result[String, String]:
+    with conn = Connection(name="db1"):
+        result = conn.query()
+        print(result)
+        return Result.Ok("connection done")
+
+def use_logger() -> Result[String, String]:
+    with logger = Logger(prefix="APP"):
+        logger.log("started")
+        logger.log("running")
+        return Result.Ok("logger done")
+
+def main() -> int32:
+    match use_connection():
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(err):
+            print(err)
+
+    match use_logger():
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(err):
+            print(err)
+
+    return 0

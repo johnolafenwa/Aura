@@ -1,0 +1,20 @@
+def main():
+    mut a: int32 = 1
+    mut b: int32 = 2
+    mut c: int32 = 3
+
+    a = a + b
+    b = b * c
+    c = a + b + c
+
+    print(a)
+    print(b)
+    print(c)
+
+    a += 10
+    b -= 1
+    c *= 2
+
+    print(a)
+    print(b)
+    print(c)

@@ -1,0 +1,24 @@
+def worker(out: Channel[int32]):
+    out.send(100)
+    out.send(200)
+    out.close()
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    task = spawn worker(ch.clone())
+
+    match ch.recv():
+        case Option.Some(value):
+            print(value)
+        case Option.None:
+            print("error")
+
+    match ch.recv():
+        case Option.Some(value):
+            print(value)
+        case Option.None:
+            print("error")
+
+    task.join()
+    print("joined")
+    return 0

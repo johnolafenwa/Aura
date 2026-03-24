@@ -1,0 +1,11 @@
+class Data:
+    value: String
+
+def consume(d: Data):
+    print(d.value)
+
+def main() -> int32:
+    data = Data(value="hello")
+    consume(d=data)
+    print(data.value)
+    return 0

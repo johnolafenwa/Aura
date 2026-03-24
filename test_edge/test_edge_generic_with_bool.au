@@ -1,0 +1,24 @@
+# Test: generic class instantiated with bool, edge numeric types
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def main() -> int32:
+    # bool
+    b1 = Box(value=true)
+    print(b1.get())
+
+    b2 = Box(value=false)
+    print(b2.get())
+
+    # int64
+    b3: Box[int64] = Box(value=9999999999 as int64)
+    print(b3.get())
+
+    # float32
+    b4: Box[float32] = Box(value=1.5 as float32)
+    print(b4.get())
+
+    return 0

@@ -1,0 +1,29 @@
+def find_positive(x: int32) -> Option[int32]:
+    if x > 0:
+        return Option.Some(x)
+    return Option.None
+
+def main() -> int32:
+    a: Option[int32] = find_positive(42)
+    b: Option[int32] = find_positive(-5)
+    c: Option[int32] = find_positive(0)
+
+    match a:
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    match b:
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    match c:
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    return 0

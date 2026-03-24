@@ -1,6 +1,6 @@
 # Generics
 
-Aurora now supports user-defined generic classes, enums, and functions.
+Aurora now supports user-defined generic classes, enums, and functions, including bounds on class and enum type parameters.
 
 ## Generic Classes
 
@@ -24,6 +24,13 @@ The current compiler supports inferring the constructor type arguments from:
 - the surrounding expected type
 - the provided field values
 
+Generic classes may also carry trait bounds on their type parameters:
+
+```python
+class Wrapper[T: Greeter]:
+    value: T
+```
+
 ## Generic Enums
 
 ```python
@@ -40,6 +47,14 @@ match wrapped:
 ```
 
 Payload matching uses the instantiated payload type, so `value` is a `String` in the example above.
+
+Generic enums may also use bounded type parameters and unit variants:
+
+```python
+enum MaybeNamed[T: Greeter]:
+    Some(T)
+    Empty
+```
 
 ## Generic Functions
 
@@ -61,19 +76,34 @@ text: String = identity("aurora")
 print(text)
 ```
 
+Method calls on generic class instances also work inside generic functions:
+
+```python
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def extract[T](box: Box[T]) -> T:
+    return box.get()
+```
+
 ## Current Limits
 
 The implemented generic surface currently supports:
 
 - generic `class`, `enum`, and `def` declarations
+- trait bounds on class and enum type parameters
 - generic type arguments in type positions such as `Box[int32]`
 - inference for generic function calls
 - inference for generic class constructors and enum payload constructors
+- method calls on generic class instances inside generic functions
+- generic enum unit variants with instantiated types
 
 It does not yet support:
 
-- traits and generic trait bounds
 - explicit type arguments on call expressions
-- generic imports across modules, because the module system is still being implemented
+- generic trait declarations
 
-See [examples/generics/box_and_wrapper.au](../examples/generics/box_and_wrapper.au).
+See [examples/generics/box_and_wrapper.au](../examples/generics/box_and_wrapper.au), [examples/generics/generic_method_calls.au](../examples/generics/generic_method_calls.au), and [examples/generics/bounded_types.au](../examples/generics/bounded_types.au).

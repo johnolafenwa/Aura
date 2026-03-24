@@ -1,0 +1,13 @@
+# Edge: class with empty string default
+class Message:
+    text: String = ""
+    priority: int32 = 0
+
+def main() -> int32:
+    m = Message()
+    print(m.text)
+    print(m.priority)
+    m2 = Message(text="urgent", priority=5)
+    print(m2.text)
+    print(m2.priority)
+    return 0

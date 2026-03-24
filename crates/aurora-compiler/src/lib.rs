@@ -6,6 +6,8 @@ pub mod interpreter;
 pub mod lexer;
 pub mod mir;
 pub mod mir_runtime;
+mod native_codegen;
+mod native_runtime;
 pub mod parser;
 pub mod sema;
 
@@ -20,7 +22,8 @@ pub use analysis::{
 pub use diag::{Diagnostic, Result, Span};
 pub use interpreter::{run, RunOutput, Value};
 pub use mir::{lower as lower_to_mir, MirModule};
-pub use mir_runtime::run as run_mir;
+pub use mir_runtime::{run as run_mir, run_serialized_mir};
+pub use native_codegen::emit_host_object as emit_host_native_object;
 pub use sema::{ImportedBinding, ModuleContext, ModuleNamespace, Program};
 
 use ast::{ImportKind, Item};
@@ -46,6 +49,11 @@ pub fn run_source_via_mir(source: &str) -> Result<RunOutput> {
 
 pub fn lower_source_to_mir(source: &str) -> Result<MirModule> {
     let program = check_source(source)?;
+    Ok(lower_to_mir(&program))
+}
+
+pub fn lower_path_with_source_to_mir(path: &Path, source: &str) -> Result<MirModule> {
+    let program = check_path_with_source(path, source)?;
     Ok(lower_to_mir(&program))
 }
 
@@ -111,7 +119,11 @@ impl ModuleLoader {
         self.load_program_internal(path, Some(source))
     }
 
-    fn load_program_internal(&mut self, path: &Path, source_override: Option<&str>) -> Result<Program> {
+    fn load_program_internal(
+        &mut self,
+        path: &Path,
+        source_override: Option<&str>,
+    ) -> Result<Program> {
         let path = absolutize(path);
         if let Some(loaded) = self.cache.get(&path) {
             return Ok(loaded.program.clone());
@@ -143,13 +155,20 @@ impl ModuleLoader {
             },
         )?;
 
-        self.cache
-            .insert(path.clone(), LoadedModule { program: program.clone() });
+        self.cache.insert(
+            path.clone(),
+            LoadedModule {
+                program: program.clone(),
+            },
+        );
         self.stack.pop();
         Ok(program)
     }
 
-    fn resolve_imports(&mut self, module: &ast::Module) -> Result<BTreeMap<String, ImportedBinding>> {
+    fn resolve_imports(
+        &mut self,
+        module: &ast::Module,
+    ) -> Result<BTreeMap<String, ImportedBinding>> {
         let mut bindings = BTreeMap::new();
         for import in &module.imports {
             match &import.kind {
@@ -161,12 +180,18 @@ impl ModuleLoader {
                             if local_item_exists(&imported, name) {
                                 Diagnostic::at(
                                     import.span,
-                                    format!("item `{}` is private in module `{}`", name, logical_name),
+                                    format!(
+                                        "item `{}` is private in module `{}`",
+                                        name, logical_name
+                                    ),
                                 )
                             } else {
                                 Diagnostic::at(
                                     import.span,
-                                    format!("module `{}` has no export named `{}`", logical_name, name),
+                                    format!(
+                                        "module `{}` has no export named `{}`",
+                                        logical_name, name
+                                    ),
                                 )
                             }
                         })?;
@@ -244,13 +269,21 @@ fn exported_binding(program: &Program, name: &str) -> Option<ImportedBinding> {
                     .map(ImportedBinding::Function);
             }
             Item::Class(decl) if decl.name == name && decl.public => {
-                return program.classes.get(name).cloned().map(ImportedBinding::Class);
+                return program
+                    .classes
+                    .get(name)
+                    .cloned()
+                    .map(ImportedBinding::Class);
             }
             Item::Enum(decl) if decl.name == name && decl.public => {
                 return program.enums.get(name).cloned().map(ImportedBinding::Enum);
             }
             Item::Trait(decl) if decl.name == name && decl.public => {
-                return program.traits.get(name).cloned().map(ImportedBinding::Trait);
+                return program
+                    .traits
+                    .get(name)
+                    .cloned()
+                    .map(ImportedBinding::Trait);
             }
             _ => {}
         }
@@ -259,7 +292,10 @@ fn exported_binding(program: &Program, name: &str) -> Option<ImportedBinding> {
 }
 
 fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
-    let name = path.last().cloned().unwrap_or_else(|| program.module_name.clone());
+    let name = path
+        .last()
+        .cloned()
+        .unwrap_or_else(|| program.module_name.clone());
     let mut namespace = ModuleNamespace {
         name,
         path: path.join("."),
@@ -309,9 +345,8 @@ fn insert_namespace_import(
         return Ok(());
     }
     let root_name = path[0].clone();
-    let root = bindings
-        .entry(root_name.clone())
-        .or_insert_with(|| ImportedBinding::Module(ModuleNamespace {
+    let root = bindings.entry(root_name.clone()).or_insert_with(|| {
+        ImportedBinding::Module(ModuleNamespace {
             name: root_name.clone(),
             path: root_name.clone(),
             modules: BTreeMap::new(),
@@ -319,7 +354,8 @@ fn insert_namespace_import(
             classes: BTreeMap::new(),
             enums: BTreeMap::new(),
             traits: BTreeMap::new(),
-        }));
+        })
+    });
     let ImportedBinding::Module(root_namespace) = root else {
         return Err(Diagnostic::at(
             span,
@@ -349,19 +385,22 @@ fn insert_namespace_import(
                 traits: BTreeMap::new(),
             });
     }
-    current
-        .modules
-        .insert(path.last().cloned().expect("path should be non-empty"), leaf);
+    current.modules.insert(
+        path.last().cloned().expect("path should be non-empty"),
+        leaf,
+    );
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        check_source, lower_source_to_mir, parse_source, run_mir, run_path, run_path_via_mir,
-        run_source, run_source_via_mir, Value,
+        check_source, lower_path_with_source_to_mir, lower_source_to_mir, parse_source, run_mir,
+        run_path, run_path_via_mir, run_serialized_mir, run_source, run_source_via_mir, Value,
     };
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     const POINT_SOURCE: &str = include_str!("../../../examples/point.au");
     const BASIC_ADDITION_SOURCE: &str = include_str!("../../../examples/basic_addition.au");
@@ -476,7 +515,62 @@ mod tests {
             "examples/concurrency/select_send.au",
             include_str!("../../../examples/concurrency/select_send.au"),
         ),
+        (
+            "examples/enums/wildcard_match.au",
+            include_str!("../../../examples/enums/wildcard_match.au"),
+        ),
+        (
+            "examples/generics/generic_method_calls.au",
+            include_str!("../../../examples/generics/generic_method_calls.au"),
+        ),
+        (
+            "examples/generics/bounded_types.au",
+            include_str!("../../../examples/generics/bounded_types.au"),
+        ),
+        (
+            "examples/traits/marker_trait.au",
+            include_str!("../../../examples/traits/marker_trait.au"),
+        ),
+        (
+            "examples/traits/specialized_generic_impl.au",
+            include_str!("../../../examples/traits/specialized_generic_impl.au"),
+        ),
+        (
+            "examples/concurrency/minute_duration.au",
+            include_str!("../../../examples/concurrency/minute_duration.au"),
+        ),
     ];
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(prefix: &str) -> Self {
+            let unique = format!(
+                "{}-{}-{}",
+                prefix,
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("system time should be after unix epoch")
+                    .as_nanos()
+            );
+            let path = std::env::temp_dir().join(unique);
+            fs::create_dir_all(&path).expect("failed to create temp dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &PathBuf {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 
     #[test]
     fn parses_the_point_milestone() {
@@ -493,14 +587,14 @@ mod tests {
     #[test]
     fn runs_the_point_milestone() {
         let output = run_source(POINT_SOURCE).expect("point program should run");
-        assert_eq!(output.stdout, "5\n");
+        assert_eq!(output.stdout, "5.0\n");
         assert_eq!(output.value, Value::Int(0));
     }
 
     #[test]
     fn mir_runtime_runs_the_point_milestone() {
         let output = run_source_via_mir(POINT_SOURCE).expect("point program should run via MIR");
-        assert_eq!(output.stdout, "5\n");
+        assert_eq!(output.stdout, "5.0\n");
         assert_eq!(output.value, Value::Int(0));
     }
 
@@ -655,6 +749,46 @@ mod tests {
     }
 
     #[test]
+    fn serialized_mir_runner_executes_point_example() {
+        let source = include_str!("../../../examples/point.au");
+        let mir = lower_source_to_mir(source).expect("point example should lower to MIR");
+        let mir_json = serde_json::to_vec(&mir).expect("MIR should serialize to JSON bytes");
+        let output = run_serialized_mir(&mir_json, "/virtual/point.au", source)
+            .expect("serialized MIR runner should execute point example");
+        assert_eq!(output.stdout, "5.0\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
+    fn serialized_mir_runner_reports_invalid_embedded_mir() {
+        let error = run_serialized_mir(b"{not json", "/virtual/bad.au", "print(value=1)\n")
+            .expect_err("invalid embedded MIR should return a diagnostic");
+        assert!(
+            error.message.contains("failed to deserialize embedded MIR"),
+            "unexpected diagnostic: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn path_with_source_mir_lowering_resolves_local_module_imports() {
+        let temp = TempDir::new("aurora-compiler-lower-path-source");
+        fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
+        fs::write(
+            temp.path().join("helpers/math.au"),
+            "public def double(value: int32) -> int32:\n    return value * 2\n",
+        )
+        .expect("failed to write helper module");
+        let main_path = temp.path().join("main.au");
+        let source = "import helpers.math\n\ndef main() -> int32:\n    print(helpers.math.double(value=5))\n    return 0\n";
+        let mir = lower_path_with_source_to_mir(&main_path, source)
+            .expect("path-aware MIR lowering should resolve local imports");
+        let output = run_mir(&mir).expect("path-aware MIR lowering should produce runnable MIR");
+        assert_eq!(output.stdout, "10\n");
+        assert_eq!(output.value, Value::Int(0));
+    }
+
+    #[test]
     fn backend_path_runs_channels_example_natively() {
         let source = include_str!("../../../examples/concurrency/channels_spawn.au");
         let output =
@@ -713,15 +847,11 @@ mod tests {
                 EXAMPLE_CASES[3].1,
                 "hello world\nhello aurora\n6\n12\n",
             ),
-            (
-                "examples/basics/pass_keyword.au",
-                EXAMPLE_CASES[4].1,
-                "0\n",
-            ),
+            ("examples/basics/pass_keyword.au", EXAMPLE_CASES[4].1, "0\n"),
             (
                 "examples/classes/point_distance.au",
                 EXAMPLE_CASES[5].1,
-                "5\n",
+                "5.0\n",
             ),
             (
                 "examples/classes/default_fields.au",
@@ -773,16 +903,20 @@ mod tests {
                 EXAMPLE_CASES[15].1,
                 "9\n",
             ),
-            ("examples/numbers/float_sqrt.au", EXAMPLE_CASES[16].1, "9\n"),
+            (
+                "examples/numbers/float_sqrt.au",
+                EXAMPLE_CASES[16].1,
+                "9.0\n",
+            ),
             (
                 "examples/numbers/float32_values.au",
                 EXAMPLE_CASES[17].1,
-                "3.25\n2\n5\n",
+                "3.25\n2.0\n5.0\n",
             ),
             (
                 "examples/numbers/numeric_casts.au",
                 EXAMPLE_CASES[18].1,
-                "7\n3\n1.25\n2\n",
+                "7\n3.0\n1.25\n2.0\n",
             ),
             (
                 "examples/strings/greeting.au",
@@ -823,6 +957,36 @@ mod tests {
                 "examples/concurrency/select_send.au",
                 EXAMPLE_CASES[26].1,
                 "sent\n4\n",
+            ),
+            (
+                "examples/enums/wildcard_match.au",
+                EXAMPLE_CASES[27].1,
+                "2\n",
+            ),
+            (
+                "examples/generics/generic_method_calls.au",
+                EXAMPLE_CASES[28].1,
+                "7\n",
+            ),
+            (
+                "examples/generics/bounded_types.au",
+                EXAMPLE_CASES[29].1,
+                "aurora\nempty\n",
+            ),
+            (
+                "examples/traits/marker_trait.au",
+                EXAMPLE_CASES[30].1,
+                "1\n",
+            ),
+            (
+                "examples/traits/specialized_generic_impl.au",
+                EXAMPLE_CASES[31].1,
+                "hello\n",
+            ),
+            (
+                "examples/concurrency/minute_duration.au",
+                EXAMPLE_CASES[32].1,
+                "120000ms\n",
             ),
         ];
 
@@ -861,15 +1025,11 @@ mod tests {
                 EXAMPLE_CASES[3].1,
                 "hello world\nhello aurora\n6\n12\n",
             ),
-            (
-                "examples/basics/pass_keyword.au",
-                EXAMPLE_CASES[4].1,
-                "0\n",
-            ),
+            ("examples/basics/pass_keyword.au", EXAMPLE_CASES[4].1, "0\n"),
             (
                 "examples/classes/point_distance.au",
                 EXAMPLE_CASES[5].1,
-                "5\n",
+                "5.0\n",
             ),
             (
                 "examples/classes/default_fields.au",
@@ -921,16 +1081,20 @@ mod tests {
                 EXAMPLE_CASES[15].1,
                 "9\n",
             ),
-            ("examples/numbers/float_sqrt.au", EXAMPLE_CASES[16].1, "9\n"),
+            (
+                "examples/numbers/float_sqrt.au",
+                EXAMPLE_CASES[16].1,
+                "9.0\n",
+            ),
             (
                 "examples/numbers/float32_values.au",
                 EXAMPLE_CASES[17].1,
-                "3.25\n2\n5\n",
+                "3.25\n2.0\n5.0\n",
             ),
             (
                 "examples/numbers/numeric_casts.au",
                 EXAMPLE_CASES[18].1,
-                "7\n3\n1.25\n2\n",
+                "7\n3.0\n1.25\n2.0\n",
             ),
             (
                 "examples/strings/greeting.au",
@@ -971,6 +1135,36 @@ mod tests {
                 "examples/concurrency/select_send.au",
                 EXAMPLE_CASES[26].1,
                 "sent\n4\n",
+            ),
+            (
+                "examples/enums/wildcard_match.au",
+                EXAMPLE_CASES[27].1,
+                "2\n",
+            ),
+            (
+                "examples/generics/generic_method_calls.au",
+                EXAMPLE_CASES[28].1,
+                "7\n",
+            ),
+            (
+                "examples/generics/bounded_types.au",
+                EXAMPLE_CASES[29].1,
+                "aurora\nempty\n",
+            ),
+            (
+                "examples/traits/marker_trait.au",
+                EXAMPLE_CASES[30].1,
+                "1\n",
+            ),
+            (
+                "examples/traits/specialized_generic_impl.au",
+                EXAMPLE_CASES[31].1,
+                "hello\n",
+            ),
+            (
+                "examples/concurrency/minute_duration.au",
+                EXAMPLE_CASES[32].1,
+                "120000ms\n",
             ),
         ];
 

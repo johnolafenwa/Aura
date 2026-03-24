@@ -1,0 +1,9 @@
+def greet() -> String:
+    return "hello"
+
+def greet() -> String:
+    return "hi"
+
+def main() -> int32:
+    print(greet())
+    return 0

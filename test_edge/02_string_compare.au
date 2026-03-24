@@ -1,0 +1,27 @@
+def main() -> int32:
+    a = "hello"
+    b = "hello"
+    c = "world"
+
+    if a == b:
+        print("equal ok")
+    else:
+        print("equal fail")
+
+    if a != c:
+        print("not equal ok")
+    else:
+        print("not equal fail")
+
+    if a == c:
+        print("should not print")
+    else:
+        print("different ok")
+
+    d = "hello" + ""
+    if d == a:
+        print("concat empty equal ok")
+    else:
+        print("concat empty equal fail")
+
+    return 0

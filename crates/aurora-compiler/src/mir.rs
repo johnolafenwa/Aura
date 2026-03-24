@@ -74,6 +74,7 @@ pub enum MirReceiverKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirParam {
     pub name: String,
+    pub passing: MirReceiverKind,
     pub ty: Type,
 }
 
@@ -166,6 +167,7 @@ pub enum CallTarget {
 pub struct MirArg {
     pub name: Option<String>,
     pub value: Operand,
+    pub writeback_place: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -176,8 +178,9 @@ pub struct MirFieldInit {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirMatchArm {
-    pub enum_name: String,
-    pub variant_name: String,
+    pub enum_name: Option<String>,
+    pub variant_name: Option<String>,
+    pub wildcard: bool,
     pub label: String,
 }
 
@@ -198,7 +201,8 @@ pub enum MirSelectKind {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Operand {
     Place(String),
-    Int(i64),
+    Int(i128),
+    Duration(i128),
     Float(f64),
     Bool(bool),
     String(String),
@@ -411,18 +415,19 @@ fn lower_function(
         .zip(param_types.iter())
         .map(|(param, ty)| MirParam {
             name: param.name.clone(),
+            passing: lower_receiver_kind(param.passing),
             ty: ty.clone(),
         })
         .collect::<Vec<_>>();
 
     let mut lowerer = Lowerer::new(program, name);
     if let Some(receiver_type) = receiver_type {
-        lowerer.local_types.insert("self".to_string(), receiver_type);
-    }
-    for (param, ty) in function.params.iter().zip(param_types.iter()) {
         lowerer
             .local_types
-            .insert(param.name.clone(), ty.clone());
+            .insert("self".to_string(), receiver_type);
+    }
+    for (param, ty) in function.params.iter().zip(param_types.iter()) {
+        lowerer.local_types.insert(param.name.clone(), ty.clone());
     }
     lowerer.lower_stmts(&function.body);
     lowerer.finish(MirFunctionSpec {
@@ -758,13 +763,21 @@ impl<'a> Lowerer<'a> {
             .iter()
             .map(|arm| {
                 let arm_block = self.new_block("match_arm");
-                let Pattern::Variant(pattern) = &arm.pattern;
                 (
                     arm_block,
-                    MirMatchArm {
-                        enum_name: pattern.enum_name.clone(),
-                        variant_name: pattern.variant_name.clone(),
-                        label: self.label(arm_block),
+                    match &arm.pattern {
+                        Pattern::Variant(pattern) => MirMatchArm {
+                            enum_name: Some(pattern.enum_name.clone()),
+                            variant_name: Some(pattern.variant_name.clone()),
+                            wildcard: false,
+                            label: self.label(arm_block),
+                        },
+                        Pattern::Wildcard(_) => MirMatchArm {
+                            enum_name: None,
+                            variant_name: None,
+                            wildcard: true,
+                            label: self.label(arm_block),
+                        },
                     },
                 )
             })
@@ -778,14 +791,15 @@ impl<'a> Lowerer<'a> {
 
         for ((arm_block, _), arm) in arms.iter().zip(&match_stmt.arms) {
             self.switch_to(*arm_block);
-            let Pattern::Variant(pattern) = &arm.pattern;
-            if let Some(binding) = &pattern.binding {
-                self.emit(Instruction::Assign {
-                    target: binding.clone(),
-                    value: Rvalue::VariantPayload {
-                        scrutinee: scrutinee.clone(),
-                    },
-                });
+            if let Pattern::Variant(pattern) = &arm.pattern {
+                if let Some(binding) = &pattern.binding {
+                    self.emit(Instruction::Assign {
+                        target: binding.clone(),
+                        value: Rvalue::VariantPayload {
+                            scrutinee: scrutinee.clone(),
+                        },
+                    });
+                }
             }
             self.lower_stmts(&arm.body);
             if !self.current_terminated() {
@@ -915,14 +929,14 @@ impl<'a> Lowerer<'a> {
         match &expr.kind {
             ExprKind::Name(name) => Operand::Place(name.clone()),
             ExprKind::Int(value) => Operand::Int(*value),
-            ExprKind::DurationMillis(value) => Operand::Int(*value),
+            ExprKind::DurationMillis(value) => Operand::Duration(*value),
             ExprKind::Float(value) => Operand::Float(*value),
             ExprKind::Bool(value) => Operand::Bool(*value),
             ExprKind::String(value) => Operand::String(value.clone()),
             ExprKind::Group(inner) => self.lower_expr(inner),
             ExprKind::Unary { op, expr: value } => {
                 let value = self.lower_expr(value);
-                let temp = self.new_temp();
+                let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::Unary {
@@ -935,7 +949,7 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Cast { expr: value, ty } => {
                 let value = self.lower_expr(value);
-                let temp = self.new_temp();
+                let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::Cast {
@@ -949,7 +963,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Spawn { detached, value } => self.lower_spawn(*detached, value),
             ExprKind::Try(inner) => {
                 let value = self.lower_expr(inner);
-                let temp = self.new_temp();
+                let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::Try { value },
@@ -962,7 +976,7 @@ impl<'a> Lowerer<'a> {
                 }
                 let left = self.lower_expr(left);
                 let right = self.lower_expr(right);
-                let temp = self.new_temp();
+                let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::Binary {
@@ -977,7 +991,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Member { object, field } => {
                 if let ExprKind::Name(enum_name) = &object.kind {
                     if is_known_enum_name(self.program, enum_name) {
-                        let temp = self.new_temp();
+                        let temp = self.new_temp_for_expr(expr);
                         self.emit(Instruction::Assign {
                             target: temp.clone(),
                             value: Rvalue::EnumVariant {
@@ -991,7 +1005,7 @@ impl<'a> Lowerer<'a> {
                 }
 
                 let object = self.lower_expr(object);
-                let temp = self.new_temp();
+                let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::Member {
@@ -1001,12 +1015,12 @@ impl<'a> Lowerer<'a> {
                 });
                 Operand::Place(temp)
             }
-            ExprKind::Call { callee, args } => self.lower_call(callee, args),
+            ExprKind::Call { callee, args } => self.lower_call(expr, callee, args),
         }
     }
 
     fn lower_logical_expr(&mut self, op: BinaryOp, left: &Expr, right: &Expr) -> Operand {
-        let result = self.new_temp();
+        let result = self.new_typed_temp(Type::named("bool"));
         let rhs_block = self.new_block("logic_rhs");
         let short_block = self.new_block("logic_short");
         let join_block = self.new_block("logic_join");
@@ -1077,8 +1091,8 @@ impl<'a> Lowerer<'a> {
         Operand::Place(temp)
     }
 
-    fn lower_call(&mut self, callee: &Expr, args: &[Argument]) -> Operand {
-        let temp = self.new_temp();
+    fn lower_call(&mut self, expr: &Expr, callee: &Expr, args: &[Argument]) -> Operand {
+        let temp = self.new_temp_for_expr(expr);
 
         match &callee.kind {
             ExprKind::Name(name) if self.program.classes.contains_key(name) => {
@@ -1281,7 +1295,11 @@ impl<'a> Lowerer<'a> {
 
         if let Type::Named(class_name, _) = &receiver_type {
             if let Some(class) = self.program.classes.get(class_name) {
-                if let Some(method) = class.methods.get(field).filter(|method| method.decl.receiver.is_some()) {
+                if let Some(method) = class
+                    .methods
+                    .get(field)
+                    .filter(|method| method.decl.receiver.is_some())
+                {
                     return self.lower_user_args(
                         &format!("method `{}`", field),
                         &method.decl.params,
@@ -1292,18 +1310,16 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        if let Some((_, method)) = self
-            .program
-            .trait_impls
-            .iter()
-            .find_map(|trait_impl| {
-                if trait_impl.for_type == receiver_type {
-                    trait_impl.methods.get(field).map(|method| (trait_impl, method))
-                } else {
-                    None
-                }
-            })
-        {
+        if let Some((_, method)) = self.program.trait_impls.iter().find_map(|trait_impl| {
+            if trait_impl.for_type == receiver_type {
+                trait_impl
+                    .methods
+                    .get(field)
+                    .map(|method| (trait_impl, method))
+            } else {
+                None
+            }
+        }) {
             return self.lower_user_args(
                 &format!("method `{}`", field),
                 &method.decl.params,
@@ -1336,15 +1352,21 @@ impl<'a> Lowerer<'a> {
             .zip(params.iter())
             .map(|(argument, param)| MirArg {
                 name: None,
-                value: self.lower_expr(
-                    argument
-                        .map(|argument| &argument.value)
-                        .unwrap_or_else(|| {
-                            param.default
-                                .as_ref()
-                                .expect("optional parameter should provide a default expression")
-                        }),
-                ),
+                value: self.lower_expr(argument.map(|argument| &argument.value).unwrap_or_else(
+                    || {
+                        param
+                            .default
+                            .as_ref()
+                            .expect("optional parameter should provide a default expression")
+                    },
+                )),
+                writeback_place: argument.and_then(|argument| {
+                    if param.passing == crate::ast::ReceiverKind::BorrowMut {
+                        self.render_place_expr_option(&argument.value)
+                    } else {
+                        None
+                    }
+                }),
             })
             .collect()
     }
@@ -1354,6 +1376,7 @@ impl<'a> Lowerer<'a> {
             .map(|argument| MirArg {
                 name: argument.name.clone(),
                 value: self.lower_expr(&argument.value),
+                writeback_place: None,
             })
             .collect()
     }
@@ -1431,19 +1454,16 @@ impl<'a> Lowerer<'a> {
                             }
                         }
                     }
-                    self.program
-                        .trait_impls
-                        .iter()
-                        .find_map(|trait_impl| {
-                            if trait_impl.for_type == receiver_type {
-                                trait_impl
-                                    .methods
-                                    .get(field)
-                                    .map(|method| method.signature.return_type.clone())
-                            } else {
-                                None
-                            }
-                        })
+                    self.program.trait_impls.iter().find_map(|trait_impl| {
+                        if trait_impl.for_type == receiver_type {
+                            trait_impl
+                                .methods
+                                .get(field)
+                                .map(|method| method.signature.return_type.clone())
+                        } else {
+                            None
+                        }
+                    })
                 }
                 _ => None,
             },
@@ -1511,6 +1531,20 @@ impl<'a> Lowerer<'a> {
         let name = format!("%t{}", self.temp_counter);
         self.temp_counter += 1;
         name
+    }
+
+    fn new_typed_temp(&mut self, ty: Type) -> String {
+        let name = self.new_temp();
+        self.local_types.insert(name.clone(), ty);
+        name
+    }
+
+    fn new_temp_for_expr(&mut self, expr: &Expr) -> String {
+        if let Some(ty) = self.infer_expr_type(expr) {
+            self.new_typed_temp(ty)
+        } else {
+            self.new_temp()
+        }
     }
 
     fn new_block(&mut self, prefix: &str) -> usize {

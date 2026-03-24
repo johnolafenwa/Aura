@@ -1,0 +1,15 @@
+enum Container[T]:
+    Empty
+    Value(T)
+
+def check(c: Container[int32]) -> int32:
+    match c:
+        case Container.Empty:
+            return 0
+        case Container.Value(v):
+            return v
+
+def main() -> int32:
+    print(check(Container.Empty))
+    print(check(Container.Value(42)))
+    return 0

@@ -1,0 +1,14 @@
+def main() -> int32:
+    ch: Channel[int32] = channel()
+
+    select:
+        case send_result = ch.send(42):
+            match send_result:
+                case Result.Ok(done):
+                    print("sent")
+                case Result.Err(err):
+                    print("send err")
+        case after(10ms):
+            print("send timeout ok")
+
+    return 0

@@ -1,0 +1,6 @@
+def main() -> int32:
+    if cancelled():
+        print("cancelled")
+    else:
+        print("not cancelled")
+    return 0

@@ -1,0 +1,15 @@
+def main() -> int32:
+    mut original: String = "start"
+    copy = original.clone()
+
+    original = "changed"
+
+    print(original)
+    print(copy)
+
+    if original != copy:
+        print("independence ok")
+    else:
+        print("independence fail")
+
+    return 0

@@ -1,0 +1,13 @@
+# Edge: using a class instance after it was consumed (should be error)
+class Token:
+    value: String
+
+    def consume(self) -> String:
+        return self.value
+
+def main() -> int32:
+    t = Token(value="secret")
+    result = t.consume()
+    print(result)
+    print(t.value)
+    return 0

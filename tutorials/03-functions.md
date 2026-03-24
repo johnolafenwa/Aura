@@ -46,6 +46,37 @@ Parameters are written with explicit types:
 def distance(a: Point, b: Point) -> float64:
 ```
 
+Aurora also supports ordinary borrowed parameters for helper functions that should inspect or mutate an existing caller-owned value without consuming it.
+
+```python
+def read(counter: borrow Counter) -> int32:
+    return counter.value
+
+def bump(counter: borrow mut Counter):
+    counter.value += 1
+```
+
+The preferred style matches the proposal and writes the borrow in the type position:
+
+- `counter: borrow Counter`
+- `counter: borrow mut Counter`
+
+The current compiler also accepts the equivalent prefix spelling:
+
+- `borrow counter: Counter`
+- `borrow mut counter: Counter`
+
+`borrow mut` parameters must receive a mutable place at the call site:
+
+```python
+mut counter = Counter(value=41)
+bump(counter)
+```
+
+See [examples/basics/borrow_parameters.au](../examples/basics/borrow_parameters.au).
+
+For now, borrowed parameters are only supported on ordinary calls. `spawn` and `task_group().spawn(...)` still require by-value parameters because task capture does not yet model borrowed argument lifetimes.
+
 ## Calling Functions
 
 Aurora now supports both positional and named arguments for ordinary function calls.
@@ -135,4 +166,5 @@ The current compiler infers generic function type arguments from the arguments y
 
 Aurora’s implemented subset does not yet cover:
 
-- imports or namespaced function declarations
+- borrowed return types on ordinary functions
+- explicit lifetime syntax on function signatures

@@ -1,0 +1,18 @@
+# Test trait with void-returning method (no -> annotation)
+trait Logger:
+    def log(borrow self)
+
+class ConsoleLogger:
+    prefix: String
+
+impl Logger for ConsoleLogger:
+    def log(borrow self):
+        print(self.prefix)
+
+def do_log[T: Logger](logger: T):
+    logger.log()
+
+def main() -> int32:
+    l = ConsoleLogger(prefix="INFO")
+    do_log(logger=l)
+    return 0

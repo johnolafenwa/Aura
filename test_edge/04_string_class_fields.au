@@ -1,0 +1,27 @@
+class Person:
+    name: String
+    title: String
+
+    def full_title(borrow self) -> String:
+        return self.title + " " + self.name
+
+class Config:
+    host: String = "localhost"
+    path: String = "/api"
+
+    def url(borrow self) -> String:
+        return self.host + self.path
+
+def main() -> int32:
+    p = Person(name="Ada", title="Dr")
+    print(p.full_title())
+    print(p.name)
+    print(p.title)
+
+    c = Config()
+    print(c.url())
+
+    c2 = Config(host="example.com")
+    print(c2.url())
+
+    return 0

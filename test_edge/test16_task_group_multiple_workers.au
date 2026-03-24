@@ -1,0 +1,39 @@
+def worker_a(out: Channel[int32]):
+    mut i: int32 = 0
+    while i < 3:
+        if cancelled():
+            return
+        out.send(i)
+        i += 1
+
+def worker_b(out: Channel[int32]):
+    mut i: int32 = 10
+    while i < 13:
+        if cancelled():
+            return
+        out.send(i)
+        i += 1
+
+def main() -> int32:
+    out: Channel[int32] = channel()
+    mut total: int32 = 0
+
+    with task_group() as group:
+        group.spawn(worker_a, out.clone())
+        group.spawn(worker_b, out.clone())
+        mut seen: int32 = 0
+
+        while seen < 6:
+            select:
+                case value = out.recv():
+                    match value:
+                        case Option.Some(next):
+                            total += next
+                            seen += 1
+                        case Option.None:
+                            break
+
+        out.close()
+
+    print(total)
+    return 0

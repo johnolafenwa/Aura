@@ -1,0 +1,5 @@
+enum Empty:
+
+def main() -> int32:
+    print("hello")
+    return 0

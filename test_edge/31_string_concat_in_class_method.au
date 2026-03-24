@@ -1,0 +1,17 @@
+class Builder:
+    prefix: String
+    suffix: String
+
+    def build(borrow self, middle: String) -> String:
+        return self.prefix + middle + self.suffix
+
+    def close(borrow mut self):
+        pass
+
+def main() -> int32:
+    b = Builder(prefix="[", suffix="]")
+    print(b.build("hello"))
+    print(b.build("world"))
+    print(b.build(""))
+
+    return 0

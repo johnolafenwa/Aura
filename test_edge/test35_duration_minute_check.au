@@ -1,0 +1,7 @@
+def main() -> int32:
+    select:
+        case after(1ms):
+            print("fast")
+        case after(2m):
+            print("slow")
+    return 0

@@ -1,0 +1,33 @@
+# Test generic class with multiple methods
+
+class Container[T]:
+    value: T
+    label: String
+
+    def get_value(borrow self) -> T:
+        return self.value
+
+    def get_label(borrow self) -> String:
+        return self.label
+
+    def has_label(borrow self) -> bool:
+        return true
+
+    def with_label(borrow self, new_label: String) -> Container[T]:
+        return Container(value=self.value, label=new_label)
+
+def main() -> int32:
+    c1 = Container(value=42, label="first")
+    print(c1.get_value())
+    print(c1.get_label())
+    print(c1.has_label())
+
+    c2 = c1.with_label(new_label="second")
+    print(c2.get_value())
+    print(c2.get_label())
+
+    c3 = Container(value="hello", label="greeting")
+    print(c3.get_value())
+    print(c3.get_label())
+
+    return 0

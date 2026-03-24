@@ -1,0 +1,24 @@
+def main() -> int32:
+    empty = ""
+    print(empty)
+
+    result = empty + "hello"
+    print(result)
+
+    result2 = "world" + empty
+    print(result2)
+
+    result3 = empty + empty
+    print(result3)
+
+    if empty == "":
+        print("empty equals empty ok")
+    else:
+        print("empty equals empty fail")
+
+    if empty != "notempty":
+        print("empty not equals notempty ok")
+    else:
+        print("empty not equals notempty fail")
+
+    return 0

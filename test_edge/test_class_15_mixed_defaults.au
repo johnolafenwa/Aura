@@ -1,0 +1,12 @@
+# Edge: class with some fields having defaults and some not
+class Item:
+    name: String
+    quantity: int32 = 1
+    price: float64
+
+def main() -> int32:
+    item = Item(name="Widget", price=9.99)
+    print(item.name)
+    print(item.quantity)
+    print(item.price)
+    return 0

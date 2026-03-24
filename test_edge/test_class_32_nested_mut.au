@@ -1,0 +1,16 @@
+# Edge: mutating a nested class field
+class Inner:
+    value: int32
+
+    def bump(borrow mut self):
+        self.value += 1
+
+class Outer:
+    inner: Inner
+
+def main() -> int32:
+    mut o = Outer(inner=Inner(value=0))
+    o.inner.bump()
+    o.inner.bump()
+    print(o.inner.value)
+    return 0

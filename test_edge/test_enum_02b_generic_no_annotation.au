@@ -1,0 +1,15 @@
+enum Container[T]:
+    Empty
+    Value(T)
+
+def unwrap_or_default(c: Container[int32], default_val: int32) -> int32:
+    match c:
+        case Container.Empty:
+            return default_val
+        case Container.Value(v):
+            return v
+
+def main() -> int32:
+    full = Container.Value(42)
+    print(unwrap_or_default(full, 0))
+    return 0

@@ -1,0 +1,44 @@
+def main() -> int32:
+    # Basic range(n)
+    mut sum1: int32 = 0
+    for i in range(5):
+        sum1 += i
+    # 0+1+2+3+4 = 10
+    print(sum1)
+
+    # Range with start and stop: range(start, stop)
+    mut sum2: int32 = 0
+    for i in range(3, 7):
+        sum2 += i
+    # 3+4+5+6 = 18
+    print(sum2)
+
+    # Range with named args
+    mut sum3: int32 = 0
+    for i in range(start=2, stop=5):
+        sum3 += i
+    # 2+3+4 = 9
+    print(sum3)
+
+    # Range(0) - empty range
+    mut sum4: int32 = 0
+    for i in range(0):
+        sum4 += 999
+    # Should be 0 (no iterations)
+    print(sum4)
+
+    # Range(1) - single iteration
+    mut sum5: int32 = 0
+    for i in range(1):
+        sum5 += i
+    # 0
+    print(sum5)
+
+    # Larger range
+    mut sum6: int32 = 0
+    for i in range(100):
+        sum6 += i
+    # 0+1+...+99 = 4950
+    print(sum6)
+
+    return 0

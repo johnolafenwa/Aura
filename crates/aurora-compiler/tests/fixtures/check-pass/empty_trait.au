@@ -1,0 +1,11 @@
+trait Marker:
+    pass
+
+class User:
+    value: int32
+
+impl Marker for User:
+    pass
+
+def main() -> int32:
+    return 0

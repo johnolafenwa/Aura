@@ -1,0 +1,8 @@
+enum Container[T]:
+    Empty
+    Value(T)
+
+def main() -> int32:
+    empty: Container[int32] = Container.Empty
+    print("created empty")
+    return 0

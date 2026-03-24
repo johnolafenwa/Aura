@@ -1,0 +1,45 @@
+trait Shape:
+    def area(borrow self) -> float64
+    def perimeter(borrow self) -> float64
+    def name(borrow self) -> String
+
+class Circle:
+    radius: float64
+
+impl Shape for Circle:
+    def area(borrow self) -> float64:
+        return 3.14159 * self.radius * self.radius
+
+    def perimeter(borrow self) -> float64:
+        return 2.0 * 3.14159 * self.radius
+
+    def name(borrow self) -> String:
+        return "Circle"
+
+class Rectangle:
+    width: float64
+    height: float64
+
+impl Shape for Rectangle:
+    def area(borrow self) -> float64:
+        return self.width * self.height
+
+    def perimeter(borrow self) -> float64:
+        return 2.0 * (self.width + self.height)
+
+    def name(borrow self) -> String:
+        return "Rectangle"
+
+def print_shape_info[T: Shape](shape: T):
+    print(shape.name())
+    print(shape.area())
+    print(shape.perimeter())
+
+def main() -> int32:
+    c = Circle(radius=5.0)
+    r = Rectangle(width=3.0, height=4.0)
+
+    print_shape_info(shape=c)
+    print_shape_info(shape=r)
+
+    return 0

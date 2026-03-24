@@ -1,0 +1,34 @@
+# Test: trait method returning a class
+
+class Point:
+    x: int32
+    y: int32
+
+trait Locatable:
+    def location(borrow self) -> Point
+
+class City:
+    name: String
+    px: int32
+    py: int32
+
+impl Locatable for City:
+    def location(borrow self) -> Point:
+        return Point(x=self.px, y=self.py)
+
+def show_location[T: Locatable](item: T):
+    p = item.location()
+    print(p.x)
+    print(p.y)
+
+def main() -> int32:
+    c = City(name="Aurora", px=10, py=20)
+    show_location(item=c)
+
+    # Also direct call
+    c2 = City(name="Test", px=5, py=15)
+    p = c2.location()
+    print(p.x)
+    print(p.y)
+
+    return 0

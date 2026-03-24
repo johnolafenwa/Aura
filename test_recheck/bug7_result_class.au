@@ -1,0 +1,7 @@
+class Result:
+    value: int32
+    ok: bool
+
+def main():
+    r = Result(value=42, ok=true)
+    print(r.value)

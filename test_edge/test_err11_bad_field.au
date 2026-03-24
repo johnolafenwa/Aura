@@ -1,0 +1,8 @@
+class Person:
+    name: String
+    age: int32
+
+def main() -> int32:
+    p = Person(name="Alice", age=30)
+    print(p.email)
+    return 0

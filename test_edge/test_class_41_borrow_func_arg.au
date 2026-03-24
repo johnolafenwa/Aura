@@ -1,0 +1,14 @@
+# Edge: can we use 'borrow' for function params (not just methods)?
+class Point:
+    x: float64
+    y: float64
+
+def print_point(borrow p: Point):
+    print(p.x)
+    print(p.y)
+
+def main() -> int32:
+    p = Point(x=1.0, y=2.0)
+    print_point(p)
+    print_point(p)
+    return 0

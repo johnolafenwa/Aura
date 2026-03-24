@@ -17,11 +17,11 @@ use crate::sema::{ModuleNamespace, Program, Type};
 
 #[derive(Clone, Debug)]
 pub enum Value {
-    Int(i64),
+    Int(i128),
     Float(f64),
     Bool(bool),
     String(String),
-    Duration(i64),
+    Duration(i128),
     Range(RangeValue),
     ModuleNamespace(ModuleNamespaceValue),
     Unit,
@@ -47,8 +47,8 @@ pub struct EnumVariantValue {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RangeValue {
-    pub start: i64,
-    pub end: i64,
+    pub start: i128,
+    pub end: i128,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -150,11 +150,10 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
     match value {
         Value::Int(value) => {
             if let Some((min, max)) = crate::sema::integer_type_bounds(target) {
-                let value_i128 = value as i128;
-                if value_i128 < min || value_i128 > max {
+                if value < min || value > max {
                     return Err(render_target_error(
                         span,
-                        format!("integer value `{}` does not fit in `{}`", value_i128, target),
+                        format!("integer value `{}` does not fit in `{}`", value, target),
                     ));
                 }
                 return Ok(Value::Int(value));
@@ -170,19 +169,18 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
                     ));
                 }
                 let truncated = value.trunc();
-                if truncated < i64::MIN as f64 || truncated > i64::MAX as f64 {
+                if truncated < i128::MIN as f64 || truncated > i128::MAX as f64 {
                     return Err(render_target_error(
                         span,
                         format!("integer value `{}` does not fit in `{}`", truncated, target),
                     ));
                 }
-                let coerced = truncated as i64;
-                let coerced_i128 = coerced as i128;
+                let coerced = truncated as i128;
                 let (min, max) = crate::sema::integer_type_bounds(target).unwrap();
-                if coerced_i128 < min || coerced_i128 > max {
+                if coerced < min || coerced > max {
                     return Err(render_target_error(
                         span,
-                        format!("integer value `{}` does not fit in `{}`", coerced_i128, target),
+                        format!("integer value `{}` does not fit in `{}`", coerced, target),
                     ));
                 }
                 return Ok(Value::Int(coerced));
@@ -261,7 +259,13 @@ impl Value {
     pub fn render(&self) -> String {
         match self {
             Value::Int(value) => value.to_string(),
-            Value::Float(value) => value.to_string(),
+            Value::Float(value) => {
+                if value.is_finite() && value.fract() == 0.0 {
+                    format!("{value:.1}")
+                } else {
+                    value.to_string()
+                }
+            }
             Value::Bool(value) => value.to_string(),
             Value::String(value) => value.clone(),
             Value::Duration(value) => format!("{}ms", value),
@@ -493,6 +497,12 @@ struct Interpreter {
 struct CallOutcome {
     value: Value,
     updated_receiver: Option<Value>,
+    updated_params: Vec<(usize, Value)>,
+}
+
+struct EvaluatedArg<'a> {
+    argument: Option<&'a Argument>,
+    value: Value,
 }
 
 enum EvalOutcome {
@@ -617,11 +627,7 @@ impl Interpreter {
         }
         Type::Named(
             type_ref.name.clone(),
-            type_ref
-                .args
-                .iter()
-                .map(Self::lower_runtime_type)
-                .collect(),
+            type_ref.args.iter().map(Self::lower_runtime_type).collect(),
         )
     }
 
@@ -711,7 +717,8 @@ impl Interpreter {
                 _ => self.infer_expr_type(left, env),
             },
             ExprKind::Member { object, field } => {
-                if let Some(Type::Named(class_name, class_args)) = self.infer_expr_type(object, env) {
+                if let Some(Type::Named(class_name, class_args)) = self.infer_expr_type(object, env)
+                {
                     if class_name == "String" && class_args.is_empty() {
                         return match field.as_str() {
                             "clone" => Some(Type::named("String")),
@@ -753,20 +760,29 @@ impl Interpreter {
                             _ => None,
                         };
                     }
-                    if class_args.is_empty() {
-                        if let Some(class_info) = self.program.classes.get(&class_name) {
-                            if let Some(field_info) = class_info.fields.get(field) {
-                                return Some(field_info.ty.clone());
-                            }
-                            if let Some(method) = class_info.methods.get(field) {
-                                return Some(method.signature.return_type.clone());
-                            }
+                    if let Some(class_info) = self.program.classes.get(&class_name) {
+                        let substitutions = crate::sema::substitutions_from_decl_type_args(
+                            &class_info.decl.type_params,
+                            &class_args,
+                        );
+                        if let Some(field_info) = class_info.fields.get(field) {
+                            return Some(crate::sema::substitute_type(
+                                &field_info.ty,
+                                &substitutions,
+                            ));
                         }
-                        if let Some(method) =
-                            self.find_trait_impl_method(&Type::named(&class_name), field)
-                        {
-                            return Some(method.signature.return_type.clone());
+                        if let Some(method) = class_info.methods.get(field) {
+                            return Some(crate::sema::substitute_type(
+                                &method.signature.return_type,
+                                &substitutions,
+                            ));
                         }
+                    }
+                    if let Some(method) = self.find_trait_impl_method(
+                        &Type::Named(class_name.clone(), class_args.clone()),
+                        field,
+                    ) {
+                        return Some(method.signature.return_type.clone());
                     }
                 }
                 None
@@ -822,6 +838,26 @@ impl Interpreter {
             }
             trait_impl.methods.get(field)
         })
+    }
+
+    fn find_trait_impl_method_for_class_name(
+        &self,
+        class_name: &str,
+        field: &str,
+    ) -> Option<&crate::sema::TraitImplMethodInfo> {
+        let mut matches =
+            self.program
+                .trait_impls
+                .iter()
+                .filter_map(|trait_impl| match &trait_impl.for_type {
+                    Type::Named(name, _) if name == class_name => trait_impl.methods.get(field),
+                    _ => None,
+                });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(first)
     }
 
     fn validate_value_fits_type(
@@ -891,10 +927,26 @@ impl Interpreter {
         } else {
             None
         };
+        let mut updated_params = Vec::new();
+        for (index, param) in function.params.iter().enumerate() {
+            if param.passing == ReceiverKind::BorrowMut {
+                let value = env.get(&param.name).cloned().ok_or_else(|| {
+                    Diagnostic::at(
+                        param.span,
+                        format!(
+                            "mutable borrowed parameter `{}` was not available after function execution",
+                            param.name
+                        ),
+                    )
+                })?;
+                updated_params.push((index, value));
+            }
+        }
 
         Ok(CallOutcome {
             value,
             updated_receiver,
+            updated_params,
         })
     }
 
@@ -999,8 +1051,8 @@ impl Interpreter {
                     if let Some(binding) = self.match_pattern(&arm.pattern, &scrutinee)? {
                         env.push_scope();
                         if let Some((name, value)) = binding {
-                            let binding_ty =
-                                Self::infer_value_type(&value).unwrap_or_else(|| Type::named("Unknown"));
+                            let binding_ty = Self::infer_value_type(&value)
+                                .unwrap_or_else(|| Type::named("Unknown"));
                             env.define_typed(name, binding_ty, value);
                         }
                         let flow = self.exec_block(&arm.body, env, false)?;
@@ -1108,6 +1160,7 @@ impl Interpreter {
         value: &Value,
     ) -> Result<Option<Option<(String, Value)>>> {
         match pattern {
+            Pattern::Wildcard(_) => Ok(Some(None)),
             Pattern::Variant(pattern) => {
                 let Value::EnumVariant(variant) = value else {
                     return Err(Diagnostic::at(
@@ -1192,9 +1245,18 @@ impl Interpreter {
                         ))
                     }
                 };
+                let duration = u64::try_from(duration).map_err(|_| {
+                    Diagnostic::at(
+                        duration_arg.span,
+                        format!(
+                            "duration `{}ms` does not fit in the runtime timer range",
+                            duration
+                        ),
+                    )
+                })?;
                 Ok(Some(
                     Instant::now()
-                        .checked_add(StdDuration::from_millis(duration as u64))
+                        .checked_add(StdDuration::from_millis(duration))
                         .unwrap_or_else(Instant::now),
                 ))
             }
@@ -1338,7 +1400,11 @@ impl Interpreter {
                 };
                 let result = match (op, value) {
                     (UnaryOp::Not, Value::Bool(value)) => Value::Bool(!value),
-                    (UnaryOp::Neg, Value::Int(value)) => Value::Int(-value),
+                    (UnaryOp::Neg, Value::Int(value)) => Value::Int(
+                        value
+                            .checked_neg()
+                            .ok_or_else(|| Diagnostic::at(expr.span, "integer overflow"))?,
+                    ),
                     (UnaryOp::Neg, Value::Float(value)) => Value::Float(-value),
                     (UnaryOp::Not, other) => {
                         return Err(Diagnostic::at(
@@ -1356,6 +1422,9 @@ impl Interpreter {
                         ))
                     }
                 };
+                if let Some(result_ty) = self.infer_expr_type(expr, env) {
+                    self.validate_value_fits_type(&result, &result_ty, expr.span)?;
+                }
                 Ok(EvalOutcome::Value(result))
             }
             ExprKind::Spawn { detached, value } => {
@@ -1440,12 +1509,11 @@ impl Interpreter {
                     EvalOutcome::Value(value) => value,
                     EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
                 };
-                Ok(EvalOutcome::Value(self.eval_binary(
-                    expr.span,
-                    *op,
-                    left_value,
-                    right_value,
-                )?))
+                let result = self.eval_binary(expr.span, *op, left_value, right_value)?;
+                if let Some(result_ty) = self.infer_expr_type(expr, env) {
+                    self.validate_value_fits_type(&result, &result_ty, expr.span)?;
+                }
+                Ok(EvalOutcome::Value(result))
             }
             ExprKind::Member { object, field } => {
                 if let ExprKind::Name(enum_name) = &object.kind {
@@ -1624,23 +1692,43 @@ impl Interpreter {
                             }
                             EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
                         };
-                        std::thread::sleep(std::time::Duration::from_millis(duration as u64));
+                        let duration = u64::try_from(duration).map_err(|_| {
+                            Diagnostic::at(
+                                ordered_args[0]
+                                    .expect("`sleep` requires exactly one argument")
+                                    .span,
+                                format!(
+                                    "duration `{}ms` does not fit in the runtime timer range",
+                                    duration
+                                ),
+                            )
+                        })?;
+                        std::thread::sleep(std::time::Duration::from_millis(duration));
                         Ok(EvalOutcome::Value(Value::Unit))
                     }
                 }
             }
             ExprKind::Name(name) if self.program.functions.contains_key(name) => {
                 let function = self.program.functions.get(name).unwrap().decl.clone();
-                let values = self.eval_callable_arg_values(
+                let evaluated_args = self.eval_callable_args(
                     &format!("function `{}`", name),
                     &function.params,
                     args,
                     env,
                     callee.span,
                 )?;
-                Ok(EvalOutcome::Value(
-                    self.call_function(&function, values)?.value,
-                ))
+                let values = evaluated_args
+                    .iter()
+                    .map(|argument| argument.value.clone())
+                    .collect();
+                let outcome = self.call_function(&function, values)?;
+                self.apply_borrowed_param_writebacks(
+                    &function.params,
+                    &evaluated_args,
+                    &outcome.updated_params,
+                    env,
+                )?;
+                Ok(EvalOutcome::Value(outcome.value))
             }
             ExprKind::Name(name) if self.program.classes.contains_key(name) => {
                 let class_decl = self.program.classes.get(name).unwrap().decl.clone();
@@ -1697,16 +1785,25 @@ impl Interpreter {
                         .cloned()
                     {
                         if method.decl.receiver.is_none() {
-                            let values = self.eval_callable_arg_values(
+                            let evaluated_args = self.eval_callable_args(
                                 &format!("method `{}`", field),
                                 &method.decl.params,
                                 args,
                                 env,
                                 callee.span,
                             )?;
-                            return Ok(EvalOutcome::Value(
-                                self.call_function(&method.decl, values)?.value,
-                            ));
+                            let values = evaluated_args
+                                .iter()
+                                .map(|argument| argument.value.clone())
+                                .collect();
+                            let outcome = self.call_function(&method.decl, values)?;
+                            self.apply_borrowed_param_writebacks(
+                                &method.decl.params,
+                                &evaluated_args,
+                                &outcome.updated_params,
+                                env,
+                            )?;
+                            return Ok(EvalOutcome::Value(outcome.value));
                         }
                     }
                 }
@@ -1820,16 +1917,25 @@ impl Interpreter {
                             )
                         })?;
                         if let Some(function) = module.functions.get(field).cloned() {
-                            let values = self.eval_callable_arg_values(
+                            let evaluated_args = self.eval_callable_args(
                                 &format!("function `{}`", function.decl.name),
                                 &function.decl.params,
                                 args,
                                 env,
                                 callee.span,
                             )?;
-                            return Ok(EvalOutcome::Value(
-                                self.call_function(&function.decl, values)?.value,
-                            ));
+                            let values = evaluated_args
+                                .iter()
+                                .map(|argument| argument.value.clone())
+                                .collect();
+                            let outcome = self.call_function(&function.decl, values)?;
+                            self.apply_borrowed_param_writebacks(
+                                &function.decl.params,
+                                &evaluated_args,
+                                &outcome.updated_params,
+                                env,
+                            )?;
+                            return Ok(EvalOutcome::Value(outcome.value));
                         }
                         if let Some(class_info) = module.classes.get(field) {
                             let class_decl = class_info.decl.clone();
@@ -1902,13 +2008,16 @@ impl Interpreter {
                         {
                             if method.decl.receiver.is_some() {
                                 let mut values = vec![Value::Instance(instance)];
-                                values.extend(self.eval_callable_arg_values(
+                                let evaluated_args = self.eval_callable_args(
                                     &format!("method `{}`", field),
                                     &method.decl.params,
                                     args,
                                     env,
                                     callee.span,
-                                )?);
+                                )?;
+                                values.extend(
+                                    evaluated_args.iter().map(|argument| argument.value.clone()),
+                                );
                                 let outcome = self.call_function(&method.decl, values)?;
                                 if method.decl.receiver == Some(ReceiverKind::BorrowMut) {
                                     let updated_receiver =
@@ -1923,21 +2032,40 @@ impl Interpreter {
                                             })?;
                                     self.write_place_expr(object, env, updated_receiver)?;
                                 }
+                                self.apply_borrowed_param_writebacks(
+                                    &method.decl.params,
+                                    &evaluated_args,
+                                    &outcome.updated_params,
+                                    env,
+                                )?;
                                 return Ok(EvalOutcome::Value(outcome.value));
                             }
                         }
+                        let resolved_receiver_ty = self
+                            .infer_expr_type(object, env)
+                            .filter(|ty| !matches!(ty, Type::TypeParam(_)))
+                            .unwrap_or_else(|| Type::named(&instance.class_name));
                         if let Some(method) = self
-                            .find_trait_impl_method(&Type::named(&instance.class_name), field)
+                            .find_trait_impl_method(&resolved_receiver_ty, field)
+                            .or_else(|| {
+                                self.find_trait_impl_method_for_class_name(
+                                    &instance.class_name,
+                                    field,
+                                )
+                            })
                             .cloned()
                         {
                             let mut values = vec![Value::Instance(instance)];
-                            values.extend(self.eval_callable_arg_values(
+                            let evaluated_args = self.eval_callable_args(
                                 &format!("method `{}`", field),
                                 &method.decl.params,
                                 args,
                                 env,
                                 callee.span,
-                            )?);
+                            )?;
+                            values.extend(
+                                evaluated_args.iter().map(|argument| argument.value.clone()),
+                            );
                             let outcome = self.call_function(&method.decl, values)?;
                             if method.decl.receiver == Some(ReceiverKind::BorrowMut) {
                                 let updated_receiver =
@@ -1952,6 +2080,12 @@ impl Interpreter {
                                     })?;
                                 self.write_place_expr(object, env, updated_receiver)?;
                             }
+                            self.apply_borrowed_param_writebacks(
+                                &method.decl.params,
+                                &evaluated_args,
+                                &outcome.updated_params,
+                                env,
+                            )?;
                             return Ok(EvalOutcome::Value(outcome.value));
                         }
                         Err(Diagnostic::at(callee.span, "unsupported call target"))
@@ -2063,12 +2197,34 @@ impl Interpreter {
                     "binary operands must have matching numeric types",
                 )),
             },
-            BinaryOp::Less => self.eval_ordering(span, left, right, |left, right| left < right),
-            BinaryOp::LessEq => self.eval_ordering(span, left, right, |left, right| left <= right),
-            BinaryOp::Greater => self.eval_ordering(span, left, right, |left, right| left > right),
-            BinaryOp::GreaterEq => {
-                self.eval_ordering(span, left, right, |left, right| left >= right)
-            }
+            BinaryOp::Less => self.eval_ordering(
+                span,
+                left,
+                right,
+                |left, right| left < right,
+                |left, right| left < right,
+            ),
+            BinaryOp::LessEq => self.eval_ordering(
+                span,
+                left,
+                right,
+                |left, right| left <= right,
+                |left, right| left <= right,
+            ),
+            BinaryOp::Greater => self.eval_ordering(
+                span,
+                left,
+                right,
+                |left, right| left > right,
+                |left, right| left > right,
+            ),
+            BinaryOp::GreaterEq => self.eval_ordering(
+                span,
+                left,
+                right,
+                |left, right| left >= right,
+                |left, right| left >= right,
+            ),
         }
     }
 
@@ -2077,13 +2233,14 @@ impl Interpreter {
         span: crate::diag::Span,
         left: Value,
         right: Value,
-        compare: impl FnOnce(f64, f64) -> bool + Copy,
+        compare_int: impl FnOnce(i128, i128) -> bool + Copy,
+        compare_float: impl FnOnce(f64, f64) -> bool + Copy,
     ) -> Result<Value> {
         match (left, right) {
-            (Value::Int(left), Value::Int(right)) => {
-                Ok(Value::Bool(compare(left as f64, right as f64)))
+            (Value::Int(left), Value::Int(right)) => Ok(Value::Bool(compare_int(left, right))),
+            (Value::Float(left), Value::Float(right)) => {
+                Ok(Value::Bool(compare_float(left, right)))
             }
-            (Value::Float(left), Value::Float(right)) => Ok(Value::Bool(compare(left, right))),
             _ => Err(Diagnostic::at(
                 span,
                 "ordering comparisons require matching numeric operands",
@@ -2119,13 +2276,18 @@ impl Interpreter {
             .decl
             .clone();
 
-        let values = self.eval_callable_arg_values(
+        self.require_spawnable_function(&function, span)?;
+        let evaluated_args = self.eval_callable_args(
             &format!("function `{}`", function_name),
             &function.params,
             args,
             env,
             span,
         )?;
+        let values = evaluated_args
+            .iter()
+            .map(|argument| argument.value.clone())
+            .collect();
 
         let program = self.program.clone();
         let stdout = self.stdout.clone();
@@ -2273,13 +2435,18 @@ impl Interpreter {
                     .decl
                     .clone();
 
-                let values = self.eval_callable_arg_values(
+                self.require_spawnable_function(&function, span)?;
+                let evaluated_args = self.eval_callable_args(
                     &format!("function `{}`", function_name),
                     &function.params,
                     &args[1..],
                     env,
                     span,
                 )?;
+                let values = evaluated_args
+                    .iter()
+                    .map(|argument| argument.value.clone())
+                    .collect();
 
                 let program = self.program.clone();
                 let stdout = self.stdout.clone();
@@ -2546,14 +2713,14 @@ impl Interpreter {
         Ok(())
     }
 
-    fn eval_callable_arg_values(
+    fn eval_callable_args<'a>(
         &mut self,
         callee_name: &str,
         params: &[Param],
-        args: &[Argument],
+        args: &'a [Argument],
         env: &mut Env,
         span: crate::diag::Span,
-    ) -> Result<Vec<Value>> {
+    ) -> Result<Vec<EvaluatedArg<'a>>> {
         let ordered_args = bind_call_arguments(
             callee_name,
             &callable_params_from_decl(params),
@@ -2566,17 +2733,70 @@ impl Interpreter {
             let expr = if let Some(argument) = argument {
                 &argument.value
             } else {
-                param.default
+                param
+                    .default
                     .as_ref()
                     .expect("optional parameter should provide a default expression")
             };
             values.push(match self.eval_expr(expr, env)? {
-                EvalOutcome::Value(value) => value,
+                EvalOutcome::Value(value) => EvaluatedArg { argument, value },
                 EvalOutcome::Return(_) => {
                     unreachable!("return flow should not escape expression argument evaluation")
                 }
             });
         }
         Ok(values)
+    }
+
+    fn apply_borrowed_param_writebacks(
+        &mut self,
+        params: &[Param],
+        evaluated_args: &[EvaluatedArg<'_>],
+        updated_params: &[(usize, Value)],
+        env: &mut Env,
+    ) -> Result<()> {
+        for (index, value) in updated_params {
+            let Some(param) = params.get(*index) else {
+                continue;
+            };
+            if param.passing != ReceiverKind::BorrowMut {
+                continue;
+            }
+            let argument = evaluated_args
+                .get(*index)
+                .and_then(|evaluated| evaluated.argument)
+                .ok_or_else(|| {
+                    Diagnostic::at(
+                        param.span,
+                        format!(
+                            "mutable borrowed parameter `{}` requires an explicit argument",
+                            param.name
+                        ),
+                    )
+                })?;
+            self.write_place_expr(&argument.value, env, value.clone())?;
+        }
+        Ok(())
+    }
+
+    fn require_spawnable_function(
+        &self,
+        function: &FunctionDecl,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        if let Some(param) = function
+            .params
+            .iter()
+            .find(|param| param.passing != ReceiverKind::Value)
+        {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "`spawn` does not yet support borrowed parameter `{}` on function `{}`",
+                    param.name, function.name
+                ),
+            ));
+        }
+        Ok(())
     }
 }

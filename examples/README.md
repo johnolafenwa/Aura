@@ -32,6 +32,12 @@ The examples are organized by topic so they can serve both as quick references a
     - `hello aurora`
     - `6`
     - `12`
+- `borrow_parameters.au`
+  - free-function `borrow` and `borrow mut` parameters with caller-visible mutation
+  - prints:
+    - `41`
+    - `42`
+    - `42`
 - `pass_keyword.au`
   - the `pass` no-op statement in empty classes and functions
   - prints `0`
@@ -40,7 +46,7 @@ The examples are organized by topic so they can serve both as quick references a
 
 - `point_distance.au`
   - class fields, member access, functions, and `float64.sqrt()`
-  - prints `5`
+  - prints `5.0`
 - `default_fields.au`
   - field default values and keyword construction
   - prints:
@@ -89,6 +95,9 @@ The examples are organized by topic so they can serve both as quick references a
     - `4`
     - `division by zero`
     - `7`
+- `wildcard_match.au`
+  - wildcard `case _:` arms in statement-form `match`
+  - prints `2`
 
 ### `generics/`
 
@@ -97,6 +106,14 @@ The examples are organized by topic so they can serve both as quick references a
   - prints:
     - `7`
     - `ok`
+- `generic_method_calls.au`
+  - method calls on generic class instances inside generic functions
+  - prints `7`
+- `bounded_types.au`
+  - trait bounds on generic class and enum type parameters
+  - prints:
+    - `aurora`
+    - `empty`
 
 ### `traits/`
 
@@ -108,6 +125,12 @@ The examples are organized by topic so they can serve both as quick references a
 - `multiple_bounds.au`
   - bounded generic calls with `T: A + B`
   - prints `9`
+- `marker_trait.au`
+  - empty marker traits declared with `pass`
+  - prints `1`
+- `specialized_generic_impl.au`
+  - specialized trait impls for concrete generic instances
+  - prints `hello`
 
 ### `modules/`
 
@@ -171,25 +194,28 @@ The examples are organized by topic so they can serve both as quick references a
   - prints:
     - `start`
     - `end`
+- `minute_duration.au`
+  - duration literals with the `m` suffix
+  - prints `120000ms`
 
 ### `numbers/`
 
 - `float_sqrt.au`
   - `float64` values and `.sqrt()`
-  - prints `9`
+  - prints `9.0`
 - `float32_values.au`
   - `float32` values introduced through annotated bindings, parameters, returns, and class fields
   - prints:
     - `3.25`
-    - `2`
-    - `5`
+    - `2.0`
+    - `5.0`
 - `numeric_casts.au`
   - explicit numeric conversions with `expr as Type`
   - prints:
     - `7`
-    - `3`
+    - `3.0`
     - `1.25`
-    - `2`
+    - `2.0`
 - `unary_minus.au`
   - unary minus for integer and floating-point expressions
   - prints:
@@ -225,6 +251,7 @@ cargo run -p aura -- run examples/basics/top_level_script.au
 cargo run -p aura -- run examples/basics/named_arguments.au
 cargo run -p aura -- run examples/basics/named_builtin_arguments.au
 cargo run -p aura -- run examples/basics/default_arguments.au
+cargo run -p aura -- run examples/basics/borrow_parameters.au
 cargo run -p aura -- run examples/basics/pass_keyword.au
 cargo run -p aura -- run examples/classes/point_distance.au
 cargo run -p aura -- run examples/classes/methods.au
@@ -234,9 +261,14 @@ cargo run -p aura -- run examples/control_flow/boolean_logic.au
 cargo run -p aura -- run examples/control_flow/while_break_continue.au
 cargo run -p aura -- run examples/enums/result_match.au
 cargo run -p aura -- run examples/enums/result_option.au
+cargo run -p aura -- run examples/enums/wildcard_match.au
 cargo run -p aura -- run examples/generics/box_and_wrapper.au
+cargo run -p aura -- run examples/generics/generic_method_calls.au
+cargo run -p aura -- run examples/generics/bounded_types.au
 cargo run -p aura -- run examples/traits/greeter.au
 cargo run -p aura -- run examples/traits/multiple_bounds.au
+cargo run -p aura -- run examples/traits/marker_trait.au
+cargo run -p aura -- run examples/traits/specialized_generic_impl.au
 cargo run -p aura -- run examples/error_handling/try_result.au
 cargo run -p aura -- run examples/resources/with_resource.au
 cargo run -p aura -- run examples/concurrency/channels_spawn.au
@@ -248,6 +280,7 @@ cargo run -p aura -- run examples/concurrency/task_group_cancel.au
 cargo run -p aura -- run examples/concurrency/select_timeout.au
 cargo run -p aura -- run examples/concurrency/select_timeout_named.au
 cargo run -p aura -- run examples/concurrency/sleep_builtin.au
+cargo run -p aura -- run examples/concurrency/minute_duration.au
 cargo run -p aura -- run examples/numbers/float32_values.au
 cargo run -p aura -- run examples/numbers/numeric_casts.au
 cargo run -p aura -- run examples/numbers/unary_minus.au
@@ -256,15 +289,27 @@ cargo run -p aura -- run examples/strings/string_clone.au
 
 ## Build Standalone Artifacts
 
-The bootstrap CLI can also package a runnable standalone binary for a checked program:
+The CLI can also package a runnable standalone native binary for a checked program:
 
 ```bash
 cargo run -p aura -- build -o ./target/aurora-point examples/point.au
 ./target/aurora-point
+cargo run -p aura -- build --backend direct -o ./target/aurora-direct examples/basic_addition.au
+./target/aurora-direct
 ```
 
-Today this build path is still bootstrap-oriented. It generates and compiles a small Rust launcher linked against `aurora-compiler`, so it is useful for packaging and smoke-testing programs but it is not yet the final MIR-native backend.
-The generated launcher now embeds checked MIR and executes it directly through `run_mir(...)`.
+`aura build` now supports:
+
+- `--backend auto`
+  - default
+  - tries the direct native backend first and falls back to the runtime-linked MIR artifact backend when needed
+- `--backend direct`
+  - forces the current direct native backend
+  - currently covers scalars, floats, plain classes, field access, and immutable methods
+- `--backend mir-runtime`
+  - forces the runtime-linked MIR artifact backend for the broader implemented surface
+
+The built binary does not depend on the original `.au` source file at runtime, but the build step still needs Cargo/Rust and a host C compiler.
 
 ## Run Through The Backend Path
 
@@ -279,7 +324,7 @@ cargo run -p aura -- run-mir examples/enums/result_match.au
 Current `run-mir` limits:
 
 - it now covers the current implemented Aurora surface, including `spawn`, `select`, channels, task groups, `try`, and `with`
-- it is still a bootstrap backend path, not the final MIR-native code generation backend
+- it is still the broader runtime-linked MIR execution path, so future backend work is about expanding the direct native backend so fewer programs need that path
 
 ## Check, AST, and MIR
 

@@ -1,0 +1,7 @@
+enum Dup:
+    A
+    A
+
+def main() -> int32:
+    print("hello")
+    return 0

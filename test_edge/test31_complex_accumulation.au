@@ -1,0 +1,52 @@
+# Test: GCD, prime check, and digit sum using loops and conditionals
+def gcd(a: int32, b: int32) -> int32:
+    mut x: int32 = a
+    mut y: int32 = b
+    while y != 0:
+        mut temp: int32 = y
+        y = x % y
+        x = temp
+    return x
+
+def is_prime(n: int32) -> bool:
+    if n < 2:
+        return false
+    if n == 2:
+        return true
+    if n % 2 == 0:
+        return false
+    mut i: int32 = 3
+    while i * i <= n:
+        if n % i == 0:
+            return false
+        i += 2
+    return true
+
+def digit_sum(n: int32) -> int32:
+    mut num: int32 = n
+    mut sum: int32 = 0
+    while num > 0:
+        sum += num % 10
+        num = num / 10
+    return sum
+
+def main() -> int32:
+    # GCD tests
+    print(gcd(12, 8))
+    print(gcd(100, 75))
+    print(gcd(17, 13))
+    print(gcd(0, 5))
+
+    # Prime tests
+    print(is_prime(2))
+    print(is_prime(17))
+    print(is_prime(4))
+    print(is_prime(1))
+    print(is_prime(97))
+
+    # Digit sum tests
+    print(digit_sum(123))
+    print(digit_sum(9999))
+    print(digit_sum(1))
+
+    return 0

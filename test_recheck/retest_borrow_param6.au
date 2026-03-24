@@ -1,0 +1,10 @@
+class Data:
+    value: int32
+
+def consume(d: Data):
+    print(d.value)
+
+def main():
+    d = Data(value=42)
+    consume(d)
+    print(d.value)

@@ -1,0 +1,8 @@
+public def add(a: int32, b: int32) -> int32:
+    return a + b
+
+public def multiply(a: int32, b: int32) -> int32:
+    return a * b
+
+def private_helper() -> int32:
+    return 42

@@ -1,0 +1,27 @@
+# Test: function with many return points
+def multi_return(x: int32) -> String:
+    if x < 0:
+        return "negative"
+
+    if x == 0:
+        return "zero"
+
+    if x < 10:
+        return "small"
+
+    if x < 100:
+        return "medium"
+
+    if x < 1000:
+        return "large"
+
+    return "huge"
+
+def main() -> int32:
+    print(multi_return(-5))
+    print(multi_return(0))
+    print(multi_return(7))
+    print(multi_return(50))
+    print(multi_return(500))
+    print(multi_return(5000))
+    return 0

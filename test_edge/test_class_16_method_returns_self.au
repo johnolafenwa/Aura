@@ -1,0 +1,16 @@
+# Edge: method that returns Self type (fluent builder pattern)
+class Builder:
+    x: int32
+    y: int32
+
+    def with_x(borrow self, new_x: int32) -> Builder:
+        return Builder(x=new_x, y=self.y)
+
+    def with_y(borrow self, new_y: int32) -> Builder:
+        return Builder(x=self.x, y=new_y)
+
+def main() -> int32:
+    b = Builder(x=0, y=0).with_x(10).with_y(20)
+    print(b.x)
+    print(b.y)
+    return 0

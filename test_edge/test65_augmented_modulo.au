@@ -1,0 +1,4 @@
+def main():
+    mut x: int32 = 17
+    x %= 5
+    print(x)

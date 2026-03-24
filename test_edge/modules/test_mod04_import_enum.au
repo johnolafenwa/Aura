@@ -1,0 +1,7 @@
+from models.color import Color
+from models.color import color_name
+
+def main() -> int32:
+    c = Color.Green
+    print(color_name(c=c))
+    return 0

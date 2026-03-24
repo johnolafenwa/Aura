@@ -1,0 +1,6 @@
+def get_number() -> int32:
+    return "not a number"
+
+def main() -> int32:
+    print(get_number())
+    return 0

@@ -1,0 +1,5 @@
+def main() -> int32:
+    x: int32 = 42
+    y: float64 = x.to_float64()
+    print(y)
+    return 0

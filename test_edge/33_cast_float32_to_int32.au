@@ -1,0 +1,14 @@
+def main() -> int32:
+    a: float32 = 9.9 as float32
+    b = a as int32
+    print(b)
+
+    c: float32 = -2.1 as float32
+    d = c as int32
+    print(d)
+
+    e: int32 = 50
+    f = e as float32
+    print(f)
+
+    return 0

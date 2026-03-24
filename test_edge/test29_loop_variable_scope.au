@@ -1,0 +1,32 @@
+# Test: loop variable behavior
+def main() -> int32:
+    # Test that for loop variable gets each value correctly
+    mut last: int32 = -1
+    for i in range(5):
+        last = i
+    # last should be 4
+    print(last)
+
+    # Test: multiple for loops with same variable name
+    mut sum1: int32 = 0
+    for i in range(3):
+        sum1 += i
+    mut sum2: int32 = 0
+    for i in range(3, 6):
+        sum2 += i
+    # sum1 = 0+1+2 = 3, sum2 = 3+4+5 = 12
+    print(sum1)
+    print(sum2)
+
+    # While loop variable reuse
+    mut x: int32 = 0
+    while x < 3:
+        x += 1
+    print(x)
+
+    mut x2: int32 = 10
+    while x2 > 7:
+        x2 -= 1
+    print(x2)
+
+    return 0

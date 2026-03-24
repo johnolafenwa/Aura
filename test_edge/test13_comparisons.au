@@ -1,0 +1,76 @@
+def main() -> int32:
+    a: int32 = 10
+    b: int32 = 20
+    c: int32 = 10
+
+    # ==
+    if a == c:
+        print("eq: pass")
+    else:
+        print("eq: FAIL")
+
+    # !=
+    if a != b:
+        print("neq: pass")
+    else:
+        print("neq: FAIL")
+
+    # <
+    if a < b:
+        print("lt: pass")
+    else:
+        print("lt: FAIL")
+
+    # >
+    if b > a:
+        print("gt: pass")
+    else:
+        print("gt: FAIL")
+
+    # <=
+    if a <= c:
+        print("le_eq: pass")
+    else:
+        print("le_eq: FAIL")
+
+    if a <= b:
+        print("le_lt: pass")
+    else:
+        print("le_lt: FAIL")
+
+    # >=
+    if a >= c:
+        print("ge_eq: pass")
+    else:
+        print("ge_eq: FAIL")
+
+    if b >= a:
+        print("ge_gt: pass")
+    else:
+        print("ge_gt: FAIL")
+
+    # Negative cases - make sure false conditions work
+    if a > b:
+        print("neg_gt: FAIL")
+    else:
+        print("neg_gt: pass")
+
+    if a != c:
+        print("neg_neq: FAIL")
+    else:
+        print("neg_neq: pass")
+
+    # Compare with 0
+    if a > 0:
+        print("pos: pass")
+    else:
+        print("pos: FAIL")
+
+    # Comparison in boolean context
+    result = a < b and b > c
+    if result:
+        print("bool_cmp: pass")
+    else:
+        print("bool_cmp: FAIL")
+
+    return 0

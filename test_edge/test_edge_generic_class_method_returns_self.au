@@ -1,0 +1,20 @@
+# Test: generic class with a method that returns the same generic type
+class Stack[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+    def replace(borrow self, new_value: T) -> Stack[T]:
+        return Stack(value=new_value)
+
+def main() -> int32:
+    s1: Stack[int32] = Stack(value=10)
+    s2: Stack[int32] = s1.replace(new_value=20)
+    print(s2.get())
+
+    s3: Stack[String] = Stack(value="old")
+    s4: Stack[String] = s3.replace(new_value="new")
+    print(s4.get())
+
+    return 0

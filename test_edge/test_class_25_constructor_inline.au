@@ -1,0 +1,12 @@
+# Edge: inline constructor in expression positions
+class Point:
+    x: float64
+    y: float64
+
+    def magnitude(borrow self) -> float64:
+        return (self.x * self.x + self.y * self.y).sqrt()
+
+def main() -> int32:
+    # Constructor used directly in function argument
+    print(Point(x=3.0, y=4.0).magnitude())
+    return 0

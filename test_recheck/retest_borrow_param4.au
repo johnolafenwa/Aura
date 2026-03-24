@@ -1,0 +1,9 @@
+class Counter:
+    value: int32
+
+def try_mutate(borrow c: Counter):
+    c.value = 99
+
+def main():
+    c = Counter(value=0)
+    try_mutate(c)

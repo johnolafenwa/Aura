@@ -1,0 +1,16 @@
+# Test: trait with default method implementation (if supported)
+
+trait Describable:
+    def describe(borrow self) -> String:
+        return "unknown"
+
+class Item:
+    name: String
+
+impl Describable for Item:
+    pass
+
+def main() -> int32:
+    i = Item(name="test")
+    print(i.describe())
+    return 0

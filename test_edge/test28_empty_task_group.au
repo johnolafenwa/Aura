@@ -1,0 +1,6 @@
+def main() -> int32:
+    with task_group() as group:
+        print("empty group")
+
+    print("after group")
+    return 0

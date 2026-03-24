@@ -1,0 +1,27 @@
+class Config:
+    host: String = "localhost"
+    port: int32 = 8080
+    debug: bool = false
+    max_connections: int32 = 100
+
+def main() -> int32:
+    # All defaults
+    c1 = Config()
+    print(c1.host)
+    print(c1.port)
+    print(c1.debug)
+    print(c1.max_connections)
+
+    # Override some defaults
+    c2 = Config(host="example.com", debug=true)
+    print(c2.host)
+    print(c2.port)
+    print(c2.debug)
+
+    # Override all
+    c3 = Config(host="prod.com", port=443, debug=false, max_connections=500)
+    print(c3.host)
+    print(c3.port)
+    print(c3.max_connections)
+
+    return 0

@@ -1,0 +1,44 @@
+class Stats:
+    count: int32
+    total: float64
+    label: String
+
+    def bump(borrow mut self):
+        self.count += 1
+
+    def add(borrow mut self, value: float64):
+        self.total = self.total + value
+        self.count += 1
+
+    def reset(borrow mut self):
+        self.count = 0
+        self.total = 0.0
+
+    def rename(borrow mut self, new_label: String):
+        self.label = new_label
+
+    def get_total(borrow self) -> float64:
+        return self.total
+
+def main() -> int32:
+    mut s = Stats(count=0, total=0.0, label="scores")
+
+    s.add(10.0)
+    s.add(20.0)
+    s.add(30.0)
+    print(s.count)
+    print(s.total)
+    print(s.get_total())
+
+    s.rename("grades")
+    print(s.label)
+
+    s.reset()
+    print(s.count)
+    print(s.total)
+
+    s.bump()
+    s.bump()
+    print(s.count)
+
+    return 0

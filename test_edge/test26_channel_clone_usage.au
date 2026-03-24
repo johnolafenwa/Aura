@@ -1,0 +1,23 @@
+def worker(ch: Channel[int32]):
+    match ch.recv():
+        case Option.Some(value):
+            ch.send(value * 2)
+        case Option.None:
+            ch.send(-1)
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+
+    spawn detached worker(ch.clone())
+
+    ch.send(5)
+
+    sleep(10ms)
+
+    match ch.recv():
+        case Option.Some(value):
+            print(value)
+        case Option.None:
+            print("error")
+
+    return 0

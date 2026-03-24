@@ -1,0 +1,21 @@
+enum Priority:
+    Low
+    Medium
+    High
+    Critical
+
+def is_urgent(p: Priority) -> bool:
+    match p:
+        case Priority.Critical:
+            return true
+        case _:
+            return false
+
+def main() -> int32:
+    if is_urgent(Priority.Critical):
+        print("urgent")
+    if is_urgent(Priority.Low):
+        print("not urgent")
+    else:
+        print("calm")
+    return 0

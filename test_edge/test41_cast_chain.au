@@ -1,0 +1,4 @@
+def main():
+    a: int32 = 42
+    b = (a as int64) as float64
+    print(b)

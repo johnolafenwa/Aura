@@ -1,0 +1,12 @@
+class Counter:
+    value: int32
+
+def increment(borrow mut c: Counter):
+    c.value = c.value + 1
+
+def main():
+    mut c = Counter(value=0)
+    increment(c)
+    print(c.value)
+    increment(c)
+    print(c.value)

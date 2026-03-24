@@ -1,0 +1,11 @@
+def always_none() -> Option[String]:
+    return Option.None
+
+def main() -> int32:
+    r = always_none()
+    match r:
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none as expected")
+    return 0

@@ -1,0 +1,10 @@
+# Edge: main without return type using classes
+class Msg:
+    text: String
+
+    def show(borrow self):
+        print(self.text)
+
+def main():
+    msg = Msg(text="Hello from Aurora!")
+    msg.show()

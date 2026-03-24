@@ -1,0 +1,25 @@
+enum Payload:
+    Text(String)
+    Number(int32)
+    Pair(int32)
+
+def describe_payload(p: Payload) -> String:
+    match p:
+        case Payload.Text(s):
+            return s
+        case Payload.Number(n):
+            print(n)
+            return "number"
+        case Payload.Pair(x):
+            print(x)
+            return "pair"
+
+def main() -> int32:
+    p1 = Payload.Text("hello world")
+    p2 = Payload.Number(42)
+    p3 = Payload.Pair(99)
+
+    print(describe_payload(p1))
+    print(describe_payload(p2))
+    print(describe_payload(p3))
+    return 0

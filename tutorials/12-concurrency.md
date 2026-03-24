@@ -109,6 +109,14 @@ sleep(100ms)
 
 See [examples/concurrency/sleep_builtin.au](../examples/concurrency/sleep_builtin.au).
 
+The minute suffix is fully supported in the current compiler:
+
+```aurora
+print(2m)
+```
+
+See [examples/concurrency/minute_duration.au](../examples/concurrency/minute_duration.au).
+
 The timer helper also supports a named form:
 
 ```aurora
@@ -151,6 +159,7 @@ See:
 - [examples/concurrency/select_timeout.au](../examples/concurrency/select_timeout.au)
 - [examples/concurrency/select_timeout_named.au](../examples/concurrency/select_timeout_named.au)
 - [examples/concurrency/sleep_builtin.au](../examples/concurrency/sleep_builtin.au)
+- [examples/concurrency/minute_duration.au](../examples/concurrency/minute_duration.au)
 
 ## Current Limits
 

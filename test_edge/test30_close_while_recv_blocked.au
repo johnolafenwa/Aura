@@ -1,0 +1,15 @@
+def closer(ch: Channel[int32]):
+    sleep(10ms)
+    ch.close()
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    spawn detached closer(ch.clone())
+
+    match ch.recv():
+        case Option.Some(value):
+            print("error: got value")
+        case Option.None:
+            print("recv unblocked by close")
+
+    return 0

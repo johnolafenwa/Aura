@@ -1,0 +1,24 @@
+class Record:
+    id: int32
+    score: float64
+    label: String
+    active: bool
+
+    def summary(borrow self) -> String:
+        return self.label
+
+def main() -> int32:
+    r = Record(id=42, score=99.5, label="test", active=true)
+    print(r.id)
+    print(r.score)
+    print(r.label)
+    print(r.active)
+    print(r.summary())
+
+    r2 = Record(id=0, score=0.0, label="", active=false)
+    print(r2.id)
+    print(r2.score)
+    print(r2.label)
+    print(r2.active)
+
+    return 0

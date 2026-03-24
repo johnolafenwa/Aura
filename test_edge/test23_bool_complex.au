@@ -1,0 +1,13 @@
+def main():
+    x: int32 = 5
+    y: int32 = 10
+
+    r1 = x < y and y > 0
+    r2 = x > y or y > 0
+    r3 = not (x == y)
+    r4 = x <= 5 and y >= 10
+
+    print(r1)
+    print(r2)
+    print(r3)
+    print(r4)

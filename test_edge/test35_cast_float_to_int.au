@@ -1,0 +1,12 @@
+def main():
+    a = 7.9 as int32
+    print(a)
+
+    b = 3.1 as int32
+    print(b)
+
+    c = -2.7 as int32
+    print(c)
+
+    d = 0.0 as int32
+    print(d)

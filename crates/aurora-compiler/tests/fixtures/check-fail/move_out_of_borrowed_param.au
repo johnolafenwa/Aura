@@ -1,0 +1,5 @@
+class User:
+    name: String
+
+def take_name(user: borrow User) -> String:
+    return user.name

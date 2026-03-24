@@ -1,0 +1,8 @@
+# Edge: constructing with an extra field that doesn't exist
+class Point:
+    x: int32
+    y: int32
+
+def main() -> int32:
+    p = Point(x=1, y=2, z=3)
+    return 0

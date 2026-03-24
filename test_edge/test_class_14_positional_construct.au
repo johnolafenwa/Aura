@@ -1,0 +1,10 @@
+# Edge: can we construct with positional args instead of named?
+class Point:
+    x: float64
+    y: float64
+
+def main() -> int32:
+    p = Point(1.0, 2.0)
+    print(p.x)
+    print(p.y)
+    return 0

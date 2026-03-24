@@ -1,0 +1,13 @@
+public enum Color:
+    Red
+    Green
+    Blue
+
+public def color_name(c: Color) -> String:
+    match c:
+        case Color.Red:
+            return "red"
+        case Color.Green:
+            return "green"
+        case Color.Blue:
+            return "blue"

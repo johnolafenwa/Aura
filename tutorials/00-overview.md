@@ -21,26 +21,26 @@ These tutorials teach the language as it exists in this repository today, not th
 Today’s working subset includes:
 
 - `class`, `enum`, and `def`
+- `trait` plus `impl Trait for Type`
 - top-level executable statements
 - explicit type annotations and inferred bindings
 - mutable reassignment with `mut`
 - omitted `-> None` return types
 - user-defined enums plus built-in `Result`, `Option`, and `SendError`
+- user-defined generic classes, enums, and functions
 - class methods with `self`, `borrow self`, and `borrow mut self`
 - arithmetic, comparisons, strings, booleans, and duration literals
 - `if`, `elif`, `else`, `while`, `for`, `match`, `with`, `select`, `break`, and `continue`
-- `print`, `range`, `channel`, `task_group`, `cancelled`, and `after`
+- `print`, `range`, `channel`, `task_group`, `cancelled`, `after`, and `sleep`
 - machine-readable compiler output for AST, analysis, and completions
 
 ## What Is Still Outside The Bootstrap Surface
 
 The repository is not at the full proposal yet. Notable gaps include:
 
-- imports and modules
-- traits
-- user-defined generics
-- wildcard and nested match patterns
-- backend/codegen beyond the interpreter-backed bootstrap path
+- nested match patterns
+- expression-form `match`
+- borrowed return types and explicit lifetime syntax
 
 ## Recommended Companion Material
 

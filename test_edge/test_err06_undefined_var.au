@@ -1,0 +1,4 @@
+def main() -> int32:
+    x = undefined_variable + 1
+    print(x)
+    return 0

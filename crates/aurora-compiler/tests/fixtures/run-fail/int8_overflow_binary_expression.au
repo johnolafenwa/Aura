@@ -1,0 +1,5 @@
+def main() -> int32:
+    a: int8 = 100
+    b: int8 = 100
+    print(a + b)
+    return 0

@@ -1,0 +1,22 @@
+# Edge: multiple associated methods, including ones that call each other
+class Size:
+    width: int32
+    height: int32
+
+    def small() -> Size:
+        return Size(width=320, height=240)
+
+    def medium() -> Size:
+        return Size(width=640, height=480)
+
+    def large() -> Size:
+        return Size(width=1920, height=1080)
+
+    def area(borrow self) -> int32:
+        return self.width * self.height
+
+def main() -> int32:
+    print(Size.small().area())
+    print(Size.medium().area())
+    print(Size.large().area())
+    return 0

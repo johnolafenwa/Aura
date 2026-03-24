@@ -1,0 +1,5 @@
+error: cannot move non-copy field `name` out of borrowed value `user`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/move_out_of_borrowed_param.au:5:17
+  |
+5 |     return user.name
+  |                 ^

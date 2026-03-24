@@ -71,7 +71,11 @@ Current bootstrap compiler workflow:
 - `cargo run -p aura -- run-mir examples/classes/methods.au`
   - execute the current MIR runtime path for the current implemented Aurora surface
 - `cargo run -p aura -- build -o ./target/aurora-point examples/point.au`
-  - compile a standalone bootstrap binary through the current backend path
+  - compile a standalone native binary through the default auto backend
+- `cargo run -p aura -- build --backend direct -o ./target/aurora-direct ./examples/basic_addition.au`
+  - force the direct native backend for the current scalar, float, plain-class, and immutable-method subset
+- `cargo run -p aura -- build --backend mir-runtime -o ./target/aurora-point-runtime examples/point.au`
+  - force the runtime-linked MIR artifact backend
 - `cargo run -p aura -- ast examples/classes/point_distance.au`
   - print the parsed syntax tree
 - `cargo run -p aura -- ast-json examples/classes/point_distance.au`
@@ -99,15 +103,20 @@ Current bootstrap compiler workflow:
 
 Current `build` status:
 
-- `aura build` now produces a standalone native binary by generating and compiling a small Rust launcher linked against `aurora-compiler`
-- the generated launcher now embeds checked MIR and runs it directly through `aurora_compiler::run_mir(...)`
-- this is still a bootstrap artifact path, not the final MIR-native code generation backend yet
+- `aura build` now accepts `--backend auto|direct|mir-runtime`
+- `aura build` defaults to `auto`
+- `auto` tries the direct native backend first and falls back to the runtime-linked MIR artifact backend when the program uses unsupported surface
+- `direct` performs true low-level native code generation for the current scalar, float, plain-class, and immutable-method subset
+- `mir-runtime` lowers to checked MIR at build time, embeds that MIR in a native launcher, and links the result against a compiled Aurora runtime library
+- the built binary no longer reparses source or compiles a generated Rust runner at build time
+- the built binary no longer depends on the original `.au` source files at runtime
+- the current build path still requires Cargo/Rust plus a host C compiler when producing artifacts
 
 Current `run-mir` status:
 
 - `aura run-mir` executes programs natively through the MIR runtime for the current implemented Aurora surface
 - `spawn`, `select`, channels, task groups, `try`, and `with` now run through MIR
-- the next backend step is replacing the bootstrap launcher build with real MIR-native code generation
+- the remaining backend step is expanding the direct native backend beyond the current plain-data/class subset so fewer programs need the runtime-linked fallback
 
 ## VS Code install
 

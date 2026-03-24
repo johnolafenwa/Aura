@@ -38,8 +38,13 @@ pub struct ImportDecl {
 
 #[derive(Clone, Debug, Serialize)]
 pub enum ImportKind {
-    Module { path: Vec<String> },
-    From { module_path: Vec<String>, names: Vec<String> },
+    Module {
+        path: Vec<String>,
+    },
+    From {
+        module_path: Vec<String>,
+        names: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -47,6 +52,7 @@ pub struct ClassDecl {
     pub public: bool,
     pub name: String,
     pub type_params: Vec<String>,
+    pub type_param_bounds: BTreeMap<String, Vec<TypeRef>>,
     pub fields: Vec<FieldDecl>,
     pub methods: Vec<FunctionDecl>,
     pub span: Span,
@@ -66,6 +72,7 @@ pub struct EnumDecl {
     pub public: bool,
     pub name: String,
     pub type_params: Vec<String>,
+    pub type_param_bounds: BTreeMap<String, Vec<TypeRef>>,
     pub variants: Vec<EnumVariantDecl>,
     pub span: Span,
 }
@@ -117,6 +124,7 @@ pub enum ReceiverKind {
 #[derive(Clone, Debug, Serialize)]
 pub struct Param {
     pub name: String,
+    pub passing: ReceiverKind,
     pub ty: TypeRef,
     pub default: Option<Expr>,
     pub span: Span,
@@ -196,6 +204,7 @@ pub struct MatchArm {
 #[derive(Clone, Debug, Serialize)]
 pub enum Pattern {
     Variant(VariantPattern),
+    Wildcard(Span),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -268,8 +277,8 @@ pub struct Expr {
 #[derive(Clone, Debug, Serialize)]
 pub enum ExprKind {
     Name(String),
-    Int(i64),
-    DurationMillis(i64),
+    Int(i128),
+    DurationMillis(i128),
     Float(f64),
     Bool(bool),
     String(String),

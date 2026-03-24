@@ -1,0 +1,14 @@
+class Vec2:
+    x: float64
+    y: float64
+
+def dot(borrow a: Vec2, borrow b: Vec2) -> float64:
+    return a.x * b.x + a.y * b.y
+
+def main():
+    v1 = Vec2(x=3.0, y=4.0)
+    v2 = Vec2(x=1.0, y=2.0)
+    result = dot(v1, v2)
+    print(result)
+    print(v1.x)
+    print(v2.y)

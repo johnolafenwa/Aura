@@ -1,0 +1,4 @@
+def main():
+    big: int64 = 300
+    small = big as int8
+    print(small)

@@ -1,0 +1,16 @@
+# Test implementing a trait for a generic class
+
+trait Displayable:
+    def display(borrow self) -> String
+
+class Box[T]:
+    value: T
+
+impl Displayable for Box[int32]:
+    def display(borrow self) -> String:
+        return "box"
+
+def main() -> int32:
+    b = Box(value=42)
+    print(b.display())
+    return 0

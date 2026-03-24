@@ -1,0 +1,29 @@
+# Test continue in nested loops - does it only skip innermost?
+def main() -> int32:
+    mut outer_runs: int32 = 0
+    mut inner_runs: int32 = 0
+
+    for i in range(3):
+        outer_runs += 1
+        for j in range(5):
+            if j == 2:
+                continue
+            inner_runs += 1
+
+    # outer_runs = 3
+    print(outer_runs)
+    # inner_runs = 3 * 4 = 12 (skip j==2 each time)
+    print(inner_runs)
+
+    # Continue in outer loop via flag
+    mut outer2: int32 = 0
+    mut i: int32 = 0
+    while i < 5:
+        i += 1
+        if i == 3:
+            continue
+        outer2 += 1
+    # i goes 1,2,3(skip),4,5 => outer2 = 4
+    print(outer2)
+
+    return 0

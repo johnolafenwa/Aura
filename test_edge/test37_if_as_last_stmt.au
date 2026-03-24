@@ -1,0 +1,14 @@
+# Test: if/elif/else as the last statement in functions (return value handling)
+def check(x: int32) -> int32:
+    if x > 0:
+        return 1
+    elif x < 0:
+        return -1
+    else:
+        return 0
+
+def main() -> int32:
+    print(check(42))
+    print(check(-7))
+    print(check(0))
+    return 0

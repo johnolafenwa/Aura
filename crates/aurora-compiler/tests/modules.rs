@@ -88,8 +88,7 @@ def main() -> int32:
     let output = run_path(&main_path).expect("dotted module import should run");
     assert_eq!(output.stdout, "8\n");
 
-    let mir_output =
-        run_path_via_mir(&main_path).expect("dotted module import should run via MIR");
+    let mir_output = run_path_via_mir(&main_path).expect("dotted module import should run via MIR");
     assert_eq!(mir_output.stdout, "8\n");
 }
 
