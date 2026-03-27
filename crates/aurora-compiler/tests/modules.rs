@@ -93,6 +93,147 @@ def main() -> int32:
 }
 
 #[test]
+fn dotted_import_supports_public_classes_and_methods() {
+    let temp = TempDir::new("aurora-modules-dotted-import-classes");
+    temp.write(
+        "pkg/types.au",
+        r#"public class Counter:
+    public value: int32
+
+    public def read(borrow self) -> int32:
+        return self.value
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"import pkg.types
+
+def main() -> int32:
+    counter = pkg.types.Counter(value=4)
+    print(counter.read())
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("dotted class import should run");
+    assert_eq!(output.stdout, "4\n");
+
+    let mir_output =
+        run_path_via_mir(&main_path).expect("dotted class import should run via MIR");
+    assert_eq!(mir_output.stdout, "4\n");
+}
+
+#[test]
+fn dotted_import_supports_enum_variants_and_qualified_match_patterns() {
+    let temp = TempDir::new("aurora-modules-dotted-import-enums");
+    temp.write(
+        "pkg/types.au",
+        r#"public enum Status:
+    Ready
+    Busy
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"import pkg.types
+
+def main() -> int32:
+    status = pkg.types.Status.Ready
+    print(status == pkg.types.Status.Ready)
+    match status:
+        case pkg.types.Status.Ready:
+            print(1)
+        case pkg.types.Status.Busy:
+            print(2)
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("dotted enum import should run");
+    assert_eq!(output.stdout, "true\n1\n");
+
+    let mir_output =
+        run_path_via_mir(&main_path).expect("dotted enum import should run via MIR");
+    assert_eq!(mir_output.stdout, "true\n1\n");
+}
+
+#[test]
+fn imported_public_function_can_call_public_sibling_function() {
+    let temp = TempDir::new("aurora-modules-sibling-call");
+    temp.write(
+        "helpers/math.au",
+        r#"public def leaf() -> int32:
+    return 42
+
+public def wrapper() -> int32:
+    return leaf()
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"from helpers.math import wrapper
+
+def main() -> int32:
+    print(wrapper())
+    return 0
+"#,
+    );
+
+    let program = check_path(&main_path).expect("program should type-check");
+    assert!(
+        program
+            .module_registry
+            .get("helpers.math")
+            .and_then(|namespace| namespace.all_functions.get("leaf"))
+            .is_some(),
+        "module registry should preserve helper function metadata"
+    );
+
+    let output = run_path(&main_path).expect("imported sibling function call should run");
+    assert_eq!(output.stdout, "42\n");
+
+    let mir_output =
+        run_path_via_mir(&main_path).expect("imported sibling function call should run via MIR");
+    assert_eq!(mir_output.stdout, "42\n");
+}
+
+#[test]
+fn imported_public_function_can_construct_public_class_and_call_method() {
+    let temp = TempDir::new("aurora-modules-constructor-method");
+    temp.write(
+        "helpers/counter.au",
+        r#"public class Counter:
+    public value: int32
+
+    public def read(borrow self) -> int32:
+        return self.value
+
+public def make() -> Counter:
+    return Counter(value=4)
+
+public def read_created() -> int32:
+    return make().read()
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"from helpers.counter import read_created
+
+def main() -> int32:
+    print(read_created())
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("imported constructor/method flow should run");
+    assert_eq!(output.stdout, "4\n");
+
+    let mir_output = run_path_via_mir(&main_path)
+        .expect("imported constructor/method flow should run via MIR");
+    assert_eq!(mir_output.stdout, "4\n");
+}
+
+#[test]
 fn importing_private_top_level_function_fails() {
     let temp = TempDir::new("aurora-modules-private-import");
     temp.write(

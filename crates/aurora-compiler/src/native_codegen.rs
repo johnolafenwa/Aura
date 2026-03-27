@@ -3,7 +3,9 @@ use std::collections::{BTreeSet, HashMap};
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::immediates::Ieee64;
 use cranelift_codegen::ir::TrapCode;
-use cranelift_codegen::ir::{types, AbiParam, InstBuilder, MemFlags, Signature, UserFuncName, Value};
+use cranelift_codegen::ir::{
+    types, AbiParam, InstBuilder, MemFlags, Signature, UserFuncName, Value,
+};
 use cranelift_codegen::isa::CallConv;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
@@ -142,6 +144,7 @@ struct NativeCodegen<'a> {
     trait_impls: Vec<MirTraitImpl>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
+    function_writeback_types: HashMap<String, Vec<DirectType>>,
     call_conv: CallConv,
     runtime_init: FuncId,
     print_i64: FuncId,
@@ -152,11 +155,16 @@ struct NativeCodegen<'a> {
     fail_division_by_zero: FuncId,
     fail_int32_overflow: FuncId,
     box_i64: FuncId,
+    box_uint_literal: FuncId,
     box_f64: FuncId,
     box_bool: FuncId,
     box_unit: FuncId,
     string_literal: FuncId,
     duration_literal: FuncId,
+    range_new: FuncId,
+    range_current: FuncId,
+    range_end: FuncId,
+    range_advance: FuncId,
     clone_value: FuncId,
     unbox_i64: FuncId,
     unbox_f64: FuncId,
@@ -169,7 +177,6 @@ struct NativeCodegen<'a> {
     enum_variant: FuncId,
     variant_matches: FuncId,
     variant_payload: FuncId,
-    instance_new: FuncId,
     instance_empty: FuncId,
     instance_get_field: FuncId,
     instance_set_field: FuncId,
@@ -188,6 +195,7 @@ struct NativeCodegen<'a> {
     deadline_new: FuncId,
     deadline_ready: FuncId,
     sleep_ms: FuncId,
+    sleep_value: FuncId,
     spawn_call: FuncId,
     string_data: HashMap<Vec<u8>, DataId>,
 }
@@ -250,12 +258,30 @@ impl<'a> NativeCodegen<'a> {
             &[types::I64],
             None,
         )?;
-        let box_i64 =
-            declare_runtime_function(&mut object, "aurora_direct_box_i64", &[types::I64], Some(types::I64))?;
-        let box_f64 =
-            declare_runtime_function(&mut object, "aurora_direct_box_f64", &[types::F64], Some(types::I64))?;
-        let box_bool =
-            declare_runtime_function(&mut object, "aurora_direct_box_bool", &[types::I64], Some(types::I64))?;
+        let box_i64 = declare_runtime_function(
+            &mut object,
+            "aurora_direct_box_i64",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let box_uint_literal = declare_runtime_function(
+            &mut object,
+            "aurora_direct_box_uint_literal",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let box_f64 = declare_runtime_function(
+            &mut object,
+            "aurora_direct_box_f64",
+            &[types::F64],
+            Some(types::I64),
+        )?;
+        let box_bool = declare_runtime_function(
+            &mut object,
+            "aurora_direct_box_bool",
+            &[types::I64],
+            Some(types::I64),
+        )?;
         let box_unit =
             declare_runtime_function(&mut object, "aurora_direct_box_unit", &[], Some(types::I64))?;
         let string_literal = declare_runtime_function(
@@ -267,6 +293,30 @@ impl<'a> NativeCodegen<'a> {
         let duration_literal = declare_runtime_function(
             &mut object,
             "aurora_direct_duration_literal",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let range_new = declare_runtime_function(
+            &mut object,
+            "aurora_direct_range_new",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let range_current = declare_runtime_function(
+            &mut object,
+            "aurora_direct_range_current",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let range_end = declare_runtime_function(
+            &mut object,
+            "aurora_direct_range_end",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let range_advance = declare_runtime_function(
+            &mut object,
+            "aurora_direct_range_advance",
             &[types::I64],
             Some(types::I64),
         )?;
@@ -340,12 +390,6 @@ impl<'a> NativeCodegen<'a> {
             &mut object,
             "aurora_direct_variant_payload",
             &[types::I64],
-            Some(types::I64),
-        )?;
-        let instance_new = declare_runtime_function(
-            &mut object,
-            "aurora_direct_instance_new",
-            &[types::I64, types::I64, types::I64, types::I64, types::I64, types::I64],
             Some(types::I64),
         )?;
         let instance_empty = declare_runtime_function(
@@ -450,11 +494,13 @@ impl<'a> NativeCodegen<'a> {
             &[types::I64],
             Some(types::I64),
         )?;
-        let sleep_ms = declare_runtime_function(
+        let sleep_ms =
+            declare_runtime_function(&mut object, "aurora_direct_sleep_ms", &[types::I64], None)?;
+        let sleep_value = declare_runtime_function(
             &mut object,
-            "aurora_direct_sleep_ms",
+            "aurora_direct_sleep_value",
             &[types::I64],
-            None,
+            Some(types::I64),
         )?;
         let spawn_call = declare_runtime_function(
             &mut object,
@@ -467,6 +513,7 @@ impl<'a> NativeCodegen<'a> {
         let mut function_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
         let mut function_param_types = HashMap::new();
+        let mut function_writeback_types = HashMap::new();
         for function in module.functions.iter().chain(module.top_level.iter()) {
             let signature = signature_for(function, &classes, call_conv)?;
             let func_id = object
@@ -477,9 +524,16 @@ impl<'a> NativeCodegen<'a> {
             functions.insert(function.name.clone(), func_id);
             let thunk_signature = thunk_signature(call_conv);
             let thunk_id = object
-                .declare_function(&mangle_thunk_symbol(&function.name), Linkage::Local, &thunk_signature)
+                .declare_function(
+                    &mangle_thunk_symbol(&function.name),
+                    Linkage::Local,
+                    &thunk_signature,
+                )
                 .map_err(|error| {
-                    format!("failed to declare function thunk `{}`: {}", function.name, error)
+                    format!(
+                        "failed to declare function thunk `{}`: {}",
+                        function.name, error
+                    )
                 })?;
             function_thunks.insert(function.name.clone(), thunk_id);
             function_return_types.insert(
@@ -491,10 +545,21 @@ impl<'a> NativeCodegen<'a> {
                 )?,
             );
             let mut params = Vec::new();
+            let mut writebacks = Vec::new();
+            if function.receiver == Some(MirReceiverKind::BorrowMut) {
+                writebacks.push(receiver_type(function, &classes)?);
+            }
             if function.receiver.is_some() {
                 params.push(receiver_type(function, &classes)?);
             }
             for param in &function.params {
+                if param.passing == MirReceiverKind::BorrowMut {
+                    writebacks.push(ensure_direct_type(
+                        &param.ty,
+                        &classes,
+                        &format!("parameter `{}` on `{}`", param.name, function.name),
+                    )?);
+                }
                 params.push(ensure_direct_type(
                     &param.ty,
                     &classes,
@@ -502,6 +567,7 @@ impl<'a> NativeCodegen<'a> {
                 )?);
             }
             function_param_types.insert(function.name.clone(), params);
+            function_writeback_types.insert(function.name.clone(), writebacks);
         }
 
         Ok(Self {
@@ -513,6 +579,7 @@ impl<'a> NativeCodegen<'a> {
             trait_impls,
             function_return_types,
             function_param_types,
+            function_writeback_types,
             call_conv,
             runtime_init,
             print_i64,
@@ -523,11 +590,16 @@ impl<'a> NativeCodegen<'a> {
             fail_division_by_zero,
             fail_int32_overflow,
             box_i64,
+            box_uint_literal,
             box_f64,
             box_bool,
             box_unit,
             string_literal,
             duration_literal,
+            range_new,
+            range_current,
+            range_end,
+            range_advance,
             clone_value,
             unbox_i64,
             unbox_f64,
@@ -540,7 +612,6 @@ impl<'a> NativeCodegen<'a> {
             enum_variant,
             variant_matches,
             variant_payload,
-            instance_new,
             instance_empty,
             instance_get_field,
             instance_set_field,
@@ -559,12 +630,14 @@ impl<'a> NativeCodegen<'a> {
             deadline_new,
             deadline_ready,
             sleep_ms,
+            sleep_value,
             spawn_call,
             string_data: HashMap::new(),
         })
     }
 
     fn emit(mut self) -> std::result::Result<Vec<u8>, String> {
+        let spawn_targets = collect_spawn_targets(self.module);
         for function in self
             .module
             .functions
@@ -572,7 +645,9 @@ impl<'a> NativeCodegen<'a> {
             .chain(self.module.top_level.iter())
         {
             self.define_function(function)?;
-            self.define_function_thunk(function)?;
+            if spawn_targets.contains(&function.name) {
+                self.define_function_thunk(function)?;
+            }
         }
         self.define_main_wrapper()?;
         let product = self.object.finish();
@@ -693,6 +768,49 @@ impl<'a> NativeCodegen<'a> {
                     );
                 }
             }
+            if let Terminator::Select { arms, .. } = &block.terminator {
+                for arm in arms {
+                    let Some(binding) = &arm.binding else {
+                        continue;
+                    };
+                    if variables.contains_key(binding) {
+                        continue;
+                    }
+                    let ty = infer_select_binding_type(
+                        arm,
+                        &variable_types,
+                        &self.classes,
+                    )
+                    .ok_or_else(|| {
+                        format!(
+                            "direct backend could not infer direct type for select binding `{}` in `{}`",
+                            binding, function.name
+                        )
+                    })?;
+                    declare_root_variables(
+                        &mut builder,
+                        &mut variable_index,
+                        &mut variables,
+                        &mut variable_types,
+                        binding.clone(),
+                        ty,
+                        None,
+                    );
+                }
+            }
+            if let Terminator::ForRange { binding, .. } = &block.terminator {
+                if !variables.contains_key(binding) {
+                    declare_root_variables(
+                        &mut builder,
+                        &mut variable_index,
+                        &mut variables,
+                        &mut variable_types,
+                        binding.clone(),
+                        DirectType::Scalar(ScalarKind::Int32),
+                        None,
+                    );
+                }
+            }
         }
 
         let cleanup_places = function
@@ -717,6 +835,22 @@ impl<'a> NativeCodegen<'a> {
             let zero = builder.ins().iconst(types::I64, 0);
             builder.def_var(variable, zero);
             cleanup_active_vars.insert(place.clone(), variable);
+        }
+
+        let mut writeback_locals = Vec::new();
+        if function.receiver == Some(MirReceiverKind::BorrowMut) {
+            let receiver_ty = receiver_type(function, &self.classes)?;
+            writeback_locals.push(("self".to_string(), receiver_ty));
+        }
+        for param in &function.params {
+            if param.passing == MirReceiverKind::BorrowMut {
+                let ty = ensure_direct_type(
+                    &param.ty,
+                    &self.classes,
+                    &format!("parameter `{}` on `{}`", param.name, function.name),
+                )?;
+                writeback_locals.push((param.name.clone(), ty));
+            }
         }
 
         let mut function_refs = HashMap::new();
@@ -752,38 +886,70 @@ impl<'a> NativeCodegen<'a> {
             .object
             .declare_func_in_func(self.fail_int32_overflow, builder.func);
         let box_i64 = self.object.declare_func_in_func(self.box_i64, builder.func);
+        let box_uint_literal = self
+            .object
+            .declare_func_in_func(self.box_uint_literal, builder.func);
         let box_f64 = self.object.declare_func_in_func(self.box_f64, builder.func);
-        let box_bool = self.object.declare_func_in_func(self.box_bool, builder.func);
-        let box_unit = self.object.declare_func_in_func(self.box_unit, builder.func);
+        let box_bool = self
+            .object
+            .declare_func_in_func(self.box_bool, builder.func);
+        let box_unit = self
+            .object
+            .declare_func_in_func(self.box_unit, builder.func);
         let string_literal = self
             .object
             .declare_func_in_func(self.string_literal, builder.func);
         let duration_literal = self
             .object
             .declare_func_in_func(self.duration_literal, builder.func);
+        let range_new = self
+            .object
+            .declare_func_in_func(self.range_new, builder.func);
+        let range_current = self
+            .object
+            .declare_func_in_func(self.range_current, builder.func);
+        let range_end = self
+            .object
+            .declare_func_in_func(self.range_end, builder.func);
+        let range_advance = self
+            .object
+            .declare_func_in_func(self.range_advance, builder.func);
         let clone_value = self
             .object
             .declare_func_in_func(self.clone_value, builder.func);
-        let unbox_i64 = self.object.declare_func_in_func(self.unbox_i64, builder.func);
-        let unbox_f64 = self.object.declare_func_in_func(self.unbox_f64, builder.func);
-        let unbox_bool = self.object.declare_func_in_func(self.unbox_bool, builder.func);
+        let unbox_i64 = self
+            .object
+            .declare_func_in_func(self.unbox_i64, builder.func);
+        let unbox_f64 = self
+            .object
+            .declare_func_in_func(self.unbox_f64, builder.func);
+        let unbox_bool = self
+            .object
+            .declare_func_in_func(self.unbox_bool, builder.func);
         let value_as_condition = self
             .object
             .declare_func_in_func(self.value_as_condition, builder.func);
-        let unary_value = self.object.declare_func_in_func(self.unary_value, builder.func);
-        let binary_value = self.object.declare_func_in_func(self.binary_value, builder.func);
-        let cast_value = self.object.declare_func_in_func(self.cast_value, builder.func);
+        let unary_value = self
+            .object
+            .declare_func_in_func(self.unary_value, builder.func);
+        let binary_value = self
+            .object
+            .declare_func_in_func(self.binary_value, builder.func);
+        let cast_value = self
+            .object
+            .declare_func_in_func(self.cast_value, builder.func);
         let value_type_matches = self
             .object
             .declare_func_in_func(self.value_type_matches, builder.func);
-        let enum_variant = self.object.declare_func_in_func(self.enum_variant, builder.func);
+        let enum_variant = self
+            .object
+            .declare_func_in_func(self.enum_variant, builder.func);
         let variant_matches = self
             .object
             .declare_func_in_func(self.variant_matches, builder.func);
         let variant_payload = self
             .object
             .declare_func_in_func(self.variant_payload, builder.func);
-        let instance_new = self.object.declare_func_in_func(self.instance_new, builder.func);
         let instance_empty = self
             .object
             .declare_func_in_func(self.instance_empty, builder.func);
@@ -838,6 +1004,9 @@ impl<'a> NativeCodegen<'a> {
         let sleep_ms = self
             .object
             .declare_func_in_func(self.sleep_ms, builder.func);
+        let sleep_value = self
+            .object
+            .declare_func_in_func(self.sleep_value, builder.func);
         let spawn_call = self
             .object
             .declare_func_in_func(self.spawn_call, builder.func);
@@ -851,6 +1020,8 @@ impl<'a> NativeCodegen<'a> {
             function_thunk_refs,
             function_return_types: self.function_return_types.clone(),
             function_param_types: self.function_param_types.clone(),
+            function_writeback_types: self.function_writeback_types.clone(),
+            writeback_locals,
             classes: self.classes.clone(),
             trait_impls: self.trait_impls.clone(),
             object: &mut self.object,
@@ -865,11 +1036,16 @@ impl<'a> NativeCodegen<'a> {
             fail_division_by_zero,
             fail_int32_overflow,
             box_i64,
+            box_uint_literal,
             box_f64,
             box_bool,
             box_unit,
             string_literal,
             duration_literal,
+            range_new,
+            range_current,
+            range_end,
+            range_advance,
             clone_value,
             unbox_i64,
             unbox_f64,
@@ -882,7 +1058,6 @@ impl<'a> NativeCodegen<'a> {
             enum_variant,
             variant_matches,
             variant_payload,
-            instance_new,
             instance_empty,
             instance_get_field,
             instance_set_field,
@@ -901,6 +1076,7 @@ impl<'a> NativeCodegen<'a> {
             deadline_new,
             deadline_ready,
             sleep_ms,
+            sleep_value,
             spawn_call,
         };
 
@@ -926,10 +1102,7 @@ impl<'a> NativeCodegen<'a> {
         Ok(())
     }
 
-    fn define_function_thunk(
-        &mut self,
-        function: &MirFunction,
-    ) -> std::result::Result<(), String> {
+    fn define_function_thunk(&mut self, function: &MirFunction) -> std::result::Result<(), String> {
         if function.receiver.is_some() {
             return Err(format!(
                 "direct backend does not yet support spawn thunks for methods like `{}`",
@@ -952,13 +1125,23 @@ impl<'a> NativeCodegen<'a> {
 
         let args_ptr = builder.block_params(entry)[0];
         let target_ref = self.object.declare_func_in_func(target_id, builder.func);
-        let unbox_i64 = self.object.declare_func_in_func(self.unbox_i64, builder.func);
-        let unbox_f64 = self.object.declare_func_in_func(self.unbox_f64, builder.func);
-        let unbox_bool = self.object.declare_func_in_func(self.unbox_bool, builder.func);
+        let unbox_i64 = self
+            .object
+            .declare_func_in_func(self.unbox_i64, builder.func);
+        let unbox_f64 = self
+            .object
+            .declare_func_in_func(self.unbox_f64, builder.func);
+        let unbox_bool = self
+            .object
+            .declare_func_in_func(self.unbox_bool, builder.func);
         let box_i64 = self.object.declare_func_in_func(self.box_i64, builder.func);
         let box_f64 = self.object.declare_func_in_func(self.box_f64, builder.func);
-        let box_bool = self.object.declare_func_in_func(self.box_bool, builder.func);
-        let box_unit = self.object.declare_func_in_func(self.box_unit, builder.func);
+        let box_bool = self
+            .object
+            .declare_func_in_func(self.box_bool, builder.func);
+        let box_unit = self
+            .object
+            .declare_func_in_func(self.box_unit, builder.func);
 
         let mut lowered_args = Vec::new();
         for (index, param_ty) in self
@@ -968,19 +1151,17 @@ impl<'a> NativeCodegen<'a> {
             .flatten()
             .enumerate()
         {
-            let raw = builder.ins().load(
-                types::I64,
-                MemFlags::new(),
-                args_ptr,
-                (index as i32) * 8,
-            );
+            let raw = builder
+                .ins()
+                .load(types::I64, MemFlags::new(), args_ptr, (index as i32) * 8);
             match param_ty {
                 DirectType::Opaque(_) => lowered_args.push(raw),
                 DirectType::Scalar(ScalarKind::Int32) => {
                     let inst = builder.ins().call(unbox_i64, &[raw]);
                     lowered_args.push(builder.inst_results(inst)[0]);
                 }
-                DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
+                DirectType::Scalar(ScalarKind::Float32)
+                | DirectType::Scalar(ScalarKind::Float64) => {
                     let inst = builder.ins().call(unbox_f64, &[raw]);
                     lowered_args.push(builder.inst_results(inst)[0]);
                 }
@@ -1002,14 +1183,22 @@ impl<'a> NativeCodegen<'a> {
 
         let inst = builder.ins().call(target_ref, &lowered_args);
         let results = builder.inst_results(inst).to_vec();
-        let return_ty = self.function_return_types.get(&function.name).ok_or_else(|| {
-            format!("direct backend does not know return type for `{}`", function.name)
-        })?;
+        let return_ty = self
+            .function_return_types
+            .get(&function.name)
+            .ok_or_else(|| {
+                format!(
+                    "direct backend does not know return type for `{}`",
+                    function.name
+                )
+            })?;
         let boxed = match return_ty {
-            DirectType::Opaque(_) => results
-                .first()
-                .copied()
-                .ok_or_else(|| format!("thunk for `{}` expected an opaque return value", function.name))?,
+            DirectType::Opaque(_) => results.first().copied().ok_or_else(|| {
+                format!(
+                    "thunk for `{}` expected an opaque return value",
+                    function.name
+                )
+            })?,
             DirectType::Scalar(ScalarKind::Int32) => {
                 let boxed = builder.ins().call(box_i64, &[results[0]]);
                 builder.inst_results(boxed)[0]
@@ -1104,6 +1293,8 @@ struct FunctionCompiler<'a> {
     function_thunk_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
+    function_writeback_types: HashMap<String, Vec<DirectType>>,
+    writeback_locals: Vec<(String, DirectType)>,
     classes: HashMap<String, MirClass>,
     trait_impls: Vec<MirTraitImpl>,
     object: &'a mut ObjectModule,
@@ -1118,11 +1309,16 @@ struct FunctionCompiler<'a> {
     fail_division_by_zero: cranelift_codegen::ir::FuncRef,
     fail_int32_overflow: cranelift_codegen::ir::FuncRef,
     box_i64: cranelift_codegen::ir::FuncRef,
+    box_uint_literal: cranelift_codegen::ir::FuncRef,
     box_f64: cranelift_codegen::ir::FuncRef,
     box_bool: cranelift_codegen::ir::FuncRef,
     box_unit: cranelift_codegen::ir::FuncRef,
     string_literal: cranelift_codegen::ir::FuncRef,
     duration_literal: cranelift_codegen::ir::FuncRef,
+    range_new: cranelift_codegen::ir::FuncRef,
+    range_current: cranelift_codegen::ir::FuncRef,
+    range_end: cranelift_codegen::ir::FuncRef,
+    range_advance: cranelift_codegen::ir::FuncRef,
     clone_value: cranelift_codegen::ir::FuncRef,
     unbox_i64: cranelift_codegen::ir::FuncRef,
     unbox_f64: cranelift_codegen::ir::FuncRef,
@@ -1135,7 +1331,6 @@ struct FunctionCompiler<'a> {
     enum_variant: cranelift_codegen::ir::FuncRef,
     variant_matches: cranelift_codegen::ir::FuncRef,
     variant_payload: cranelift_codegen::ir::FuncRef,
-    instance_new: cranelift_codegen::ir::FuncRef,
     instance_empty: cranelift_codegen::ir::FuncRef,
     instance_get_field: cranelift_codegen::ir::FuncRef,
     instance_set_field: cranelift_codegen::ir::FuncRef,
@@ -1154,6 +1349,7 @@ struct FunctionCompiler<'a> {
     deadline_new: cranelift_codegen::ir::FuncRef,
     deadline_ready: cranelift_codegen::ir::FuncRef,
     sleep_ms: cranelift_codegen::ir::FuncRef,
+    sleep_value: cranelift_codegen::ir::FuncRef,
     spawn_call: cranelift_codegen::ir::FuncRef,
 }
 
@@ -1220,7 +1416,8 @@ impl<'a> FunctionCompiler<'a> {
                 let value = self.load_operand(operand)?;
                 let coerced = self.coerce_value(value, return_ty)?;
                 self.emit_pending_cleanups(true)?;
-                self.builder.ins().return_(&coerced.values);
+                let return_values = self.build_return_values(coerced)?;
+                self.builder.ins().return_(&return_values);
             }
             Terminator::Goto(label) => {
                 let block = self.blocks[label];
@@ -1246,7 +1443,9 @@ impl<'a> FunctionCompiler<'a> {
             } => {
                 let scrutinee = self.load_operand(scrutinee)?;
                 let DirectType::Opaque(_) = scrutinee.ty else {
-                    return Err("direct backend expected enum matches to use opaque scrutinees".to_string());
+                    return Err(
+                        "direct backend expected enum matches to use opaque scrutinees".to_string(),
+                    );
                 };
                 for arm in arms {
                     if arm.wildcard {
@@ -1269,6 +1468,14 @@ impl<'a> FunctionCompiler<'a> {
             }
             Terminator::Select { arms, .. } => {
                 self.compile_select(arms)?;
+            }
+            Terminator::ForRange {
+                binding,
+                iterable,
+                body_label,
+                exit_label,
+            } => {
+                self.compile_for_range(binding, iterable, body_label, exit_label)?;
             }
             other => {
                 return Err(format!(
@@ -1685,6 +1892,9 @@ impl<'a> FunctionCompiler<'a> {
         name: &str,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
+        if name == "range" {
+            return self.compile_range(args);
+        }
         if name == "channel" {
             if !args.is_empty() {
                 return Err("direct backend expected `channel()` to take no arguments".to_string());
@@ -1700,7 +1910,9 @@ impl<'a> FunctionCompiler<'a> {
         }
         if name == "task_group" {
             if !args.is_empty() {
-                return Err("direct backend expected `task_group()` to take no arguments".to_string());
+                return Err(
+                    "direct backend expected `task_group()` to take no arguments".to_string(),
+                );
             }
             let inst = self.builder.ins().call(self.task_group_new, &[]);
             return Ok(ValueRef {
@@ -1710,12 +1922,32 @@ impl<'a> FunctionCompiler<'a> {
         }
         if name == "cancelled" {
             if !args.is_empty() {
-                return Err("direct backend expected `cancelled()` to take no arguments".to_string());
+                return Err(
+                    "direct backend expected `cancelled()` to take no arguments".to_string()
+                );
             }
             let inst = self.builder.ins().call(self.cancelled, &[]);
             return Ok(ValueRef {
                 values: self.builder.inst_results(inst).to_vec(),
                 ty: DirectType::Scalar(ScalarKind::Bool),
+            });
+        }
+        if name == "sleep" {
+            let [argument] = args else {
+                return Err(
+                    "direct backend expected `sleep()` to receive one duration argument"
+                        .to_string(),
+                );
+            };
+            let duration = self.load_operand(&argument.value)?;
+            let duration = self.ensure_opaque(duration)?;
+            let inst = self
+                .builder
+                .ins()
+                .call(self.sleep_value, &[duration.values[0]]);
+            return Ok(ValueRef {
+                values: self.builder.inst_results(inst).to_vec(),
+                ty: DirectType::Scalar(ScalarKind::Unit),
             });
         }
         let func_ref = *self
@@ -1728,27 +1960,149 @@ impl<'a> FunctionCompiler<'a> {
             .get(name)
             .cloned()
             .unwrap_or_default();
+        let mut writeback_places = Vec::new();
         for (index, argument) in args.iter().enumerate() {
-            if argument.writeback_place.is_some() {
-                return Err(
-                    "direct backend does not support borrow-mut writeback arguments".to_string(),
-                );
-            }
             let loaded = self.load_operand(&argument.value)?;
             let coerced = if let Some(expected_ty) = expected.get(index) {
                 self.coerce_value(loaded, expected_ty)?
             } else {
                 loaded
             };
+            if let Some(place) = &argument.writeback_place {
+                writeback_places.push(place.clone());
+            }
             lowered_args.extend(coerced.values);
         }
         let inst = self.builder.ins().call(func_ref, &lowered_args);
-        let result_ty = self.call_result_type(name)?;
         let results = self.builder.inst_results(inst).to_vec();
+        let (result, writebacks) = self.split_call_results(name, results)?;
+        self.apply_writeback_places(&writeback_places, writebacks)?;
+        Ok(result)
+    }
+
+    fn compile_range(&mut self, args: &[MirArg]) -> std::result::Result<ValueRef, String> {
+        let int_ty = DirectType::Scalar(ScalarKind::Int32);
+        let (start_arg, stop_arg) = if args.iter().all(|arg| arg.name.is_none()) {
+            match args {
+                [stop] => (None, Some(stop)),
+                [start, stop] => (Some(start), Some(stop)),
+                _ => {
+                    return Err(
+                        "direct backend expected `range()` to receive one or two arguments"
+                            .to_string(),
+                    )
+                }
+            }
+        } else {
+            let mut start = None;
+            let mut stop = None;
+            let mut next_positional = 0usize;
+            for arg in args {
+                match arg.name.as_deref() {
+                    Some("start") => start = Some(arg),
+                    Some("stop") => stop = Some(arg),
+                    Some(other) => {
+                        return Err(format!(
+                            "direct backend does not recognize `range()` argument `{}`",
+                            other
+                        ))
+                    }
+                    None => {
+                        if next_positional == 0 {
+                            start = Some(arg);
+                        } else if next_positional == 1 {
+                            stop = Some(arg);
+                        } else {
+                            return Err(
+                                "direct backend expected `range()` to receive one or two arguments"
+                                    .to_string(),
+                            );
+                        }
+                        next_positional += 1;
+                    }
+                }
+            }
+            (start, stop)
+        };
+
+        let start = if let Some(argument) = start_arg {
+            let loaded = self.load_operand(&argument.value)?;
+            self.coerce_value(loaded, &int_ty)?
+        } else {
+            ValueRef {
+                values: vec![self.builder.ins().iconst(types::I64, 0)],
+                ty: int_ty.clone(),
+            }
+        };
+        let stop_arg = stop_arg.ok_or_else(|| {
+            "direct backend expected `range()` to receive a `stop` argument".to_string()
+        })?;
+        let stop = self.load_operand(&stop_arg.value)?;
+        let stop = self.coerce_value(stop, &int_ty)?;
+        let inst = self
+            .builder
+            .ins()
+            .call(self.range_new, &[start.values[0], stop.values[0]]);
         Ok(ValueRef {
-            values: results,
-            ty: result_ty,
+            values: self.builder.inst_results(inst).to_vec(),
+            ty: DirectType::Opaque(Type::named("Range")),
         })
+    }
+
+    fn compile_for_range(
+        &mut self,
+        binding: &str,
+        iterable: &Operand,
+        body_label: &str,
+        exit_label: &str,
+    ) -> std::result::Result<(), String> {
+        let Operand::Place(iterable_place) = iterable else {
+            return Err(
+                "direct backend requires `for range` iterables to live in a place".to_string(),
+            );
+        };
+        let range = self.load_place(iterable_place)?;
+        let range = self.ensure_opaque(range)?;
+        let current_inst = self
+            .builder
+            .ins()
+            .call(self.range_current, &[range.values[0]]);
+        let current = self.builder.inst_results(current_inst)[0];
+        let end_inst = self.builder.ins().call(self.range_end, &[range.values[0]]);
+        let end = self.builder.inst_results(end_inst)[0];
+        let has_next = self.builder.ins().icmp(IntCC::SignedLessThan, current, end);
+
+        let next_block = self.builder.create_block();
+        let body_block = self.blocks[body_label];
+        let exit_block = self.blocks[exit_label];
+        self.builder
+            .ins()
+            .brif(has_next, next_block, &[], exit_block, &[]);
+
+        self.builder.switch_to_block(next_block);
+        let binding_ty = self.type_of_place(binding)?;
+        self.store_place(
+            binding,
+            ValueRef {
+                values: vec![current],
+                ty: DirectType::Scalar(ScalarKind::Int32),
+            },
+        )?;
+        let advanced_inst = self
+            .builder
+            .ins()
+            .call(self.range_advance, &[range.values[0]]);
+        self.store_place(
+            iterable_place,
+            ValueRef {
+                values: self.builder.inst_results(advanced_inst).to_vec(),
+                ty: DirectType::Opaque(Type::named("Range")),
+            },
+        )?;
+        self.builder.ins().jump(body_block, &[]);
+        self.builder.seal_block(next_block);
+        let _ = binding_ty;
+        Ok(())
     }
 
     fn compile_member_call(
@@ -1774,6 +2128,7 @@ impl<'a> FunctionCompiler<'a> {
         match object.ty.clone() {
             DirectType::PlainClass(class_ty) => self.compile_class_member_call(
                 class_ty.class_name.as_str(),
+                Some(Type::named(&class_ty.class_name)),
                 object,
                 field,
                 receiver_place,
@@ -1783,11 +2138,18 @@ impl<'a> FunctionCompiler<'a> {
                 if let Type::Named(name, _type_args) = &ty {
                     if name == "String" && field == "clone" {
                         if !args.is_empty() || !args.is_empty() {
-                            return Err("direct backend expected `clone()` to take no arguments".to_string());
+                            return Err("direct backend expected `clone()` to take no arguments"
+                                .to_string());
                         }
                         return Ok(self.ensure_opaque(object)?);
                     }
-                    return self.compile_opaque_member_call(&ty, object, field, receiver_place, args);
+                    return self.compile_opaque_member_call(
+                        &ty,
+                        object,
+                        field,
+                        receiver_place,
+                        args,
+                    );
                 }
                 self.compile_opaque_member_call(&ty, object, field, receiver_place, args)
             }
@@ -1876,15 +2238,20 @@ impl<'a> FunctionCompiler<'a> {
         match operand {
             Operand::Place(place) => self.load_place(place),
             Operand::Int(value) => {
-                let narrowed = i64::try_from(*value).map_err(|_| {
-                    format!(
-                        "direct backend only supports integer constants that fit in host i64, found `{}`",
-                        value
-                    )
-                })?;
+                if let Ok(narrowed) = i64::try_from(*value) {
+                    return Ok(ValueRef {
+                        values: vec![self.builder.ins().iconst(types::I64, narrowed)],
+                        ty: DirectType::Scalar(ScalarKind::Int32),
+                    });
+                }
+                let (ptr, len) = self.string_constant(value.to_string().as_bytes())?;
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.box_uint_literal, &[ptr, len]);
                 Ok(ValueRef {
-                    values: vec![self.builder.ins().iconst(types::I64, narrowed)],
-                    ty: DirectType::Scalar(ScalarKind::Int32),
+                    values: self.builder.inst_results(inst).to_vec(),
+                    ty: DirectType::Opaque(Type::named("Unknown")),
                 })
             }
             Operand::Float(value) => Ok(ValueRef {
@@ -1907,10 +2274,7 @@ impl<'a> FunctionCompiler<'a> {
                     )
                 })?;
                 let narrowed = self.builder.ins().iconst(types::I64, narrowed);
-                let inst = self
-                    .builder
-                    .ins()
-                    .call(self.duration_literal, &[narrowed]);
+                let inst = self.builder.ins().call(self.duration_literal, &[narrowed]);
                 Ok(ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
                     ty: DirectType::Opaque(Type::named("Duration")),
@@ -1983,10 +2347,10 @@ impl<'a> FunctionCompiler<'a> {
             }
             DirectType::Opaque(_) => {
                 let (field_ptr, field_len) = self.string_constant(field.as_bytes())?;
-                let inst = self
-                    .builder
-                    .ins()
-                    .call(self.instance_get_field, &[object.values[0], field_ptr, field_len]);
+                let inst = self.builder.ins().call(
+                    self.instance_get_field,
+                    &[object.values[0], field_ptr, field_len],
+                );
                 Ok(ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
                     ty: DirectType::Opaque(Type::named("Unknown")),
@@ -2017,36 +2381,51 @@ impl<'a> FunctionCompiler<'a> {
         }
 
         if matches!(value.ty, DirectType::Opaque(_)) {
-            let result = match target.scalar_kind() {
-                Some(ScalarKind::Int32) => {
+            let result = match target {
+                DirectType::Scalar(ScalarKind::Int32) => {
                     let inst = self.builder.ins().call(self.unbox_i64, &[value.values[0]]);
                     ValueRef {
                         values: self.builder.inst_results(inst).to_vec(),
                         ty: target.clone(),
                     }
                 }
-                Some(ScalarKind::Float32) | Some(ScalarKind::Float64) => {
+                DirectType::Scalar(ScalarKind::Float32)
+                | DirectType::Scalar(ScalarKind::Float64) => {
                     let inst = self.builder.ins().call(self.unbox_f64, &[value.values[0]]);
                     ValueRef {
                         values: self.builder.inst_results(inst).to_vec(),
                         ty: target.clone(),
                     }
                 }
-                Some(ScalarKind::Bool) => {
+                DirectType::Scalar(ScalarKind::Bool) => {
                     let inst = self.builder.ins().call(self.unbox_bool, &[value.values[0]]);
                     ValueRef {
                         values: self.builder.inst_results(inst).to_vec(),
                         ty: target.clone(),
                     }
                 }
-                Some(ScalarKind::Unit) => unit_value(&mut self.builder),
-                None => {
-                    return Err(format!(
-                        "direct backend encountered an unsupported value coercion from `{}` to `{}`",
-                        render_direct_type(&value.ty),
-                        render_direct_type(target)
-                    ))
+                DirectType::Scalar(ScalarKind::Unit) => unit_value(&mut self.builder),
+                DirectType::PlainClass(class) => {
+                    let mut values = Vec::new();
+                    for field in &class.fields {
+                        let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
+                        let inst = self.builder.ins().call(
+                            self.instance_get_field,
+                            &[value.values[0], field_ptr, field_len],
+                        );
+                        let field_value = ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::named("Unknown")),
+                        };
+                        let coerced = self.coerce_value(field_value, &field.ty)?;
+                        values.extend(coerced.values);
+                    }
+                    ValueRef {
+                        values,
+                        ty: target.clone(),
+                    }
                 }
+                DirectType::Opaque(_) => unreachable!("opaque target handled earlier"),
             };
             if matches!(target.scalar_kind(), Some(ScalarKind::Int32)) {
                 self.emit_int32_bounds_check(result.values[0]);
@@ -2056,6 +2435,10 @@ impl<'a> FunctionCompiler<'a> {
 
         match (value.ty.scalar_kind(), target.scalar_kind()) {
             (Some(ScalarKind::Bool), Some(ScalarKind::Int32)) => Ok(ValueRef {
+                values: value.values,
+                ty: target.clone(),
+            }),
+            (Some(lhs), Some(rhs)) if lhs.is_float() && rhs.is_float() => Ok(ValueRef {
                 values: value.values,
                 ty: target.clone(),
             }),
@@ -2130,10 +2513,8 @@ impl<'a> FunctionCompiler<'a> {
             return self.store_root(root, value);
         }
 
-        if matches!(
-            self.variable_types.get(root),
-            Some(DirectType::Opaque(_))
-        ) && segments.len() == 1
+        if matches!(self.variable_types.get(root), Some(DirectType::Opaque(_)))
+            && segments.len() == 1
         {
             let current = self.load_root(root)?;
             let current = self.ensure_opaque(current)?;
@@ -2141,17 +2522,20 @@ impl<'a> FunctionCompiler<'a> {
             let (field_ptr, field_len) = self.string_constant(segments[0].as_bytes())?;
             let inst = self.builder.ins().call(
                 self.instance_set_field,
-                &[current.values[0], field_ptr, field_len, updated_value.values[0]],
+                &[
+                    current.values[0],
+                    field_ptr,
+                    field_len,
+                    updated_value.values[0],
+                ],
             );
             return self.store_root(
                 root,
                 ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
-                    ty: self
-                        .variable_types
-                        .get(root)
-                        .cloned()
-                        .ok_or_else(|| format!("direct backend does not know local type for `{}`", root))?,
+                    ty: self.variable_types.get(root).cloned().ok_or_else(|| {
+                        format!("direct backend does not know local type for `{}`", root)
+                    })?,
                 },
             );
         }
@@ -2244,10 +2628,34 @@ impl<'a> FunctionCompiler<'a> {
                     ty: DirectType::Opaque(Type::Unit),
                 })
             }
-            DirectType::PlainClass(_) => Err(format!(
-                "direct backend does not yet support boxing plain-class value `{}`",
-                render_direct_type(&value.ty)
-            )),
+            DirectType::PlainClass(class) => {
+                let (class_ptr, class_len) = self.string_constant(class.class_name.as_bytes())?;
+                let init = self
+                    .builder
+                    .ins()
+                    .call(self.instance_empty, &[class_ptr, class_len]);
+                let mut current = self.builder.inst_results(init)[0];
+                let mut start = 0usize;
+                for field in &class.fields {
+                    let end = start + field.ty.value_count();
+                    let field_value = ValueRef {
+                        values: value.values[start..end].to_vec(),
+                        ty: field.ty.clone(),
+                    };
+                    let field_value = self.ensure_opaque(field_value)?;
+                    let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
+                    let inst = self.builder.ins().call(
+                        self.instance_set_field,
+                        &[current, field_ptr, field_len, field_value.values[0]],
+                    );
+                    current = self.builder.inst_results(inst)[0];
+                    start = end;
+                }
+                Ok(ValueRef {
+                    values: vec![current],
+                    ty: DirectType::Opaque(Type::named(&class.class_name)),
+                })
+            }
         }
     }
 
@@ -2269,10 +2677,7 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn string_constant(
-        &mut self,
-        bytes: &[u8],
-    ) -> std::result::Result<(Value, Value), String> {
+    fn string_constant(&mut self, bytes: &[u8]) -> std::result::Result<(Value, Value), String> {
         let id = if let Some(id) = self.string_data.get(bytes) {
             *id
         } else {
@@ -2361,9 +2766,7 @@ impl<'a> FunctionCompiler<'a> {
         let ok_block = self.builder.create_block();
         let err_block = self.builder.create_block();
         let join_block = self.builder.create_block();
-        self.builder
-            .ins()
-            .brif(ok, ok_block, &[], err_block, &[]);
+        self.builder.ins().brif(ok, ok_block, &[], err_block, &[]);
 
         self.builder.switch_to_block(ok_block);
         let payload = self.compile_variant_payload(value.clone())?;
@@ -2374,7 +2777,8 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(err_block);
         self.emit_pending_cleanups(true)?;
-        self.builder.ins().return_(&value.values);
+        let return_values = self.build_return_values(value.clone())?;
+        self.builder.ins().return_(&return_values);
         self.builder.seal_block(err_block);
 
         self.builder.switch_to_block(join_block);
@@ -2397,7 +2801,10 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn emit_pending_cleanups(&mut self, cancel_before_cleanup: bool) -> std::result::Result<(), String> {
+    fn emit_pending_cleanups(
+        &mut self,
+        cancel_before_cleanup: bool,
+    ) -> std::result::Result<(), String> {
         for place in self.cleanup_places.clone().into_iter().rev() {
             let Some(variable) = self.cleanup_active_vars.get(&place).copied() else {
                 continue;
@@ -2417,6 +2824,80 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.seal_block(run_block);
             self.builder.switch_to_block(next_block);
             self.builder.seal_block(next_block);
+        }
+        Ok(())
+    }
+
+    fn build_return_values(
+        &mut self,
+        primary: ValueRef,
+    ) -> std::result::Result<Vec<Value>, String> {
+        let mut values = primary.values;
+        for (name, ty) in self.writeback_locals.clone() {
+            let current = self.load_root(&name)?;
+            let coerced = self.coerce_value(current, &ty)?;
+            values.extend(coerced.values);
+        }
+        Ok(values)
+    }
+
+    fn split_call_results(
+        &self,
+        function_name: &str,
+        results: Vec<Value>,
+    ) -> std::result::Result<(ValueRef, Vec<ValueRef>), String> {
+        let result_ty = self.call_result_type(function_name)?;
+        let result_count = result_ty.value_count();
+        if results.len() < result_count {
+            return Err(format!(
+                "direct backend received too few call results for `{}`",
+                function_name
+            ));
+        }
+        let mut cursor = result_count;
+        let mut writebacks = Vec::new();
+        for ty in self
+            .function_writeback_types
+            .get(function_name)
+            .cloned()
+            .unwrap_or_default()
+        {
+            let count = ty.value_count();
+            if results.len() < cursor + count {
+                return Err(format!(
+                    "direct backend received incomplete writeback results for `{}`",
+                    function_name
+                ));
+            }
+            writebacks.push(ValueRef {
+                values: results[cursor..cursor + count].to_vec(),
+                ty,
+            });
+            cursor += count;
+        }
+        Ok((
+            ValueRef {
+                values: results[..result_count].to_vec(),
+                ty: result_ty,
+            },
+            writebacks,
+        ))
+    }
+
+    fn apply_writeback_places(
+        &mut self,
+        places: &[String],
+        values: Vec<ValueRef>,
+    ) -> std::result::Result<(), String> {
+        if places.len() != values.len() {
+            return Err(format!(
+                "direct backend expected {} writeback values but received {}",
+                places.len(),
+                values.len()
+            ));
+        }
+        for (place, value) in places.iter().zip(values.into_iter()) {
+            self.store_place(place, value)?;
         }
         Ok(())
     }
@@ -2447,14 +2928,14 @@ impl<'a> FunctionCompiler<'a> {
                 let loaded = self.load_operand(&operand)?;
                 if matches!(ty, Type::Named(name, _) if name == "TaskGroup") {
                     let loaded = self.ensure_opaque(loaded)?;
-                    let cancel_before = self.builder.ins().iconst(
-                        types::I64,
-                        if cancel_before_cleanup { 1 } else { 0 },
-                    );
-                    let _ = self.builder.ins().call(
-                        self.task_group_close,
-                        &[loaded.values[0], cancel_before],
-                    );
+                    let cancel_before = self
+                        .builder
+                        .ins()
+                        .iconst(types::I64, if cancel_before_cleanup { 1 } else { 0 });
+                    let _ = self
+                        .builder
+                        .ins()
+                        .call(self.task_group_close, &[loaded.values[0], cancel_before]);
                     return Ok(());
                 }
                 if self
@@ -2472,6 +2953,7 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_class_member_call(
         &mut self,
         class_name: &str,
+        receiver_type_hint: Option<Type>,
         object: ValueRef,
         field: &str,
         receiver_place: Option<&str>,
@@ -2479,7 +2961,15 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let method = find_method(self.classes.get(class_name), field)
             .cloned()
-            .or_else(|| self.find_trait_method(&Type::named(class_name), field).cloned())
+            .or_else(|| {
+                receiver_type_hint
+                    .as_ref()
+                    .and_then(|ty| self.find_trait_method(ty, field).cloned())
+            })
+            .or_else(|| {
+                self.find_trait_method(&Type::named(class_name), field)
+                    .cloned()
+            })
             .ok_or_else(|| {
                 format!(
                     "direct backend does not know method `{}.{}`",
@@ -2496,44 +2986,52 @@ impl<'a> FunctionCompiler<'a> {
         let func_ref = *self
             .function_refs
             .get(&method_function_name)
-            .ok_or_else(|| format!("direct backend does not know function `{}`", method_function_name))?;
+            .ok_or_else(|| {
+                format!(
+                    "direct backend does not know function `{}`",
+                    method_function_name
+                )
+            })?;
         let expected = self
             .function_param_types
             .get(&method_function_name)
             .cloned()
             .unwrap_or_default();
         let mut lowered_args = Vec::new();
+        let mut writeback_places = Vec::new();
         let receiver_expected = expected
             .first()
             .cloned()
             .unwrap_or_else(|| object.ty.clone());
-        lowered_args.extend(self.coerce_value(object.clone(), &receiver_expected)?.values);
+        lowered_args.extend(
+            self.coerce_value(object.clone(), &receiver_expected)?
+                .values,
+        );
+        if method.receiver == Some(MirReceiverKind::BorrowMut) {
+            let Some(place) = receiver_place else {
+                return Err(format!(
+                    "direct backend does not yet support temporary mutable receiver method `{}.{}`",
+                    class_name, field
+                ));
+            };
+            writeback_places.push(place.to_string());
+        }
         for (index, argument) in args.iter().enumerate() {
-            if argument.writeback_place.is_some() {
-                return Err("direct backend does not support borrow-mut writeback arguments".to_string());
-            }
             let loaded = self.load_operand(&argument.value)?;
             let coerced = if let Some(expected_ty) = expected.get(index + 1) {
                 self.coerce_value(loaded, expected_ty)?
             } else {
                 loaded
             };
+            if let Some(place) = &argument.writeback_place {
+                writeback_places.push(place.clone());
+            }
             lowered_args.extend(coerced.values);
         }
         let inst = self.builder.ins().call(func_ref, &lowered_args);
-        let result_ty = self.call_result_type(&method_function_name)?;
         let results = self.builder.inst_results(inst).to_vec();
-        let result = ValueRef {
-            values: results,
-            ty: result_ty,
-        };
-        if method.receiver == Some(MirReceiverKind::BorrowMut) {
-            if let Some(place) = receiver_place {
-                let receiver_ty = self.type_of_place(place)?;
-                let updated = self.coerce_value(object, &receiver_ty)?;
-                self.store_place(place, updated)?;
-            }
-        }
+        let (result, writebacks) = self.split_call_results(&method_function_name, results)?;
+        self.apply_writeback_places(&writeback_places, writebacks)?;
         Ok(result)
     }
 
@@ -2545,30 +3043,39 @@ impl<'a> FunctionCompiler<'a> {
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
-        if let Type::Named(name, class_args) = object_ty {
-            if name == "String" && field == "clone" {
-                if !args.is_empty() {
-                    return Err("direct backend expected `clone()` to take no arguments".to_string());
-                }
-                let object = self.ensure_opaque(object)?;
-                let inst = self
-                    .builder
-                    .ins()
-                    .call(self.clone_value, &[object.values[0]]);
-                return Ok(ValueRef {
-                    values: self.builder.inst_results(inst).to_vec(),
-                    ty: DirectType::Opaque(Type::named("String")),
-                });
+        if field == "clone" {
+            if !args.is_empty() {
+                return Err("direct backend expected `clone()` to take no arguments".to_string());
             }
-            if self.classes.contains_key(name) || self.find_trait_method(object_ty, field).is_some() {
-                return self.compile_class_member_call(name, object, field, receiver_place, args);
+            let object = self.ensure_opaque(object)?;
+            let inst = self
+                .builder
+                .ins()
+                .call(self.clone_value, &[object.values[0]]);
+            return Ok(ValueRef {
+                values: self.builder.inst_results(inst).to_vec(),
+                ty: DirectType::Opaque(object_ty.clone()),
+            });
+        }
+        if let Type::Named(name, class_args) = object_ty {
+            if self.classes.contains_key(name) || self.find_trait_method(object_ty, field).is_some()
+            {
+                return self.compile_class_member_call(
+                    name,
+                    Some(object_ty.clone()),
+                    object,
+                    field,
+                    receiver_place,
+                    args,
+                );
             }
             if name == "Channel" {
                 let object = self.ensure_opaque(object)?;
                 return match field {
                     "clone" => {
                         if !args.is_empty() {
-                            return Err("direct backend expected `clone()` to take no arguments".to_string());
+                            return Err("direct backend expected `clone()` to take no arguments"
+                                .to_string());
                         }
                         let inst = self
                             .builder
@@ -2576,19 +3083,23 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.clone_value, &[object.values[0]]);
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Opaque(Type::Named("Channel".to_string(), class_args.clone())),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Channel".to_string(),
+                                class_args.clone(),
+                            )),
                         })
                     }
                     "send" => {
                         let [argument] = args else {
-                            return Err("direct backend expected `send()` to receive one argument".to_string());
+                            return Err("direct backend expected `send()` to receive one argument"
+                                .to_string());
                         };
                         let loaded = self.load_operand(&argument.value)?;
                         let value = self.ensure_opaque(loaded)?;
-                        let inst = self.builder.ins().call(
-                            self.channel_send,
-                            &[object.values[0], value.values[0]],
-                        );
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.channel_send, &[object.values[0], value.values[0]]);
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
                             ty: DirectType::Opaque(Type::Named(
@@ -2608,7 +3119,9 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "recv" => {
                         if !args.is_empty() {
-                            return Err("direct backend expected `recv()` to take no arguments".to_string());
+                            return Err(
+                                "direct backend expected `recv()` to take no arguments".to_string()
+                            );
                         }
                         let inst = self
                             .builder
@@ -2627,7 +3140,8 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "close" => {
                         if !args.is_empty() {
-                            return Err("direct backend expected `close()` to take no arguments".to_string());
+                            return Err("direct backend expected `close()` to take no arguments"
+                                .to_string());
                         }
                         let inst = self
                             .builder
@@ -2649,7 +3163,8 @@ impl<'a> FunctionCompiler<'a> {
                 return match field {
                     "clone" => {
                         if !args.is_empty() {
-                            return Err("direct backend expected `clone()` to take no arguments".to_string());
+                            return Err("direct backend expected `clone()` to take no arguments"
+                                .to_string());
                         }
                         let inst = self
                             .builder
@@ -2657,12 +3172,17 @@ impl<'a> FunctionCompiler<'a> {
                             .call(self.clone_value, &[object.values[0]]);
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Opaque(Type::Named("Task".to_string(), class_args.clone())),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Task".to_string(),
+                                class_args.clone(),
+                            )),
                         })
                     }
                     "join" => {
                         if !args.is_empty() {
-                            return Err("direct backend expected `join()` to take no arguments".to_string());
+                            return Err(
+                                "direct backend expected `join()` to take no arguments".to_string()
+                            );
                         }
                         let inst = self.builder.ins().call(self.task_join, &[object.values[0]]);
                         Ok(ValueRef {
@@ -2683,7 +3203,8 @@ impl<'a> FunctionCompiler<'a> {
                 return match field {
                     "cancel" => {
                         if !args.is_empty() {
-                            return Err("direct backend expected `cancel()` to take no arguments".to_string());
+                            return Err("direct backend expected `cancel()` to take no arguments"
+                                .to_string());
                         }
                         let inst = self
                             .builder
@@ -2696,13 +3217,14 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "close" => {
                         if !args.is_empty() {
-                            return Err("direct backend expected `close()` to take no arguments".to_string());
+                            return Err("direct backend expected `close()` to take no arguments"
+                                .to_string());
                         }
                         let cancel_before = self.builder.ins().iconst(types::I64, 0);
-                        let inst = self.builder.ins().call(
-                            self.task_group_close,
-                            &[object.values[0], cancel_before],
-                        );
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.task_group_close, &[object.values[0], cancel_before]);
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
                             ty: DirectType::Scalar(ScalarKind::Unit),
@@ -2727,6 +3249,7 @@ impl<'a> FunctionCompiler<'a> {
         if candidates.len() == 1 {
             return self.compile_class_member_call(
                 &candidates[0].0,
+                Some(Type::named(&candidates[0].0)),
                 object,
                 field,
                 receiver_place,
@@ -2749,9 +3272,11 @@ impl<'a> FunctionCompiler<'a> {
         let join_block = self.builder.create_block();
         let mut current_fallthrough = None;
         let result_vars = self.declare_temporary_result_storage(&result_ty)?;
-        for (index, (candidate_ty, method)) in candidates.iter().enumerate() {
+        for (index, (candidate_ty, _method)) in candidates.iter().enumerate() {
             let check_block = if index == 0 {
-                self.builder.current_block().expect("current block should exist")
+                self.builder
+                    .current_block()
+                    .expect("current block should exist")
             } else {
                 let block = self.builder.create_block();
                 self.builder.switch_to_block(block);
@@ -2766,6 +3291,7 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.switch_to_block(then_block);
             let call_result = self.compile_class_member_call(
                 candidate_ty,
+                Some(Type::named(candidate_ty)),
                 object.clone(),
                 field,
                 receiver_place,
@@ -2828,7 +3354,10 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
         let thunk_ref = *self.function_thunk_refs.get(function).ok_or_else(|| {
-            format!("direct backend does not know spawn thunk for `{}`", function)
+            format!(
+                "direct backend does not know spawn thunk for `{}`",
+                function
+            )
         })?;
         let arg_count_value = self.builder.ins().iconst(types::I64, args.len() as i64);
         let buffer_call = self
@@ -2845,9 +3374,10 @@ impl<'a> FunctionCompiler<'a> {
             let value = self.load_operand(&arg.value)?;
             let value = self.ensure_opaque(value)?;
             let index_value = self.builder.ins().iconst(types::I64, index as i64);
-            self.builder
-                .ins()
-                .call(self.arg_buffer_store, &[buffer, index_value, value.values[0]]);
+            self.builder.ins().call(
+                self.arg_buffer_store,
+                &[buffer, index_value, value.values[0]],
+            );
         }
         let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk_ref);
         let detached_value = self
@@ -2863,7 +3393,13 @@ impl<'a> FunctionCompiler<'a> {
         };
         let call = self.builder.ins().call(
             self.spawn_call,
-            &[thunk_ptr, buffer, arg_count_value, detached_value, task_group_value],
+            &[
+                thunk_ptr,
+                buffer,
+                arg_count_value,
+                detached_value,
+                task_group_value,
+            ],
         );
         let ty = if detached {
             DirectType::Scalar(ScalarKind::Unit)
@@ -2873,7 +3409,10 @@ impl<'a> FunctionCompiler<'a> {
                 .get(function)
                 .cloned()
                 .ok_or_else(|| {
-                    format!("direct backend does not know return type for `{}`", function)
+                    format!(
+                        "direct backend does not know return type for `{}`",
+                        function
+                    )
                 })?;
             DirectType::Opaque(Type::Named(
                 "Task".to_string(),
@@ -2886,10 +3425,7 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
-    fn compile_select(
-        &mut self,
-        arms: &[MirSelectArm],
-    ) -> std::result::Result<(), String> {
+    fn compile_select(&mut self, arms: &[MirSelectArm]) -> std::result::Result<(), String> {
         let loop_block = self.builder.create_block();
         let mut initial_deadlines = Vec::new();
         for arm in arms {
@@ -2947,10 +3483,10 @@ impl<'a> FunctionCompiler<'a> {
                     let channel = self.ensure_opaque(channel)?;
                     let value = self.load_operand(value)?;
                     let value = self.ensure_opaque(value)?;
-                    let inst = self.builder.ins().call(
-                        self.channel_send,
-                        &[channel.values[0], value.values[0]],
-                    );
+                    let inst = self
+                        .builder
+                        .ins()
+                        .call(self.channel_send, &[channel.values[0], value.values[0]]);
                     if let Some(binding) = &arm.binding {
                         let binding_ty = self.type_of_place(binding)?;
                         self.store_place(
@@ -2967,21 +3503,14 @@ impl<'a> FunctionCompiler<'a> {
                 MirSelectKind::After { .. } => {
                     let deadline = deadline_params[deadline_index];
                     deadline_index += 1;
-                    let inst = self
-                        .builder
-                        .ins()
-                        .call(self.deadline_ready, &[deadline]);
+                    let inst = self.builder.ins().call(self.deadline_ready, &[deadline]);
                     let ready = self.builder.inst_results(inst)[0];
                     let zero = self.builder.ins().iconst(types::I64, 0);
                     let ready = self.builder.ins().icmp(IntCC::NotEqual, ready, zero);
                     let next_block = self.builder.create_block();
-                    self.builder.ins().brif(
-                        ready,
-                        self.blocks[&arm.label],
-                        &[],
-                        next_block,
-                        &[],
-                    );
+                    self.builder
+                        .ins()
+                        .brif(ready, self.blocks[&arm.label], &[], next_block, &[]);
                     self.builder.switch_to_block(next_block);
                 }
             }
@@ -3015,7 +3544,11 @@ impl<'a> FunctionCompiler<'a> {
         }
         for trait_impl in &self.trait_impls {
             if let Type::Named(name, _) = &trait_impl.for_type {
-                if let Some(method) = trait_impl.methods.iter().find(|method| method.name == field) {
+                if let Some(method) = trait_impl
+                    .methods
+                    .iter()
+                    .find(|method| method.name == field)
+                {
                     candidates.push((name.clone(), method.clone()));
                 }
             }
@@ -3028,7 +3561,10 @@ impl<'a> FunctionCompiler<'a> {
             if &trait_impl.for_type != ty {
                 return None;
             }
-            trait_impl.methods.iter().find(|method| method.name == field)
+            trait_impl
+                .methods
+                .iter()
+                .find(|method| method.name == field)
         })
     }
 
@@ -3038,7 +3574,9 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<Vec<Variable>, String> {
         let mut vars = Vec::new();
         for abi in ty.abi_types() {
-            let variable = Variable::from_u32((self.variables.len() + self.variable_types.len() + vars.len() + 10000) as u32);
+            let variable = Variable::from_u32(
+                (self.variables.len() + self.variable_types.len() + vars.len() + 10000) as u32,
+            );
             self.builder.declare_var(variable, abi);
             let zero = match abi {
                 t if t == types::F64 => self.builder.ins().f64const(Ieee64::with_float(0.0)),
@@ -3069,7 +3607,6 @@ impl<'a> FunctionCompiler<'a> {
         let values = vars.iter().map(|var| self.builder.use_var(*var)).collect();
         Ok(ValueRef { values, ty })
     }
-
 }
 
 fn unit_value(builder: &mut FunctionBuilder<'_>) -> ValueRef {
@@ -3107,10 +3644,14 @@ fn signature_for(
     call_conv: CallConv,
 ) -> std::result::Result<Signature, String> {
     let mut signature = Signature::new(call_conv);
+    let mut writeback_types = Vec::new();
     if function.receiver.is_some() {
         let receiver_ty = receiver_type(function, classes)?;
         for abi in receiver_ty.abi_types() {
             signature.params.push(AbiParam::new(abi));
+        }
+        if function.receiver == Some(MirReceiverKind::BorrowMut) {
+            writeback_types.push(receiver_ty);
         }
     }
     for param in &function.params {
@@ -3122,6 +3663,9 @@ fn signature_for(
         for abi in ty.abi_types() {
             signature.params.push(AbiParam::new(abi));
         }
+        if param.passing == MirReceiverKind::BorrowMut {
+            writeback_types.push(ty);
+        }
     }
     let return_ty = ensure_direct_type(
         &function.return_type,
@@ -3130,6 +3674,11 @@ fn signature_for(
     )?;
     for abi in return_ty.abi_types() {
         signature.returns.push(AbiParam::new(abi));
+    }
+    for ty in writeback_types {
+        for abi in ty.abi_types() {
+            signature.returns.push(AbiParam::new(abi));
+        }
     }
     Ok(signature)
 }
@@ -3241,6 +3790,7 @@ fn validate_function(
             Terminator::Return(operand) => validate_operand(operand)?,
             Terminator::Goto(_) => {}
             Terminator::Branch { condition, .. } => validate_operand(condition)?,
+            Terminator::ForRange { iterable, .. } => validate_operand(iterable)?,
             Terminator::Match { scrutinee, .. } => validate_operand(scrutinee)?,
             Terminator::Select { arms, .. } => {
                 for arm in arms {
@@ -3304,7 +3854,9 @@ fn validate_rvalue(
             .map(|_| ()),
         Rvalue::VariantPayload { scrutinee } => validate_operand(scrutinee),
         Rvalue::Try { value } => validate_operand(value),
-        Rvalue::Spawn { task_group, args, .. } => {
+        Rvalue::Spawn {
+            task_group, args, ..
+        } => {
             if let Some(group) = task_group {
                 validate_operand(group)?;
             }
@@ -3313,27 +3865,18 @@ fn validate_rvalue(
             }
             Ok(())
         }
-        other => Err(format!(
-            "direct backend does not yet support MIR rvalue `{:?}`",
-            other
-        )),
     }
 }
 
 fn validate_operand(operand: &Operand) -> std::result::Result<(), String> {
     match operand {
         Operand::Place(_)
+        | Operand::Int(_)
         | Operand::Bool(_)
         | Operand::Unit
         | Operand::Float(_)
         | Operand::String(_)
         | Operand::Duration(_) => Ok(()),
-        Operand::Int(value) => i64::try_from(*value).map(|_| ()).map_err(|_| {
-            format!(
-                "direct backend only supports integer constants that fit in host i64, found `{}`",
-                value
-            )
-        }),
     }
 }
 
@@ -3404,7 +3947,9 @@ fn direct_type_inner(
             }
             Some(DirectType::Opaque(Type::Named(name.clone(), vec![])))
         }
-        Type::Named(name, args) => Some(DirectType::Opaque(Type::Named(name.clone(), args.clone()))),
+        Type::Named(name, args) => {
+            Some(DirectType::Opaque(Type::Named(name.clone(), args.clone())))
+        }
     }
 }
 
@@ -3442,6 +3987,9 @@ fn infer_rvalue_type(
         },
         Rvalue::Call { callee, .. } => match callee {
             CallTarget::Name(name) if name == "print" => Some(DirectType::Scalar(ScalarKind::Unit)),
+            CallTarget::Name(name) if name == "range" => {
+                Some(DirectType::Opaque(Type::named("Range")))
+            }
             CallTarget::Name(name) if name == "channel" => Some(DirectType::Opaque(Type::Named(
                 "Channel".to_string(),
                 vec![Type::named("Unknown")],
@@ -3452,6 +4000,7 @@ fn infer_rvalue_type(
             CallTarget::Name(name) if name == "cancelled" => {
                 Some(DirectType::Scalar(ScalarKind::Bool))
             }
+            CallTarget::Name(name) if name == "sleep" => Some(DirectType::Scalar(ScalarKind::Unit)),
             CallTarget::Name(name) => function_return_types.get(name).cloned(),
             CallTarget::Member { object, field, .. } => {
                 let object_ty = infer_operand_type(object, variable_types)?;
@@ -3495,6 +4044,65 @@ fn infer_rvalue_type(
     }
 }
 
+fn infer_select_binding_type(
+    arm: &MirSelectArm,
+    variable_types: &HashMap<String, DirectType>,
+    classes: &HashMap<String, MirClass>,
+) -> Option<DirectType> {
+    match &arm.kind {
+        MirSelectKind::Recv { channel } => {
+            let channel_ty = infer_operand_type(channel, variable_types)?;
+            match channel_ty {
+                DirectType::Opaque(Type::Named(name, args)) if name == "Channel" => {
+                    Some(DirectType::Opaque(Type::Named(
+                        "Option".to_string(),
+                        vec![args
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| Type::named("Unknown"))],
+                    )))
+                }
+                _ => Some(DirectType::Opaque(Type::Named(
+                    "Option".to_string(),
+                    vec![Type::named("Unknown")],
+                ))),
+            }
+        }
+        MirSelectKind::Send { channel, .. } => {
+            let channel_ty = infer_operand_type(channel, variable_types)?;
+            match channel_ty {
+                DirectType::Opaque(Type::Named(name, args)) if name == "Channel" => {
+                    Some(DirectType::Opaque(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Unit,
+                            Type::Named(
+                                "SendError".to_string(),
+                                vec![args
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                            ),
+                        ],
+                    )))
+                }
+                _ => Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Unit,
+                        Type::Named("SendError".to_string(), vec![Type::named("Unknown")]),
+                    ],
+                ))),
+            }
+        }
+        MirSelectKind::After { duration } => {
+            let _ = classes;
+            infer_operand_type(duration, variable_types)?;
+            Some(DirectType::Scalar(ScalarKind::Unit))
+        }
+    }
+}
+
 fn infer_operand_type(
     operand: &Operand,
     variable_types: &HashMap<String, DirectType>,
@@ -3510,7 +4118,13 @@ fn infer_operand_type(
             }
             Some(ty)
         }
-        Operand::Int(_) => Some(DirectType::Scalar(ScalarKind::Int32)),
+        Operand::Int(value) => {
+            if i64::try_from(*value).is_ok() {
+                Some(DirectType::Scalar(ScalarKind::Int32))
+            } else {
+                Some(DirectType::Opaque(Type::named("Unknown")))
+            }
+        }
         Operand::Float(_) => Some(DirectType::Scalar(ScalarKind::Float64)),
         Operand::Bool(_) => Some(DirectType::Scalar(ScalarKind::Bool)),
         Operand::Unit => Some(DirectType::Scalar(ScalarKind::Unit)),
@@ -3581,6 +4195,24 @@ fn direct_type_to_type(ty: &DirectType) -> Type {
     }
 }
 
+fn collect_spawn_targets(module: &MirModule) -> BTreeSet<String> {
+    let mut targets = BTreeSet::new();
+    for function in module.functions.iter().chain(module.top_level.iter()) {
+        for block in &function.blocks {
+            for instruction in &block.instructions {
+                if let Instruction::Assign {
+                    value: Rvalue::Spawn { function, .. },
+                    ..
+                } = instruction
+                {
+                    targets.insert(function.clone());
+                }
+            }
+        }
+    }
+    targets
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -3621,16 +4253,15 @@ mod tests {
     }
 
     #[test]
-    fn direct_backend_rejects_trait_impl_dispatch() {
+    fn direct_backend_emits_object_for_trait_impl_dispatch() {
         let source = include_str!("../../../examples/traits/greeter.au");
         let mir = lower_source_to_mir(source).expect("trait example should lower to MIR");
-        let error = emit_host_object(&mir)
-            .expect_err("trait impl dispatch should still be unsupported directly");
+        let object =
+            emit_host_object(&mir).expect("trait impl dispatch should now compile directly");
 
         assert!(
-            error.contains("trait impl dispatch"),
-            "unexpected direct backend rejection: {}",
-            error
+            !object.is_empty(),
+            "trait dispatch object should not be empty"
         );
     }
 
@@ -3762,10 +4393,10 @@ mod tests {
     }
 
     #[test]
-    fn ensure_direct_type_rejects_non_direct_types() {
-        let error = ensure_direct_type(&Type::named("String"), &HashMap::new(), "test type")
-            .expect_err("non-direct types should be rejected");
-        assert!(error.contains("direct backend does not yet support test type"));
+    fn ensure_direct_type_maps_runtime_backed_types_to_opaque_values() {
+        let ty = ensure_direct_type(&Type::named("String"), &HashMap::new(), "test type")
+            .expect("runtime-backed types should still be representable directly");
+        assert_eq!(ty, DirectType::Opaque(Type::named("String")));
     }
 
     #[test]
@@ -3790,6 +4421,7 @@ mod tests {
         );
         let function = MirFunction {
             name: "demo".to_string(),
+            module_name: "<test>".to_string(),
             receiver: Some(MirReceiverKind::Borrow),
             params: vec![crate::mir::MirParam {
                 name: "other".to_string(),

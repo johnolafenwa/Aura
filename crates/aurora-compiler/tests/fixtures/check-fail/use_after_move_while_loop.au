@@ -1,0 +1,13 @@
+class Token:
+    value: int32
+
+def consume(token: Token):
+    print(token.value)
+
+def main() -> int32:
+    token = Token(value=1)
+    mut keep_running: bool = true
+    while keep_running:
+        consume(token)
+        keep_running = false
+    return 0

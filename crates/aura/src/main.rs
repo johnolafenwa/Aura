@@ -20,7 +20,6 @@ struct Input {
 enum BuildBackend {
     Auto,
     Direct,
-    MirRuntime,
 }
 
 fn main() {
@@ -57,7 +56,7 @@ fn main() {
                 Ok(output) => {
                     write_stdout(&output.stdout);
                     if let Value::Int(code) = output.value {
-                        process::exit(code as i32);
+                        process::exit(code.as_i128().unwrap_or(1) as i32);
                     }
                 }
                 Err(error) => {
@@ -77,7 +76,7 @@ fn main() {
                 Ok(output) => {
                     write_stdout(&output.stdout);
                     if let Value::Int(code) = output.value {
-                        process::exit(code as i32);
+                        process::exit(code.as_i128().unwrap_or(1) as i32);
                     }
                 }
                 Err(error) => {
@@ -271,7 +270,6 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, BuildBackend, Vec<String>) {
                 backend = match value.as_str() {
                     "auto" => BuildBackend::Auto,
                     "direct" => BuildBackend::Direct,
-                    "mir-runtime" => BuildBackend::MirRuntime,
                     _ => print_usage_and_exit(),
                 };
                 index += 1;
@@ -339,22 +337,15 @@ fn render_error(path: &str, source: &str, error: &Diagnostic) -> String {
 }
 
 fn build_binary_with_backend(
-    path: &str,
-    source: &str,
+    _path: &str,
+    _source: &str,
     mir: &MirModule,
     output_path: &Path,
     backend: BuildBackend,
 ) -> std::result::Result<(), String> {
     match backend {
         BuildBackend::Direct => build_direct_native_binary(mir, output_path),
-        BuildBackend::MirRuntime => build_runtime_artifact_binary(path, source, mir, output_path),
-        BuildBackend::Auto => match build_direct_native_binary(mir, output_path) {
-            Ok(()) => Ok(()),
-            Err(message) if message.starts_with("direct backend does not") => {
-                build_runtime_artifact_binary(path, source, mir, output_path)
-            }
-            Err(message) => Err(message),
-        },
+        BuildBackend::Auto => build_direct_native_binary(mir, output_path),
     }
 }
 
@@ -375,10 +366,19 @@ fn build_direct_native_binary(
     let native_runtime = ensure_native_runtime_artifacts()?;
     let object_bytes = emit_host_native_object(mir)?;
     let temp_object = temporary_direct_object_path(output_path);
+    let temp_staticlib = temporary_direct_staticlib_path(output_path);
     fs::write(&temp_object, object_bytes).map_err(|error| {
         format!(
             "failed to write direct backend object `{}`: {}",
             temp_object.display(),
+            error
+        )
+    })?;
+    fs::copy(&native_runtime.staticlib, &temp_staticlib).map_err(|error| {
+        format!(
+            "failed to stage Aurora runtime library `{}` as `{}`: {}",
+            native_runtime.staticlib.display(),
+            temp_staticlib.display(),
             error
         )
     })?;
@@ -387,7 +387,7 @@ fn build_direct_native_binary(
     let mut command = Command::new(cc);
     command
         .arg(&temp_object)
-        .arg(&native_runtime.staticlib)
+        .arg(&temp_staticlib)
         .arg("-o")
         .arg(output_path);
     for arg in &native_runtime.native_link_args {
@@ -399,6 +399,7 @@ fn build_direct_native_binary(
         .map_err(|error| format!("failed to run native linker for direct backend: {}", error));
 
     let _ = fs::remove_file(&temp_object);
+    let _ = fs::remove_file(&temp_staticlib);
 
     let output = result?;
     if !output.status.success() {
@@ -410,71 +411,13 @@ fn build_direct_native_binary(
     Ok(())
 }
 
-fn build_runtime_artifact_binary(
-    path: &str,
-    source: &str,
-    mir: &MirModule,
-    output_path: &Path,
-) -> std::result::Result<(), String> {
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "failed to create output directory `{}`: {}",
-                parent.display(),
-                error
-            )
-        })?;
-    }
-
-    let native_runtime = ensure_native_runtime_artifacts()?;
-    let temp_source = temporary_native_launcher_path(output_path);
-    let launcher_source = render_native_launcher_source(path, source, mir);
-
-    fs::write(&temp_source, launcher_source).map_err(|error| {
-        format!(
-            "failed to write native launcher source `{}`: {}",
-            temp_source.display(),
-            error
-        )
-    })?;
-
-    let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
-    let mut command = Command::new(cc);
-    command
-        .arg("-std=c99")
-        .arg("-O2")
-        .arg(&temp_source)
-        .arg(&native_runtime.staticlib)
-        .arg("-o")
-        .arg(output_path);
-    for arg in &native_runtime.native_link_args {
-        command.arg(arg);
-    }
-
-    let result = command
-        .output()
-        .map_err(|error| format!("failed to run native compiler for `aura build`: {}", error));
-
-    let _ = fs::remove_file(&temp_source);
-
-    let output = result?;
-    if !output.status.success() {
-        return Err(format!(
-            "native build failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    Ok(())
-}
-
-fn temporary_native_launcher_path(output_path: &Path) -> PathBuf {
+fn temporary_direct_object_path(output_path: &Path) -> PathBuf {
     let file_name = output_path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("aurora-output");
     let unique = format!(
-        "aurora-native-build-{}-{}-{}.c",
+        "aurora-direct-object-{}-{}-{}.o",
         file_name,
         std::process::id(),
         std::time::SystemTime::now()
@@ -485,13 +428,13 @@ fn temporary_native_launcher_path(output_path: &Path) -> PathBuf {
     std::env::temp_dir().join(unique)
 }
 
-fn temporary_direct_object_path(output_path: &Path) -> PathBuf {
+fn temporary_direct_staticlib_path(output_path: &Path) -> PathBuf {
     let file_name = output_path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("aurora-output");
     let unique = format!(
-        "aurora-direct-object-{}-{}-{}.o",
+        "aurora-direct-runtime-{}-{}-{}.a",
         file_name,
         std::process::id(),
         std::time::SystemTime::now()
@@ -541,10 +484,7 @@ fn ensure_native_runtime_artifacts() -> std::result::Result<NativeRuntimeArtifac
         ));
     }
 
-    let staticlib = repo_root()
-        .join("target")
-        .join(current_profile())
-        .join(static_library_file_name());
+    let staticlib = resolve_static_library_path(repo_root(), current_profile())?;
     if !staticlib.exists() {
         return Err(format!(
             "failed to locate compiled Aurora runtime library `{}` after build",
@@ -572,6 +512,51 @@ fn static_library_file_name() -> &'static str {
     "libaurora_compiler.a"
 }
 
+fn resolve_static_library_path(
+    root: PathBuf,
+    profile: &str,
+) -> std::result::Result<PathBuf, String> {
+    let primary = root
+        .join("target")
+        .join(profile)
+        .join(static_library_file_name());
+    if primary.exists() {
+        return Ok(primary);
+    }
+
+    let deps_dir = root.join("target").join(profile).join("deps");
+    let mut candidates = fs::read_dir(&deps_dir)
+        .map_err(|error| {
+            format!(
+                "failed to inspect Aurora runtime library directory `{}`: {}",
+                deps_dir.display(),
+                error
+            )
+        })?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with("libaurora_compiler-") && name.ends_with(".a"))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|path| {
+        fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+    });
+    if let Some(candidate) = candidates.pop() {
+        return Ok(candidate);
+    }
+
+    Err(format!(
+        "failed to locate compiled Aurora runtime library `{}` or a matching archive in `{}`",
+        primary.display(),
+        deps_dir.display()
+    ))
+}
+
 fn parse_native_static_libs(output: &str) -> Vec<String> {
     output
         .lines()
@@ -583,72 +568,6 @@ fn parse_native_static_libs(output: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn render_native_launcher_source(path: &str, source: &str, mir: &MirModule) -> String {
-    let mir_json = serde_json::to_vec(mir).expect("MIR should serialize to JSON bytes");
-    format!(
-        r#"#include <signal.h>
-#include <stddef.h>
-#include <stdint.h>
-
-extern int aurora_native_run(
-    const uint8_t* mir_json,
-    size_t mir_json_len,
-    const uint8_t* source_path,
-    size_t source_path_len,
-    const uint8_t* source,
-    size_t source_len
-);
-
-static const uint8_t AURORA_MIR_BYTES[] = {{
-{mir_bytes}
-}};
-
-static const uint8_t AURORA_SOURCE_PATH_BYTES[] = {{
-{path_bytes}
-}};
-
-static const uint8_t AURORA_SOURCE_BYTES[] = {{
-{source_bytes}
-}};
-
-int main(void) {{
-    signal(SIGPIPE, SIG_IGN);
-    return aurora_native_run(
-        AURORA_MIR_BYTES,
-        sizeof(AURORA_MIR_BYTES),
-        AURORA_SOURCE_PATH_BYTES,
-        sizeof(AURORA_SOURCE_PATH_BYTES),
-        AURORA_SOURCE_BYTES,
-        sizeof(AURORA_SOURCE_BYTES)
-    );
-}}
-"#,
-        mir_bytes = render_c_byte_array(&mir_json),
-        source_bytes = render_c_byte_array(source.as_bytes()),
-        path_bytes = render_c_byte_array(path.as_bytes()),
-    )
-}
-
-fn render_c_byte_array(bytes: &[u8]) -> String {
-    let mut rendered = String::new();
-    for (index, byte) in bytes.iter().enumerate() {
-        if index % 12 == 0 {
-            rendered.push_str("    ");
-        }
-        rendered.push_str(&format!("0x{:02x}", byte));
-        if index + 1 != bytes.len() {
-            rendered.push_str(", ");
-        }
-        if index % 12 == 11 && index + 1 != bytes.len() {
-            rendered.push('\n');
-        }
-    }
-    if bytes.is_empty() {
-        rendered.push_str("    0x00");
-    }
-    rendered
 }
 
 fn write_stdout(text: &str) {
@@ -670,8 +589,8 @@ fn print_usage_and_exit() -> ! {
     eprintln!(
         "   or: aura <check|run|run-mir|build|ast|ast-json|mir|analyze> --stdin <virtual-path>"
     );
-    eprintln!("   or: aura build [-o <output>] [--backend auto|direct|mir-runtime] <file.au>");
-    eprintln!("   or: aura build [-o <output>] [--backend auto|direct|mir-runtime] --stdin <virtual-path>");
+    eprintln!("   or: aura build [-o <output>] [--backend auto|direct] <file.au>");
+    eprintln!("   or: aura build [-o <output>] [--backend auto|direct] --stdin <virtual-path>");
     eprintln!("   or: aura complete --line <n> --character <n> [--trigger .] <file.au>");
     eprintln!(
         "   or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>"
@@ -681,21 +600,64 @@ fn print_usage_and_exit() -> ! {
 
 #[cfg(test)]
 mod tests {
-    use aurora_compiler::lower_source_to_mir;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use super::render_native_launcher_source;
+    use super::resolve_static_library_path;
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let unique = format!(
+            "aurora-aura-tests-{}-{}-{}",
+            name,
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after unix epoch")
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&path).expect("temp dir should exist");
+        path
+    }
 
     #[test]
-    fn native_launcher_embeds_serialized_mir_and_calls_runtime_entrypoint() {
-        let mir = lower_source_to_mir("print(value=1)\n").expect("source should lower to MIR");
-        let runner = render_native_launcher_source("/virtual/test.au", "print(value=1)\n", &mir);
-        assert!(
-            runner.contains("aurora_native_run"),
-            "native launcher should call the compiled Aurora runtime entrypoint"
-        );
-        assert!(
-            runner.contains("static const uint8_t AURORA_MIR_BYTES[]"),
-            "native launcher should embed serialized MIR bytes"
-        );
+    fn resolve_static_library_path_prefers_primary_staticlib() {
+        let root = unique_temp_dir("primary-staticlib");
+        let target = root.join("target").join("debug");
+        let deps = target.join("deps");
+        fs::create_dir_all(&deps).expect("deps dir should exist");
+        let primary = target.join("libaurora_compiler.a");
+        fs::write(&primary, b"primary").expect("primary staticlib should write");
+        fs::write(
+            deps.join("libaurora_compiler-old.a"),
+            b"stale hashed archive",
+        )
+        .expect("hashed archive should write");
+
+        let resolved = resolve_static_library_path(root.clone(), "debug")
+            .expect("should resolve runtime library");
+        assert_eq!(resolved, primary);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolve_static_library_path_uses_newest_hashed_archive_when_primary_missing() {
+        let root = unique_temp_dir("newest-hashed");
+        let deps = root.join("target").join("debug").join("deps");
+        fs::create_dir_all(&deps).expect("deps dir should exist");
+        let older = deps.join("libaurora_compiler-older.a");
+        fs::write(&older, b"older").expect("older archive should write");
+        thread::sleep(Duration::from_millis(10));
+        let newer = deps.join("libaurora_compiler-newer.a");
+        fs::write(&newer, b"newer").expect("newer archive should write");
+
+        let resolved = resolve_static_library_path(root.clone(), "debug")
+            .expect("should resolve newest hashed runtime library");
+        assert_eq!(resolved, newer);
+
+        let _ = fs::remove_dir_all(root);
     }
 }

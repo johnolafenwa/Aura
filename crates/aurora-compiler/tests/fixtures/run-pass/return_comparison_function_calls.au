@@ -1,0 +1,12 @@
+def identity(value: int32) -> int32:
+    return value
+
+def compare() -> bool:
+    return identity(value=10) > identity(value=5)
+
+def main() -> int32:
+    if compare():
+        print(true)
+    else:
+        print(false)
+    return 0

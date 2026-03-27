@@ -736,9 +736,16 @@ impl Parser {
             self.bump();
             return Ok(Pattern::Wildcard(span));
         }
-        let enum_name = self.expect_identifier()?;
+        let mut segments = vec![self.expect_identifier()?];
         self.expect_simple(TokenKind::Dot)?;
-        let variant_name = self.expect_identifier()?;
+        segments.push(self.expect_identifier()?);
+        while self.eat_simple(&TokenKind::Dot).is_some() {
+            segments.push(self.expect_identifier()?);
+        }
+        let variant_name = segments
+            .pop()
+            .expect("pattern should contain a variant segment");
+        let enum_name = segments.join(".");
         let binding = if self.eat_simple(&TokenKind::LParen).is_some() {
             let name = self.expect_identifier()?;
             self.expect_simple(TokenKind::RParen)?;

@@ -1,0 +1,16 @@
+import pkg.types
+
+def main() -> int32:
+    counter = pkg.types.Counter(value=4)
+    print(counter.read())
+
+    status = pkg.types.Status.Ready
+    print(status == pkg.types.Status.Ready)
+
+    match status:
+        case pkg.types.Status.Ready:
+            print(1)
+        case pkg.types.Status.Busy:
+            print(2)
+
+    return 0

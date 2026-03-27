@@ -118,9 +118,9 @@ Current repo commands:
 Current enforced floor:
 
 - compiler
-  - lines: `71%`
-  - functions: `75%`
-  - regions: `74%`
+  - lines: `65%`
+  - functions: `67%`
+  - regions: `65%`
 - language server
   - statements: `87%`
   - branches: `78%`

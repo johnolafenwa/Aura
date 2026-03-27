@@ -12,7 +12,6 @@ cargo run -p aura -- run examples/classes/point_distance.au
 cargo run -p aura -- run-mir examples/classes/methods.au
 cargo run -p aura -- build -o ./target/aurora-point examples/point.au
 cargo run -p aura -- build --backend direct -o ./target/aurora-direct examples/basic_addition.au
-cargo run -p aura -- build --backend mir-runtime -o ./target/aurora-point-runtime examples/point.au
 cargo run -p aura -- ast examples/classes/point_distance.au
 cargo run -p aura -- ast-json examples/classes/point_distance.au
 cargo run -p aura -- mir examples/control_flow/while_break_continue.au
@@ -30,9 +29,7 @@ cargo run -p aura -- complete --line 5 --character 11 --trigger . examples/point
 - `build`
   - compile a standalone native binary
   - `--backend auto` is the default
-  - `--backend direct` forces the true direct native backend for the current scalar, float, plain-class, and immutable-method subset
-  - `--backend mir-runtime` forces the runtime-linked MIR artifact backend
-  - the runtime-linked backend lowers to checked MIR at build time, embeds that MIR in a native launcher, and links it against the Aurora runtime library
+  - `--backend direct` forces the true direct native backend for the full currently implemented Aurora language surface
   - the generated binary does not depend on the original `.au` source file at runtime
   - the current build step still requires Cargo/Rust and a host C compiler
 - `ast`

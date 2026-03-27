@@ -1,0 +1,20 @@
+trait Show:
+    def show(borrow self) -> String
+
+enum Status:
+    Ready
+
+impl Show for int32:
+    def show(borrow self) -> String:
+        return "int"
+
+impl Show for Status:
+    def show(borrow self) -> String:
+        return "ready"
+
+def main() -> int32:
+    value: int32 = 7
+    status = Status.Ready
+    print(value.show())
+    print(status.show())
+    return 0

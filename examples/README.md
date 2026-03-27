@@ -77,6 +77,7 @@ The examples are organized by topic so they can serve both as quick references a
 - `for_range.au`
   - `for` loops over `range(...)`, plus `break` and `continue`
   - prints `7`
+  - current bootstrap note: `range(...)` bounds must fit the signed index space used by the compiler/runtime
 - `while_break_continue.au`
   - loops, `break`, `continue`, and compound assignment
   - prints `ok`
@@ -139,6 +140,12 @@ The examples are organized by topic so they can serve both as quick references a
   - prints:
     - `10`
     - `2`
+- `namespace_import_types.au`
+  - namespace-qualified class construction, enum variants, and qualified `match` arms through `import ...`
+  - prints:
+    - `4`
+    - `true`
+    - `1`
 
 ### `error_handling/`
 
@@ -216,6 +223,11 @@ The examples are organized by topic so they can serve both as quick references a
     - `3.0`
     - `1.25`
     - `2.0`
+- `uint128_values.au`
+  - full-range `uint128` literals and arithmetic through the current runtimes and direct backend
+  - prints:
+    - `340282366920938463463374607431768211455`
+    - `340282366920938463463374607431768211455`
 - `unary_minus.au`
   - unary minus for integer and floating-point expressions
   - prints:
@@ -302,12 +314,10 @@ cargo run -p aura -- build --backend direct -o ./target/aurora-direct examples/b
 
 - `--backend auto`
   - default
-  - tries the direct native backend first and falls back to the runtime-linked MIR artifact backend when needed
+  - uses the direct native backend for the maintained Aurora surface
 - `--backend direct`
   - forces the current direct native backend
-  - currently covers scalars, floats, plain classes, field access, and immutable methods
-- `--backend mir-runtime`
-  - forces the runtime-linked MIR artifact backend for the broader implemented surface
+  - now covers the full currently implemented Aurora language surface
 
 The built binary does not depend on the original `.au` source file at runtime, but the build step still needs Cargo/Rust and a host C compiler.
 
@@ -324,7 +334,7 @@ cargo run -p aura -- run-mir examples/enums/result_match.au
 Current `run-mir` limits:
 
 - it now covers the current implemented Aurora surface, including `spawn`, `select`, channels, task groups, `try`, and `with`
-- it is still the broader runtime-linked MIR execution path, so future backend work is about expanding the direct native backend so fewer programs need that path
+- the direct backend now covers the maintained Aurora surface, so `run-mir` is mainly useful as an alternate execution path and backend-debugging tool
 
 ## Check, AST, and MIR
 

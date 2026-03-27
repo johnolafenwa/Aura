@@ -360,9 +360,9 @@ def main() -> int32:\n    mut current: int32 = 1\n    if current < 5:\n        c
 
 #[test]
 fn build_with_direct_backend_rejects_unsupported_programs() {
-    let fixture = repo_root().join("examples/concurrency/channels_spawn.au");
+    let fixture = repo_root().join("examples/modules/helpers/math.au");
     let output_dir = TempDir::new("aurora-build-direct-unsupported");
-    let output_path = output_dir.path().join("channels-direct");
+    let output_path = output_dir.path().join("helper-module-direct");
 
     let build = Command::new(aura_bin())
         .arg("build")
@@ -372,15 +372,44 @@ fn build_with_direct_backend_rejects_unsupported_programs() {
         .arg(&output_path)
         .arg(&fixture)
         .output()
-        .expect("failed to run aura build --backend direct on unsupported program");
+        .expect("failed to run aura build --backend direct on non-entry module");
 
     assert!(
         !build.status.success(),
-        "direct backend should reject unsupported programs"
+        "direct backend should reject non-entry modules"
     );
     assert!(
-        String::from_utf8_lossy(&build.stderr).contains("direct backend"),
-        "unsupported direct backend errors should mention the direct backend, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+            .contains("requires a `main` function or top-level script"),
+        "non-entry direct backend errors should explain the missing entrypoint, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+}
+
+#[test]
+fn build_rejects_removed_mir_runtime_backend_option() {
+    let fixture = repo_root().join("examples/point.au");
+    let output_dir = TempDir::new("aurora-build-removed-backend");
+    let output_path = output_dir.path().join("point-removed-backend");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("mir-runtime")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura build with removed backend");
+
+    assert!(
+        !build.status.success(),
+        "removed mir-runtime backend option should fail"
+    );
+    assert!(
+        String::from_utf8_lossy(&build.stderr).contains("usage:")
+            || String::from_utf8_lossy(&build.stderr).contains("auto|direct"),
+        "removed backend option should report current build usage, stderr was:\n{}",
         String::from_utf8_lossy(&build.stderr)
     );
 }
@@ -421,7 +450,11 @@ fn build_with_direct_backend_supports_point_example() {
 
 #[test]
 fn build_with_direct_backend_supports_class_methods_example() {
-    assert_direct_backend_example_runs("examples/classes/methods.au", "methods-direct", "4\n8\n0\n");
+    assert_direct_backend_example_runs(
+        "examples/classes/methods.au",
+        "methods-direct",
+        "4\n8\n0\n",
+    );
 }
 
 #[test]
@@ -475,6 +508,42 @@ fn build_with_direct_backend_supports_concurrency_example() {
         "examples/concurrency/channels_spawn.au",
         "channels-direct",
         "2\n4\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_borrow_parameters_example() {
+    assert_direct_backend_example_runs(
+        "examples/basics/borrow_parameters.au",
+        "borrow-params-direct",
+        "41\n42\n42\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_mutating_methods_example() {
+    assert_direct_backend_example_runs(
+        "examples/classes/mutating_methods.au",
+        "mutating-methods-direct",
+        "6\n1\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_for_range_example() {
+    assert_direct_backend_example_runs(
+        "examples/control_flow/for_range.au",
+        "for-range-direct",
+        "7\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_full_range_uint128_example() {
+    assert_direct_backend_example_runs(
+        "examples/numbers/uint128_values.au",
+        "uint128-direct",
+        "340282366920938463463374607431768211455\n340282366920938463463374607431768211455\n",
     );
 }
 

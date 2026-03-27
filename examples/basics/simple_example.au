@@ -1,0 +1,33 @@
+class Person:
+    
+    age: int32 
+    name: String
+
+def multiply(a: float32, b: float32) -> float32:
+    
+    return a * b 
+    
+def printPerson(person: Person):
+    
+    print(person.name)
+    
+def incrementAge(person: borrow mut Person):
+    
+    person.age += 1
+    
+    
+def main():
+    
+    mut person = Person(age=27, name="Ayoola Olafenwa")
+    
+    incrementAge(person)
+    
+    
+    printPerson(person)
+    
+    num1: float32 = 78.0
+    num2: float32 = 10.7
+    
+    product: float32 = multiply(num1, num2)
+    
+    print(product)

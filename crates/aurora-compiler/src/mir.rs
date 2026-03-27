@@ -6,7 +6,7 @@ use crate::call::{bind_call_arguments, callable_params_from_decl, CallConvention
 use crate::diag::Span;
 use crate::sema::{ModuleNamespace, Program, Type};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn is_known_enum_name(program: &Program, name: &str) -> bool {
     program.enums.contains_key(name) || matches!(name, "Result" | "Option" | "SendError")
@@ -23,6 +23,7 @@ pub struct MirModule {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirFunction {
     pub name: String,
+    pub module_name: String,
     pub receiver: Option<MirReceiverKind>,
     pub params: Vec<MirParam>,
     pub local_types: Vec<MirLocalType>,
@@ -201,7 +202,7 @@ pub enum MirSelectKind {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Operand {
     Place(String),
-    Int(i128),
+    Int(u128),
     Duration(i128),
     Float(f64),
     Bool(bool),
@@ -244,6 +245,7 @@ pub fn lower(program: &Program) -> MirModule {
             lower_function(
                 program,
                 &function.decl.name,
+                &function.module_name,
                 function.decl.receiver,
                 None,
                 &function.decl,
@@ -281,6 +283,7 @@ pub fn lower(program: &Program) -> MirModule {
             functions.push(lower_function(
                 program,
                 &qualified_name,
+                &class.module_name,
                 method.decl.receiver,
                 Some(Type::Named(
                     class.decl.name.clone(),
@@ -308,6 +311,17 @@ pub fn lower(program: &Program) -> MirModule {
             methods,
         });
     }
+    let mut seen_class_names = classes
+        .iter()
+        .map(|class| class.name.clone())
+        .collect::<BTreeSet<_>>();
+    push_imported_module_classes(
+        program,
+        &mut classes,
+        &mut functions,
+        &mut seen_function_names,
+        &mut seen_class_names,
+    );
 
     let mut trait_impls = Vec::new();
     for trait_impl in &program.trait_impls {
@@ -320,6 +334,7 @@ pub fn lower(program: &Program) -> MirModule {
             functions.push(lower_function(
                 program,
                 &qualified_name,
+                &program.module_name,
                 method.decl.receiver,
                 Some(trait_impl.for_type.clone()),
                 &method.decl,
@@ -358,8 +373,104 @@ fn push_imported_module_functions(
     functions: &mut Vec<MirFunction>,
     seen: &mut BTreeSet<String>,
 ) {
-    for namespace in program.imported_modules.values() {
+    for namespace in program.module_registry.values() {
         push_imported_module_functions_from_namespace(program, namespace, functions, seen);
+    }
+}
+
+fn push_imported_module_classes(
+    program: &Program,
+    classes: &mut Vec<MirClass>,
+    functions: &mut Vec<MirFunction>,
+    seen_function_names: &mut BTreeSet<String>,
+    seen_class_names: &mut BTreeSet<String>,
+) {
+    for namespace in program.module_registry.values() {
+        push_imported_module_classes_from_namespace(
+            program,
+            namespace,
+            classes,
+            functions,
+            seen_function_names,
+            seen_class_names,
+        );
+    }
+}
+
+fn push_imported_module_classes_from_namespace(
+    program: &Program,
+    namespace: &ModuleNamespace,
+    classes: &mut Vec<MirClass>,
+    functions: &mut Vec<MirFunction>,
+    seen_function_names: &mut BTreeSet<String>,
+    seen_class_names: &mut BTreeSet<String>,
+) {
+    for class in namespace.classes.values() {
+        if !seen_class_names.insert(class.decl.name.clone()) {
+            continue;
+        }
+        let fields = class
+            .decl
+            .fields
+            .iter()
+            .map(|field| MirClassField {
+                name: field.name.clone(),
+                ty: class
+                    .fields
+                    .get(&field.name)
+                    .expect("imported class field type should exist during MIR lowering")
+                    .ty
+                    .clone(),
+            })
+            .collect::<Vec<_>>();
+        let mut methods = Vec::new();
+        for method in class.methods.values() {
+            let qualified_name = format!(
+                "{}::{}.{}",
+                namespace.path, class.decl.name, method.decl.name
+            );
+            if seen_function_names.insert(qualified_name.clone()) {
+                functions.push(lower_function(
+                    program,
+                    &qualified_name,
+                    &class.module_name,
+                    method.decl.receiver,
+                    Some(Type::Named(
+                        class.decl.name.clone(),
+                        class
+                            .decl
+                            .type_params
+                            .iter()
+                            .cloned()
+                            .map(Type::TypeParam)
+                            .collect(),
+                    )),
+                    &method.decl,
+                    &method.signature.params,
+                    &method.signature.return_type,
+                ));
+            }
+            methods.push(MirMethod {
+                name: method.decl.name.clone(),
+                function_name: qualified_name,
+                receiver: method.decl.receiver.map(lower_receiver_kind),
+            });
+        }
+        classes.push(MirClass {
+            name: class.decl.name.clone(),
+            fields,
+            methods,
+        });
+    }
+    for child in namespace.modules.values() {
+        push_imported_module_classes_from_namespace(
+            program,
+            child,
+            classes,
+            functions,
+            seen_function_names,
+            seen_class_names,
+        );
     }
 }
 
@@ -375,6 +486,7 @@ fn push_imported_module_functions_from_namespace(
             functions.push(lower_function(
                 program,
                 &qualified_name,
+                &function.module_name,
                 function.decl.receiver,
                 None,
                 &function.decl,
@@ -403,6 +515,7 @@ fn lower_receiver_kind(receiver: ReceiverKind) -> MirReceiverKind {
 fn lower_function(
     program: &Program,
     name: &str,
+    module_name: &str,
     receiver: Option<ReceiverKind>,
     receiver_type: Option<Type>,
     function: &crate::ast::FunctionDecl,
@@ -420,7 +533,7 @@ fn lower_function(
         })
         .collect::<Vec<_>>();
 
-    let mut lowerer = Lowerer::new(program, name);
+    let mut lowerer = Lowerer::new(program, name, module_name);
     if let Some(receiver_type) = receiver_type {
         lowerer
             .local_types
@@ -440,7 +553,7 @@ fn lower_function(
 }
 
 fn lower_top_level(program: &Program) -> MirFunction {
-    let mut lowerer = Lowerer::new(program, "__script");
+    let mut lowerer = Lowerer::new(program, "__script", &program.module_name);
     lowerer.lower_stmts(&program.top_level_stmts);
     lowerer.finish(MirFunctionSpec {
         name: "__script".to_string(),
@@ -462,6 +575,7 @@ struct MirFunctionSpec {
 struct Lowerer<'a> {
     program: &'a Program,
     function_name: &'a str,
+    module_name: &'a str,
     blocks: Vec<BasicBlockBuilder>,
     current_block: usize,
     temp_counter: usize,
@@ -484,10 +598,11 @@ struct BasicBlockBuilder {
 }
 
 impl<'a> Lowerer<'a> {
-    fn new(program: &'a Program, function_name: &'a str) -> Self {
+    fn new(program: &'a Program, function_name: &'a str, module_name: &'a str) -> Self {
         Self {
             program,
             function_name,
+            module_name,
             blocks: vec![BasicBlockBuilder {
                 label: "entry".to_string(),
                 instructions: Vec::new(),
@@ -503,6 +618,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn module_namespace(&self, path: &str) -> Option<&ModuleNamespace> {
+        if let Some(namespace) = self.program.module_registry.get(path) {
+            return Some(namespace);
+        }
         let mut segments = path.split('.');
         let first = segments.next()?;
         let mut namespace = self.program.imported_modules.get(first)?;
@@ -512,12 +630,62 @@ impl<'a> Lowerer<'a> {
         Some(namespace)
     }
 
+    fn current_module_namespace(&self) -> Option<&ModuleNamespace> {
+        if self.module_name == self.program.module_name {
+            None
+        } else {
+            self.program.module_registry.get(self.module_name)
+        }
+    }
+
+    fn resolve_function_info(&self, name: &str) -> Option<&crate::sema::FunctionInfo> {
+        self.current_module_namespace()
+            .and_then(|namespace| namespace.all_functions.get(name))
+            .or_else(|| self.program.functions.get(name))
+    }
+
+    fn resolve_class_info(&self, name: &str) -> Option<&crate::sema::ClassInfo> {
+        if let Some((module_path, item_name)) = name.rsplit_once('.') {
+            if let Some(namespace) = self.module_namespace(module_path) {
+                if let Some(class_info) = namespace
+                    .classes
+                    .get(item_name)
+                    .or_else(|| namespace.all_classes.get(item_name))
+                {
+                    return Some(class_info);
+                }
+            }
+        }
+        self.current_module_namespace()
+            .and_then(|namespace| namespace.all_classes.get(name))
+            .or_else(|| self.program.classes.get(name))
+            .or_else(|| self.find_imported_class_info(name))
+    }
+
+    fn resolve_enum_info(&self, name: &str) -> Option<&crate::sema::EnumInfo> {
+        if let Some((module_path, item_name)) = name.rsplit_once('.') {
+            if let Some(namespace) = self.module_namespace(module_path) {
+                if let Some(enum_info) = namespace
+                    .enums
+                    .get(item_name)
+                    .or_else(|| namespace.all_enums.get(item_name))
+                {
+                    return Some(enum_info);
+                }
+            }
+        }
+        self.current_module_namespace()
+            .and_then(|namespace| namespace.all_enums.get(name))
+            .or_else(|| self.program.enums.get(name))
+            .or_else(|| self.find_imported_enum_info(name))
+    }
+
     fn infer_module_path(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::Name(name) => self
-                .program
-                .imported_modules
-                .get(name)
+                .current_module_namespace()
+                .and_then(|namespace| namespace.imported_modules.get(name))
+                .or_else(|| self.program.imported_modules.get(name))
                 .map(|namespace| namespace.path.clone()),
             ExprKind::Group(inner) => self.infer_module_path(inner),
             ExprKind::Member { object, field } => {
@@ -529,6 +697,90 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn qualified_module_item(&self, expr: &Expr) -> Option<(String, String)> {
+        match &expr.kind {
+            ExprKind::Member { object, field } => {
+                self.infer_module_path(object).map(|path| (path, field.clone()))
+            }
+            ExprKind::Group(inner) => self.qualified_module_item(inner),
+            _ => None,
+        }
+    }
+
+    fn find_class_in_modules<'b>(
+        modules: &'b BTreeMap<String, ModuleNamespace>,
+        name: &str,
+        found: &mut Option<&'b crate::sema::ClassInfo>,
+        ambiguous: &mut bool,
+    ) {
+        for namespace in modules.values() {
+            if let Some(class_info) = namespace
+                .classes
+                .get(name)
+                .or_else(|| namespace.all_classes.get(name))
+            {
+                if found.is_some() {
+                    *ambiguous = true;
+                } else {
+                    *found = Some(class_info);
+                }
+            }
+            Self::find_class_in_modules(&namespace.modules, name, found, ambiguous);
+        }
+    }
+
+    fn find_enum_in_modules<'b>(
+        modules: &'b BTreeMap<String, ModuleNamespace>,
+        name: &str,
+        found: &mut Option<&'b crate::sema::EnumInfo>,
+        ambiguous: &mut bool,
+    ) {
+        for namespace in modules.values() {
+            if let Some(enum_info) = namespace
+                .enums
+                .get(name)
+                .or_else(|| namespace.all_enums.get(name))
+            {
+                if found.is_some() {
+                    *ambiguous = true;
+                } else {
+                    *found = Some(enum_info);
+                }
+            }
+            Self::find_enum_in_modules(&namespace.modules, name, found, ambiguous);
+        }
+    }
+
+    fn find_imported_class_info(&self, name: &str) -> Option<&crate::sema::ClassInfo> {
+        let modules = self
+            .current_module_namespace()
+            .map(|namespace| &namespace.imported_modules)
+            .unwrap_or(&self.program.imported_modules);
+        let mut found = None;
+        let mut ambiguous = false;
+        Self::find_class_in_modules(modules, name, &mut found, &mut ambiguous);
+        if ambiguous {
+            None
+        } else {
+            found
+        }
+    }
+
+    fn find_imported_enum_info(&self, name: &str) -> Option<&crate::sema::EnumInfo> {
+        let modules = self
+            .current_module_namespace()
+            .map(|namespace| &namespace.imported_modules)
+            .unwrap_or(&self.program.imported_modules);
+        let mut found = None;
+        let mut ambiguous = false;
+        Self::find_enum_in_modules(modules, name, &mut found, &mut ambiguous);
+        if ambiguous {
+            None
+        } else {
+            found
+        }
+    }
+
     fn finish(mut self, spec: MirFunctionSpec) -> MirFunction {
         if self.blocks[self.current_block].terminator.is_none() {
             self.blocks[self.current_block].terminator =
@@ -537,6 +789,7 @@ impl<'a> Lowerer<'a> {
 
         MirFunction {
             name: spec.name,
+            module_name: self.module_name.to_string(),
             receiver: spec.receiver,
             params: spec.params,
             local_types: self
@@ -767,7 +1020,11 @@ impl<'a> Lowerer<'a> {
                     arm_block,
                     match &arm.pattern {
                         Pattern::Variant(pattern) => MirMatchArm {
-                            enum_name: Some(pattern.enum_name.clone()),
+                            enum_name: Some(
+                                self.resolve_enum_info(&pattern.enum_name)
+                                    .map(|enum_info| enum_info.decl.name.clone())
+                                    .unwrap_or_else(|| pattern.enum_name.clone()),
+                            ),
                             variant_name: Some(pattern.variant_name.clone()),
                             wildcard: false,
                             label: self.label(arm_block),
@@ -989,6 +1246,22 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Member { object, field } => {
+                if let Some((module_path, enum_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(enum_info) = namespace.enums.get(&enum_name).cloned() {
+                            let temp = self.new_temp_for_expr(expr);
+                            self.emit(Instruction::Assign {
+                                target: temp.clone(),
+                                value: Rvalue::EnumVariant {
+                                    enum_name: enum_info.decl.name.clone(),
+                                    variant_name: field.clone(),
+                                    payload: None,
+                                },
+                            });
+                            return Operand::Place(temp);
+                        }
+                    }
+                }
                 if let ExprKind::Name(enum_name) = &object.kind {
                     if is_known_enum_name(self.program, enum_name) {
                         let temp = self.new_temp_for_expr(expr);
@@ -1095,12 +1368,11 @@ impl<'a> Lowerer<'a> {
         let temp = self.new_temp_for_expr(expr);
 
         match &callee.kind {
-            ExprKind::Name(name) if self.program.classes.contains_key(name) => {
+            ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
                 let class = self
-                    .program
-                    .classes
-                    .get(name)
-                    .expect("class should exist during MIR lowering");
+                    .resolve_class_info(name)
+                    .expect("class should exist during MIR lowering")
+                    .clone();
                 let fields = class
                     .decl
                     .fields
@@ -1131,6 +1403,50 @@ impl<'a> Lowerer<'a> {
                 });
             }
             ExprKind::Member { object, field } => {
+                if let Some((module_path, item_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(class) = namespace.classes.get(&item_name).cloned() {
+                            if class
+                                .methods
+                                .get(field)
+                                .is_some_and(|method| method.decl.receiver.is_none())
+                            {
+                                let method = class.methods.get(field).unwrap();
+                                let lowered_args = self.lower_user_args(
+                                    &format!("method `{}`", field),
+                                    &method.decl.params,
+                                    args,
+                                    callee.span,
+                                );
+                                self.emit(Instruction::Assign {
+                                    target: temp.clone(),
+                                    value: Rvalue::Call {
+                                        callee: CallTarget::Name(format!(
+                                            "{}.{}",
+                                            class.decl.name, field
+                                        )),
+                                        args: lowered_args,
+                                    },
+                                });
+                                return Operand::Place(temp);
+                            }
+                        }
+                        if let Some(enum_info) = namespace.enums.get(&item_name).cloned() {
+                            let payload = args
+                                .first()
+                                .map(|argument| self.lower_expr(&argument.value));
+                            self.emit(Instruction::Assign {
+                                target: temp.clone(),
+                                value: Rvalue::EnumVariant {
+                                    enum_name: enum_info.decl.name.clone(),
+                                    variant_name: field.clone(),
+                                    payload,
+                                },
+                            });
+                            return Operand::Place(temp);
+                        }
+                    }
+                }
                 if let Some(module_path) = self.infer_module_path(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(function) = namespace.functions.get(field).cloned() {
@@ -1152,6 +1468,37 @@ impl<'a> Lowerer<'a> {
                             });
                             return Operand::Place(temp);
                         }
+                        if let Some(class) = namespace.classes.get(field).cloned() {
+                            let fields = class
+                                .decl
+                                .fields
+                                .iter()
+                                .filter_map(|field_decl| {
+                                    if let Some(argument) = args.iter().find(|argument| {
+                                        argument.name.as_deref()
+                                            == Some(field_decl.name.as_str())
+                                    }) {
+                                        Some(MirFieldInit {
+                                            name: field_decl.name.clone(),
+                                            value: self.lower_expr(&argument.value),
+                                        })
+                                    } else {
+                                        field_decl.default.as_ref().map(|default| MirFieldInit {
+                                            name: field_decl.name.clone(),
+                                            value: self.lower_expr(default),
+                                        })
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+                            self.emit(Instruction::Assign {
+                                target: temp.clone(),
+                                value: Rvalue::Construct {
+                                    class_name: class.decl.name.clone(),
+                                    fields,
+                                },
+                            });
+                            return Operand::Place(temp);
+                        }
                     }
                 }
 
@@ -1161,19 +1508,17 @@ impl<'a> Lowerer<'a> {
                         _ => panic!("task-group spawn should lower from a named function target"),
                     };
                     let group = self.lower_expr(object);
-                    let lowered_args = self
-                        .program
-                        .functions
-                        .get(&function)
-                        .map(|function_info| {
+                    let lowered_args =
+                        if let Some(function_info) = self.resolve_function_info(&function).cloned() {
                             self.lower_user_args(
                                 &format!("function `{}`", function),
                                 &function_info.decl.params,
                                 &args[1..],
                                 callee.span,
                             )
-                        })
-                        .unwrap_or_else(|| self.lower_args(&args[1..]));
+                        } else {
+                            self.lower_args(&args[1..])
+                        };
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
                         value: Rvalue::Spawn {
@@ -1187,7 +1532,7 @@ impl<'a> Lowerer<'a> {
                 }
 
                 if let ExprKind::Name(class_name) = &object.kind {
-                    if let Some(class) = self.program.classes.get(class_name) {
+                    if let Some(class) = self.resolve_class_info(class_name).cloned() {
                         if class
                             .methods
                             .get(field)
@@ -1213,7 +1558,9 @@ impl<'a> Lowerer<'a> {
                 }
 
                 if let ExprKind::Name(enum_name) = &object.kind {
-                    if is_known_enum_name(self.program, enum_name) {
+                    if is_known_enum_name(self.program, enum_name)
+                        || self.resolve_enum_info(enum_name).is_some()
+                    {
                         let payload = args
                             .first()
                             .map(|argument| self.lower_expr(&argument.value));
@@ -1245,23 +1592,31 @@ impl<'a> Lowerer<'a> {
                 });
             }
             ExprKind::Name(name) => {
-                let lowered_args = self
-                    .program
-                    .functions
-                    .get(name)
-                    .map(|function_info| {
+                let lowered_args =
+                    if let Some(function_info) = self.resolve_function_info(name).cloned() {
                         self.lower_user_args(
                             &format!("function `{}`", name),
                             &function_info.decl.params,
                             args,
                             callee.span,
                         )
-                    })
-                    .unwrap_or_else(|| self.lower_args(args));
+                    } else {
+                        self.lower_args(args)
+                    };
+                let callee_name = if self.program.functions.contains_key(name) {
+                    name.clone()
+                } else if self
+                    .current_module_namespace()
+                    .is_some_and(|namespace| namespace.all_functions.contains_key(name))
+                {
+                    imported_module_function_name(self.module_name, name)
+                } else {
+                    name.clone()
+                };
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::Call {
-                        callee: CallTarget::Name(name.clone()),
+                        callee: CallTarget::Name(callee_name),
                         args: lowered_args,
                     },
                 });
@@ -1294,7 +1649,7 @@ impl<'a> Lowerer<'a> {
         };
 
         if let Type::Named(class_name, _) = &receiver_type {
-            if let Some(class) = self.program.classes.get(class_name) {
+            if let Some(class) = self.resolve_class_info(class_name).cloned() {
                 if let Some(method) = class
                     .methods
                     .get(field)
@@ -1393,12 +1748,10 @@ impl<'a> Lowerer<'a> {
                         .get(name)
                         .map(|namespace| Type::Module(namespace.path.clone()))
                 })
-                .or_else(|| self.program.classes.get(name).map(|_| Type::named(name)))
-                .or_else(|| self.program.enums.get(name).map(|_| Type::named(name)))
+                .or_else(|| self.resolve_class_info(name).map(|_| Type::named(name)))
+                .or_else(|| self.resolve_enum_info(name).map(|_| Type::named(name)))
                 .or_else(|| {
-                    self.program
-                        .functions
-                        .get(name)
+                    self.resolve_function_info(name)
                         .map(|function| function.signature.return_type.clone())
                 }),
             ExprKind::Group(inner) => self.infer_expr_type(inner),
@@ -1425,17 +1778,27 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Name(name) => self
-                    .program
-                    .classes
-                    .get(name)
+                    .resolve_class_info(name)
                     .map(|_| Type::named(name))
                     .or_else(|| {
-                        self.program
-                            .functions
-                            .get(name)
+                        self.resolve_function_info(name)
                             .map(|function| function.signature.return_type.clone())
                     }),
                 ExprKind::Member { object, field } => {
+                    if let Some((module_path, item_name)) = self.qualified_module_item(object) {
+                        if let Some(namespace) = self.module_namespace(&module_path) {
+                            if let Some(class) = namespace.classes.get(&item_name) {
+                                if let Some(method) = class.methods.get(field) {
+                                    return Some(method.signature.return_type.clone());
+                                }
+                            }
+                            if let Some(enum_info) = namespace.enums.get(&item_name) {
+                                if enum_info.variants.contains_key(field) {
+                                    return Some(Type::named(enum_info.decl.name.clone()));
+                                }
+                            }
+                        }
+                    }
                     if let Some(module_path) = self.infer_module_path(object) {
                         if let Some(namespace) = self.module_namespace(&module_path) {
                             if let Some(child) = namespace.modules.get(field) {
@@ -1444,11 +1807,17 @@ impl<'a> Lowerer<'a> {
                             if let Some(function) = namespace.functions.get(field) {
                                 return Some(function.signature.return_type.clone());
                             }
+                            if let Some(class) = namespace.classes.get(field) {
+                                return Some(Type::named(class.decl.name.clone()));
+                            }
+                            if let Some(enum_info) = namespace.enums.get(field) {
+                                return Some(Type::named(enum_info.decl.name.clone()));
+                            }
                         }
                     }
                     let receiver_type = self.infer_expr_type(object)?;
                     if let Type::Named(class_name, _) = &receiver_type {
-                        if let Some(class) = self.program.classes.get(class_name) {
+                        if let Some(class) = self.resolve_class_info(class_name) {
                             if let Some(method) = class.methods.get(field) {
                                 return Some(method.signature.return_type.clone());
                             }
@@ -1468,11 +1837,20 @@ impl<'a> Lowerer<'a> {
                 _ => None,
             },
             ExprKind::Member { object, field } => {
+                if let Some((module_path, item_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(enum_info) = namespace.enums.get(&item_name) {
+                            if enum_info.variants.contains_key(field) {
+                                return Some(Type::named(enum_info.decl.name.clone()));
+                            }
+                        }
+                    }
+                }
                 let receiver_type = self.infer_expr_type(object)?;
                 let Type::Named(class_name, _) = receiver_type else {
                     return None;
                 };
-                let class = self.program.classes.get(&class_name)?;
+                let class = self.resolve_class_info(&class_name)?;
                 class.fields.get(field).map(|field| field.ty.clone())
             }
             ExprKind::Binary { left, right, .. } => {

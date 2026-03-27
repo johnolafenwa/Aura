@@ -13,6 +13,7 @@ use crate::interpreter::{
     cast_numeric_value, CancellationContext, ChannelValue, EnumVariantValue, InstanceValue,
     RangeValue, RunOutput, TaskGroupValue, TaskValue, TryRecvResult, Value,
 };
+use crate::integer::IntegerValue;
 use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirFunction, MirMethod, MirModule, MirParam,
     MirReceiverKind, MirSelectKind, MirTraitImpl, Operand, Rvalue, Terminator,
@@ -64,7 +65,7 @@ fn run_serialized_mir_entrypoint(mir_json: &[u8], source_path: &str, source: &st
                 return 1;
             }
             if let Value::Int(code) = output.value {
-                return code as i32;
+                return code.as_i128().unwrap_or(0) as i32;
             }
             0
         }
@@ -356,12 +357,11 @@ impl MirRuntime {
         ty: &Type,
         span: Option<crate::diag::Span>,
     ) -> Result<()> {
-        if let Some((min, max)) = crate::sema::integer_type_bounds(ty) {
+        if let Some(bounds) = crate::sema::integer_type_bounds(ty) {
             let Value::Int(value) = value else {
                 return Ok(());
             };
-            let value = *value as i128;
-            if value < min || value > max {
+            if !value.fits_bounds(bounds) {
                 let message = format!("integer value `{}` does not fit in `{}`", value, ty);
                 return Err(match span {
                     Some(span) => Diagnostic::at(span, message),
@@ -370,6 +370,39 @@ impl MirRuntime {
             }
         }
         Ok(())
+    }
+
+    fn coerce_value_to_type(
+        &self,
+        value: Value,
+        ty: &Type,
+        span: Option<crate::diag::Span>,
+    ) -> Result<Value> {
+        let coerced = match (&value, ty) {
+            (Value::Int(_), Type::Named(name, _))
+                if name.starts_with("int") || name.starts_with("uint") =>
+            {
+                value
+            }
+            (Value::Float(_), Type::Named(name, _))
+                if name == "float32" || name == "float64" =>
+            {
+                cast_numeric_value(value, ty, span)?
+            }
+            (Value::Int(_), Type::Named(name, _))
+                if name == "float32" || name == "float64" =>
+            {
+                cast_numeric_value(value, ty, span)?
+            }
+            (Value::Float(_), Type::Named(name, _))
+                if name.starts_with("int") || name.starts_with("uint") =>
+            {
+                cast_numeric_value(value, ty, span)?
+            }
+            _ => value,
+        };
+        self.validate_value_fits_type(&coerced, ty, span)?;
+        Ok(coerced)
     }
 
     fn resolve_place_type(&self, place: &str, env: &Env) -> Option<Type> {
@@ -420,8 +453,8 @@ impl MirRuntime {
 
         let bound_args = bind_args(&function.params, args)?;
         for (param, argument) in function.params.iter().zip(bound_args.iter()) {
-            self.validate_value_fits_type(&argument.value, &param.ty, None)?;
-            env.define_typed(&param.name, param.ty.clone(), argument.value.clone());
+            let value = self.coerce_value_to_type(argument.value.clone(), &param.ty, None)?;
+            env.define_typed(&param.name, param.ty.clone(), value);
         }
 
         let value = self.execute_function(function, &mut env)?;
@@ -501,10 +534,13 @@ impl MirRuntime {
                         _ => None,
                     };
                     if let Some(target_ty) = self.resolve_place_type(target, env) {
-                        self.validate_value_fits_type(&evaluated, &target_ty, span)?;
+                        let evaluated =
+                            self.coerce_value_to_type(evaluated, &target_ty, span)?;
                         if !target.contains('.') {
                             env.set_place_type(target, target_ty);
                         }
+                        env.write_place(target, evaluated)?;
+                        return Ok(None);
                     } else if !target.contains('.') {
                         if let Some(inferred_ty) = Self::infer_value_type(&evaluated) {
                             env.set_place_type(target, inferred_ty);
@@ -577,7 +613,7 @@ impl MirRuntime {
                 if *next < range.end {
                     let current = *next;
                     *next += 1;
-                    env.write_place(binding, Value::Int(current))?;
+                    env.write_place(binding, Value::Int(IntegerValue::from_signed(current)))?;
                     Ok(BlockOutcome::Goto(body_label.clone()))
                 } else {
                     loop_state.remove(block_label);
@@ -704,7 +740,11 @@ impl MirRuntime {
                 let value = self.evaluate_operand(value, env)?;
                 let result = match (op, value) {
                     (UnaryOp::Not, Value::Bool(value)) => Value::Bool(!value),
-                    (UnaryOp::Neg, Value::Int(value)) => Value::Int(-value),
+                    (UnaryOp::Neg, Value::Int(value)) => Value::Int(
+                        value
+                            .checked_neg()
+                            .ok_or_else(|| Diagnostic::new("integer overflow"))?,
+                    ),
                     (UnaryOp::Neg, Value::Float(value)) => Value::Float(-value),
                     (UnaryOp::Not, other) => {
                         return Err(Diagnostic::new(format!(
@@ -891,7 +931,12 @@ impl MirRuntime {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(&["duration"], values)?;
                     let duration = match bound[0].value.clone() {
-                        Value::Int(duration) | Value::Duration(duration) => duration,
+                        Value::Int(duration) => duration.as_i128().ok_or_else(|| {
+                            Diagnostic::new(
+                                "`after(...)` duration must fit in signed timer range",
+                            )
+                        })?,
+                        Value::Duration(duration) => duration,
                         _ => {
                             return Err(Diagnostic::new(
                                 "`after(...)` expects a duration value in MIR runtime",
@@ -905,7 +950,12 @@ impl MirRuntime {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(&["duration"], values)?;
                     let duration = match bound[0].value.clone() {
-                        Value::Int(duration) | Value::Duration(duration) => duration,
+                        Value::Int(duration) => duration.as_i128().ok_or_else(|| {
+                            Diagnostic::new(
+                                "`sleep(...)` duration must fit in signed timer range",
+                            )
+                        })?,
+                        Value::Duration(duration) => duration,
                         _ => {
                             return Err(Diagnostic::new(
                                 "`sleep(...)` expects a duration value in MIR runtime",
@@ -1037,11 +1087,58 @@ impl MirRuntime {
                         )?;
                         Ok(outcome.value)
                     }
-                    _ => Err(Diagnostic::new(format!(
-                        "unsupported MIR member call `{}` on `{}`",
-                        field,
-                        receiver.render()
-                    ))),
+                    other => {
+                        let resolved_receiver_ty = receiver_place
+                            .as_ref()
+                            .and_then(|place| self.resolve_place_type(place, env))
+                            .or_else(|| Self::infer_value_type(other))
+                            .filter(|ty| !matches!(ty, Type::TypeParam(_)));
+                        if let Some(resolved_receiver_ty) = resolved_receiver_ty {
+                            if let Some(method) =
+                                self.find_trait_impl_method(&resolved_receiver_ty, field).cloned()
+                            {
+                                let function = self
+                                    .functions
+                                    .get(&method.function_name)
+                                    .cloned()
+                                    .ok_or_else(|| {
+                                        Diagnostic::new(format!(
+                                            "unknown MIR method body `{}`",
+                                            method.function_name
+                                        ))
+                                    })?;
+                                let evaluated_args = evaluate_named_args(args, env)?;
+                                let outcome = self.call_function(
+                                    &function,
+                                    Some(receiver.clone()),
+                                    evaluated_args.clone(),
+                                )?;
+                                if method.receiver == Some(MirReceiverKind::BorrowMut) {
+                                    let updated = outcome.updated_receiver.ok_or_else(|| {
+                                        Diagnostic::new(format!(
+                                            "mutable MIR method `{}` did not return an updated receiver",
+                                            field
+                                        ))
+                                    })?;
+                                    if let Some(place) = receiver_place {
+                                        env.write_place(place, updated)?;
+                                    }
+                                }
+                                self.apply_borrowed_param_writebacks(
+                                    &function.params,
+                                    &evaluated_args,
+                                    &outcome.updated_params,
+                                    env,
+                                )?;
+                                return Ok(outcome.value);
+                            }
+                        }
+                        Err(Diagnostic::new(format!(
+                            "unsupported MIR member call `{}` on `{}`",
+                            field,
+                            receiver.render()
+                        )))
+                    }
                 }
             }
         }
@@ -1300,7 +1397,11 @@ impl MirRuntime {
                 MirSelectKind::After { duration } => {
                     let value = self.evaluate_operand(duration, env)?;
                     let millis = match value {
-                        Value::Int(value) => value,
+                        Value::Int(value) => value.as_i128().ok_or_else(|| {
+                            Diagnostic::new(
+                                "MIR `after(...)` duration must fit in signed timer range",
+                            )
+                        })?,
                         Value::Duration(value) => value,
                         other => {
                             return Err(Diagnostic::new(format!(
@@ -1385,7 +1486,7 @@ impl MirRuntime {
     fn evaluate_operand(&self, operand: &Operand, env: &Env) -> Result<Value> {
         match operand {
             Operand::Place(place) => env.read_place(place),
-            Operand::Int(value) => Ok(Value::Int(*value)),
+            Operand::Int(value) => Ok(Value::Int(IntegerValue::from_literal(*value))),
             Operand::Duration(value) => Ok(Value::Duration(*value)),
             Operand::Float(value) => Ok(Value::Float(*value)),
             Operand::Bool(value) => Ok(Value::Bool(*value)),
@@ -1462,7 +1563,7 @@ impl MirRuntime {
                 )),
             },
             BinaryOp::Div => match (left, right) {
-                (Value::Int(_left), Value::Int(0)) => Err(span.map_or_else(
+                (Value::Int(_left), Value::Int(right)) if right.is_zero() => Err(span.map_or_else(
                     || Diagnostic::new("division by zero"),
                     |span| Diagnostic::at(span, "division by zero"),
                 )),
@@ -1480,7 +1581,7 @@ impl MirRuntime {
                 )),
             },
             BinaryOp::Mod => match (left, right) {
-                (Value::Int(_left), Value::Int(0)) => Err(span.map_or_else(
+                (Value::Int(_left), Value::Int(right)) if right.is_zero() => Err(span.map_or_else(
                     || Diagnostic::new("division by zero"),
                     |span| Diagnostic::at(span, "division by zero"),
                 )),
@@ -1575,7 +1676,7 @@ fn evaluate_named_args(args: &[MirArg], env: &Env) -> Result<Vec<EvaluatedMirArg
         .map(|arg| {
             let value = match &arg.value {
                 Operand::Place(place) => env.read_place(place)?,
-                Operand::Int(value) => Value::Int(*value),
+                Operand::Int(value) => Value::Int(IntegerValue::from_literal(*value)),
                 Operand::Duration(value) => Value::Duration(*value),
                 Operand::Float(value) => Value::Float(*value),
                 Operand::Bool(value) => Value::Bool(*value),
@@ -1684,17 +1785,24 @@ fn build_range(args: Vec<EvaluatedMirArg>) -> Result<Value> {
 
     let (start, stop) = match (start, stop) {
         (Some(start), Some(stop)) => (start, stop),
-        (None, Some(stop)) => (0, stop),
+        (None, Some(stop)) => (IntegerValue::zero(), stop),
         _ => return Err(Diagnostic::new("`range` requires `stop` in MIR runtime")),
     };
 
-    Ok(Value::Range(RangeValue { start, end: stop }))
+    Ok(Value::Range(RangeValue {
+        start: start.as_i128().ok_or_else(|| {
+            Diagnostic::new("`range` start must fit in signed index space in MIR runtime")
+        })?,
+        end: stop.as_i128().ok_or_else(|| {
+            Diagnostic::new("`range` stop must fit in signed index space in MIR runtime")
+        })?,
+    }))
 }
 
 fn eval_ordering(
     left: Value,
     right: Value,
-    compare_int: impl FnOnce(i128, i128) -> bool + Copy,
+    compare_int: impl FnOnce(IntegerValue, IntegerValue) -> bool + Copy,
     compare_float: impl FnOnce(f64, f64) -> bool + Copy,
 ) -> Result<Value> {
     match (left, right) {

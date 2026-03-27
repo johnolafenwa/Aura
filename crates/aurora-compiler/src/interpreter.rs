@@ -13,11 +13,12 @@ use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinFunction, BuiltinMember, CallConvention,
 };
 use crate::diag::{Diagnostic, Result, Span};
+use crate::integer::{IntegerBounds, IntegerValue};
 use crate::sema::{ModuleNamespace, Program, Type};
 
 #[derive(Clone, Debug)]
 pub enum Value {
-    Int(i128),
+    Int(IntegerValue),
     Float(f64),
     Bool(bool),
     String(String),
@@ -117,7 +118,7 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
 
     fn render_source_type(value: &Value) -> String {
         match value {
-            Value::Int(_) => "int32".to_string(),
+            Value::Int(_) => "integer".to_string(),
             Value::Float(_) => "float64".to_string(),
             Value::Bool(_) => "bool".to_string(),
             Value::String(_) => "String".to_string(),
@@ -149,8 +150,8 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
 
     match value {
         Value::Int(value) => {
-            if let Some((min, max)) = crate::sema::integer_type_bounds(target) {
-                if value < min || value > max {
+            if let Some(bounds) = crate::sema::integer_type_bounds(target) {
+                if !value.fits_bounds(bounds) {
                     return Err(render_target_error(
                         span,
                         format!("integer value `{}` does not fit in `{}`", value, target),
@@ -158,10 +159,10 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
                 }
                 return Ok(Value::Int(value));
             }
-            cast_float(value as f64)
+            cast_float(value.to_f64())
         }
         Value::Float(value) => {
-            if crate::sema::integer_type_bounds(target).is_some() {
+            if let Some(bounds) = crate::sema::integer_type_bounds(target) {
                 if !value.is_finite() {
                     return Err(render_target_error(
                         span,
@@ -169,15 +170,27 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
                     ));
                 }
                 let truncated = value.trunc();
-                if truncated < i128::MIN as f64 || truncated > i128::MAX as f64 {
-                    return Err(render_target_error(
-                        span,
-                        format!("integer value `{}` does not fit in `{}`", truncated, target),
-                    ));
-                }
-                let coerced = truncated as i128;
-                let (min, max) = crate::sema::integer_type_bounds(target).unwrap();
-                if coerced < min || coerced > max {
+                let coerced = match bounds {
+                    IntegerBounds::Signed { min, max } => {
+                        if truncated < min as f64 || truncated > max as f64 {
+                            return Err(render_target_error(
+                                span,
+                                format!("integer value `{}` does not fit in `{}`", truncated, target),
+                            ));
+                        }
+                        IntegerValue::from_signed(truncated as i128)
+                    }
+                    IntegerBounds::Unsigned { max } => {
+                        if truncated < 0.0 || truncated > max as f64 {
+                            return Err(render_target_error(
+                                span,
+                                format!("integer value `{}` does not fit in `{}`", truncated, target),
+                            ));
+                        }
+                        IntegerValue::from_literal(truncated as u128)
+                    }
+                };
+                if !coerced.fits_bounds(bounds) {
                     return Err(render_target_error(
                         span,
                         format!("integer value `{}` does not fit in `{}`", coerced, target),
@@ -479,6 +492,7 @@ pub fn run(program: &Program) -> Result<RunOutput> {
         program: Arc::new(program.clone()),
         stdout: stdout.clone(),
         cancellation: CancellationContext::default(),
+        module_stack: Vec::new(),
     };
     let value = interpreter.run_main()?;
     let rendered_stdout = stdout.lock().unwrap().clone();
@@ -492,6 +506,7 @@ struct Interpreter {
     program: Arc<Program>,
     stdout: Arc<Mutex<String>>,
     cancellation: CancellationContext,
+    module_stack: Vec<String>,
 }
 
 struct CallOutcome {
@@ -580,7 +595,11 @@ impl Env {
 
 impl Interpreter {
     fn seed_imported_modules(&self, env: &mut Env) {
-        for (name, namespace) in &self.program.imported_modules {
+        self.seed_module_imports(env, &self.program.imported_modules);
+    }
+
+    fn seed_module_imports(&self, env: &mut Env, imported_modules: &BTreeMap<String, ModuleNamespace>) {
+        for (name, namespace) in imported_modules {
             env.define_typed(
                 name.clone(),
                 Type::Module(namespace.path.clone()),
@@ -591,7 +610,181 @@ impl Interpreter {
         }
     }
 
+    fn current_module_name(&self) -> &str {
+        self.module_stack
+            .last()
+            .map(String::as_str)
+            .unwrap_or(self.program.module_name.as_str())
+    }
+
+    fn current_module_namespace(&self) -> Option<&ModuleNamespace> {
+        let module_name = self.current_module_name();
+        if module_name == self.program.module_name {
+            None
+        } else {
+            self.program
+                .module_registry
+                .get(module_name)
+                .or_else(|| self.module_namespace(module_name))
+        }
+    }
+
+    fn resolve_function_info(&self, name: &str) -> Option<&crate::sema::FunctionInfo> {
+        self.current_module_namespace()
+            .and_then(|namespace| namespace.all_functions.get(name))
+            .or_else(|| self.program.functions.get(name))
+    }
+
+    fn infer_module_path(&self, expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Name(name) => self
+                .current_module_namespace()
+                .and_then(|namespace| namespace.imported_modules.get(name))
+                .or_else(|| self.program.imported_modules.get(name))
+                .map(|namespace| namespace.path.clone()),
+            ExprKind::Member { object, field } => {
+                let module_path = self.infer_module_path(object)?;
+                let namespace = self.module_namespace(&module_path)?;
+                namespace.modules.get(field).map(|child| child.path.clone())
+            }
+            ExprKind::Group(inner) => self.infer_module_path(inner),
+            _ => None,
+        }
+    }
+
+    fn qualified_module_item(&self, expr: &Expr) -> Option<(String, String)> {
+        match &expr.kind {
+            ExprKind::Member { object, field } => {
+                self.infer_module_path(object).map(|path| (path, field.clone()))
+            }
+            ExprKind::Group(inner) => self.qualified_module_item(inner),
+            _ => None,
+        }
+    }
+
+    fn find_class_in_modules<'b>(
+        modules: &'b BTreeMap<String, ModuleNamespace>,
+        name: &str,
+        found: &mut Option<&'b crate::sema::ClassInfo>,
+        ambiguous: &mut bool,
+    ) {
+        for namespace in modules.values() {
+            if let Some(class_info) = namespace
+                .classes
+                .get(name)
+                .or_else(|| namespace.all_classes.get(name))
+            {
+                if found.is_some() {
+                    *ambiguous = true;
+                } else {
+                    *found = Some(class_info);
+                }
+            }
+            Self::find_class_in_modules(&namespace.modules, name, found, ambiguous);
+        }
+    }
+
+    fn find_enum_in_modules<'b>(
+        modules: &'b BTreeMap<String, ModuleNamespace>,
+        name: &str,
+        found: &mut Option<&'b crate::sema::EnumInfo>,
+        ambiguous: &mut bool,
+    ) {
+        for namespace in modules.values() {
+            if let Some(enum_info) = namespace
+                .enums
+                .get(name)
+                .or_else(|| namespace.all_enums.get(name))
+            {
+                if found.is_some() {
+                    *ambiguous = true;
+                } else {
+                    *found = Some(enum_info);
+                }
+            }
+            Self::find_enum_in_modules(&namespace.modules, name, found, ambiguous);
+        }
+    }
+
+    fn resolve_class_info(&self, name: &str) -> Option<&crate::sema::ClassInfo> {
+        if let Some((module_path, item_name)) = name.rsplit_once('.') {
+            if let Some(namespace) = self.module_namespace(module_path) {
+                if let Some(class_info) = namespace
+                    .classes
+                    .get(item_name)
+                    .or_else(|| namespace.all_classes.get(item_name))
+                {
+                    return Some(class_info);
+                }
+            }
+        }
+        let imported_modules = self
+            .current_module_namespace()
+            .map(|namespace| &namespace.imported_modules)
+            .unwrap_or(&self.program.imported_modules);
+        let mut found = None;
+        let mut ambiguous = false;
+        Self::find_class_in_modules(imported_modules, name, &mut found, &mut ambiguous);
+        self.current_module_namespace()
+            .and_then(|namespace| namespace.all_classes.get(name))
+            .or_else(|| self.program.classes.get(name))
+            .or(if ambiguous { None } else { found })
+    }
+
+    fn resolve_enum_info(&self, name: &str) -> Option<&crate::sema::EnumInfo> {
+        if let Some((module_path, item_name)) = name.rsplit_once('.') {
+            if let Some(namespace) = self.module_namespace(module_path) {
+                if let Some(enum_info) = namespace
+                    .enums
+                    .get(item_name)
+                    .or_else(|| namespace.all_enums.get(item_name))
+                {
+                    return Some(enum_info);
+                }
+            }
+        }
+        let imported_modules = self
+            .current_module_namespace()
+            .map(|namespace| &namespace.imported_modules)
+            .unwrap_or(&self.program.imported_modules);
+        let mut found = None;
+        let mut ambiguous = false;
+        Self::find_enum_in_modules(imported_modules, name, &mut found, &mut ambiguous);
+        self.current_module_namespace()
+            .and_then(|namespace| namespace.all_enums.get(name))
+            .or_else(|| self.program.enums.get(name))
+            .or(if ambiguous { None } else { found })
+    }
+
+    fn coerce_value_to_type(
+        &self,
+        value: Value,
+        ty: &Type,
+        span: crate::diag::Span,
+    ) -> Result<Value> {
+        let coerced = match (&value, ty) {
+            (Value::Int(_), Type::Named(name, _)) if name.starts_with("int") || name.starts_with("uint") => {
+                value
+            }
+            (Value::Float(_), Type::Named(name, _)) if name == "float32" || name == "float64" => {
+                cast_numeric_value(value, ty, Some(span))?
+            }
+            (Value::Int(_), Type::Named(name, _)) if name == "float32" || name == "float64" => {
+                cast_numeric_value(value, ty, Some(span))?
+            }
+            (Value::Float(_), Type::Named(name, _)) if name.starts_with("int") || name.starts_with("uint") => {
+                cast_numeric_value(value, ty, Some(span))?
+            }
+            _ => value,
+        };
+        self.validate_value_fits_type(&coerced, ty, span)?;
+        Ok(coerced)
+    }
+
     fn module_namespace(&self, path: &str) -> Option<&ModuleNamespace> {
+        if let Some(namespace) = self.program.module_registry.get(path) {
+            return Some(namespace);
+        }
         let mut segments = path.split('.');
         let first = segments.next()?;
         let mut namespace = self.program.imported_modules.get(first)?;
@@ -618,7 +811,9 @@ impl Interpreter {
             ));
         }
 
-        Ok(self.call_function(&main_fn.decl, Vec::new())?.value)
+        Ok(self
+            .call_function(&main_fn.decl, &main_fn.module_name, Vec::new())?
+            .value)
     }
 
     fn lower_runtime_type(type_ref: &crate::ast::TypeRef) -> Type {
@@ -674,7 +869,22 @@ impl Interpreter {
             ExprKind::Name(name) => env
                 .get_type(name)
                 .cloned()
-                .or_else(|| env.get(name).and_then(Self::infer_value_type)),
+                .or_else(|| env.get(name).and_then(Self::infer_value_type))
+                .or_else(|| {
+                    self.current_module_namespace()
+                        .and_then(|namespace| namespace.all_functions.get(name))
+                        .map(|function| function.signature.return_type.clone())
+                })
+                .or_else(|| {
+                    self.current_module_namespace()
+                        .and_then(|namespace| namespace.all_classes.get(name))
+                        .map(|class| Type::named(class.decl.name.clone()))
+                })
+                .or_else(|| {
+                    self.current_module_namespace()
+                        .and_then(|namespace| namespace.all_enums.get(name))
+                        .map(|enum_info| Type::named(enum_info.decl.name.clone()))
+                }),
             ExprKind::Int(_) => Some(Type::named("int32")),
             ExprKind::DurationMillis(_) => Some(Type::named("Duration")),
             ExprKind::Float(_) => Some(Type::named("float64")),
@@ -717,6 +927,15 @@ impl Interpreter {
                 _ => self.infer_expr_type(left, env),
             },
             ExprKind::Member { object, field } => {
+                if let Some((module_path, item_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(enum_info) = namespace.enums.get(&item_name) {
+                            if enum_info.variants.contains_key(field) {
+                                return Some(Type::named(enum_info.decl.name.clone()));
+                            }
+                        }
+                    }
+                }
                 if let Some(Type::Named(class_name, class_args)) = self.infer_expr_type(object, env)
                 {
                     if class_name == "String" && class_args.is_empty() {
@@ -760,7 +979,7 @@ impl Interpreter {
                             _ => None,
                         };
                     }
-                    if let Some(class_info) = self.program.classes.get(&class_name) {
+                    if let Some(class_info) = self.resolve_class_info(&class_name) {
                         let substitutions = crate::sema::substitutions_from_decl_type_args(
                             &class_info.decl.type_params,
                             &class_args,
@@ -805,11 +1024,11 @@ impl Interpreter {
                         BuiltinFunction::Sleep => Some(Type::Unit),
                     };
                 }
-                if let Some(function) = self.program.functions.get(name) {
+                if let Some(function) = self.resolve_function_info(name) {
                     return Some(function.signature.return_type.clone());
                 }
-                if self.program.classes.contains_key(name) {
-                    return Some(Type::named(name));
+                if let Some(class_info) = self.resolve_class_info(name) {
+                    return Some(Type::named(class_info.decl.name.clone()));
                 }
                 None
             }
@@ -866,12 +1085,11 @@ impl Interpreter {
         ty: &Type,
         span: crate::diag::Span,
     ) -> Result<()> {
-        if let Some((min, max)) = crate::sema::integer_type_bounds(ty) {
+        if let Some(bounds) = crate::sema::integer_type_bounds(ty) {
             let Value::Int(value) = value else {
                 return Ok(());
             };
-            let value = *value as i128;
-            if value < min || value > max {
+            if !value.fits_bounds(bounds) {
                 return Err(Diagnostic::at(
                     span,
                     format!("integer value `{}` does not fit in `{}`", value, ty),
@@ -886,7 +1104,7 @@ impl Interpreter {
         self.seed_imported_modules(&mut env);
         let top_level_stmts = self.program.top_level_stmts.clone();
         match self.exec_block(&top_level_stmts, &mut env, false)? {
-            ExecFlow::Continue => Ok(Value::Int(0)),
+            ExecFlow::Continue => Ok(Value::Int(IntegerValue::zero())),
             ExecFlow::Return(_) => unreachable!("top-level return should be rejected in sema"),
             ExecFlow::Break | ExecFlow::ContinueLoop => {
                 unreachable!("top-level loop control should be rejected in sema")
@@ -894,60 +1112,79 @@ impl Interpreter {
         }
     }
 
-    fn call_function(&mut self, function: &FunctionDecl, args: Vec<Value>) -> Result<CallOutcome> {
-        let mut env = Env::with_root();
-        self.seed_imported_modules(&mut env);
-        let mut values = args.into_iter();
-        if function.receiver.is_some() {
-            let Some(receiver) = values.next() else {
-                return Err(Diagnostic::at(
-                    function.span,
-                    format!("method `{}` is missing its receiver", function.name),
-                ));
+    fn call_function(
+        &mut self,
+        function: &FunctionDecl,
+        module_name: &str,
+        args: Vec<Value>,
+    ) -> Result<CallOutcome> {
+        self.module_stack.push(module_name.to_string());
+        let result = (|| {
+            let mut env = Env::with_root();
+            if module_name == self.program.module_name {
+                self.seed_imported_modules(&mut env);
+            } else if let Some(namespace) = self
+                .program
+                .module_registry
+                .get(module_name)
+                .or_else(|| self.module_namespace(module_name))
+            {
+                self.seed_module_imports(&mut env, &namespace.imported_modules);
+            }
+            let mut values = args.into_iter();
+            if function.receiver.is_some() {
+                let Some(receiver) = values.next() else {
+                    return Err(Diagnostic::at(
+                        function.span,
+                        format!("method `{}` is missing its receiver", function.name),
+                    ));
+                };
+                let receiver_ty =
+                    Self::infer_value_type(&receiver).unwrap_or_else(|| Type::named("Unknown"));
+                env.define_typed("self".to_string(), receiver_ty, receiver);
+            }
+            for (param, value) in function.params.iter().zip(values) {
+                let ty = Self::lower_runtime_type(&param.ty);
+                let value = self.coerce_value_to_type(value, &ty, param.span)?;
+                env.define_typed(param.name.clone(), ty, value);
+            }
+
+            let value = match self.exec_block(&function.body, &mut env, false)? {
+                ExecFlow::Continue => Value::Unit,
+                ExecFlow::Return(value) => value,
+                ExecFlow::Break | ExecFlow::ContinueLoop => {
+                    unreachable!("loop control outside loop should be rejected in sema")
+                }
             };
-            let receiver_ty =
-                Self::infer_value_type(&receiver).unwrap_or_else(|| Type::named("Unknown"));
-            env.define_typed("self".to_string(), receiver_ty, receiver);
-        }
-        for (param, value) in function.params.iter().zip(values) {
-            let ty = Self::lower_runtime_type(&param.ty);
-            self.validate_value_fits_type(&value, &ty, param.span)?;
-            env.define_typed(param.name.clone(), ty, value);
-        }
-
-        let value = match self.exec_block(&function.body, &mut env, false)? {
-            ExecFlow::Continue => Value::Unit,
-            ExecFlow::Return(value) => value,
-            ExecFlow::Break | ExecFlow::ContinueLoop => {
-                unreachable!("loop control outside loop should be rejected in sema")
+            let updated_receiver = if function.receiver == Some(ReceiverKind::BorrowMut) {
+                env.get("self").cloned()
+            } else {
+                None
+            };
+            let mut updated_params = Vec::new();
+            for (index, param) in function.params.iter().enumerate() {
+                if param.passing == ReceiverKind::BorrowMut {
+                    let value = env.get(&param.name).cloned().ok_or_else(|| {
+                        Diagnostic::at(
+                            param.span,
+                            format!(
+                                "mutable borrowed parameter `{}` was not available after function execution",
+                                param.name
+                            ),
+                        )
+                    })?;
+                    updated_params.push((index, value));
+                }
             }
-        };
-        let updated_receiver = if function.receiver == Some(ReceiverKind::BorrowMut) {
-            env.get("self").cloned()
-        } else {
-            None
-        };
-        let mut updated_params = Vec::new();
-        for (index, param) in function.params.iter().enumerate() {
-            if param.passing == ReceiverKind::BorrowMut {
-                let value = env.get(&param.name).cloned().ok_or_else(|| {
-                    Diagnostic::at(
-                        param.span,
-                        format!(
-                            "mutable borrowed parameter `{}` was not available after function execution",
-                            param.name
-                        ),
-                    )
-                })?;
-                updated_params.push((index, value));
-            }
-        }
 
-        Ok(CallOutcome {
-            value,
-            updated_receiver,
-            updated_params,
-        })
+            Ok(CallOutcome {
+                value,
+                updated_receiver,
+                updated_params,
+            })
+        })();
+        self.module_stack.pop();
+        result
     }
 
     fn exec_block(&mut self, body: &[Stmt], env: &mut Env, scoped: bool) -> Result<ExecFlow> {
@@ -993,7 +1230,8 @@ impl Interpreter {
                             .or_else(|| self.infer_expr_type(&assign.value, env))
                             .or_else(|| Self::infer_value_type(&final_value));
                         if let Some(binding_ty) = binding_ty {
-                            self.validate_value_fits_type(&final_value, &binding_ty, assign.span)?;
+                            let final_value =
+                                self.coerce_value_to_type(final_value, &binding_ty, assign.span)?;
                             env.define_typed(name.clone(), binding_ty, final_value);
                         } else {
                             env.define(name.clone(), final_value);
@@ -1084,7 +1322,7 @@ impl Interpreter {
                     env.define_typed(
                         for_stmt.binding.clone(),
                         Type::named("int32"),
-                        Value::Int(current),
+                        Value::Int(IntegerValue::from_signed(current)),
                     );
                     let flow = self.exec_block(&for_stmt.body, env, false)?;
                     env.pop_scope();
@@ -1107,6 +1345,8 @@ impl Interpreter {
                     .infer_expr_type(&with_stmt.value, env)
                     .or_else(|| Self::infer_value_type(&resource));
                 if let Some(resource_ty) = resource_ty {
+                    let resource =
+                        self.coerce_value_to_type(resource, &resource_ty, with_stmt.span)?;
                     env.define_typed(with_stmt.binding.clone(), resource_ty, resource);
                 } else {
                     env.define(with_stmt.binding.clone(), resource);
@@ -1171,7 +1411,11 @@ impl Interpreter {
                         ),
                     ));
                 };
-                if variant.enum_name != pattern.enum_name
+                let pattern_enum_name = self
+                    .resolve_enum_info(&pattern.enum_name)
+                    .map(|enum_info| enum_info.decl.name.clone())
+                    .unwrap_or_else(|| pattern.enum_name.clone());
+                if variant.enum_name != pattern_enum_name
                     || variant.variant_name != pattern.variant_name
                 {
                     return Ok(None);
@@ -1375,7 +1619,9 @@ impl Interpreter {
                     || Diagnostic::at(expr.span, format!("unknown name `{}`", name)),
                 )?))
             }
-            ExprKind::Int(value) => Ok(EvalOutcome::Value(Value::Int(*value))),
+            ExprKind::Int(value) => Ok(EvalOutcome::Value(Value::Int(
+                IntegerValue::from_literal(*value),
+            ))),
             ExprKind::DurationMillis(value) => Ok(EvalOutcome::Value(Value::Duration(*value))),
             ExprKind::Float(value) => Ok(EvalOutcome::Value(Value::Float(*value))),
             ExprKind::Bool(value) => Ok(EvalOutcome::Value(Value::Bool(*value))),
@@ -1423,7 +1669,8 @@ impl Interpreter {
                     }
                 };
                 if let Some(result_ty) = self.infer_expr_type(expr, env) {
-                    self.validate_value_fits_type(&result, &result_ty, expr.span)?;
+                    let result = self.coerce_value_to_type(result, &result_ty, expr.span)?;
+                    return Ok(EvalOutcome::Value(result));
                 }
                 Ok(EvalOutcome::Value(result))
             }
@@ -1511,11 +1758,38 @@ impl Interpreter {
                 };
                 let result = self.eval_binary(expr.span, *op, left_value, right_value)?;
                 if let Some(result_ty) = self.infer_expr_type(expr, env) {
-                    self.validate_value_fits_type(&result, &result_ty, expr.span)?;
+                    let result = self.coerce_value_to_type(result, &result_ty, expr.span)?;
+                    return Ok(EvalOutcome::Value(result));
                 }
                 Ok(EvalOutcome::Value(result))
             }
             ExprKind::Member { object, field } => {
+                if let Some((module_path, enum_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(enum_info) = namespace.enums.get(&enum_name) {
+                            let variant = enum_info.variants.get(field).ok_or_else(|| {
+                                Diagnostic::at(
+                                    expr.span,
+                                    format!("enum `{}` has no variant `{}`", enum_name, field),
+                                )
+                            })?;
+                            if variant.payload.is_some() {
+                                return Err(Diagnostic::at(
+                                    expr.span,
+                                    format!(
+                                        "variant `{}` of enum `{}` requires a payload",
+                                        field, enum_name
+                                    ),
+                                ));
+                            }
+                            return Ok(EvalOutcome::Value(Value::EnumVariant(EnumVariantValue {
+                                enum_name: enum_info.decl.name.clone(),
+                                variant_name: field.clone(),
+                                payload: None,
+                            })));
+                        }
+                    }
+                }
                 if let ExprKind::Name(enum_name) = &object.kind {
                     if matches!((enum_name.as_str(), field.as_str()), ("Option", "None")) {
                         return Ok(EvalOutcome::Value(Value::EnumVariant(EnumVariantValue {
@@ -1524,7 +1798,7 @@ impl Interpreter {
                             payload: None,
                         })));
                     }
-                    if let Some(enum_info) = self.program.enums.get(enum_name) {
+                    if let Some(enum_info) = self.resolve_enum_info(enum_name) {
                         let variant = enum_info.variants.get(field).ok_or_else(|| {
                             Diagnostic::at(
                                 expr.span,
@@ -1628,8 +1902,29 @@ impl Interpreter {
                             });
                         }
                         let (start, end) = match values.as_slice() {
-                            [Value::Int(end)] => (0, *end),
-                            [Value::Int(start), Value::Int(end)] => (*start, *end),
+                            [Value::Int(end)] => (
+                                0,
+                                end.as_i128().ok_or_else(|| {
+                                    Diagnostic::at(
+                                        callee.span,
+                                        "`range` arguments must fit in signed index space",
+                                    )
+                                })?,
+                            ),
+                            [Value::Int(start), Value::Int(end)] => (
+                                start.as_i128().ok_or_else(|| {
+                                    Diagnostic::at(
+                                        callee.span,
+                                        "`range` arguments must fit in signed index space",
+                                    )
+                                })?,
+                                end.as_i128().ok_or_else(|| {
+                                    Diagnostic::at(
+                                        callee.span,
+                                        "`range` arguments must fit in signed index space",
+                                    )
+                                })?,
+                            ),
                             _ => {
                                 return Err(Diagnostic::at(
                                     callee.span,
@@ -1708,8 +2003,11 @@ impl Interpreter {
                     }
                 }
             }
-            ExprKind::Name(name) if self.program.functions.contains_key(name) => {
-                let function = self.program.functions.get(name).unwrap().decl.clone();
+            ExprKind::Name(name) if self.resolve_function_info(name).is_some() => {
+                let function_info = self.resolve_function_info(name).cloned().ok_or_else(|| {
+                    Diagnostic::at(callee.span, format!("unknown function `{}`", name))
+                })?;
+                let function = function_info.decl.clone();
                 let evaluated_args = self.eval_callable_args(
                     &format!("function `{}`", name),
                     &function.params,
@@ -1721,7 +2019,8 @@ impl Interpreter {
                     .iter()
                     .map(|argument| argument.value.clone())
                     .collect();
-                let outcome = self.call_function(&function, values)?;
+                let outcome =
+                    self.call_function(&function, &function_info.module_name, values)?;
                 self.apply_borrowed_param_writebacks(
                     &function.params,
                     &evaluated_args,
@@ -1730,8 +2029,9 @@ impl Interpreter {
                 )?;
                 Ok(EvalOutcome::Value(outcome.value))
             }
-            ExprKind::Name(name) if self.program.classes.contains_key(name) => {
-                let class_decl = self.program.classes.get(name).unwrap().decl.clone();
+            ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
+                let class_info = self.resolve_class_info(name).unwrap().clone();
+                let class_decl = class_info.decl.clone();
                 let mut values = BTreeMap::new();
 
                 for argument in args {
@@ -1745,6 +2045,17 @@ impl Interpreter {
                         EvalOutcome::Value(value) => value,
                         EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
                     };
+                    let field_ty = class_info
+                        .fields
+                        .get(field_name)
+                        .map(|field| field.ty.clone())
+                        .ok_or_else(|| {
+                            Diagnostic::at(
+                                argument.span,
+                                format!("class `{}` has no field named `{}`", name, field_name),
+                            )
+                        })?;
+                    let value = self.coerce_value_to_type(value, &field_ty, argument.span)?;
                     values.insert(field_name.clone(), value);
                 }
 
@@ -1753,15 +2064,20 @@ impl Interpreter {
                         continue;
                     }
                     if let Some(default) = &field.default {
-                        values.insert(
-                            field.name.clone(),
-                            match self.eval_expr(default, env)? {
-                                EvalOutcome::Value(value) => value,
-                                EvalOutcome::Return(value) => {
-                                    return Ok(EvalOutcome::Return(value))
-                                }
-                            },
-                        );
+                        let value = match self.eval_expr(default, env)? {
+                            EvalOutcome::Value(value) => value,
+                            EvalOutcome::Return(value) => {
+                                return Ok(EvalOutcome::Return(value))
+                            }
+                        };
+                        let field_ty = class_info
+                            .fields
+                            .get(&field.name)
+                            .expect("class field should exist")
+                            .ty
+                            .clone();
+                        let value = self.coerce_value_to_type(value, &field_ty, field.span)?;
+                        values.insert(field.name.clone(), value);
                     } else {
                         return Err(Diagnostic::at(
                             callee.span,
@@ -1776,15 +2092,91 @@ impl Interpreter {
                 })))
             }
             ExprKind::Member { object, field } => {
+                if let Some((module_path, item_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(class_info) = namespace.classes.get(&item_name).cloned() {
+                            if let Some(method) = class_info.methods.get(field).cloned() {
+                                if method.decl.receiver.is_none() {
+                                    let evaluated_args = self.eval_callable_args(
+                                        &format!("method `{}`", field),
+                                        &method.decl.params,
+                                        args,
+                                        env,
+                                        callee.span,
+                                    )?;
+                                    let values = evaluated_args
+                                        .iter()
+                                        .map(|argument| argument.value.clone())
+                                        .collect();
+                                    let outcome = self.call_function(
+                                        &method.decl,
+                                        &class_info.module_name,
+                                        values,
+                                    )?;
+                                    self.apply_borrowed_param_writebacks(
+                                        &method.decl.params,
+                                        &evaluated_args,
+                                        &outcome.updated_params,
+                                        env,
+                                    )?;
+                                    return Ok(EvalOutcome::Value(outcome.value));
+                                }
+                            }
+                        }
+                        if let Some(enum_info) = namespace.enums.get(&item_name).cloned() {
+                            let variant = enum_info.variants.get(field).ok_or_else(|| {
+                                Diagnostic::at(
+                                    callee.span,
+                                    format!("enum `{}` has no variant `{}`", item_name, field),
+                                )
+                            })?;
+                            let payload = match &variant.payload {
+                                Some(_) => {
+                                    if args.len() != 1 {
+                                        return Err(Diagnostic::at(
+                                            callee.span,
+                                            format!(
+                                                "variant `{}` of enum `{}` expects exactly one payload argument",
+                                                field, item_name
+                                            ),
+                                        ));
+                                    }
+                                    Some(Box::new(match self.eval_expr(&args[0].value, env)? {
+                                        EvalOutcome::Value(value) => value,
+                                        EvalOutcome::Return(value) => {
+                                            return Ok(EvalOutcome::Return(value))
+                                        }
+                                    }))
+                                }
+                                None => {
+                                    return Err(Diagnostic::at(
+                                        callee.span,
+                                        format!(
+                                            "variant `{}` of enum `{}` does not take a payload",
+                                            field, item_name
+                                        ),
+                                    ));
+                                }
+                            };
+                            return Ok(EvalOutcome::Value(Value::EnumVariant(EnumVariantValue {
+                                enum_name: enum_info.decl.name.clone(),
+                                variant_name: field.clone(),
+                                payload,
+                            })));
+                        }
+                    }
+                }
                 if let ExprKind::Name(class_name) = &object.kind {
                     if let Some(method) = self
-                        .program
-                        .classes
-                        .get(class_name)
+                        .resolve_class_info(class_name)
                         .and_then(|class_info| class_info.methods.get(field))
                         .cloned()
                     {
                         if method.decl.receiver.is_none() {
+                            let module_name = self
+                                .resolve_class_info(class_name)
+                                .map(|class_info| class_info.module_name.clone())
+                                .unwrap_or_else(|| self.current_module_name().to_string());
                             let evaluated_args = self.eval_callable_args(
                                 &format!("method `{}`", field),
                                 &method.decl.params,
@@ -1796,7 +2188,8 @@ impl Interpreter {
                                 .iter()
                                 .map(|argument| argument.value.clone())
                                 .collect();
-                            let outcome = self.call_function(&method.decl, values)?;
+                            let outcome =
+                                self.call_function(&method.decl, &module_name, values)?;
                             self.apply_borrowed_param_writebacks(
                                 &method.decl.params,
                                 &evaluated_args,
@@ -1928,7 +2321,11 @@ impl Interpreter {
                                 .iter()
                                 .map(|argument| argument.value.clone())
                                 .collect();
-                            let outcome = self.call_function(&function.decl, values)?;
+                            let outcome = self.call_function(
+                                &function.decl,
+                                &function.module_name,
+                                values,
+                            )?;
                             self.apply_borrowed_param_writebacks(
                                 &function.decl.params,
                                 &evaluated_args,
@@ -1937,7 +2334,7 @@ impl Interpreter {
                             )?;
                             return Ok(EvalOutcome::Value(outcome.value));
                         }
-                        if let Some(class_info) = module.classes.get(field) {
+                        if let Some(class_info) = module.classes.get(field).cloned() {
                             let class_decl = class_info.decl.clone();
                             let mut values = BTreeMap::new();
 
@@ -1957,6 +2354,21 @@ impl Interpreter {
                                         return Ok(EvalOutcome::Return(value))
                                     }
                                 };
+                                let field_ty = class_info
+                                    .fields
+                                    .get(field_name)
+                                    .map(|field_info| field_info.ty.clone())
+                                    .ok_or_else(|| {
+                                        Diagnostic::at(
+                                            argument.span,
+                                            format!(
+                                                "class `{}` has no field named `{}`",
+                                                class_decl.name, field_name
+                                            ),
+                                        )
+                                    })?;
+                                let value =
+                                    self.coerce_value_to_type(value, &field_ty, argument.span)?;
                                 values.insert(field_name.clone(), value);
                             }
 
@@ -1965,15 +2377,24 @@ impl Interpreter {
                                     continue;
                                 }
                                 if let Some(default) = &field_decl.default {
-                                    values.insert(
-                                        field_decl.name.clone(),
-                                        match self.eval_expr(default, env)? {
-                                            EvalOutcome::Value(value) => value,
-                                            EvalOutcome::Return(value) => {
-                                                return Ok(EvalOutcome::Return(value))
-                                            }
-                                        },
-                                    );
+                                    let value = match self.eval_expr(default, env)? {
+                                        EvalOutcome::Value(value) => value,
+                                        EvalOutcome::Return(value) => {
+                                            return Ok(EvalOutcome::Return(value))
+                                        }
+                                    };
+                                    let field_ty = class_info
+                                        .fields
+                                        .get(&field_decl.name)
+                                        .expect("class field should exist")
+                                        .ty
+                                        .clone();
+                                    let value = self.coerce_value_to_type(
+                                        value,
+                                        &field_ty,
+                                        field_decl.span,
+                                    )?;
+                                    values.insert(field_decl.name.clone(), value);
                                 } else {
                                     return Err(Diagnostic::at(
                                         callee.span,
@@ -2000,13 +2421,15 @@ impl Interpreter {
                     }
                     Value::Instance(instance) => {
                         if let Some(method) = self
-                            .program
-                            .classes
-                            .get(&instance.class_name)
+                            .resolve_class_info(&instance.class_name)
                             .and_then(|class_info| class_info.methods.get(field))
                             .cloned()
                         {
                             if method.decl.receiver.is_some() {
+                                let module_name = self
+                                    .resolve_class_info(&instance.class_name)
+                                    .map(|class_info| class_info.module_name.clone())
+                                    .unwrap_or_else(|| self.current_module_name().to_string());
                                 let mut values = vec![Value::Instance(instance)];
                                 let evaluated_args = self.eval_callable_args(
                                     &format!("method `{}`", field),
@@ -2018,7 +2441,8 @@ impl Interpreter {
                                 values.extend(
                                     evaluated_args.iter().map(|argument| argument.value.clone()),
                                 );
-                                let outcome = self.call_function(&method.decl, values)?;
+                                let outcome =
+                                    self.call_function(&method.decl, &module_name, values)?;
                                 if method.decl.receiver == Some(ReceiverKind::BorrowMut) {
                                     let updated_receiver =
                                             outcome.updated_receiver.ok_or_else(|| {
@@ -2055,6 +2479,7 @@ impl Interpreter {
                             })
                             .cloned()
                         {
+                            let module_name = self.current_module_name().to_string();
                             let mut values = vec![Value::Instance(instance)];
                             let evaluated_args = self.eval_callable_args(
                                 &format!("method `{}`", field),
@@ -2066,7 +2491,8 @@ impl Interpreter {
                             values.extend(
                                 evaluated_args.iter().map(|argument| argument.value.clone()),
                             );
-                            let outcome = self.call_function(&method.decl, values)?;
+                            let outcome =
+                                self.call_function(&method.decl, &module_name, values)?;
                             if method.decl.receiver == Some(ReceiverKind::BorrowMut) {
                                 let updated_receiver =
                                     outcome.updated_receiver.ok_or_else(|| {
@@ -2098,17 +2524,64 @@ impl Interpreter {
                         BuiltinMember::StringClone.bind_args(args, callee.span)?;
                         Ok(EvalOutcome::Value(Value::String(value.clone())))
                     }
-                    other if field == "sqrt" => {
-                        BuiltinMember::FloatSqrt.bind_args(args, callee.span)?;
-                        Err(Diagnostic::at(
-                            callee.span,
-                            format!(
-                                "`sqrt` is only available on `float64`, found `{}`",
-                                other.render()
-                            ),
-                        ))
+                    other => {
+                        let resolved_receiver_ty = self
+                            .infer_expr_type(object, env)
+                            .or_else(|| Self::infer_value_type(&other))
+                            .filter(|ty| !matches!(ty, Type::TypeParam(_)));
+                        if let Some(resolved_receiver_ty) = resolved_receiver_ty {
+                            if let Some(method) = self
+                                .find_trait_impl_method(&resolved_receiver_ty, field)
+                                .cloned()
+                            {
+                                let module_name = self.current_module_name().to_string();
+                                let mut values = vec![other];
+                                let evaluated_args = self.eval_callable_args(
+                                    &format!("method `{}`", field),
+                                    &method.decl.params,
+                                    args,
+                                    env,
+                                    callee.span,
+                                )?;
+                                values.extend(
+                                    evaluated_args.iter().map(|argument| argument.value.clone()),
+                                );
+                                let outcome =
+                                    self.call_function(&method.decl, &module_name, values)?;
+                                if method.decl.receiver == Some(ReceiverKind::BorrowMut) {
+                                    let updated_receiver =
+                                        outcome.updated_receiver.ok_or_else(|| {
+                                            Diagnostic::at(
+                                                callee.span,
+                                                format!(
+                                                    "method `{}` did not produce an updated mutable receiver",
+                                                    field
+                                                ),
+                                            )
+                                        })?;
+                                    self.write_place_expr(object, env, updated_receiver)?;
+                                }
+                                self.apply_borrowed_param_writebacks(
+                                    &method.decl.params,
+                                    &evaluated_args,
+                                    &outcome.updated_params,
+                                    env,
+                                )?;
+                                return Ok(EvalOutcome::Value(outcome.value));
+                            }
+                        }
+                        if field == "sqrt" {
+                            BuiltinMember::FloatSqrt.bind_args(args, callee.span)?;
+                            return Err(Diagnostic::at(
+                                callee.span,
+                                format!(
+                                    "`sqrt` is only available on `float64`, found `{}`",
+                                    other.render()
+                                ),
+                            ));
+                        }
+                        Err(Diagnostic::at(callee.span, "unsupported call target"))
                     }
-                    _ => Err(Diagnostic::at(callee.span, "unsupported call target")),
                 }
             }
             _ => Err(Diagnostic::at(callee.span, "unsupported call target")),
@@ -2174,7 +2647,9 @@ impl Interpreter {
                 )),
             },
             BinaryOp::Div => match (left, right) {
-                (Value::Int(_left), Value::Int(0)) => Err(Diagnostic::at(span, "division by zero")),
+                (Value::Int(_left), Value::Int(right)) if right.is_zero() => {
+                    Err(Diagnostic::at(span, "division by zero"))
+                }
                 (Value::Int(left), Value::Int(right)) => left
                     .checked_div(right)
                     .map(Value::Int)
@@ -2186,7 +2661,9 @@ impl Interpreter {
                 )),
             },
             BinaryOp::Mod => match (left, right) {
-                (Value::Int(_left), Value::Int(0)) => Err(Diagnostic::at(span, "division by zero")),
+                (Value::Int(_left), Value::Int(right)) if right.is_zero() => {
+                    Err(Diagnostic::at(span, "division by zero"))
+                }
                 (Value::Int(left), Value::Int(right)) => left
                     .checked_rem(right)
                     .map(Value::Int)
@@ -2233,7 +2710,7 @@ impl Interpreter {
         span: crate::diag::Span,
         left: Value,
         right: Value,
-        compare_int: impl FnOnce(i128, i128) -> bool + Copy,
+        compare_int: impl FnOnce(IntegerValue, IntegerValue) -> bool + Copy,
         compare_float: impl FnOnce(f64, f64) -> bool + Copy,
     ) -> Result<Value> {
         match (left, right) {
@@ -2268,13 +2745,11 @@ impl Interpreter {
                 "`spawn` currently supports named function calls only",
             ));
         };
-        let function = self
-            .program
-            .functions
-            .get(function_name)
-            .ok_or_else(|| Diagnostic::at(span, "spawn target must be a named function"))?
-            .decl
-            .clone();
+        let function_info = self
+            .resolve_function_info(function_name)
+            .cloned()
+            .ok_or_else(|| Diagnostic::at(span, "spawn target must be a named function"))?;
+        let function = function_info.decl.clone();
 
         self.require_spawnable_function(&function, span)?;
         let evaluated_args = self.eval_callable_args(
@@ -2301,9 +2776,10 @@ impl Interpreter {
                 program,
                 stdout,
                 cancellation,
+                module_stack: Vec::new(),
             };
             interpreter
-                .call_function(&function, values)
+                .call_function(&function, &function_info.module_name, values)
                 .map(|outcome| outcome.value)
                 .map_err(|error| error.to_string())
         });
@@ -2422,18 +2898,16 @@ impl Interpreter {
                         "`spawn` currently requires a named function target",
                     ));
                 };
-                let function = self
-                    .program
-                    .functions
-                    .get(function_name)
+                let function_info = self
+                    .resolve_function_info(function_name)
                     .ok_or_else(|| {
                         Diagnostic::at(
                             args[0].span,
                             format!("unknown function `{}`", function_name),
                         )
                     })?
-                    .decl
                     .clone();
+                let function = function_info.decl.clone();
 
                 self.require_spawnable_function(&function, span)?;
                 let evaluated_args = self.eval_callable_args(
@@ -2456,9 +2930,10 @@ impl Interpreter {
                         program,
                         stdout,
                         cancellation,
+                        module_stack: Vec::new(),
                     };
                     interpreter
-                        .call_function(&function, values)
+                        .call_function(&function, &function_info.module_name, values)
                         .map(|outcome| outcome.value)
                         .map_err(|error| error.to_string())
                 });
@@ -2548,7 +3023,9 @@ impl Interpreter {
         match target {
             AssignTarget::Name(name) => {
                 if let Some(binding_ty) = env.get_type(name).cloned() {
-                    self.validate_value_fits_type(&value, &binding_ty, span)?;
+                    let value = self.coerce_value_to_type(value, &binding_ty, span)?;
+                    env.set(name.clone(), value);
+                    return Ok(());
                 }
                 env.set(name.clone(), value);
                 Ok(())
@@ -2568,13 +3045,13 @@ impl Interpreter {
                     ));
                 }
                 if let Some(field_ty) = self
-                    .program
-                    .classes
-                    .get(&instance.class_name)
+                    .resolve_class_info(&instance.class_name)
                     .and_then(|class_info| class_info.fields.get(field))
                     .map(|field_info| field_info.ty.clone())
                 {
-                    self.validate_value_fits_type(&value, &field_ty, span)?;
+                    let value = self.coerce_value_to_type(value, &field_ty, span)?;
+                    instance.fields.insert(field.clone(), value);
+                    return self.write_place_expr(object, env, object_value);
                 }
                 instance.fields.insert(field.clone(), value);
                 self.write_place_expr(object, env, object_value)
@@ -2665,9 +3142,7 @@ impl Interpreter {
             ));
         };
         let method = self
-            .program
-            .classes
-            .get(&instance.class_name)
+            .resolve_class_info(&instance.class_name)
             .and_then(|class_info| class_info.methods.get("close"))
             .cloned()
             .ok_or_else(|| {
@@ -2679,7 +3154,12 @@ impl Interpreter {
                     ),
                 )
             })?;
-        let outcome = self.call_function(&method.decl, vec![Value::Instance(instance)])?;
+        let module_name = self
+            .resolve_class_info(&instance.class_name)
+            .map(|class_info| class_info.module_name.clone())
+            .unwrap_or_else(|| self.current_module_name().to_string());
+        let outcome =
+            self.call_function(&method.decl, &module_name, vec![Value::Instance(instance)])?;
         if let Some(updated_receiver) = outcome.updated_receiver {
             env.set(binding.to_string(), updated_receiver);
         }

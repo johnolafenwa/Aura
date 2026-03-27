@@ -31,6 +31,8 @@ Do not mix top-level executable statements with `main` in the same file.
 
 Floating-point literals default to `float64`, but they can adopt an expected `float32` type from an annotation, parameter, return type, or class field.
 
+Integer literals now support the full `uint128` range in the checker, interpreter, MIR runtime, and direct backend.
+
 ## Types
 
 Builtin scalar and utility type names currently accepted by the compiler:
@@ -132,6 +134,12 @@ Current builtin functions:
 - `after`
 - `sleep`
 
+Current builtin `range(...)` notes:
+
+- supports `range(stop)` and `range(start, stop)`
+- supports the matching named-argument forms
+- currently requires bounds that fit the bootstrap compiler's signed index space
+
 Current builtin member methods include:
 
 - `float64.sqrt()`
@@ -154,7 +162,7 @@ The current compiler supports:
 - `case _:`
 - exhaustive statement-form `match`
 
-It does not yet support nested or expression-form matches.
+It does not yet support nested patterns inside a single `case` or expression-form `match`, but ordinary nested `match` statements are supported.
 
 ## Concurrency
 
@@ -184,10 +192,9 @@ The current CLI commands are:
 
 Current backend/tooling notes:
 
-- `build` accepts `--backend auto|direct|mir-runtime`
+- `build` accepts `--backend auto|direct`
 - `auto` is the default
-- `direct` currently covers the scalar, float, plain-class, and immutable-method subset
-- `mir-runtime` remains the broader runtime-linked backend path for the implemented language surface
+- `direct` now covers the full currently implemented Aurora language surface
 
 The current VS Code tooling is compiler-backed for:
 
@@ -210,6 +217,6 @@ Not yet implemented:
 Current module/import limitations:
 
 - imports resolve local `.au` files relative to the current package root
-- `import a.b` exposes module namespaces for calls like `a.b.func(...)`
+- `import a.b` exposes module namespaces for calls like `a.b.func(...)`, `a.b.Type(...)`, and `a.b.Enum.Variant`
 - type annotations still expect imported types to come through `from ... import Type`
 - package manifests and external dependencies are still proposal-only

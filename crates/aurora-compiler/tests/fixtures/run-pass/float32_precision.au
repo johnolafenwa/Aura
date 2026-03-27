@@ -1,0 +1,5 @@
+def main() -> int32:
+    left: float32 = 16777216.0
+    right: float32 = 1.0
+    print(left + right)
+    return 0

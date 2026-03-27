@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-03-24
+Last updated: 2026-03-25
 
 ## In Progress
 
@@ -15,9 +15,7 @@ Last updated: 2026-03-24
 - Raise the Aurora language-server analysis package to enforced 100% coverage before expanding its semantic surface further.
 - Extend the trait system toward the remaining proposal surface, including generic traits, generic impl headers, and operator traits.
 - Extend compiler-backed `analyze` / `complete` and the LSP from local-module diagnostics/hover/completions to fully correct cross-file definitions for imported items.
-- Add broader product-level backend coverage around direct native codegen outputs and the `auto`/`mir-runtime` fallback split.
 - Narrow the JS fallback further now that completions, diagnostics, symbols, hover, and definition all have compiler-backed paths.
-- Expand the direct low-level native backend beyond the current scalar/float/plain-class subset so fewer programs need the runtime-linked MIR artifact path.
 
 ## Done
 
@@ -120,12 +118,18 @@ Last updated: 2026-03-24
 - Fixed direct-expression narrow integer overflow checking so runtime arithmetic respects annotated widths even when values flow straight into calls.
 - Fixed whole-number float rendering so values like `5.0` and `9.0` preserve their `.0` suffix in output.
 - Added ordinary free-function `borrow` and `borrow mut` parameters across the parser, checker, interpreter, MIR runtime, fixtures, examples, tutorials, and LSP fallback analysis.
+- Fixed namespace-imported classes and enums so `import a.b` now supports `a.b.Type(...)`, `a.b.Enum.Variant`, and qualified `match` arms in both the interpreter and MIR execution paths.
+- Finished the remaining numeric-runtime gap for true full-range `uint128` execution across the checker, interpreter, MIR runtime, direct backend, fixtures, CLI coverage, and maintained examples/tutorials.
+- Clarified in the maintained tutorials/examples that `range(...)` is still limited to the current signed index space in the bootstrap compiler, without freezing that limitation into the proposal.
 - Replaced `aura build`'s generated Rust launcher with a native MIR artifact build path that embeds serialized MIR in a native launcher and links it against a compiled Aurora runtime library.
 - Added product coverage for stdin-backed native builds with local modules and for binaries that still run after the original source file is removed.
 - Added a true direct native backend for a supported scalar/control-flow MIR subset and exposed it through `aura build --backend direct`.
 - Switched `aura build` to a three-way backend matrix with `--backend auto|direct|mir-runtime`, where `auto` now tries direct native codegen first and falls back when needed.
 - Added compiler-side direct-backend coverage so the enforced Rust coverage gate remains green after introducing native codegen modules.
 - Expanded the direct native backend to support floats, plain classes, field access, associated methods, and immutable instance methods, including clean broken-pipe handling for direct-built binaries.
+- Expanded the direct native backend to cover the full currently implemented Aurora language surface, including mutable borrows, `range`/`for`, traits, generics, resource cleanup, and concurrency/task-group/select examples.
+- Verified direct backend parity against every runnable maintained example by building with `--backend direct` and comparing output to `aura run`.
+- Removed `--backend mir-runtime` from the CLI and docs now that the maintained Aurora surface has full native direct coverage.
 
 ## Blocked
 

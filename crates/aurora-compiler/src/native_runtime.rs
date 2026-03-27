@@ -13,6 +13,7 @@ use crate::interpreter::{
     cast_numeric_value, CancellationContext, ChannelValue, EnumVariantValue, InstanceValue,
     RangeValue, TaskGroupValue, TaskValue, TryRecvResult, Value,
 };
+use crate::integer::IntegerValue;
 use crate::sema::Type;
 
 fn write_stdout(text: &str) {
@@ -66,10 +67,7 @@ fn current_cancellation() -> CancellationContext {
     DIRECT_CANCELLATION.with(|slot| slot.borrow().clone())
 }
 
-fn with_cancellation_scope<T>(
-    cancellation: CancellationContext,
-    work: impl FnOnce() -> T,
-) -> T {
+fn with_cancellation_scope<T>(cancellation: CancellationContext, work: impl FnOnce() -> T) -> T {
     DIRECT_CANCELLATION.with(|slot| {
         let previous = slot.replace(cancellation);
         let result = work();
@@ -80,7 +78,10 @@ fn with_cancellation_scope<T>(
 
 fn extract_duration_millis(value: &Value) -> i128 {
     match value {
-        Value::Int(value) | Value::Duration(value) => *value,
+        Value::Int(value) => value.as_i128().unwrap_or_else(|| {
+            runtime_error("expected `Duration`, found an integer outside signed timer range")
+        }),
+        Value::Duration(value) => *value,
         other => runtime_error(format!(
             "expected `Duration`, found `{}`",
             value_type_name(other)
@@ -112,7 +113,7 @@ fn runtime_error(message: impl AsRef<str>) -> ! {
 
 fn value_type_name(value: &Value) -> String {
     match value {
-        Value::Int(_) => "int32".to_string(),
+        Value::Int(_) => "integer".to_string(),
         Value::Float(_) => "float64".to_string(),
         Value::Bool(_) => "bool".to_string(),
         Value::String(_) => "String".to_string(),
@@ -260,7 +261,9 @@ fn eval_binary_value(
             ))),
         },
         BinaryOp::Div => match (left, right) {
-            (Value::Int(_), Value::Int(0)) => Err(Diagnostic::new("division by zero")),
+            (Value::Int(_), Value::Int(right)) if right.is_zero() => {
+                Err(Diagnostic::new("division by zero"))
+            }
             (Value::Int(left), Value::Int(right)) => left
                 .checked_div(right)
                 .map(Value::Int)
@@ -273,7 +276,9 @@ fn eval_binary_value(
             ))),
         },
         BinaryOp::Mod => match (left, right) {
-            (Value::Int(_), Value::Int(0)) => Err(Diagnostic::new("division by zero")),
+            (Value::Int(_), Value::Int(right)) if right.is_zero() => {
+                Err(Diagnostic::new("division by zero"))
+            }
             (Value::Int(left), Value::Int(right)) => left
                 .checked_rem(right)
                 .map(Value::Int)
@@ -334,7 +339,19 @@ pub extern "C" fn aurora_direct_print_bool(value: i64) {
 
 #[no_mangle]
 pub extern "C" fn aurora_direct_box_i64(value: i64) -> *mut OpaqueValue {
-    boxed_value(Value::Int(value as i128))
+    boxed_value(Value::Int(IntegerValue::from_signed(value as i128)))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_box_uint_literal(
+    ptr: *const u8,
+    len: usize,
+) -> *mut OpaqueValue {
+    let text = decode_bytes(ptr, len);
+    let value = text
+        .parse::<u128>()
+        .unwrap_or_else(|_| runtime_error(format!("invalid embedded uint literal `{}`", text)));
+    boxed_value(Value::Int(IntegerValue::from_literal(value)))
 }
 
 #[no_mangle]
@@ -353,16 +370,59 @@ pub extern "C" fn aurora_direct_box_unit() -> *mut OpaqueValue {
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_literal(
-    ptr: *const u8,
-    len: usize,
-) -> *mut OpaqueValue {
+pub extern "C" fn aurora_direct_string_literal(ptr: *const u8, len: usize) -> *mut OpaqueValue {
     boxed_value(Value::String(decode_bytes(ptr, len).to_string()))
 }
 
 #[no_mangle]
 pub extern "C" fn aurora_direct_duration_literal(value: i64) -> *mut OpaqueValue {
     boxed_value(Value::Duration(value as i128))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_range_new(start: i64, end: i64) -> *mut OpaqueValue {
+    boxed_value(Value::Range(RangeValue {
+        start: start as i128,
+        end: end as i128,
+    }))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_range_current(range: *mut OpaqueValue) -> i64 {
+    match unsafe { value_ref(range) } {
+        Value::Range(range) => i64::try_from(range.start)
+            .unwrap_or_else(|_| runtime_error("range start is outside host i64 bounds")),
+        other => runtime_error(format!(
+            "expected `Range`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_range_end(range: *mut OpaqueValue) -> i64 {
+    match unsafe { value_ref(range) } {
+        Value::Range(range) => i64::try_from(range.end)
+            .unwrap_or_else(|_| runtime_error("range end is outside host i64 bounds")),
+        other => runtime_error(format!(
+            "expected `Range`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_range_advance(range: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(range) } {
+        Value::Range(range) => boxed_value(Value::Range(RangeValue {
+            start: range.start + 1,
+            end: range.end,
+        })),
+        other => runtime_error(format!(
+            "expected `Range`, found `{}`",
+            value_type_name(other)
+        )),
+    }
 }
 
 #[no_mangle]
@@ -373,7 +433,10 @@ pub extern "C" fn aurora_direct_clone_value(value: *mut OpaqueValue) -> *mut Opa
 #[no_mangle]
 pub extern "C" fn aurora_direct_unbox_i64(value: *mut OpaqueValue) -> i64 {
     match unsafe { value_ref(value) } {
-        Value::Int(value) => *value as i64,
+        Value::Int(value) => value
+            .as_i128()
+            .and_then(|value| i64::try_from(value).ok())
+            .unwrap_or_else(|| runtime_error("direct backend expected an integer that fits in host i64")),
         other => runtime_error(format!(
             "direct backend expected `int32`, found `{}`",
             value_type_name(other)
@@ -413,7 +476,7 @@ pub extern "C" fn aurora_direct_print_value(value: *mut OpaqueValue) {
 pub extern "C" fn aurora_direct_value_as_condition(value: *mut OpaqueValue) -> i64 {
     match unsafe { value_ref(value) } {
         Value::Bool(value) => i64::from(*value),
-        Value::Int(value) => i64::from(*value != 0),
+        Value::Int(value) => i64::from(!value.is_zero()),
         Value::Unit => 0,
         other => runtime_error(format!(
             "direct backend cannot use `{}` as a branch condition",
@@ -457,7 +520,11 @@ pub extern "C" fn aurora_direct_binary_value(
         12 => BinaryOp::Or,
         other => runtime_error(format!("unknown binary opcode `{}`", other)),
     };
-    match eval_binary_value(unsafe { take_value(left) }, unsafe { take_value(right) }, op) {
+    match eval_binary_value(
+        unsafe { take_value(left) },
+        unsafe { take_value(right) },
+        op,
+    ) {
         Ok(value) => boxed_value(value),
         Err(error) => runtime_error(error.message),
     }
@@ -649,11 +716,7 @@ pub extern "C" fn aurora_direct_arg_buffer_new(count: i64) -> *mut i64 {
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_arg_buffer_store(
-    buffer: *mut i64,
-    index: i64,
-    value: i64,
-) {
+pub extern "C" fn aurora_direct_arg_buffer_store(buffer: *mut i64, index: i64, value: i64) {
     let index = usize::try_from(index).unwrap_or_else(|_| runtime_error("invalid arg index"));
     unsafe {
         *buffer.add(index) = value;
@@ -667,7 +730,9 @@ pub extern "C" fn aurora_direct_channel_new() -> *mut OpaqueValue {
 
 #[no_mangle]
 pub extern "C" fn aurora_direct_task_group_new() -> *mut OpaqueValue {
-    boxed_value(Value::TaskGroup(TaskGroupValue::new(&current_cancellation())))
+    boxed_value(Value::TaskGroup(TaskGroupValue::new(
+        &current_cancellation(),
+    )))
 }
 
 #[no_mangle]
@@ -841,7 +906,8 @@ pub extern "C" fn aurora_direct_task_group_close(
 #[no_mangle]
 pub extern "C" fn aurora_direct_deadline_new(duration: *mut OpaqueValue) -> i64 {
     let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis = u64::try_from(millis).unwrap_or_else(|_| runtime_error("invalid deadline duration"));
+    let millis =
+        u64::try_from(millis).unwrap_or_else(|_| runtime_error("invalid deadline duration"));
     let deadline = Deadline(
         Instant::now()
             .checked_add(StdDuration::from_millis(millis))
@@ -857,13 +923,26 @@ pub extern "C" fn aurora_direct_deadline_ready(deadline: i64) -> i64 {
         return 1;
     }
     let ready = unsafe { Instant::now() >= (*deadline).0 };
-    if ready { 1 } else { 0 }
+    if ready {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn aurora_direct_sleep_ms(duration: i64) {
-    let millis = u64::try_from(duration).unwrap_or_else(|_| runtime_error("invalid sleep duration"));
+    let millis =
+        u64::try_from(duration).unwrap_or_else(|_| runtime_error("invalid sleep duration"));
     thread::sleep(StdDuration::from_millis(millis));
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_sleep_value(duration: *mut OpaqueValue) -> *mut OpaqueValue {
+    let millis = extract_duration_millis(unsafe { value_ref(duration) });
+    let millis = u64::try_from(millis).unwrap_or_else(|_| runtime_error("invalid sleep duration"));
+    thread::sleep(StdDuration::from_millis(millis));
+    boxed_value(Value::Unit)
 }
 
 #[no_mangle]
@@ -875,7 +954,8 @@ pub extern "C" fn aurora_direct_spawn_call(
     task_group: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
-    let arg_count = usize::try_from(arg_count).unwrap_or_else(|_| runtime_error("invalid spawn arg count"));
+    let arg_count =
+        usize::try_from(arg_count).unwrap_or_else(|_| runtime_error("invalid spawn arg count"));
     let args = unsafe { slice::from_raw_parts(args_ptr, arg_count) }.to_vec();
     let group = if task_group.is_null() {
         None

@@ -16,6 +16,15 @@ Then call public functions through the module path:
 print(helpers.math.double(value=5))
 ```
 
+Namespace imports also work for public classes and enums:
+
+```python
+import pkg.types
+
+counter = pkg.types.Counter(value=4)
+status = pkg.types.Status.Ready
+```
+
 ## Importing Names Directly
 
 Use `from ... import ...` when you want a direct local binding:
@@ -52,9 +61,11 @@ Across module boundaries:
 
 Within the same module, private members remain usable.
 
-## Maintained Example
+## Maintained Examples
 
 See [examples/modules/simple_import.au](../examples/modules/simple_import.au) with its helper modules under [examples/modules/helpers](../examples/modules/helpers).
+
+See [examples/modules/namespace_import_types.au](../examples/modules/namespace_import_types.au) with its helper module under [examples/modules/pkg](../examples/modules/pkg).
 
 ## Current Limits
 

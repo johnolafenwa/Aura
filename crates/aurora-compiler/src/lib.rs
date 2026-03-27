@@ -3,6 +3,7 @@ pub mod ast;
 pub mod call;
 pub mod diag;
 pub mod interpreter;
+pub mod integer;
 pub mod lexer;
 pub mod mir;
 pub mod mir_runtime;
@@ -147,11 +148,13 @@ impl ModuleLoader {
         let module = parse_source(&source)?;
         let module_name = logical_module_name(&self.package_root, &path);
         let imported_bindings = self.resolve_imports(&module)?;
+        let module_registry = self.build_module_registry();
         let program = sema::check_with_context(
             module,
             ModuleContext {
                 module_name,
                 imported_bindings,
+                module_registry,
             },
         )?;
 
@@ -211,6 +214,24 @@ impl ModuleLoader {
             }
         }
         Ok(bindings)
+    }
+
+    fn build_module_registry(&self) -> BTreeMap<String, ModuleNamespace> {
+        self.cache
+            .values()
+            .map(|loaded| {
+                let path = loaded
+                    .program
+                    .module_name
+                    .split('.')
+                    .map(|segment| segment.to_string())
+                    .collect::<Vec<_>>();
+                (
+                    loaded.program.module_name.clone(),
+                    exported_namespace(&path, &loaded.program),
+                )
+            })
+            .collect()
     }
 
     fn load_imported_module(&mut self, module_path: &[String], span: Span) -> Result<Program> {
@@ -304,6 +325,11 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
         classes: BTreeMap::new(),
         enums: BTreeMap::new(),
         traits: BTreeMap::new(),
+        all_functions: program.functions.clone(),
+        all_classes: program.classes.clone(),
+        all_enums: program.enums.clone(),
+        all_traits: program.traits.clone(),
+        imported_modules: program.imported_modules.clone(),
     };
 
     for item in &program.module.items {
@@ -354,6 +380,11 @@ fn insert_namespace_import(
             classes: BTreeMap::new(),
             enums: BTreeMap::new(),
             traits: BTreeMap::new(),
+            all_functions: BTreeMap::new(),
+            all_classes: BTreeMap::new(),
+            all_enums: BTreeMap::new(),
+            all_traits: BTreeMap::new(),
+            imported_modules: BTreeMap::new(),
         })
     });
     let ImportedBinding::Module(root_namespace) = root else {
@@ -383,6 +414,11 @@ fn insert_namespace_import(
                 classes: BTreeMap::new(),
                 enums: BTreeMap::new(),
                 traits: BTreeMap::new(),
+                all_functions: BTreeMap::new(),
+                all_classes: BTreeMap::new(),
+                all_enums: BTreeMap::new(),
+                all_traits: BTreeMap::new(),
+                imported_modules: BTreeMap::new(),
             });
     }
     current.modules.insert(
@@ -572,6 +608,10 @@ mod tests {
         }
     }
 
+    fn zero_exit_value() -> Value {
+        Value::Int(crate::integer::IntegerValue::zero())
+    }
+
     #[test]
     fn parses_the_point_milestone() {
         let module = parse_source(POINT_SOURCE).expect("point program should parse");
@@ -588,14 +628,14 @@ mod tests {
     fn runs_the_point_milestone() {
         let output = run_source(POINT_SOURCE).expect("point program should run");
         assert_eq!(output.stdout, "5.0\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
     fn mir_runtime_runs_the_point_milestone() {
         let output = run_source_via_mir(POINT_SOURCE).expect("point program should run via MIR");
         assert_eq!(output.stdout, "5.0\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -618,7 +658,7 @@ mod tests {
 
         let output = run_source(TOP_LEVEL_ADDITION_SOURCE).expect("top-level addition should run");
         assert_eq!(output.stdout, "16\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -626,7 +666,7 @@ mod tests {
         check_source(CONTROL_FLOW_SOURCE).expect("control flow example should type-check");
         let output = run_source(CONTROL_FLOW_SOURCE).expect("control flow example should run");
         assert_eq!(output.stdout, "ok\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -634,7 +674,7 @@ mod tests {
         let source = include_str!("../../../examples/classes/methods.au");
         let output = run_source_via_mir(source).expect("methods example should run via MIR");
         assert_eq!(output.stdout, "4\n8\n0\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -642,7 +682,7 @@ mod tests {
         let source = include_str!("../../../examples/enums/result_match.au");
         let output = run_source_via_mir(source).expect("enum match example should run via MIR");
         assert_eq!(output.stdout, "42\nbad\n0\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -651,7 +691,7 @@ mod tests {
         let mir = lower_source_to_mir(source).expect("try example should lower to MIR");
         let output = run_mir(&mir).expect("try example should run directly through MIR");
         assert_eq!(output.stdout, "6\ndivision by zero\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -660,7 +700,7 @@ mod tests {
         let output =
             run_source_via_mir(source).expect("try example should run through backend path");
         assert_eq!(output.stdout, "6\ndivision by zero\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -669,7 +709,7 @@ mod tests {
         let output =
             run_source_via_mir(source).expect("with example should run through backend path");
         assert_eq!(output.stdout, "demo\nclosed demo\ndone\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -678,7 +718,7 @@ mod tests {
         let mir = lower_source_to_mir(source).expect("with example should lower to MIR");
         let output = run_mir(&mir).expect("with example should run directly through MIR");
         assert_eq!(output.stdout, "demo\nclosed demo\ndone\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -687,7 +727,7 @@ mod tests {
         let mir = lower_source_to_mir(source).expect("channels example should lower to MIR");
         let output = run_mir(&mir).expect("channels example should run directly through MIR");
         assert_eq!(output.stdout, "2\n4\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -696,7 +736,7 @@ mod tests {
         let mir = lower_source_to_mir(source).expect("send_result example should lower to MIR");
         let output = run_mir(&mir).expect("send_result example should run directly through MIR");
         assert_eq!(output.stdout, "7\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -705,7 +745,7 @@ mod tests {
         let mir = lower_source_to_mir(source).expect("spawn_detached example should lower to MIR");
         let output = run_mir(&mir).expect("spawn_detached example should run directly through MIR");
         assert_eq!(output.stdout, "9\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -714,7 +754,7 @@ mod tests {
         let mir = lower_source_to_mir(source).expect("select_timeout example should lower to MIR");
         let output = run_mir(&mir).expect("select_timeout example should run directly through MIR");
         assert_eq!(output.stdout, "timeout\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -723,7 +763,7 @@ mod tests {
         let mir = lower_source_to_mir(source).expect("select_send example should lower to MIR");
         let output = run_mir(&mir).expect("select_send example should run directly through MIR");
         assert_eq!(output.stdout, "sent\n4\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -734,7 +774,7 @@ mod tests {
         let output =
             run_mir(&mir).expect("task_group_select example should run directly through MIR");
         assert_eq!(output.stdout, "3\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -745,7 +785,7 @@ mod tests {
         let output =
             run_mir(&mir).expect("task_group_cancel example should run directly through MIR");
         assert_eq!(output.stdout, "0\n1\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -756,7 +796,7 @@ mod tests {
         let output = run_serialized_mir(&mir_json, "/virtual/point.au", source)
             .expect("serialized MIR runner should execute point example");
         assert_eq!(output.stdout, "5.0\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -785,7 +825,7 @@ mod tests {
             .expect("path-aware MIR lowering should resolve local imports");
         let output = run_mir(&mir).expect("path-aware MIR lowering should produce runnable MIR");
         assert_eq!(output.stdout, "10\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -794,7 +834,7 @@ mod tests {
         let output =
             run_source_via_mir(source).expect("channels example should run through backend path");
         assert_eq!(output.stdout, "2\n4\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -1186,7 +1226,7 @@ mod tests {
             .join("../../examples/modules/simple_import.au");
         let output = run_path(&path).expect("module example should run");
         assert_eq!(output.stdout, "10\n2\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 
     #[test]
@@ -1195,6 +1235,6 @@ mod tests {
             .join("../../examples/modules/simple_import.au");
         let output = run_path_via_mir(&path).expect("module example should run via MIR");
         assert_eq!(output.stdout, "10\n2\n");
-        assert_eq!(output.value, Value::Int(0));
+        assert_eq!(output.value, zero_exit_value());
     }
 }

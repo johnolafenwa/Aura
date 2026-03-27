@@ -97,3 +97,4 @@ It does not yet support:
 - borrowed iteration syntax
 - `for` over arbitrary collections
 - custom step values for `range`
+- `range(...)` bounds outside the current signed index space

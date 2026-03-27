@@ -277,7 +277,7 @@ pub struct Expr {
 #[derive(Clone, Debug, Serialize)]
 pub enum ExprKind {
     Name(String),
-    Int(i128),
+    Int(u128),
     DurationMillis(i128),
     Float(f64),
     Bool(bool),

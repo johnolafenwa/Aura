@@ -12,6 +12,7 @@ use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinFunction, BuiltinMember, CallConvention,
 };
 use crate::diag::{Diagnostic, Result};
+use crate::integer::{integer_type_bounds as integer_type_bounds_impl, IntegerBounds, IntegerValue};
 
 #[derive(Clone, Debug)]
 pub struct Program {
@@ -23,6 +24,7 @@ pub struct Program {
     pub traits: BTreeMap<String, TraitInfo>,
     pub trait_impls: Vec<TraitImplInfo>,
     pub imported_modules: BTreeMap<String, ModuleNamespace>,
+    pub module_registry: BTreeMap<String, ModuleNamespace>,
     pub top_level_stmts: Vec<Stmt>,
 }
 
@@ -116,12 +118,18 @@ pub struct ModuleNamespace {
     pub classes: BTreeMap<String, ClassInfo>,
     pub enums: BTreeMap<String, EnumInfo>,
     pub traits: BTreeMap<String, TraitInfo>,
+    pub all_functions: BTreeMap<String, FunctionInfo>,
+    pub all_classes: BTreeMap<String, ClassInfo>,
+    pub all_enums: BTreeMap<String, EnumInfo>,
+    pub all_traits: BTreeMap<String, TraitInfo>,
+    pub imported_modules: BTreeMap<String, ModuleNamespace>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct ModuleContext {
     pub module_name: String,
     pub imported_bindings: BTreeMap<String, ImportedBinding>,
+    pub module_registry: BTreeMap<String, ModuleNamespace>,
 }
 
 #[derive(Clone, Debug)]
@@ -547,6 +555,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         &traits,
         &empty_trait_impls,
         &imported_modules,
+        &context.module_registry,
     );
     for class in classes.values() {
         let class_type_param_scope = type_param_scope(&class.decl.type_params);
@@ -742,6 +751,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         traits,
         trait_impls,
         imported_modules,
+        module_registry: context.module_registry,
         top_level_stmts: module.top_level_stmts.clone(),
     };
 
@@ -772,6 +782,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         &program.traits,
         &program.trait_impls,
         &program.imported_modules,
+        &program.module_registry,
     );
     for trait_info in program.traits.values() {
         let trait_type_param_scope = type_param_scope(&trait_info.decl.type_params);
@@ -787,12 +798,16 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         }
     }
     for function in program.functions.values() {
-        checker.check_function(&function.decl)?;
+        checker
+            .with_module_name(&function.module_name)
+            .check_function(&function.decl)?;
     }
 
     for class in program.classes.values() {
         for method in class.methods.values() {
-            checker.check_method(&class.decl, &method.decl)?;
+            checker
+                .with_module_name(&class.module_name)
+                .check_method(&class.decl, &method.decl)?;
         }
     }
 
@@ -1160,28 +1175,8 @@ fn is_builtin_type(name: &str) -> bool {
     )
 }
 
-pub(crate) fn integer_type_bounds(ty: &Type) -> Option<(i128, i128)> {
-    match ty {
-        Type::Unit => None,
-        Type::Module(_) => None,
-        Type::TypeParam(_) => None,
-        Type::Named(_, args) if !args.is_empty() => None,
-        Type::Named(name, _) => match name.as_str() {
-            "int8" => Some((i8::MIN as i128, i8::MAX as i128)),
-            "int16" => Some((i16::MIN as i128, i16::MAX as i128)),
-            "int32" => Some((i32::MIN as i128, i32::MAX as i128)),
-            "int64" => Some((i64::MIN as i128, i64::MAX as i128)),
-            "int128" => Some((i128::MIN, i128::MAX)),
-            "intsize" => Some((isize::MIN as i128, isize::MAX as i128)),
-            "uint8" => Some((u8::MIN as i128, u8::MAX as i128)),
-            "uint16" => Some((u16::MIN as i128, u16::MAX as i128)),
-            "uint32" => Some((u32::MIN as i128, u32::MAX as i128)),
-            "uint64" => Some((u64::MIN as i128, u64::MAX as i128)),
-            "uint128" => Some((u128::MIN as i128, i128::MAX)),
-            "uintsize" => Some((usize::MIN as i128, usize::MAX as i128)),
-            _ => None,
-        },
-    }
+pub(crate) fn integer_type_bounds(ty: &Type) -> Option<IntegerBounds> {
+    integer_type_bounds_impl(ty)
 }
 
 fn is_integer_type(ty: &Type) -> bool {
@@ -1215,6 +1210,7 @@ struct FunctionChecker<'a> {
     traits: &'a BTreeMap<String, TraitInfo>,
     trait_impls: &'a [TraitImplInfo],
     imported_modules: &'a BTreeMap<String, ModuleNamespace>,
+    module_registry: &'a BTreeMap<String, ModuleNamespace>,
     current_return_type: Option<Type>,
     type_params: BTreeMap<String, ()>,
     type_param_bounds: BTreeMap<String, Vec<String>>,
@@ -1228,7 +1224,11 @@ enum BlockFlow {
 
 impl<'a> FunctionChecker<'a> {
     fn seed_imported_modules(&self, locals: &mut HashMap<String, LocalBinding>) {
-        for (name, namespace) in self.imported_modules {
+        let imported_modules = self
+            .current_module_namespace()
+            .map(|namespace| &namespace.imported_modules)
+            .unwrap_or(self.imported_modules);
+        for (name, namespace) in imported_modules {
             locals.insert(
                 name.clone(),
                 LocalBinding {
@@ -1252,6 +1252,7 @@ impl<'a> FunctionChecker<'a> {
         traits: &'a BTreeMap<String, TraitInfo>,
         trait_impls: &'a [TraitImplInfo],
         imported_modules: &'a BTreeMap<String, ModuleNamespace>,
+        module_registry: &'a BTreeMap<String, ModuleNamespace>,
     ) -> Self {
         Self {
             module_name,
@@ -1263,6 +1264,7 @@ impl<'a> FunctionChecker<'a> {
             traits,
             trait_impls,
             imported_modules,
+            module_registry,
             current_return_type: None,
             type_params: BTreeMap::new(),
             type_param_bounds: BTreeMap::new(),
@@ -1280,6 +1282,7 @@ impl<'a> FunctionChecker<'a> {
             traits: self.traits,
             trait_impls: self.trait_impls,
             imported_modules: self.imported_modules,
+            module_registry: self.module_registry,
             current_return_type: Some(return_type),
             type_params: self.type_params.clone(),
             type_param_bounds: self.type_param_bounds.clone(),
@@ -1301,22 +1304,41 @@ impl<'a> FunctionChecker<'a> {
             traits: self.traits,
             trait_impls: self.trait_impls,
             imported_modules: self.imported_modules,
+            module_registry: self.module_registry,
             current_return_type: self.current_return_type.clone(),
             type_params,
             type_param_bounds,
         }
     }
 
+    fn with_module_name(&self, module_name: &'a str) -> Self {
+        Self {
+            module_name,
+            type_names: self.type_names,
+            type_arities: self.type_arities,
+            classes: self.classes,
+            enums: self.enums,
+            functions: self.functions,
+            traits: self.traits,
+            trait_impls: self.trait_impls,
+            imported_modules: self.imported_modules,
+            module_registry: self.module_registry,
+            current_return_type: self.current_return_type.clone(),
+            type_params: self.type_params.clone(),
+            type_param_bounds: self.type_param_bounds.clone(),
+        }
+    }
+
     fn validate_integer_literal(
         &self,
-        value: i128,
+        value: u128,
         target_ty: &Type,
         span: crate::diag::Span,
     ) -> Result<()> {
-        let Some((min, max)) = integer_type_bounds(target_ty) else {
+        let Some(bounds) = integer_type_bounds(target_ty) else {
             return Ok(());
         };
-        if value < min || value > max {
+        if !IntegerValue::from_literal(value).fits_bounds(bounds) {
             return Err(Diagnostic::at(
                 span,
                 format!(
@@ -1330,15 +1352,23 @@ impl<'a> FunctionChecker<'a> {
 
     fn validate_negative_integer_literal(
         &self,
-        value: i128,
+        value: u128,
         target_ty: &Type,
         span: crate::diag::Span,
     ) -> Result<()> {
-        let Some((min, _max)) = integer_type_bounds(target_ty) else {
+        let Some(bounds) = integer_type_bounds(target_ty) else {
             return Ok(());
         };
-        let negative = -value;
-        if negative < min {
+        let Some(negative) = IntegerValue::from_literal(value).checked_neg() else {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "integer literal `-{}` does not fit in `{}`",
+                    value, target_ty
+                ),
+            ));
+        };
+        if !negative.fits_bounds(bounds) {
             return Err(Diagnostic::at(
                 span,
                 format!(
@@ -1389,6 +1419,52 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Cast { expr, .. } => self.consume_value_expr(expr, locals),
             _ => Ok(()),
         }
+    }
+
+    fn merge_control_flow_moves(
+        &self,
+        locals: &mut HashMap<String, LocalBinding>,
+        branch_states: &[&HashMap<String, LocalBinding>],
+    ) {
+        let binding_names = locals.keys().cloned().collect::<Vec<_>>();
+        for name in binding_names {
+            let moved = branch_states.iter().any(|state| {
+                state
+                    .get(&name)
+                    .map(|binding| binding.moved)
+                    .unwrap_or(false)
+            });
+            if let Some(binding) = locals.get_mut(&name) {
+                binding.moved = moved;
+            }
+        }
+    }
+
+    fn reject_loop_carried_moves(
+        &self,
+        locals: &HashMap<String, LocalBinding>,
+        body_locals: &HashMap<String, LocalBinding>,
+        loop_kind: &str,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        for (name, binding) in locals {
+            if binding.ty.is_copy() {
+                continue;
+            }
+            let Some(body_binding) = body_locals.get(name) else {
+                continue;
+            };
+            if !binding.moved && body_binding.moved {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "`{}` loop body moves `{}` and may execute more than once",
+                        loop_kind, name
+                    ),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn check_param_defaults(
@@ -1710,6 +1786,7 @@ impl<'a> FunctionChecker<'a> {
                     }
 
                     let mut all_return = true;
+                    let mut branch_states = Vec::new();
                     for branch in &if_stmt.branches {
                         let mut branch_locals = locals.clone();
                         let branch_flow = self.check_block(
@@ -1722,8 +1799,10 @@ impl<'a> FunctionChecker<'a> {
                         if branch_flow != BlockFlow::AlwaysReturns {
                             all_return = false;
                         }
+                        branch_states.push(branch_locals);
                     }
 
+                    let mut else_state = None;
                     if let Some(else_body) = &if_stmt.else_body {
                         let mut else_locals = locals.clone();
                         let else_flow = self.check_block(
@@ -1736,8 +1815,26 @@ impl<'a> FunctionChecker<'a> {
                         if else_flow != BlockFlow::AlwaysReturns {
                             all_return = false;
                         }
+                        else_state = Some(else_locals);
                     } else {
                         all_return = false;
+                    }
+
+                    if let Some(ref else_locals) = else_state {
+                        let states = branch_states
+                            .iter()
+                            .map(|state| state as &HashMap<String, LocalBinding>)
+                            .chain(std::iter::once(else_locals as &HashMap<String, LocalBinding>))
+                            .collect::<Vec<_>>();
+                        self.merge_control_flow_moves(locals, &states);
+                    } else {
+                        let baseline_locals = locals.clone();
+                        let mut states = branch_states
+                            .iter()
+                            .map(|state| state as &HashMap<String, LocalBinding>)
+                            .collect::<Vec<_>>();
+                        states.push(&baseline_locals);
+                        self.merge_control_flow_moves(locals, &states);
                     }
 
                     if all_return {
@@ -1796,6 +1893,8 @@ impl<'a> FunctionChecker<'a> {
                         loop_depth + 1,
                         allow_return,
                     )?;
+                    self.reject_loop_carried_moves(locals, &body_locals, "for", for_stmt.span)?;
+                    self.merge_control_flow_moves(locals, &[&body_locals]);
                 }
                 Stmt::With(with_stmt) => {
                     let with_flow =
@@ -1837,6 +1936,13 @@ impl<'a> FunctionChecker<'a> {
                         loop_depth + 1,
                         allow_return,
                     )?;
+                    self.reject_loop_carried_moves(
+                        locals,
+                        &body_locals,
+                        "while",
+                        while_stmt.span,
+                    )?;
+                    self.merge_control_flow_moves(locals, &[&body_locals]);
                 }
                 Stmt::Break(break_stmt) => {
                     if loop_depth == 0 {
@@ -2273,16 +2379,25 @@ impl<'a> FunctionChecker<'a> {
                 Ok(Type::Unit)
             }
             ExprKind::Name(name) => {
-                let binding = locals
-                    .get(name)
-                    .ok_or_else(|| Diagnostic::at(expr.span, format!("unknown name `{}`", name)))?;
-                if binding.moved {
-                    return Err(Diagnostic::at(
-                        expr.span,
-                        format!("use of moved value `{}`", name),
-                    ));
+                if let Some(binding) = locals.get(name) {
+                    if binding.moved {
+                        return Err(Diagnostic::at(
+                            expr.span,
+                            format!("use of moved value `{}`", name),
+                        ));
+                    }
+                    return Ok(binding.ty.clone());
                 }
-                Ok(binding.ty.clone())
+                if let Some(function) = self.resolve_function_info(name) {
+                    return Ok(function.signature.return_type.clone());
+                }
+                if let Some(class_info) = self.resolve_class_info(name) {
+                    return Ok(Type::named(class_info.decl.name.clone()));
+                }
+                if let Some(enum_info) = self.resolve_enum_info(name) {
+                    return Ok(Type::named(enum_info.decl.name.clone()));
+                }
+                Err(Diagnostic::at(expr.span, format!("unknown name `{}`", name)))
             }
             ExprKind::Int(value) => {
                 let target_ty = expected
@@ -2426,7 +2541,16 @@ impl<'a> FunctionChecker<'a> {
                     let right_ty = self.type_of_expr(right, locals)?;
                     return self.type_of_binary(expr.span, *op, left_ty, right_ty);
                 }
-                let mut left_ty = self.type_of_expr_hint(left, locals, expected)?;
+                let operand_expected = match op {
+                    BinaryOp::Eq
+                    | BinaryOp::NotEq
+                    | BinaryOp::Less
+                    | BinaryOp::LessEq
+                    | BinaryOp::Greater
+                    | BinaryOp::GreaterEq => None,
+                    _ => expected,
+                };
+                let mut left_ty = self.type_of_expr_hint(left, locals, operand_expected)?;
                 let mut right_ty = self.type_of_expr_hint(right, locals, Some(&left_ty))?;
                 if left_ty != right_ty && matches!(left.kind, ExprKind::Int(_) | ExprKind::Float(_))
                 {
@@ -2440,6 +2564,28 @@ impl<'a> FunctionChecker<'a> {
                 self.type_of_binary(expr.span, *op, left_ty, right_ty)
             }
             ExprKind::Member { object, field } => {
+                if let Some((module_path, enum_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(enum_info) = namespace.enums.get(&enum_name) {
+                            let variant = enum_info.variants.get(field).ok_or_else(|| {
+                                Diagnostic::at(
+                                    expr.span,
+                                    format!("enum `{}` has no variant `{}`", enum_name, field),
+                                )
+                            })?;
+                            if variant.payload.is_some() {
+                                return Err(Diagnostic::at(
+                                    expr.span,
+                                    format!(
+                                        "variant `{}` of enum `{}` requires a payload",
+                                        field, enum_name
+                                    ),
+                                ));
+                            }
+                            return Ok(Type::named(enum_info.decl.name.clone()));
+                        }
+                    }
+                }
                 if let ExprKind::Name(enum_name) = &object.kind {
                     if let Some(expected_ty) = expected {
                         if let Some(payload_ty) =
@@ -2457,7 +2603,7 @@ impl<'a> FunctionChecker<'a> {
                             return Ok(expected_ty.clone());
                         }
                     }
-                    if let Some(enum_info) = self.enums.get(enum_name) {
+                    if let Some(enum_info) = self.resolve_enum_info(enum_name) {
                         let variant = enum_info.variants.get(field).ok_or_else(|| {
                             Diagnostic::at(
                                 expr.span,
@@ -2666,8 +2812,8 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
             }
-            ExprKind::Name(name) if self.functions.contains_key(name) => {
-                let function = self.functions.get(name).unwrap();
+            ExprKind::Name(name) if self.resolve_function_info(name).is_some() => {
+                let function = self.resolve_function_info(name).unwrap();
                 self.type_check_callable_args(
                     &format!("function `{}`", name),
                     &function.decl.type_params,
@@ -2682,8 +2828,8 @@ impl<'a> FunctionChecker<'a> {
                     HashMap::new(),
                 )
             }
-            ExprKind::Name(name) if self.classes.contains_key(name) => {
-                let class = self.classes.get(name).unwrap();
+            ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
+                let class = self.resolve_class_info(name).unwrap();
                 if args.iter().any(|argument| argument.name.is_none()) {
                     return Err(Diagnostic::at(
                         span,
@@ -2798,8 +2944,85 @@ impl<'a> FunctionChecker<'a> {
                 Ok(Type::Named(name.clone(), resolved_args))
             }
             ExprKind::Member { object, field } => {
+                if let Some((module_path, item_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(class_info) = namespace.classes.get(&item_name) {
+                            if let Some(method) = class_info.methods.get(field) {
+                                if method.decl.receiver.is_none() {
+                                    return self.type_check_callable_args(
+                                        &format!("method `{}`", field),
+                                        &method.decl.type_params,
+                                        &method.decl.params,
+                                        &method.signature.params,
+                                        &method.signature.return_type,
+                                        &method.type_param_bounds,
+                                        args,
+                                        span,
+                                        locals,
+                                        expected,
+                                        HashMap::new(),
+                                    );
+                                }
+                            }
+                        }
+                        if let Some(enum_info) = namespace.enums.get(&item_name) {
+                            let variant = enum_info.variants.get(field).ok_or_else(|| {
+                                Diagnostic::at(
+                                    span,
+                                    format!("enum `{}` has no variant `{}`", item_name, field),
+                                )
+                            })?;
+                            if args.iter().any(|argument| argument.name.is_some()) {
+                                return Err(Diagnostic::at(
+                                    span,
+                                    "enum variant constructors do not take keyword arguments",
+                                ));
+                            }
+                            match &variant.payload {
+                                Some(payload_ty) => {
+                                    if args.len() != 1 {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "variant `{}` of enum `{}` expects exactly one payload argument",
+                                                field, item_name
+                                            ),
+                                        ));
+                                    }
+                                    let actual = self.type_of_expr_hint(
+                                        &args[0].value,
+                                        locals,
+                                        Some(payload_ty),
+                                    )?;
+                                    if actual != *payload_ty {
+                                        return Err(Diagnostic::at(
+                                            args[0].span,
+                                            format!(
+                                                "variant `{}` of enum `{}` expects `{}`, found `{}`",
+                                                field, item_name, payload_ty, actual
+                                            ),
+                                        ));
+                                    }
+                                    if !actual.is_copy() {
+                                        self.consume_value_expr(&args[0].value, locals)?;
+                                    }
+                                }
+                                None => {
+                                    return Err(Diagnostic::at(
+                                        span,
+                                        format!(
+                                            "variant `{}` of enum `{}` does not take a payload",
+                                            field, item_name
+                                        ),
+                                    ));
+                                }
+                            }
+                            return Ok(Type::named(enum_info.decl.name.clone()));
+                        }
+                    }
+                }
                 if let ExprKind::Name(class_name) = &object.kind {
-                    if let Some(class_info) = self.classes.get(class_name) {
+                    if let Some(class_info) = self.resolve_class_info(class_name) {
                         if let Some(method) = class_info.methods.get(field) {
                             if method.decl.receiver.is_some() {
                                 return Err(Diagnostic::at(
@@ -2880,7 +3103,7 @@ impl<'a> FunctionChecker<'a> {
                             return Ok(expected_ty.clone());
                         }
                     }
-                    if let Some(enum_info) = self.enums.get(enum_name) {
+                    if let Some(enum_info) = self.resolve_enum_info(enum_name) {
                         let variant = enum_info.variants.get(field).ok_or_else(|| {
                             Diagnostic::at(
                                 span,
@@ -3242,7 +3465,7 @@ impl<'a> FunctionChecker<'a> {
                 }
 
                 if let Type::Named(class_name, type_args) = &receiver_ty {
-                    if let Some(class_info) = self.classes.get(class_name) {
+                    if let Some(class_info) = self.resolve_class_info(class_name) {
                         if let Some(method) = class_info.methods.get(field) {
                             if self.is_external_module(&class_info.module_name)
                                 && !method.decl.public
@@ -3401,7 +3624,19 @@ impl<'a> FunctionChecker<'a> {
                     wildcard_span = Some(*span);
                 }
                 Pattern::Variant(pattern) => {
-                    if pattern.enum_name != *enum_name {
+                    let pattern_enum_name = if pattern.enum_name == *enum_name {
+                        pattern.enum_name.clone()
+                    } else if let Some(pattern_enum_info) =
+                        self.resolve_enum_info(&pattern.enum_name)
+                    {
+                        pattern_enum_info.decl.name.clone()
+                    } else {
+                        return Err(Diagnostic::at(
+                            pattern.span,
+                            format!("unknown enum `{}` in match pattern", pattern.enum_name),
+                        ));
+                    };
+                    if pattern_enum_name != *enum_name {
                         return Err(Diagnostic::at(
                             pattern.span,
                             format!(
@@ -3555,6 +3790,15 @@ impl<'a> FunctionChecker<'a> {
                         ),
                     ));
                 }
+                if namespace.enums.contains_key(field) {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "enum `{}` from module `{}` must be used via one of its variants",
+                            field, path
+                        ),
+                    ));
+                }
                 return Err(Diagnostic::at(
                     span,
                     format!("module `{}` has no member `{}`", path, field),
@@ -3590,7 +3834,7 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
 
-        let Some(class_info) = self.classes.get(name) else {
+        let Some(class_info) = self.resolve_class_info(name) else {
             return Err(Diagnostic::at(
                 span,
                 format!("type `{}` has no field `{}`", name, field),
@@ -3689,6 +3933,9 @@ impl<'a> FunctionChecker<'a> {
     }
 
     fn module_namespace(&self, path: &str) -> Option<&ModuleNamespace> {
+        if let Some(namespace) = self.module_registry.get(path) {
+            return Some(namespace);
+        }
         let mut segments = path.split('.');
         let first = segments.next()?;
         let mut namespace = self.imported_modules.get(first)?;
@@ -3696,6 +3943,157 @@ impl<'a> FunctionChecker<'a> {
             namespace = namespace.modules.get(segment)?;
         }
         Some(namespace)
+    }
+
+    fn current_module_namespace(&self) -> Option<&ModuleNamespace> {
+        if self.module_name == "<main>" {
+            None
+        } else {
+            self.module_registry.get(self.module_name)
+        }
+    }
+
+    fn infer_module_path(&self, expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Name(name) => self
+                .current_module_namespace()
+                .and_then(|namespace| namespace.imported_modules.get(name))
+                .or_else(|| self.imported_modules.get(name))
+                .map(|namespace| namespace.path.clone()),
+            ExprKind::Member { object, field } => {
+                let module_path = self.infer_module_path(object)?;
+                let namespace = self.module_namespace(&module_path)?;
+                namespace.modules.get(field).map(|child| child.path.clone())
+            }
+            ExprKind::Group(inner) => self.infer_module_path(inner),
+            _ => None,
+        }
+    }
+
+    fn qualified_module_item(&self, expr: &Expr) -> Option<(String, String)> {
+        match &expr.kind {
+            ExprKind::Member { object, field } => {
+                self.infer_module_path(object).map(|path| (path, field.clone()))
+            }
+            ExprKind::Group(inner) => self.qualified_module_item(inner),
+            _ => None,
+        }
+    }
+
+    fn find_class_in_modules<'b>(
+        modules: &'b BTreeMap<String, ModuleNamespace>,
+        name: &str,
+        found: &mut Option<&'b ClassInfo>,
+        ambiguous: &mut bool,
+    ) {
+        for namespace in modules.values() {
+            if let Some(class_info) = namespace
+                .classes
+                .get(name)
+                .or_else(|| namespace.all_classes.get(name))
+            {
+                if found.is_some() {
+                    *ambiguous = true;
+                } else {
+                    *found = Some(class_info);
+                }
+            }
+            Self::find_class_in_modules(&namespace.modules, name, found, ambiguous);
+        }
+    }
+
+    fn find_enum_in_modules<'b>(
+        modules: &'b BTreeMap<String, ModuleNamespace>,
+        name: &str,
+        found: &mut Option<&'b EnumInfo>,
+        ambiguous: &mut bool,
+    ) {
+        for namespace in modules.values() {
+            if let Some(enum_info) = namespace
+                .enums
+                .get(name)
+                .or_else(|| namespace.all_enums.get(name))
+            {
+                if found.is_some() {
+                    *ambiguous = true;
+                } else {
+                    *found = Some(enum_info);
+                }
+            }
+            Self::find_enum_in_modules(&namespace.modules, name, found, ambiguous);
+        }
+    }
+
+    fn imported_class_info(&self, name: &str) -> Option<&ClassInfo> {
+        let modules = self
+            .current_module_namespace()
+            .map(|namespace| &namespace.imported_modules)
+            .unwrap_or(self.imported_modules);
+        let mut found = None;
+        let mut ambiguous = false;
+        Self::find_class_in_modules(modules, name, &mut found, &mut ambiguous);
+        if ambiguous {
+            None
+        } else {
+            found
+        }
+    }
+
+    fn imported_enum_info(&self, name: &str) -> Option<&EnumInfo> {
+        let modules = self
+            .current_module_namespace()
+            .map(|namespace| &namespace.imported_modules)
+            .unwrap_or(self.imported_modules);
+        let mut found = None;
+        let mut ambiguous = false;
+        Self::find_enum_in_modules(modules, name, &mut found, &mut ambiguous);
+        if ambiguous {
+            None
+        } else {
+            found
+        }
+    }
+
+    fn resolve_function_info(&self, name: &str) -> Option<&FunctionInfo> {
+        self.current_module_namespace()
+            .and_then(|namespace| namespace.all_functions.get(name))
+            .or_else(|| self.functions.get(name))
+    }
+
+    fn resolve_class_info(&self, name: &str) -> Option<&ClassInfo> {
+        if let Some((module_path, item_name)) = name.rsplit_once('.') {
+            if let Some(namespace) = self.module_namespace(module_path) {
+                if let Some(class_info) = namespace
+                    .classes
+                    .get(item_name)
+                    .or_else(|| namespace.all_classes.get(item_name))
+                {
+                    return Some(class_info);
+                }
+            }
+        }
+        self.current_module_namespace()
+            .and_then(|namespace| namespace.all_classes.get(name))
+            .or_else(|| self.classes.get(name))
+            .or_else(|| self.imported_class_info(name))
+    }
+
+    fn resolve_enum_info(&self, name: &str) -> Option<&EnumInfo> {
+        if let Some((module_path, item_name)) = name.rsplit_once('.') {
+            if let Some(namespace) = self.module_namespace(module_path) {
+                if let Some(enum_info) = namespace
+                    .enums
+                    .get(item_name)
+                    .or_else(|| namespace.all_enums.get(item_name))
+                {
+                    return Some(enum_info);
+                }
+            }
+        }
+        self.current_module_namespace()
+            .and_then(|namespace| namespace.all_enums.get(name))
+            .or_else(|| self.enums.get(name))
+            .or_else(|| self.imported_enum_info(name))
     }
 
     fn is_external_module(&self, owner_module: &str) -> bool {
@@ -3952,7 +4350,7 @@ impl<'a> FunctionChecker<'a> {
             Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
                 Some(vec![("Closed".to_string(), Some(args[0].clone()))])
             }
-            Type::Named(name, args) => self.enums.get(name).map(|enum_info| {
+            Type::Named(name, args) => self.resolve_enum_info(name).map(|enum_info| {
                 let substitutions =
                     substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
                 enum_info

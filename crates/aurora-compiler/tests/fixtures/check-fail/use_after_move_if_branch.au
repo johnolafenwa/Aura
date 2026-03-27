@@ -1,0 +1,12 @@
+class Token:
+    value: int32
+
+def consume(token: Token):
+    print(token.value)
+
+def main() -> int32:
+    token = Token(value=1)
+    if true:
+        consume(token)
+    print(token.value)
+    return 0

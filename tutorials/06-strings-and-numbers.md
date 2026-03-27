@@ -15,6 +15,12 @@ Floating-point literals can also adopt an expected `float32` type when the surro
 ratio: float32 = 3.25
 ```
 
+Integer literals also support the full `uint128` range now, instead of stopping at the signed `i128` ceiling:
+
+```python
+value: uint128 = 340282366920938463463374607431768211455
+```
+
 ## Arithmetic
 
 ```python
@@ -158,3 +164,16 @@ The current type checker recognizes these numeric names:
 `float64` remains the default floating literal type. Use an explicit annotation or another expected type context when you want a literal to be treated as `float32`.
 
 Annotated integer widths are enforced in both the checker and the runtime. If a value no longer fits its annotated integer type at runtime, Aurora reports an error instead of silently widening it.
+
+Full-range `uint128` literals and arithmetic are part of the maintained bootstrap surface now:
+
+```python
+def main() -> int32:
+    value: uint128 = 340282366920938463463374607431768211455
+    almost: uint128 = 340282366920938463463374607431768211454
+    print(value)
+    print(almost + 1)
+    return 0
+```
+
+See [examples/numbers/uint128_values.au](../examples/numbers/uint128_values.au).
