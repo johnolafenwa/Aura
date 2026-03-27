@@ -175,7 +175,10 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
                         if truncated < min as f64 || truncated > max as f64 {
                             return Err(render_target_error(
                                 span,
-                                format!("integer value `{}` does not fit in `{}`", truncated, target),
+                                format!(
+                                    "integer value `{}` does not fit in `{}`",
+                                    truncated, target
+                                ),
                             ));
                         }
                         IntegerValue::from_signed(truncated as i128)
@@ -184,7 +187,10 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
                         if truncated < 0.0 || truncated > max as f64 {
                             return Err(render_target_error(
                                 span,
-                                format!("integer value `{}` does not fit in `{}`", truncated, target),
+                                format!(
+                                    "integer value `{}` does not fit in `{}`",
+                                    truncated, target
+                                ),
                             ));
                         }
                         IntegerValue::from_literal(truncated as u128)
@@ -272,13 +278,7 @@ impl Value {
     pub fn render(&self) -> String {
         match self {
             Value::Int(value) => value.to_string(),
-            Value::Float(value) => {
-                if value.is_finite() && value.fract() == 0.0 {
-                    format!("{value:.1}")
-                } else {
-                    value.to_string()
-                }
-            }
+            Value::Float(value) => render_float(*value),
             Value::Bool(value) => value.to_string(),
             Value::String(value) => value.clone(),
             Value::Duration(value) => format!("{}ms", value),
@@ -312,6 +312,19 @@ impl Value {
             }
         }
     }
+}
+
+fn render_float(value: f64) -> String {
+    let roundtripped_f32 = (value as f32) as f64;
+    let mut rendered = if value == roundtripped_f32 {
+        (value as f32).to_string()
+    } else {
+        value.to_string()
+    };
+    if !rendered.contains(['.', 'e', 'E']) {
+        rendered.push_str(".0");
+    }
+    rendered
 }
 
 impl ChannelValue {
@@ -598,7 +611,11 @@ impl Interpreter {
         self.seed_module_imports(env, &self.program.imported_modules);
     }
 
-    fn seed_module_imports(&self, env: &mut Env, imported_modules: &BTreeMap<String, ModuleNamespace>) {
+    fn seed_module_imports(
+        &self,
+        env: &mut Env,
+        imported_modules: &BTreeMap<String, ModuleNamespace>,
+    ) {
         for (name, namespace) in imported_modules {
             env.define_typed(
                 name.clone(),
@@ -654,9 +671,9 @@ impl Interpreter {
 
     fn qualified_module_item(&self, expr: &Expr) -> Option<(String, String)> {
         match &expr.kind {
-            ExprKind::Member { object, field } => {
-                self.infer_module_path(object).map(|path| (path, field.clone()))
-            }
+            ExprKind::Member { object, field } => self
+                .infer_module_path(object)
+                .map(|path| (path, field.clone())),
             ExprKind::Group(inner) => self.qualified_module_item(inner),
             _ => None,
         }
@@ -763,7 +780,9 @@ impl Interpreter {
         span: crate::diag::Span,
     ) -> Result<Value> {
         let coerced = match (&value, ty) {
-            (Value::Int(_), Type::Named(name, _)) if name.starts_with("int") || name.starts_with("uint") => {
+            (Value::Int(_), Type::Named(name, _))
+                if name.starts_with("int") || name.starts_with("uint") =>
+            {
                 value
             }
             (Value::Float(_), Type::Named(name, _)) if name == "float32" || name == "float64" => {
@@ -772,7 +791,9 @@ impl Interpreter {
             (Value::Int(_), Type::Named(name, _)) if name == "float32" || name == "float64" => {
                 cast_numeric_value(value, ty, Some(span))?
             }
-            (Value::Float(_), Type::Named(name, _)) if name.starts_with("int") || name.starts_with("uint") => {
+            (Value::Float(_), Type::Named(name, _))
+                if name.starts_with("int") || name.starts_with("uint") =>
+            {
                 cast_numeric_value(value, ty, Some(span))?
             }
             _ => value,
@@ -1619,9 +1640,9 @@ impl Interpreter {
                     || Diagnostic::at(expr.span, format!("unknown name `{}`", name)),
                 )?))
             }
-            ExprKind::Int(value) => Ok(EvalOutcome::Value(Value::Int(
-                IntegerValue::from_literal(*value),
-            ))),
+            ExprKind::Int(value) => Ok(EvalOutcome::Value(Value::Int(IntegerValue::from_literal(
+                *value,
+            )))),
             ExprKind::DurationMillis(value) => Ok(EvalOutcome::Value(Value::Duration(*value))),
             ExprKind::Float(value) => Ok(EvalOutcome::Value(Value::Float(*value))),
             ExprKind::Bool(value) => Ok(EvalOutcome::Value(Value::Bool(*value))),
@@ -2019,8 +2040,7 @@ impl Interpreter {
                     .iter()
                     .map(|argument| argument.value.clone())
                     .collect();
-                let outcome =
-                    self.call_function(&function, &function_info.module_name, values)?;
+                let outcome = self.call_function(&function, &function_info.module_name, values)?;
                 self.apply_borrowed_param_writebacks(
                     &function.params,
                     &evaluated_args,
@@ -2066,9 +2086,7 @@ impl Interpreter {
                     if let Some(default) = &field.default {
                         let value = match self.eval_expr(default, env)? {
                             EvalOutcome::Value(value) => value,
-                            EvalOutcome::Return(value) => {
-                                return Ok(EvalOutcome::Return(value))
-                            }
+                            EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
                         };
                         let field_ty = class_info
                             .fields
@@ -2188,8 +2206,7 @@ impl Interpreter {
                                 .iter()
                                 .map(|argument| argument.value.clone())
                                 .collect();
-                            let outcome =
-                                self.call_function(&method.decl, &module_name, values)?;
+                            let outcome = self.call_function(&method.decl, &module_name, values)?;
                             self.apply_borrowed_param_writebacks(
                                 &method.decl.params,
                                 &evaluated_args,
@@ -2321,11 +2338,8 @@ impl Interpreter {
                                 .iter()
                                 .map(|argument| argument.value.clone())
                                 .collect();
-                            let outcome = self.call_function(
-                                &function.decl,
-                                &function.module_name,
-                                values,
-                            )?;
+                            let outcome =
+                                self.call_function(&function.decl, &function.module_name, values)?;
                             self.apply_borrowed_param_writebacks(
                                 &function.decl.params,
                                 &evaluated_args,
@@ -2491,8 +2505,7 @@ impl Interpreter {
                             values.extend(
                                 evaluated_args.iter().map(|argument| argument.value.clone()),
                             );
-                            let outcome =
-                                self.call_function(&method.decl, &module_name, values)?;
+                            let outcome = self.call_function(&method.decl, &module_name, values)?;
                             if method.decl.receiver == Some(ReceiverKind::BorrowMut) {
                                 let updated_receiver =
                                     outcome.updated_receiver.ok_or_else(|| {
@@ -3278,5 +3291,23 @@ impl Interpreter {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render_float, Value};
+
+    #[test]
+    fn render_float_preserves_whole_number_fraction() {
+        assert_eq!(render_float(42.0), "42.0");
+        assert_eq!(Value::Float(0.0).render(), "0.0");
+    }
+
+    #[test]
+    fn render_float_hides_float32_roundtrip_noise() {
+        let float32_value = (3.14f32) as f64;
+        assert_eq!(render_float(float32_value), "3.14");
+        assert_eq!(Value::Float(float32_value).render(), "3.14");
     }
 }

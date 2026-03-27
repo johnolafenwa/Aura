@@ -103,8 +103,12 @@ impl IntegerValue {
         let (sign, magnitude) = self.sign_magnitude();
         match sign {
             IntegerSign::Zero => Some(Self::zero()),
-            IntegerSign::Positive => Self::from_sign_and_magnitude(IntegerSign::Negative, magnitude),
-            IntegerSign::Negative => Self::from_sign_and_magnitude(IntegerSign::Positive, magnitude),
+            IntegerSign::Positive => {
+                Self::from_sign_and_magnitude(IntegerSign::Negative, magnitude)
+            }
+            IntegerSign::Negative => {
+                Self::from_sign_and_magnitude(IntegerSign::Positive, magnitude)
+            }
         }
     }
 
@@ -196,12 +200,8 @@ impl IntegerValue {
                 Self::from_sign_and_magnitude(left_sign, magnitude)
             }
             _ => match left_mag.cmp(&right_mag) {
-                Ordering::Greater => {
-                    Self::from_sign_and_magnitude(left_sign, left_mag - right_mag)
-                }
-                Ordering::Less => {
-                    Self::from_sign_and_magnitude(right_sign, right_mag - left_mag)
-                }
+                Ordering::Greater => Self::from_sign_and_magnitude(left_sign, left_mag - right_mag),
+                Ordering::Less => Self::from_sign_and_magnitude(right_sign, right_mag - left_mag),
                 Ordering::Equal => Some(Self::zero()),
             },
         }
@@ -264,7 +264,9 @@ pub fn integer_type_bounds(ty: &Type) -> Option<IntegerBounds> {
                 min: isize::MIN as i128,
                 max: isize::MAX as i128,
             }),
-            "uint8" => Some(IntegerBounds::Unsigned { max: u8::MAX as u128 }),
+            "uint8" => Some(IntegerBounds::Unsigned {
+                max: u8::MAX as u128,
+            }),
             "uint16" => Some(IntegerBounds::Unsigned {
                 max: u16::MAX as u128,
             }),

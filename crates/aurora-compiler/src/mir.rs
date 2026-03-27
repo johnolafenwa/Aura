@@ -699,9 +699,9 @@ impl<'a> Lowerer<'a> {
 
     fn qualified_module_item(&self, expr: &Expr) -> Option<(String, String)> {
         match &expr.kind {
-            ExprKind::Member { object, field } => {
-                self.infer_module_path(object).map(|path| (path, field.clone()))
-            }
+            ExprKind::Member { object, field } => self
+                .infer_module_path(object)
+                .map(|path| (path, field.clone())),
             ExprKind::Group(inner) => self.qualified_module_item(inner),
             _ => None,
         }
@@ -879,7 +879,7 @@ impl<'a> Lowerer<'a> {
                     });
                 }
                 self.with_stack.pop();
-                true
+                !self.current_terminated()
             }
             Stmt::Select(select_stmt) => {
                 self.lower_select(select_stmt);
@@ -1475,8 +1475,7 @@ impl<'a> Lowerer<'a> {
                                 .iter()
                                 .filter_map(|field_decl| {
                                     if let Some(argument) = args.iter().find(|argument| {
-                                        argument.name.as_deref()
-                                            == Some(field_decl.name.as_str())
+                                        argument.name.as_deref() == Some(field_decl.name.as_str())
                                     }) {
                                         Some(MirFieldInit {
                                             name: field_decl.name.clone(),
@@ -1508,17 +1507,18 @@ impl<'a> Lowerer<'a> {
                         _ => panic!("task-group spawn should lower from a named function target"),
                     };
                     let group = self.lower_expr(object);
-                    let lowered_args =
-                        if let Some(function_info) = self.resolve_function_info(&function).cloned() {
-                            self.lower_user_args(
-                                &format!("function `{}`", function),
-                                &function_info.decl.params,
-                                &args[1..],
-                                callee.span,
-                            )
-                        } else {
-                            self.lower_args(&args[1..])
-                        };
+                    let lowered_args = if let Some(function_info) =
+                        self.resolve_function_info(&function).cloned()
+                    {
+                        self.lower_user_args(
+                            &format!("function `{}`", function),
+                            &function_info.decl.params,
+                            &args[1..],
+                            callee.span,
+                        )
+                    } else {
+                        self.lower_args(&args[1..])
+                    };
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
                         value: Rvalue::Spawn {
@@ -1853,7 +1853,20 @@ impl<'a> Lowerer<'a> {
                 let class = self.resolve_class_info(&class_name)?;
                 class.fields.get(field).map(|field| field.ty.clone())
             }
-            ExprKind::Binary { left, right, .. } => {
+            ExprKind::Binary { op, left, right } => {
+                if matches!(
+                    op,
+                    BinaryOp::Eq
+                        | BinaryOp::NotEq
+                        | BinaryOp::Less
+                        | BinaryOp::LessEq
+                        | BinaryOp::Greater
+                        | BinaryOp::GreaterEq
+                        | BinaryOp::And
+                        | BinaryOp::Or
+                ) {
+                    return Some(Type::named("bool"));
+                }
                 let left_ty = self.infer_expr_type(left)?;
                 let right_ty = self.infer_expr_type(right)?;
                 if left_ty == Type::named("float64") || right_ty == Type::named("float64") {

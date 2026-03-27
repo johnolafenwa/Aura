@@ -12,7 +12,9 @@ use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinFunction, BuiltinMember, CallConvention,
 };
 use crate::diag::{Diagnostic, Result};
-use crate::integer::{integer_type_bounds as integer_type_bounds_impl, IntegerBounds, IntegerValue};
+use crate::integer::{
+    integer_type_bounds as integer_type_bounds_impl, IntegerBounds, IntegerValue,
+};
 
 #[derive(Clone, Debug)]
 pub struct Program {
@@ -1824,7 +1826,9 @@ impl<'a> FunctionChecker<'a> {
                         let states = branch_states
                             .iter()
                             .map(|state| state as &HashMap<String, LocalBinding>)
-                            .chain(std::iter::once(else_locals as &HashMap<String, LocalBinding>))
+                            .chain(std::iter::once(
+                                else_locals as &HashMap<String, LocalBinding>,
+                            ))
                             .collect::<Vec<_>>();
                         self.merge_control_flow_moves(locals, &states);
                     } else {
@@ -1936,12 +1940,7 @@ impl<'a> FunctionChecker<'a> {
                         loop_depth + 1,
                         allow_return,
                     )?;
-                    self.reject_loop_carried_moves(
-                        locals,
-                        &body_locals,
-                        "while",
-                        while_stmt.span,
-                    )?;
+                    self.reject_loop_carried_moves(locals, &body_locals, "while", while_stmt.span)?;
                     self.merge_control_flow_moves(locals, &[&body_locals]);
                 }
                 Stmt::Break(break_stmt) => {
@@ -2397,7 +2396,10 @@ impl<'a> FunctionChecker<'a> {
                 if let Some(enum_info) = self.resolve_enum_info(name) {
                     return Ok(Type::named(enum_info.decl.name.clone()));
                 }
-                Err(Diagnostic::at(expr.span, format!("unknown name `{}`", name)))
+                Err(Diagnostic::at(
+                    expr.span,
+                    format!("unknown name `{}`", name),
+                ))
             }
             ExprKind::Int(value) => {
                 let target_ty = expected
@@ -3972,9 +3974,9 @@ impl<'a> FunctionChecker<'a> {
 
     fn qualified_module_item(&self, expr: &Expr) -> Option<(String, String)> {
         match &expr.kind {
-            ExprKind::Member { object, field } => {
-                self.infer_module_path(object).map(|path| (path, field.clone()))
-            }
+            ExprKind::Member { object, field } => self
+                .infer_module_path(object)
+                .map(|path| (path, field.clone())),
             ExprKind::Group(inner) => self.qualified_module_item(inner),
             _ => None,
         }

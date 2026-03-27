@@ -9,11 +9,11 @@ use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::UnaryOp;
 use crate::diag::{Diagnostic, Result};
+use crate::integer::IntegerValue;
 use crate::interpreter::{
     cast_numeric_value, CancellationContext, ChannelValue, EnumVariantValue, InstanceValue,
     RangeValue, RunOutput, TaskGroupValue, TaskValue, TryRecvResult, Value,
 };
-use crate::integer::IntegerValue;
 use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirFunction, MirMethod, MirModule, MirParam,
     MirReceiverKind, MirSelectKind, MirTraitImpl, Operand, Rvalue, Terminator,
@@ -384,14 +384,10 @@ impl MirRuntime {
             {
                 value
             }
-            (Value::Float(_), Type::Named(name, _))
-                if name == "float32" || name == "float64" =>
-            {
+            (Value::Float(_), Type::Named(name, _)) if name == "float32" || name == "float64" => {
                 cast_numeric_value(value, ty, span)?
             }
-            (Value::Int(_), Type::Named(name, _))
-                if name == "float32" || name == "float64" =>
-            {
+            (Value::Int(_), Type::Named(name, _)) if name == "float32" || name == "float64" => {
                 cast_numeric_value(value, ty, span)?
             }
             (Value::Float(_), Type::Named(name, _))
@@ -534,8 +530,7 @@ impl MirRuntime {
                         _ => None,
                     };
                     if let Some(target_ty) = self.resolve_place_type(target, env) {
-                        let evaluated =
-                            self.coerce_value_to_type(evaluated, &target_ty, span)?;
+                        let evaluated = self.coerce_value_to_type(evaluated, &target_ty, span)?;
                         if !target.contains('.') {
                             env.set_place_type(target, target_ty);
                         }
@@ -932,9 +927,7 @@ impl MirRuntime {
                     let bound = bind_builtin_args(&["duration"], values)?;
                     let duration = match bound[0].value.clone() {
                         Value::Int(duration) => duration.as_i128().ok_or_else(|| {
-                            Diagnostic::new(
-                                "`after(...)` duration must fit in signed timer range",
-                            )
+                            Diagnostic::new("`after(...)` duration must fit in signed timer range")
                         })?,
                         Value::Duration(duration) => duration,
                         _ => {
@@ -951,9 +944,7 @@ impl MirRuntime {
                     let bound = bind_builtin_args(&["duration"], values)?;
                     let duration = match bound[0].value.clone() {
                         Value::Int(duration) => duration.as_i128().ok_or_else(|| {
-                            Diagnostic::new(
-                                "`sleep(...)` duration must fit in signed timer range",
-                            )
+                            Diagnostic::new("`sleep(...)` duration must fit in signed timer range")
                         })?,
                         Value::Duration(duration) => duration,
                         _ => {
@@ -1094,19 +1085,20 @@ impl MirRuntime {
                             .or_else(|| Self::infer_value_type(other))
                             .filter(|ty| !matches!(ty, Type::TypeParam(_)));
                         if let Some(resolved_receiver_ty) = resolved_receiver_ty {
-                            if let Some(method) =
-                                self.find_trait_impl_method(&resolved_receiver_ty, field).cloned()
+                            if let Some(method) = self
+                                .find_trait_impl_method(&resolved_receiver_ty, field)
+                                .cloned()
                             {
                                 let function = self
                                     .functions
                                     .get(&method.function_name)
                                     .cloned()
                                     .ok_or_else(|| {
-                                        Diagnostic::new(format!(
-                                            "unknown MIR method body `{}`",
-                                            method.function_name
-                                        ))
-                                    })?;
+                                    Diagnostic::new(format!(
+                                        "unknown MIR method body `{}`",
+                                        method.function_name
+                                    ))
+                                })?;
                                 let evaluated_args = evaluate_named_args(args, env)?;
                                 let outcome = self.call_function(
                                     &function,

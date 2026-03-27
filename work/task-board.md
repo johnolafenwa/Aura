@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-03-25
+Last updated: 2026-03-27
 
 ## In Progress
 
@@ -130,6 +130,8 @@ Last updated: 2026-03-25
 - Expanded the direct native backend to cover the full currently implemented Aurora language surface, including mutable borrows, `range`/`for`, traits, generics, resource cleanup, and concurrency/task-group/select examples.
 - Verified direct backend parity against every runnable maintained example by building with `--backend direct` and comparing output to `aura run`.
 - Removed `--backend mir-runtime` from the CLI and docs now that the maintained Aurora surface has full native direct coverage.
+- Fixed direct-backend parity bugs for float comparisons, float modulo, normal-scope `with` cleanup, scalar return values through `with`, boolean printing, narrow integer overflow checks, and trait method dispatch on builtin types.
+- Fixed interpreter `float32` display so round-tripped `float32` values render without leaking binary noise like `3.140000104904175`.
 
 ## Blocked
 

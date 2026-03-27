@@ -381,18 +381,22 @@ fn tokenize_line(
                                 } else {
                                     index += 1;
                                     Some(TokenKind::DurationLiteral(
-                                        i128::try_from(value.checked_mul(60_000).ok_or_else(|| {
-                                            Diagnostic::at(
-                                                Span::new(line_no, column),
-                                                "invalid duration literal",
-                                            )
-                                        })?)
-                                        .map_err(|_| {
-                                            Diagnostic::at(
-                                                Span::new(line_no, column),
-                                                "invalid duration literal",
-                                            )
-                                        })?,
+                                        i128::try_from(value.checked_mul(60_000).ok_or_else(
+                                            || {
+                                                Diagnostic::at(
+                                                    Span::new(line_no, column),
+                                                    "invalid duration literal",
+                                                )
+                                            },
+                                        )?)
+                                        .map_err(
+                                            |_| {
+                                                Diagnostic::at(
+                                                    Span::new(line_no, column),
+                                                    "invalid duration literal",
+                                                )
+                                            },
+                                        )?,
                                     ))
                                 }
                             }

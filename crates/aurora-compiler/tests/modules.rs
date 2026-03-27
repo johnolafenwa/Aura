@@ -118,8 +118,7 @@ def main() -> int32:
     let output = run_path(&main_path).expect("dotted class import should run");
     assert_eq!(output.stdout, "4\n");
 
-    let mir_output =
-        run_path_via_mir(&main_path).expect("dotted class import should run via MIR");
+    let mir_output = run_path_via_mir(&main_path).expect("dotted class import should run via MIR");
     assert_eq!(mir_output.stdout, "4\n");
 }
 
@@ -152,8 +151,7 @@ def main() -> int32:
     let output = run_path(&main_path).expect("dotted enum import should run");
     assert_eq!(output.stdout, "true\n1\n");
 
-    let mir_output =
-        run_path_via_mir(&main_path).expect("dotted enum import should run via MIR");
+    let mir_output = run_path_via_mir(&main_path).expect("dotted enum import should run via MIR");
     assert_eq!(mir_output.stdout, "true\n1\n");
 }
 
@@ -228,8 +226,8 @@ def main() -> int32:
     let output = run_path(&main_path).expect("imported constructor/method flow should run");
     assert_eq!(output.stdout, "4\n");
 
-    let mir_output = run_path_via_mir(&main_path)
-        .expect("imported constructor/method flow should run via MIR");
+    let mir_output =
+        run_path_via_mir(&main_path).expect("imported constructor/method flow should run via MIR");
     assert_eq!(mir_output.stdout, "4\n");
 }
 

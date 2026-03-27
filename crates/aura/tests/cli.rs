@@ -82,6 +82,43 @@ fn assert_direct_backend_example_runs(example: &str, binary_name: &str, expected
     assert_eq!(String::from_utf8_lossy(&run.stdout), expected_stdout);
 }
 
+fn write_temp_source(prefix: &str, source: &str) -> (TempDir, PathBuf) {
+    let temp = TempDir::new(prefix);
+    let source_path = temp.path().join("main.au");
+    fs::write(&source_path, source).expect("failed to write temporary Aurora source");
+    (temp, source_path)
+}
+
+fn build_and_run_direct_source(
+    prefix: &str,
+    source: &str,
+) -> (std::process::Output, std::process::Output) {
+    let (temp, source_path) = write_temp_source(prefix, source);
+    let output_path = temp.path().join("out");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build --backend direct");
+
+    assert!(
+        build.status.success(),
+        "direct backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run direct-backend binary");
+
+    (build, run)
+}
+
 #[test]
 fn ast_exits_cleanly_when_stdout_pipe_closes() {
     let fixture = repo_root().join("examples/point.au");
@@ -545,6 +582,118 @@ fn build_with_direct_backend_supports_full_range_uint128_example() {
         "uint128-direct",
         "340282366920938463463374607431768211455\n340282366920938463463374607431768211455\n",
     );
+}
+
+#[test]
+fn build_with_direct_backend_supports_float_comparisons_in_conditions() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-float-cmp",
+        "def main() -> int32:\n    x: float64 = 3.0\n    y: float64 = 3.0\n    if x == y:\n        print(\"equal\")\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "equal\n");
+}
+
+#[test]
+fn build_with_direct_backend_supports_float_modulo() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-float-mod",
+        "def main() -> int32:\n    x: float64 = 10.0\n    y: float64 = 3.0\n    print(x % y)\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "1.0\n");
+}
+
+#[test]
+fn build_with_direct_backend_runs_with_cleanup_on_normal_scope_exit() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-with-normal-exit",
+        "class Handle:\n    name: String\n\n    def close(borrow mut self):\n        print(\"closing \" + self.name)\n\ndef main() -> int32:\n    with h = Handle(name=\"db\"):\n        print(\"inside with\")\n    print(\"after with\")\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "inside with\nclosing db\nafter with\n"
+    );
+}
+
+#[test]
+fn build_with_direct_backend_preserves_scalar_return_values_through_with_cleanup() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-with-return",
+        "class Handle:\n    name: String\n\n    def close(borrow mut self):\n        print(\"closing \" + self.name)\n\ndef process() -> int32:\n    with h = Handle(name=\"file\"):\n        return 42\n    return 0\n\ndef main() -> int32:\n    print(process())\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "closing file\n42\n");
+}
+
+#[test]
+fn build_with_direct_backend_prints_boolean_values_as_true_and_false() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-print-bool",
+        "def main() -> int32:\n    print(1 == 1)\n    print(1 == 2)\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "true\nfalse\n");
+}
+
+#[test]
+fn build_with_direct_backend_rejects_narrow_integer_overflow_at_runtime() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-int8-overflow",
+        "def main() -> int32:\n    a: int8 = 127\n    b: int8 = 1\n    c = a + b\n    print(c)\n    return 0\n",
+    );
+
+    assert!(
+        !run.status.success(),
+        "direct-backend binary should reject int8 overflow"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("integer value `128` does not fit in `int8`"),
+        "direct-backend overflow should explain the failing int8 value, stderr was:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_trait_impls_on_builtin_types() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-builtin-trait",
+        "trait Show:\n    def show(borrow self) -> String\n\nimpl Show for int32:\n    def show(borrow self) -> String:\n        return \"int\"\n\ndef main() -> int32:\n    value: int32 = 7\n    print(value.show())\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "int\n");
 }
 
 #[test]

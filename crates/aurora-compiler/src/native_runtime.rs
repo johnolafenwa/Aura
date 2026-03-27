@@ -9,11 +9,11 @@ use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::Diagnostic;
+use crate::integer::IntegerValue;
 use crate::interpreter::{
     cast_numeric_value, CancellationContext, ChannelValue, EnumVariantValue, InstanceValue,
     RangeValue, TaskGroupValue, TaskValue, TryRecvResult, Value,
 };
-use crate::integer::IntegerValue;
 use crate::sema::Type;
 
 fn write_stdout(text: &str) {
@@ -343,10 +343,7 @@ pub extern "C" fn aurora_direct_box_i64(value: i64) -> *mut OpaqueValue {
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_box_uint_literal(
-    ptr: *const u8,
-    len: usize,
-) -> *mut OpaqueValue {
+pub extern "C" fn aurora_direct_box_uint_literal(ptr: *const u8, len: usize) -> *mut OpaqueValue {
     let text = decode_bytes(ptr, len);
     let value = text
         .parse::<u128>()
@@ -436,7 +433,9 @@ pub extern "C" fn aurora_direct_unbox_i64(value: *mut OpaqueValue) -> i64 {
         Value::Int(value) => value
             .as_i128()
             .and_then(|value| i64::try_from(value).ok())
-            .unwrap_or_else(|| runtime_error("direct backend expected an integer that fits in host i64")),
+            .unwrap_or_else(|| {
+                runtime_error("direct backend expected an integer that fits in host i64")
+            }),
         other => runtime_error(format!(
             "direct backend expected `int32`, found `{}`",
             value_type_name(other)

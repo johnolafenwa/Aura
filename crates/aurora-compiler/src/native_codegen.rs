@@ -1397,10 +1397,8 @@ impl<'a> FunctionCompiler<'a> {
                 place,
                 cancel_before_cleanup,
             } => {
+                self.emit_cleanup_for_place(place, *cancel_before_cleanup)?;
                 self.set_cleanup_active(place, false)?;
-                if *cancel_before_cleanup {
-                    self.emit_cleanup_for_place(place, true)?;
-                }
             }
         }
         Ok(())
@@ -1755,6 +1753,24 @@ impl<'a> FunctionCompiler<'a> {
                 self.emit_float_division_guard(right);
                 Ok(ValueRef {
                     values: vec![self.builder.ins().fdiv(left, right)],
+                    ty,
+                })
+            }
+            BinaryOp::Mod => {
+                let opcode_value = self.binary_opcode(BinaryOp::Mod);
+                let left_box = self.builder.ins().call(self.box_f64, &[left]);
+                let right_box = self.builder.ins().call(self.box_f64, &[right]);
+                let left_boxed = self.builder.inst_results(left_box)[0];
+                let right_boxed = self.builder.inst_results(right_box)[0];
+                let opcode = self.builder.ins().iconst(types::I64, opcode_value);
+                let result = self
+                    .builder
+                    .ins()
+                    .call(self.binary_value, &[opcode, left_boxed, right_boxed]);
+                let result_boxed = self.builder.inst_results(result)[0];
+                let unboxed = self.builder.ins().call(self.unbox_f64, &[result_boxed]);
+                Ok(ValueRef {
+                    values: self.builder.inst_results(unboxed).to_vec(),
                     ty,
                 })
             }
@@ -2153,11 +2169,24 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 self.compile_opaque_member_call(&ty, object, field, receiver_place, args)
             }
-            DirectType::Scalar(_) => Err(format!(
-                "direct backend does not support member call `.{}` on `{}`",
-                field,
-                render_direct_type(&object.ty)
-            )),
+            DirectType::Scalar(_) => {
+                let receiver_ty = direct_type_to_type(&object.ty);
+                if self.find_trait_method(&receiver_ty, field).is_some() {
+                    return self.compile_class_member_call(
+                        &receiver_ty.to_string(),
+                        Some(receiver_ty),
+                        object,
+                        field,
+                        receiver_place,
+                        args,
+                    );
+                }
+                Err(format!(
+                    "direct backend does not support member call `.{}` on `{}`",
+                    field,
+                    render_direct_type(&object.ty)
+                ))
+            }
         }
     }
 
@@ -2245,10 +2274,7 @@ impl<'a> FunctionCompiler<'a> {
                     });
                 }
                 let (ptr, len) = self.string_constant(value.to_string().as_bytes())?;
-                let inst = self
-                    .builder
-                    .ins()
-                    .call(self.box_uint_literal, &[ptr, len]);
+                let inst = self.builder.ins().call(self.box_uint_literal, &[ptr, len]);
                 Ok(ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
                     ty: DirectType::Opaque(Type::named("Unknown")),
@@ -2376,7 +2402,20 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(value);
         }
 
-        if matches!(target, DirectType::Opaque(_)) {
+        if let DirectType::Opaque(target_ty) = target {
+            if is_numeric_type_name(target_ty) {
+                let boxed = self.ensure_opaque(value)?;
+                let (target_ptr, target_len) =
+                    self.string_constant(target_ty.to_string().as_bytes())?;
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.cast_value, &[boxed.values[0], target_ptr, target_len]);
+                return Ok(ValueRef {
+                    values: self.builder.inst_results(inst).to_vec(),
+                    ty: target.clone(),
+                });
+            }
             return self.ensure_opaque(value);
         }
 
@@ -4192,6 +4231,18 @@ fn direct_type_to_type(ty: &DirectType) -> Type {
         DirectType::Scalar(ScalarKind::Unit) => Type::Unit,
         DirectType::PlainClass(class) => Type::named(&class.class_name),
         DirectType::Opaque(ty) => ty.clone(),
+    }
+}
+
+fn is_numeric_type_name(ty: &Type) -> bool {
+    match ty {
+        Type::Named(name, args) if args.is_empty() => {
+            name == "float32"
+                || name == "float64"
+                || name.starts_with("int")
+                || name.starts_with("uint")
+        }
+        _ => false,
     }
 }
 

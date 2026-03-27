@@ -1,0 +1,4 @@
+def main() -> int32:
+    value: float32 = 3.14
+    print(value)
+    return 0
