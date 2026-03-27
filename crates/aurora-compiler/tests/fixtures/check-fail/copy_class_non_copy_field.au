@@ -1,0 +1,2 @@
+copy class BadBox:
+    value: String

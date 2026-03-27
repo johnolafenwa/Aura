@@ -14,8 +14,9 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::mir::{
-    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFunction, MirMethod, MirModule,
-    MirReceiverKind, MirSelectArm, MirSelectKind, MirTraitImpl, Operand, Rvalue, Terminator,
+    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod,
+    MirModule, MirReceiverKind, MirSelectArm, MirSelectKind, MirTraitImpl, Operand, Rvalue,
+    Terminator,
 };
 use crate::sema::Type;
 
@@ -160,6 +161,7 @@ struct NativeCodegen<'a> {
     box_bool: FuncId,
     box_unit: FuncId,
     string_literal: FuncId,
+    stringify_value: FuncId,
     duration_literal: FuncId,
     range_new: FuncId,
     range_current: FuncId,
@@ -288,6 +290,12 @@ impl<'a> NativeCodegen<'a> {
             &mut object,
             "aurora_direct_string_literal",
             &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let stringify_value = declare_runtime_function(
+            &mut object,
+            "aurora_direct_stringify_value",
+            &[types::I64],
             Some(types::I64),
         )?;
         let duration_literal = declare_runtime_function(
@@ -595,6 +603,7 @@ impl<'a> NativeCodegen<'a> {
             box_bool,
             box_unit,
             string_literal,
+            stringify_value,
             duration_literal,
             range_new,
             range_current,
@@ -899,6 +908,9 @@ impl<'a> NativeCodegen<'a> {
         let string_literal = self
             .object
             .declare_func_in_func(self.string_literal, builder.func);
+        let stringify_value = self
+            .object
+            .declare_func_in_func(self.stringify_value, builder.func);
         let duration_literal = self
             .object
             .declare_func_in_func(self.duration_literal, builder.func);
@@ -1041,6 +1053,7 @@ impl<'a> NativeCodegen<'a> {
             box_bool,
             box_unit,
             string_literal,
+            stringify_value,
             duration_literal,
             range_new,
             range_current,
@@ -1314,6 +1327,7 @@ struct FunctionCompiler<'a> {
     box_bool: cranelift_codegen::ir::FuncRef,
     box_unit: cranelift_codegen::ir::FuncRef,
     string_literal: cranelift_codegen::ir::FuncRef,
+    stringify_value: cranelift_codegen::ir::FuncRef,
     duration_literal: cranelift_codegen::ir::FuncRef,
     range_new: cranelift_codegen::ir::FuncRef,
     range_current: cranelift_codegen::ir::FuncRef,
@@ -1440,10 +1454,19 @@ impl<'a> FunctionCompiler<'a> {
                 otherwise,
             } => {
                 let scrutinee = self.load_operand(scrutinee)?;
-                let DirectType::Opaque(_) = scrutinee.ty else {
+                let DirectType::Opaque(scrutinee_ty) = &scrutinee.ty else {
                     return Err(
                         "direct backend expected enum matches to use opaque scrutinees".to_string(),
                     );
+                };
+                let scrutinee_enum_name = match scrutinee_ty {
+                    Type::Named(name, _) => name.as_str(),
+                    other => {
+                        return Err(format!(
+                            "direct backend expected match scrutinee to carry an enum type name, found `{}`",
+                            other
+                        ))
+                    }
                 };
                 for arm in arms {
                     if arm.wildcard {
@@ -1453,7 +1476,7 @@ impl<'a> FunctionCompiler<'a> {
                     let next_block = self.builder.create_block();
                     let matched = self.variant_matches_value(
                         scrutinee.values[0],
-                        arm.enum_name.as_deref().unwrap_or_default(),
+                        arm.enum_name.as_deref().unwrap_or(scrutinee_enum_name),
                         arm.variant_name.as_deref().unwrap_or_default(),
                     )?;
                     let arm_block = self.blocks[&arm.label];
@@ -1488,6 +1511,7 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_rvalue(&mut self, rvalue: &Rvalue) -> std::result::Result<ValueRef, String> {
         match rvalue {
             Rvalue::Use(operand) => self.load_operand(operand),
+            Rvalue::FormatString { parts } => self.compile_format_string(parts),
             Rvalue::Unary { op, value, .. } => {
                 let value = self.load_operand(value)?;
                 self.compile_unary(*op, value)
@@ -1903,6 +1927,38 @@ impl<'a> FunctionCompiler<'a> {
         Ok(unit_value(&mut self.builder))
     }
 
+    fn compile_format_string(
+        &mut self,
+        parts: &[MirFormatPart],
+    ) -> std::result::Result<ValueRef, String> {
+        let mut current = self.string_value("")?;
+        for part in parts {
+            let next = match part {
+                MirFormatPart::Literal(text) => self.string_value(text)?,
+                MirFormatPart::Value(value) => {
+                    let value = self.load_operand(value)?;
+                    let value = self.ensure_opaque(value)?;
+                    let call = self.builder.ins().call(self.stringify_value, &[value.values[0]]);
+                    ValueRef {
+                        values: self.builder.inst_results(call).to_vec(),
+                        ty: DirectType::Opaque(Type::named("String")),
+                    }
+                }
+            };
+            current = self.compile_binary(BinaryOp::Add, current, next)?;
+        }
+        Ok(current)
+    }
+
+    fn string_value(&mut self, text: &str) -> std::result::Result<ValueRef, String> {
+        let (ptr, len) = self.string_constant(text.as_bytes())?;
+        let call = self.builder.ins().call(self.string_literal, &[ptr, len]);
+        Ok(ValueRef {
+            values: self.builder.inst_results(call).to_vec(),
+            ty: DirectType::Opaque(Type::named("String")),
+        })
+    }
+
     fn compile_named_call(
         &mut self,
         name: &str,
@@ -1912,8 +1968,11 @@ impl<'a> FunctionCompiler<'a> {
             return self.compile_range(args);
         }
         if name == "channel" {
-            if !args.is_empty() {
-                return Err("direct backend expected `channel()` to take no arguments".to_string());
+            if args.len() > 1 {
+                return Err(
+                    "direct backend expected `channel()` to take at most one capacity argument"
+                        .to_string(),
+                );
             }
             let inst = self.builder.ins().call(self.channel_new, &[]);
             return Ok(ValueRef {
@@ -3860,6 +3919,14 @@ fn validate_rvalue(
 ) -> std::result::Result<(), String> {
     match rvalue {
         Rvalue::Use(operand) => validate_operand(operand),
+        Rvalue::FormatString { parts } => {
+            for part in parts {
+                if let MirFormatPart::Value(value) = part {
+                    validate_operand(value)?;
+                }
+            }
+            Ok(())
+        }
         Rvalue::Unary { value, .. } => validate_operand(value),
         Rvalue::Cast { value, ty, .. } => {
             validate_operand(value)?;
@@ -4000,6 +4067,7 @@ fn infer_rvalue_type(
 ) -> Option<DirectType> {
     match rvalue {
         Rvalue::Use(operand) => infer_operand_type(operand, variable_types),
+        Rvalue::FormatString { .. } => Some(DirectType::Opaque(Type::named("String"))),
         Rvalue::Unary { op, value, .. } => match (op, infer_operand_type(value, variable_types)?) {
             (UnaryOp::Neg, DirectType::Scalar(ScalarKind::Int32)) => {
                 Some(DirectType::Scalar(ScalarKind::Int32))

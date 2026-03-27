@@ -54,6 +54,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+tools/aurora-language-server/coverage/tmp/
 
 # Translations
 *.mo

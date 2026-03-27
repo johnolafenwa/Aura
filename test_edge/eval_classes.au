@@ -1,0 +1,12 @@
+class Point:
+    x: int32
+    y: int32
+
+class Rect:
+    p1: Point
+    p2: Point
+
+def main() -> int32:
+    r = Rect(p1=Point(x=0, y=0), p2=Point(x=10, y=10))
+    print(r.p2.x)
+    return 0

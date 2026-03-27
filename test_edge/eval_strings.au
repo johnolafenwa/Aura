@@ -1,0 +1,7 @@
+def greet(name: String) -> String:
+    return "Hello, " + name
+
+def main() -> int32:
+    s = greet("Aurora")
+    print(s)
+    return 0

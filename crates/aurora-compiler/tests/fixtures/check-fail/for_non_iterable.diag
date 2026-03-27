@@ -1,4 +1,4 @@
-error: `for` currently requires a `Range` iterable, found `int32`
+error: `for` currently requires a `Range` or `Channel[T]` iterable, found `int32`
  --> crates/aurora-compiler/tests/fixtures/check-fail/for_non_iterable.au:3:5
   |
 3 |     for item in value:

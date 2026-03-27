@@ -114,13 +114,15 @@ Last updated: 2026-03-27
 - Added wildcard `case _:` support in statement-form `match`.
 - Added trait bounds on generic class and enum type parameters.
 - Added empty marker traits with `pass`.
-- Rejected direct recursive class fields that would require `indirect` storage, which is still outside the compiler.
+- Rejected direct recursive class fields without `indirect` and added proposal-aligned `indirect` recursive fields to the maintained compiler surface.
 - Fixed direct-expression narrow integer overflow checking so runtime arithmetic respects annotated widths even when values flow straight into calls.
 - Fixed whole-number float rendering so values like `5.0` and `9.0` preserve their `.0` suffix in output.
 - Added ordinary free-function `borrow` and `borrow mut` parameters across the parser, checker, interpreter, MIR runtime, fixtures, examples, tutorials, and LSP fallback analysis.
 - Fixed namespace-imported classes and enums so `import a.b` now supports `a.b.Type(...)`, `a.b.Enum.Variant`, and qualified `match` arms in both the interpreter and MIR execution paths.
 - Finished the remaining numeric-runtime gap for true full-range `uint128` execution across the checker, interpreter, MIR runtime, direct backend, fixtures, CLI coverage, and maintained examples/tutorials.
 - Clarified in the maintained tutorials/examples that `range(...)` is still limited to the current signed index space in the bootstrap compiler, without freezing that limitation into the proposal.
+- Brought several proposal-defined syntax/features into the maintained compiler surface: `copy class`, `indirect Node?`, `borrow str` parameters, `match borrow`, unqualified match variants, `for` iteration over `Channel[T]`, contextual `copy` keyword handling, f-strings, and explicit generic constructor specialization like `Box[int32](...)`.
+- Added maintained examples, fixture coverage, tutorial updates, and LSP fallback coverage for those proposal-alignment features.
 - Replaced `aura build`'s generated Rust launcher with a native MIR artifact build path that embeds serialized MIR in a native launcher and links it against a compiled Aurora runtime library.
 - Added product coverage for stdin-backed native builds with local modules and for binaries that still run after the original source file is removed.
 - Added a true direct native backend for a supported scalar/control-flow MIR subset and exposed it through `aura build --backend direct`.

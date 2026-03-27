@@ -158,28 +158,71 @@ impl Type {
             Type::Unit => true,
             Type::Module(_) => false,
             Type::TypeParam(_) => false,
-            Type::Named(name, args) => {
-                args.is_empty()
-                    && matches!(
-                        name.as_str(),
-                        "bool"
-                            | "int8"
-                            | "int16"
-                            | "int32"
-                            | "int64"
-                            | "int128"
-                            | "intsize"
-                            | "uint8"
-                            | "uint16"
-                            | "uint32"
-                            | "uint64"
-                            | "uint128"
-                            | "uintsize"
-                            | "float32"
-                            | "float64"
-                            | "Duration"
-                    )
+            Type::Named(name, args) => is_builtin_copy_named_type(name, args),
+        }
+    }
+}
+
+fn is_builtin_copy_named_type(name: &str, args: &[Type]) -> bool {
+    args.is_empty()
+        && matches!(
+            name,
+            "bool"
+                | "int8"
+                | "int16"
+                | "int32"
+                | "int64"
+                | "int128"
+                | "intsize"
+                | "uint8"
+                | "uint16"
+                | "uint32"
+                | "uint64"
+                | "uint128"
+                | "uintsize"
+                | "float32"
+                | "float64"
+                | "Duration"
+        )
+}
+
+fn type_is_copy_in_context(
+    ty: &Type,
+    classes: &BTreeMap<String, ClassInfo>,
+    enums: &BTreeMap<String, EnumInfo>,
+) -> bool {
+    match ty {
+        Type::Unit => true,
+        Type::Module(_) => false,
+        Type::TypeParam(_) => false,
+        Type::Named(name, args) if is_builtin_copy_named_type(name, args) => true,
+        Type::Named(name, args) if name == "Option" && args.len() == 1 => {
+            type_is_copy_in_context(&args[0], classes, enums)
+        }
+        Type::Named(name, args) if name == "Result" && args.len() == 2 => {
+            args.iter()
+                .all(|arg| type_is_copy_in_context(arg, classes, enums))
+        }
+        Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
+            type_is_copy_in_context(&args[0], classes, enums)
+        }
+        Type::Named(name, args) => {
+            if let Some(class_info) = classes.get(name) {
+                return class_info.decl.copy
+                    && args
+                        .iter()
+                        .all(|arg| type_is_copy_in_context(arg, classes, enums));
             }
+            if let Some(enum_info) = enums.get(name) {
+                return enum_info.variants.values().all(|variant| {
+                    variant
+                        .payload
+                        .as_ref()
+                        .map(|payload| type_is_copy_in_context(payload, classes, enums))
+                        .unwrap_or(true)
+                });
+            }
+            false
         }
     }
 }
@@ -454,11 +497,11 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &type_arities,
                 &class_type_param_scope,
             )?;
-            if type_contains_named(&lowered, &class_decl.name) {
+            if !field.ty.indirect && type_contains_named(&lowered, &class_decl.name) {
                 return Err(Diagnostic::at(
                     field.span,
                     format!(
-                        "recursive field `{}` on class `{}` requires `indirect`, which is not implemented yet in the compiler",
+                        "recursive field `{}` on class `{}` requires `indirect`",
                         field.name, class_decl.name
                     ),
                 ));
@@ -543,6 +586,30 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 methods,
             },
         );
+    }
+
+    for class in classes.values() {
+        if !class.decl.copy {
+            continue;
+        }
+        for field_decl in &class.decl.fields {
+            let field_ty = &class
+                .fields
+                .get(&field_decl.name)
+                .expect("class field should have lowered type")
+                .ty;
+            if !type_is_copy_in_context(field_ty, &classes, &enums) {
+                return Err(Diagnostic::at(
+                    field_decl.span,
+                    format!(
+                        "field `{}` on `copy class {}` must be a copy type, found `{}`",
+                        field_decl.name,
+                        class.decl.name,
+                        field_ty
+                    ),
+                ));
+            }
+        }
     }
 
     let empty_functions = BTreeMap::new();
@@ -830,20 +897,26 @@ fn lower_type(
     type_arities: &BTreeMap<String, usize>,
     type_params: &BTreeMap<String, ()>,
 ) -> Result<Type> {
-    if type_params.contains_key(&type_ref.name) {
+    let type_name = if type_ref.name == "str" {
+        "String"
+    } else {
+        type_ref.name.as_str()
+    };
+
+    if type_params.contains_key(type_name) {
         if !type_ref.args.is_empty() {
             return Err(Diagnostic::at(
                 type_ref.span,
                 format!(
                     "type parameter `{}` does not take type arguments",
-                    type_ref.name
+                    type_name
                 ),
             ));
         }
-        return Ok(Type::TypeParam(type_ref.name.clone()));
+        return Ok(Type::TypeParam(type_name.to_string()));
     }
 
-    if type_ref.name == "None" {
+    if type_name == "None" {
         if !type_ref.args.is_empty() {
             return Err(Diagnostic::at(
                 type_ref.span,
@@ -859,70 +932,70 @@ fn lower_type(
         .map(|arg| lower_type(arg, type_names, type_arities, type_params))
         .collect::<Result<Vec<_>>>()?;
 
-    if type_ref.name == "Option" {
+    if type_name == "Option" {
         if args.len() != 1 {
             return Err(Diagnostic::at(
                 type_ref.span,
                 "`Option` expects exactly one type argument",
             ));
         }
-        return Ok(Type::Named(type_ref.name.clone(), args));
+        return Ok(Type::Named(type_name.to_string(), args));
     }
 
-    if type_ref.name == "Result" {
+    if type_name == "Result" {
         if args.len() != 2 {
             return Err(Diagnostic::at(
                 type_ref.span,
                 "`Result` expects exactly two type arguments",
             ));
         }
-        return Ok(Type::Named(type_ref.name.clone(), args));
+        return Ok(Type::Named(type_name.to_string(), args));
     }
 
-    if type_ref.name == "Channel" || type_ref.name == "Task" || type_ref.name == "SendError" {
+    if type_name == "Channel" || type_name == "Task" || type_name == "SendError" {
         if args.len() != 1 {
             return Err(Diagnostic::at(
                 type_ref.span,
-                format!("`{}` expects exactly one type argument", type_ref.name),
+                format!("`{}` expects exactly one type argument", type_name),
             ));
         }
-        return Ok(Type::Named(type_ref.name.clone(), args));
+        return Ok(Type::Named(type_name.to_string(), args));
     }
 
-    if type_ref.name == "TaskGroup" || type_ref.name == "Duration" {
+    if type_name == "TaskGroup" || type_name == "Duration" {
         if !args.is_empty() {
             return Err(Diagnostic::at(
                 type_ref.span,
-                format!("`{}` does not take type arguments", type_ref.name),
+                format!("`{}` does not take type arguments", type_name),
             ));
         }
-        return Ok(Type::Named(type_ref.name.clone(), args));
+        return Ok(Type::Named(type_name.to_string(), args));
     }
 
-    if let Some(expected_arity) = type_arities.get(&type_ref.name) {
+    if let Some(expected_arity) = type_arities.get(type_name) {
         if args.len() != *expected_arity {
             return Err(Diagnostic::at(
                 type_ref.span,
                 format!(
                     "`{}` expects exactly {} type argument{}, found {}",
-                    type_ref.name,
+                    type_name,
                     expected_arity,
                     if *expected_arity == 1 { "" } else { "s" },
                     args.len()
                 ),
             ));
         }
-    } else if is_builtin_type(&type_ref.name) || type_names.contains_key(&type_ref.name) {
+    } else if is_builtin_type(type_name) || type_names.contains_key(type_name) {
         if !args.is_empty() {
             return Err(Diagnostic::at(
                 type_ref.span,
-                format!("`{}` does not take type arguments", type_ref.name),
+                format!("`{}` does not take type arguments", type_name),
             ));
         }
     }
 
-    if is_builtin_type(&type_ref.name) || type_names.contains_key(&type_ref.name) {
-        Ok(Type::Named(type_ref.name.clone(), args))
+    if is_builtin_type(type_name) || type_names.contains_key(type_name) {
+        Ok(Type::Named(type_name.to_string(), args))
     } else {
         Err(Diagnostic::at(
             type_ref.span,
@@ -980,6 +1053,7 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
             default_argument_references_param(expr, param_names)
         }
         ExprKind::Spawn { value, .. } => default_argument_references_param(value, param_names),
+        ExprKind::Specialize { expr, .. } => default_argument_references_param(expr, param_names),
         ExprKind::Member { object, .. } => default_argument_references_param(object, param_names),
         ExprKind::Call { callee, args } => default_argument_references_param(callee, param_names)
             .or_else(|| {
@@ -987,6 +1061,10 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
                     default_argument_references_param(&argument.value, param_names)
                 })
             }),
+        ExprKind::FString(parts) => parts.iter().find_map(|part| match part {
+            crate::ast::FormatPart::Literal(_) => None,
+            crate::ast::FormatPart::Expr(expr) => default_argument_references_param(expr, param_names),
+        }),
         ExprKind::Binary { left, right, .. } => {
             default_argument_references_param(left, param_names)
                 .or_else(|| default_argument_references_param(right, param_names))
@@ -1225,6 +1303,10 @@ enum BlockFlow {
 }
 
 impl<'a> FunctionChecker<'a> {
+    fn is_copy_type(&self, ty: &Type) -> bool {
+        type_is_copy_in_context(ty, self.classes, self.enums)
+    }
+
     fn seed_imported_modules(&self, locals: &mut HashMap<String, LocalBinding>) {
         let imported_modules = self
             .current_module_namespace()
@@ -1331,6 +1413,45 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn peel_specialization<'b>(&self, expr: &'b Expr) -> (&'b Expr, Option<&'b [TypeRef]>) {
+        match &expr.kind {
+            ExprKind::Specialize { expr, type_args } => (&**expr, Some(type_args.as_slice())),
+            _ => (expr, None),
+        }
+    }
+
+    fn lower_explicit_type_args(&self, type_args: &[TypeRef]) -> Result<Vec<Type>> {
+        type_args
+            .iter()
+            .map(|type_arg| {
+                lower_type(type_arg, self.type_names, self.type_arities, &self.type_params)
+            })
+            .collect()
+    }
+
+    fn explicit_type_substitutions(
+        &self,
+        type_params: &[String],
+        type_args: &[TypeRef],
+        span: crate::diag::Span,
+        callee_name: &str,
+    ) -> Result<HashMap<String, Type>> {
+        let lowered = self.lower_explicit_type_args(type_args)?;
+        if lowered.len() != type_params.len() {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "{} expects {} type argument{}, found {}",
+                    callee_name,
+                    type_params.len(),
+                    if type_params.len() == 1 { "" } else { "s" },
+                    lowered.len()
+                ),
+            ));
+        }
+        Ok(substitutions_from_decl_type_args(type_params, &lowered))
+    }
+
     fn validate_integer_literal(
         &self,
         value: u128,
@@ -1391,7 +1512,7 @@ impl<'a> FunctionChecker<'a> {
         let binding = locals
             .get_mut(name)
             .ok_or_else(|| Diagnostic::at(span, format!("unknown name `{}`", name)))?;
-        if binding.ty.is_copy() {
+        if self.is_copy_type(&binding.ty) {
             return Ok(());
         }
         if binding.passing != ReceiverKind::Value {
@@ -1416,9 +1537,11 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
         match &expr.kind {
+            ExprKind::Name(name) if name == "None" => Ok(()),
             ExprKind::Name(name) => self.consume_binding(name, expr.span, locals),
             ExprKind::Group(inner) => self.consume_value_expr(inner, locals),
             ExprKind::Cast { expr, .. } => self.consume_value_expr(expr, locals),
+            ExprKind::Specialize { expr, .. } => self.consume_value_expr(expr, locals),
             _ => Ok(()),
         }
     }
@@ -1450,7 +1573,7 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
     ) -> Result<()> {
         for (name, binding) in locals {
-            if binding.ty.is_copy() {
+            if self.is_copy_type(&binding.ty) {
                 continue;
             }
             let Some(body_binding) = body_locals.get(name) else {
@@ -1861,14 +1984,34 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Stmt::For(for_stmt) => {
                     let iterable_ty = self.type_of_expr(&for_stmt.iterable, locals)?;
-                    if iterable_ty != Type::named("Range") {
-                        return Err(Diagnostic::at(
-                            for_stmt.span,
-                            format!(
-                                "`for` currently requires a `Range` iterable, found `{}`",
-                                iterable_ty
-                            ),
-                        ));
+                    let (binding_ty, binding_passing) = match (&iterable_ty, for_stmt.borrow_mode) {
+                        (Type::Named(name, _), _) if name == "Range" => {
+                            (Type::named("int32"), ReceiverKind::Value)
+                        }
+                        (Type::Named(name, args), borrow_mode)
+                            if name == "Channel" && args.len() == 1 =>
+                        {
+                            let element_ty = args[0].clone();
+                            let passing =
+                                if borrow_mode.is_some() && !self.is_copy_type(&element_ty) {
+                                    borrow_mode.unwrap()
+                                } else {
+                                    ReceiverKind::Value
+                                };
+                            (element_ty, passing)
+                        }
+                        _ => {
+                            return Err(Diagnostic::at(
+                                for_stmt.span,
+                                format!(
+                                    "`for` currently requires a `Range` or `Channel[T]` iterable, found `{}`",
+                                    iterable_ty
+                                ),
+                            ))
+                        }
+                    };
+                    if for_stmt.borrow_mode.is_none() && !self.is_copy_type(&iterable_ty) {
+                        self.consume_value_expr(&for_stmt.iterable, locals)?;
                     }
                     if locals.contains_key(&for_stmt.binding) {
                         return Err(Diagnostic::at(
@@ -1883,10 +2026,10 @@ impl<'a> FunctionChecker<'a> {
                     body_locals.insert(
                         for_stmt.binding.clone(),
                         LocalBinding {
-                            ty: Type::named("int32"),
+                            ty: binding_ty,
                             assignable: false,
                             mutable_place: false,
-                            passing: ReceiverKind::Value,
+                            passing: binding_passing,
                             moved: false,
                         },
                     );
@@ -2416,7 +2559,53 @@ impl<'a> FunctionChecker<'a> {
                 .unwrap_or_else(|| Type::named("float64"))),
             ExprKind::Bool(_) => Ok(Type::named("bool")),
             ExprKind::String(_) => Ok(Type::named("String")),
+            ExprKind::FString(parts) => {
+                for part in parts {
+                    if let crate::ast::FormatPart::Expr(expr) = part {
+                        self.type_of_expr(expr, locals)?;
+                    }
+                }
+                Ok(Type::named("String"))
+            }
             ExprKind::Group(inner) => self.type_of_expr_hint(inner, locals, expected),
+            ExprKind::Specialize { expr: base, type_args } => {
+                let lowered = self.lower_explicit_type_args(type_args)?;
+                match &base.kind {
+                    ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
+                        let class = self.resolve_class_info(name).unwrap();
+                        if lowered.len() != class.decl.type_params.len() {
+                            return Err(Diagnostic::at(
+                                expr.span,
+                                format!(
+                                    "class `{}` expects {} type argument{}, found {}",
+                                    name,
+                                    class.decl.type_params.len(),
+                                    if class.decl.type_params.len() == 1 { "" } else { "s" },
+                                    lowered.len()
+                                ),
+                            ));
+                        }
+                        Ok(Type::Named(name.clone(), lowered))
+                    }
+                    ExprKind::Name(name) if self.resolve_enum_info(name).is_some() => {
+                        let enum_info = self.resolve_enum_info(name).unwrap();
+                        if lowered.len() != enum_info.decl.type_params.len() {
+                            return Err(Diagnostic::at(
+                                expr.span,
+                                format!(
+                                    "enum `{}` expects {} type argument{}, found {}",
+                                    name,
+                                    enum_info.decl.type_params.len(),
+                                    if enum_info.decl.type_params.len() == 1 { "" } else { "s" },
+                                    lowered.len()
+                                ),
+                            ));
+                        }
+                        Ok(Type::Named(name.clone(), lowered))
+                    }
+                    _ => self.type_of_expr_hint(base, locals, expected),
+                }
+            }
             ExprKind::Cast { expr: value, ty } => {
                 let target_ty =
                     lower_type(ty, self.type_names, self.type_arities, &self.type_params)?;
@@ -2566,6 +2755,45 @@ impl<'a> FunctionChecker<'a> {
                 self.type_of_binary(expr.span, *op, left_ty, right_ty)
             }
             ExprKind::Member { object, field } => {
+                if let ExprKind::Specialize {
+                    expr: inner,
+                    type_args,
+                } = &object.kind
+                {
+                    if let ExprKind::Name(enum_name) = &inner.kind {
+                        if let Some(enum_info) = self.resolve_enum_info(enum_name) {
+                            let explicit_args = self.lower_explicit_type_args(type_args)?;
+                            if explicit_args.len() != enum_info.decl.type_params.len() {
+                                return Err(Diagnostic::at(
+                                    expr.span,
+                                    format!(
+                                        "enum `{}` expects {} type argument{}, found {}",
+                                        enum_name,
+                                        enum_info.decl.type_params.len(),
+                                        if enum_info.decl.type_params.len() == 1 { "" } else { "s" },
+                                        explicit_args.len()
+                                    ),
+                                ));
+                            }
+                            let variant = enum_info.variants.get(field).ok_or_else(|| {
+                                Diagnostic::at(
+                                    expr.span,
+                                    format!("enum `{}` has no variant `{}`", enum_name, field),
+                                )
+                            })?;
+                            if variant.payload.is_some() {
+                                return Err(Diagnostic::at(
+                                    expr.span,
+                                    format!(
+                                        "variant `{}` of enum `{}` requires a payload",
+                                        field, enum_name
+                                    ),
+                                ));
+                            }
+                            return Ok(Type::Named(enum_info.decl.name.clone(), explicit_args));
+                        }
+                    }
+                }
                 if let Some((module_path, enum_name)) = self.qualified_module_item(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(enum_info) = namespace.enums.get(&enum_name) {
@@ -2646,7 +2874,7 @@ impl<'a> FunctionChecker<'a> {
                 }
                 let object_ty = self.type_of_expr(object, locals)?;
                 let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
-                if !member_ty.is_copy() {
+                if !self.is_copy_type(&member_ty) {
                     if let Some(name) = self.borrowed_root_binding_name(object, locals) {
                         return Err(Diagnostic::at(
                             expr.span,
@@ -2730,7 +2958,50 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
-        match &callee.kind {
+        let (base_callee, explicit_type_args) = self.peel_specialization(callee);
+
+        if let (ExprKind::Name(name), Some(type_args)) = (&base_callee.kind, explicit_type_args) {
+            if name == "Channel" {
+                let explicit_args = self.lower_explicit_type_args(type_args)?;
+                if explicit_args.len() != 1 {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "class `{}` expects exactly one type argument, found {}",
+                            name,
+                            explicit_args.len()
+                        ),
+                    ));
+                }
+                let capacity_params = [crate::call::CallableParam::optional("capacity")];
+                let ordered_args = bind_call_arguments(
+                    "class `Channel`",
+                    &capacity_params,
+                    args,
+                    span,
+                    CallConvention::PositionalOrNamed,
+                )?;
+                if let Some(capacity_arg) = ordered_args[0] {
+                    let actual = self.type_of_expr_hint(
+                        &capacity_arg.value,
+                        locals,
+                        Some(&Type::named("int32")),
+                    )?;
+                    if actual != Type::named("int32") {
+                        return Err(Diagnostic::at(
+                            capacity_arg.span,
+                            format!(
+                                "field `capacity` expects `int32`, found `{}`",
+                                actual
+                            ),
+                        ));
+                    }
+                }
+                return Ok(Type::Named("Channel".to_string(), explicit_args));
+            }
+        }
+
+        match &base_callee.kind {
             ExprKind::Name(name) if BuiltinFunction::from_name(name).is_some() => {
                 let builtin = BuiltinFunction::from_name(name).unwrap();
                 let ordered_args = builtin.bind_args(args, span)?;
@@ -2816,6 +3087,16 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Name(name) if self.resolve_function_info(name).is_some() => {
                 let function = self.resolve_function_info(name).unwrap();
+                let seed_substitutions = if let Some(type_args) = explicit_type_args {
+                    self.explicit_type_substitutions(
+                        &function.decl.type_params,
+                        type_args,
+                        span,
+                        &format!("function `{}`", name),
+                    )?
+                } else {
+                    HashMap::new()
+                };
                 self.type_check_callable_args(
                     &format!("function `{}`", name),
                     &function.decl.type_params,
@@ -2827,7 +3108,7 @@ impl<'a> FunctionChecker<'a> {
                     span,
                     locals,
                     expected,
-                    HashMap::new(),
+                    seed_substitutions,
                 )
             }
             ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
@@ -2843,14 +3124,23 @@ impl<'a> FunctionChecker<'a> {
                 }
 
                 let mut provided = HashMap::new();
-                let mut substitutions = match expected {
-                    Some(Type::Named(expected_name, expected_args))
-                        if expected_name == name
-                            && expected_args.len() == class.decl.type_params.len() =>
-                    {
-                        substitutions_from_decl_type_args(&class.decl.type_params, expected_args)
+                let mut substitutions = if let Some(type_args) = explicit_type_args {
+                    self.explicit_type_substitutions(
+                        &class.decl.type_params,
+                        type_args,
+                        span,
+                        &format!("class constructor `{}`", name),
+                    )?
+                } else {
+                    match expected {
+                        Some(Type::Named(expected_name, expected_args))
+                            if expected_name == name
+                                && expected_args.len() == class.decl.type_params.len() =>
+                        {
+                            substitutions_from_decl_type_args(&class.decl.type_params, expected_args)
+                        }
+                        _ => HashMap::new(),
                     }
-                    _ => HashMap::new(),
                 };
                 for argument in args {
                     let field_name = argument.name.as_ref().unwrap();
@@ -2890,7 +3180,7 @@ impl<'a> FunctionChecker<'a> {
                             ),
                         ));
                     }
-                    if !actual.is_copy() {
+                    if !self.is_copy_type(&actual) {
                         self.consume_value_expr(&argument.value, locals)?;
                     }
                 }
@@ -2946,6 +3236,7 @@ impl<'a> FunctionChecker<'a> {
                 Ok(Type::Named(name.clone(), resolved_args))
             }
             ExprKind::Member { object, field } => {
+                let (base_object, object_type_args) = self.peel_specialization(object);
                 if let Some((module_path, item_name)) = self.qualified_module_item(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(class_info) = namespace.classes.get(&item_name) {
@@ -3005,7 +3296,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    if !actual.is_copy() {
+                                    if !self.is_copy_type(&actual) {
                                         self.consume_value_expr(&args[0].value, locals)?;
                                     }
                                 }
@@ -3023,7 +3314,7 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
                 }
-                if let ExprKind::Name(class_name) = &object.kind {
+                if let ExprKind::Name(class_name) = &base_object.kind {
                     if let Some(class_info) = self.resolve_class_info(class_name) {
                         if let Some(method) = class_info.methods.get(field) {
                             if method.decl.receiver.is_some() {
@@ -3052,7 +3343,7 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
 
-                if let ExprKind::Name(enum_name) = &object.kind {
+                if let ExprKind::Name(enum_name) = &base_object.kind {
                     if let Some(expected_ty) = expected {
                         if let Some(variant_payload) =
                             self.builtin_enum_variant_payload(expected_ty, enum_name, field)
@@ -3088,7 +3379,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    if !payload_ty.is_copy() {
+                                    if !self.is_copy_type(&payload_ty) {
                                         self.consume_value_expr(&args[0].value, locals)?;
                                     }
                                 }
@@ -3141,17 +3432,27 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        let mut substitutions = match expected {
-                            Some(Type::Named(expected_name, expected_args))
-                                if expected_name == enum_name
-                                    && expected_args.len() == enum_info.decl.type_params.len() =>
-                            {
-                                substitutions_from_decl_type_args(
-                                    &enum_info.decl.type_params,
-                                    expected_args,
-                                )
+                        let mut substitutions = if let Some(type_args) = object_type_args {
+                            self.explicit_type_substitutions(
+                                &enum_info.decl.type_params,
+                                type_args,
+                                span,
+                                &format!("enum `{}`", enum_name),
+                            )?
+                        } else {
+                            match expected {
+                                Some(Type::Named(expected_name, expected_args))
+                                    if expected_name == enum_name
+                                        && expected_args.len()
+                                            == enum_info.decl.type_params.len() =>
+                                {
+                                    substitutions_from_decl_type_args(
+                                        &enum_info.decl.type_params,
+                                        expected_args,
+                                    )
+                                }
+                                _ => HashMap::new(),
                             }
-                            _ => HashMap::new(),
                         };
                         match &variant.payload {
                             Some(payload_ty) => {
@@ -3185,7 +3486,7 @@ impl<'a> FunctionChecker<'a> {
                                         ),
                                     ));
                                 }
-                                if !actual.is_copy() {
+                                if !self.is_copy_type(&actual) {
                                     self.consume_value_expr(&args[0].value, locals)?;
                                 }
                             }
@@ -3301,7 +3602,7 @@ impl<'a> FunctionChecker<'a> {
                                     ),
                                 ));
                             }
-                            if !actual.is_copy() {
+                            if !self.is_copy_type(&actual) {
                                 self.consume_value_expr(&argument.value, locals)?;
                             }
                         }
@@ -3370,7 +3671,7 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    if !receiver_args[0].is_copy() {
+                                    if !self.is_copy_type(&receiver_args[0]) {
                                         self.consume_value_expr(&send_arg.value, locals)?;
                                     }
                                     Ok(Type::Named(
@@ -3579,6 +3880,9 @@ impl<'a> FunctionChecker<'a> {
         allow_return: bool,
     ) -> Result<BlockFlow> {
         let scrutinee_ty = self.type_of_expr(&match_stmt.scrutinee, locals)?;
+        if match_stmt.borrow_mode.is_none() && !self.is_copy_type(&scrutinee_ty) {
+            self.consume_value_expr(&match_stmt.scrutinee, locals)?;
+        }
         let Type::Named(enum_name, _type_args) = &scrutinee_ty else {
             return Err(Diagnostic::at(
                 match_stmt.span,
@@ -3626,24 +3930,28 @@ impl<'a> FunctionChecker<'a> {
                     wildcard_span = Some(*span);
                 }
                 Pattern::Variant(pattern) => {
-                    let pattern_enum_name = if pattern.enum_name == *enum_name {
-                        pattern.enum_name.clone()
-                    } else if let Some(pattern_enum_info) =
-                        self.resolve_enum_info(&pattern.enum_name)
-                    {
-                        pattern_enum_info.decl.name.clone()
+                    let pattern_enum_name = if let Some(pattern_enum_name) = &pattern.enum_name {
+                        if pattern_enum_name == enum_name {
+                            pattern_enum_name.clone()
+                        } else if let Some(pattern_enum_info) =
+                            self.resolve_enum_info(pattern_enum_name)
+                        {
+                            pattern_enum_info.decl.name.clone()
+                        } else {
+                            return Err(Diagnostic::at(
+                                pattern.span,
+                                format!("unknown enum `{}` in match pattern", pattern_enum_name),
+                            ));
+                        }
                     } else {
-                        return Err(Diagnostic::at(
-                            pattern.span,
-                            format!("unknown enum `{}` in match pattern", pattern.enum_name),
-                        ));
+                        enum_name.clone()
                     };
                     if pattern_enum_name != *enum_name {
                         return Err(Diagnostic::at(
                             pattern.span,
                             format!(
                                 "match arm expects enum `{}`, found pattern for `{}`",
-                                enum_name, pattern.enum_name
+                                enum_name, pattern_enum_name
                             ),
                         ));
                     }
@@ -3713,7 +4021,15 @@ impl<'a> FunctionChecker<'a> {
                                 ty: payload_ty.clone(),
                                 assignable: false,
                                 mutable_place: false,
-                                passing: ReceiverKind::Value,
+                                passing: if let Some(borrow_mode) = match_stmt.borrow_mode {
+                                    if self.is_copy_type(payload_ty) {
+                                        ReceiverKind::Value
+                                    } else {
+                                        borrow_mode
+                                    }
+                                } else {
+                                    ReceiverKind::Value
+                                },
                                 moved: false,
                             },
                         );
@@ -3962,6 +4278,7 @@ impl<'a> FunctionChecker<'a> {
                 .and_then(|namespace| namespace.imported_modules.get(name))
                 .or_else(|| self.imported_modules.get(name))
                 .map(|namespace| namespace.path.clone()),
+            ExprKind::Specialize { expr, .. } => self.infer_module_path(expr),
             ExprKind::Member { object, field } => {
                 let module_path = self.infer_module_path(object)?;
                 let namespace = self.module_namespace(&module_path)?;
@@ -3974,6 +4291,7 @@ impl<'a> FunctionChecker<'a> {
 
     fn qualified_module_item(&self, expr: &Expr) -> Option<(String, String)> {
         match &expr.kind {
+            ExprKind::Specialize { expr, .. } => self.qualified_module_item(expr),
             ExprKind::Member { object, field } => self
                 .infer_module_path(object)
                 .map(|path| (path, field.clone())),
@@ -4316,7 +4634,7 @@ impl<'a> FunctionChecker<'a> {
             if let Some(argument) = argument {
                 match param_decl.passing {
                     ReceiverKind::Value => {
-                        if !expected.is_copy() {
+                        if !self.is_copy_type(&expected) {
                             self.consume_value_expr(&argument.value, locals)?;
                         }
                     }

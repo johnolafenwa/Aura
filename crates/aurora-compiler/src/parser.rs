@@ -1,8 +1,8 @@
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, BreakStmt, ClassDecl, ContinueStmt, EnumDecl,
-    EnumVariantDecl, Expr, ExprKind, ExprStmt, FieldDecl, ForStmt, FunctionDecl, IfBranch, IfStmt,
-    ImplDecl, ImportDecl, ImportKind, Item, MatchArm, MatchStmt, Module, Param, Pattern,
-    ReceiverKind, ReturnStmt, SelectArm, SelectStmt, Stmt, TraitDecl, TypeRef, UnaryOp,
+    EnumVariantDecl, Expr, ExprKind, ExprStmt, FieldDecl, ForStmt, FormatPart, FunctionDecl,
+    IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, Item, MatchArm, MatchStmt, Module, Param,
+    Pattern, ReceiverKind, ReturnStmt, SelectArm, SelectStmt, Stmt, TraitDecl, TypeRef, UnaryOp,
     VariantPattern, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
@@ -41,6 +41,7 @@ impl Parser {
             if self.at_keyword_import() || self.at_keyword_from() {
                 imports.push(self.parse_import()?);
             } else if self.at_simple(&TokenKind::KwPublic)
+                || self.at_copy_class_start()
                 || self.at_keyword_class()
                 || self.at_keyword_enum()
                 || self.at_keyword_def()
@@ -63,7 +64,7 @@ impl Parser {
 
     fn parse_item(&mut self) -> Result<Item> {
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
-        if self.at_keyword_class() {
+        if self.at_copy_class_start() || self.at_keyword_class() {
             Ok(Item::Class(self.parse_class(public)?))
         } else if self.at_keyword_enum() {
             Ok(Item::Enum(self.parse_enum(public)?))
@@ -110,6 +111,12 @@ impl Parser {
     }
 
     fn parse_class(&mut self, public: bool) -> Result<ClassDecl> {
+        let copy = if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "copy") {
+            self.bump();
+            true
+        } else {
+            false
+        };
         let span = self.expect_keyword(TokenKind::KwClass)?.span;
         let name = self.expect_identifier()?;
         let (type_params, type_param_bounds) = self.parse_optional_type_params(true)?;
@@ -144,6 +151,7 @@ impl Parser {
 
         Ok(ClassDecl {
             public,
+            copy,
             name,
             type_params,
             type_param_bounds,
@@ -243,6 +251,7 @@ impl Parser {
             TypeRef {
                 name: "None".to_string(),
                 args: Vec::new(),
+                indirect: false,
                 span,
             }
         };
@@ -338,6 +347,7 @@ impl Parser {
             TypeRef {
                 name: "None".to_string(),
                 args: Vec::new(),
+                indirect: false,
                 span,
             }
         };
@@ -610,6 +620,7 @@ impl Parser {
 
     fn parse_match_stmt(&mut self) -> Result<Stmt> {
         let span = self.expect_keyword(TokenKind::KwMatch)?.span;
+        let borrow_mode = self.parse_optional_borrow_mode();
         let scrutinee = self.parse_expr()?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
@@ -628,6 +639,7 @@ impl Parser {
 
         Ok(Stmt::Match(MatchStmt {
             scrutinee,
+            borrow_mode,
             arms,
             span,
         }))
@@ -637,6 +649,7 @@ impl Parser {
         let span = self.expect_keyword(TokenKind::KwFor)?.span;
         let binding = self.expect_identifier()?;
         self.expect_simple(TokenKind::KwIn)?;
+        let borrow_mode = self.parse_optional_borrow_mode();
         let iterable = self.parse_expr()?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
@@ -644,6 +657,7 @@ impl Parser {
         Ok(Stmt::For(ForStmt {
             binding,
             iterable,
+            borrow_mode,
             body,
             span,
         }))
@@ -737,15 +751,15 @@ impl Parser {
             return Ok(Pattern::Wildcard(span));
         }
         let mut segments = vec![self.expect_identifier()?];
-        self.expect_simple(TokenKind::Dot)?;
-        segments.push(self.expect_identifier()?);
         while self.eat_simple(&TokenKind::Dot).is_some() {
             segments.push(self.expect_identifier()?);
         }
-        let variant_name = segments
-            .pop()
-            .expect("pattern should contain a variant segment");
-        let enum_name = segments.join(".");
+        let variant_name = segments.pop().expect("pattern should contain a variant segment");
+        let enum_name = if segments.is_empty() {
+            None
+        } else {
+            Some(segments.join("."))
+        };
         let binding = if self.eat_simple(&TokenKind::LParen).is_some() {
             let name = self.expect_identifier()?;
             self.expect_simple(TokenKind::RParen)?;
@@ -817,6 +831,7 @@ impl Parser {
 
     fn parse_type(&mut self) -> Result<TypeRef> {
         let span = self.current_span();
+        let indirect = self.eat_simple(&TokenKind::KwIndirect).is_some();
         let name = self.expect_identifier()?;
         let mut args = Vec::new();
 
@@ -830,7 +845,22 @@ impl Parser {
             self.expect_simple(TokenKind::RBracket)?;
         }
 
-        Ok(TypeRef { name, args, span })
+        let mut ty = TypeRef {
+            name,
+            args,
+            indirect,
+            span,
+        };
+        if self.eat_simple(&TokenKind::Question).is_some() {
+            ty = TypeRef {
+                name: "Option".to_string(),
+                args: vec![ty],
+                indirect,
+                span,
+            };
+        }
+
+        Ok(ty)
     }
 
     fn parse_identifier_path(&mut self) -> Result<Vec<String>> {
@@ -1055,6 +1085,26 @@ impl Parser {
         let mut expr = self.parse_primary()?;
 
         loop {
+            if self.eat_simple(&TokenKind::LBracket).is_some() {
+                let mut type_args = Vec::new();
+                loop {
+                    type_args.push(self.parse_type()?);
+                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                        break;
+                    }
+                }
+                self.expect_simple(TokenKind::RBracket)?;
+                let span = expr.span;
+                expr = Expr {
+                    kind: ExprKind::Specialize {
+                        expr: Box::new(expr),
+                        type_args,
+                    },
+                    span,
+                };
+                continue;
+            }
+
             if self.eat_simple(&TokenKind::Dot).is_some() {
                 let field_span = self.current_span();
                 let field = self.expect_member_name()?;
@@ -1152,6 +1202,10 @@ impl Parser {
             }),
             TokenKind::StringLiteral(value) => Ok(Expr {
                 kind: ExprKind::String(value),
+                span: token.span,
+            }),
+            TokenKind::FStringLiteral(value) => Ok(Expr {
+                kind: ExprKind::FString(self.parse_format_parts(&value, token.span)?),
                 span: token.span,
             }),
             TokenKind::LParen => {
@@ -1294,6 +1348,9 @@ impl Parser {
     }
 
     fn skip_type_tokens(&self, mut idx: usize) -> usize {
+        if matches!(self.peek_kind_at(idx), Some(TokenKind::KwIndirect)) {
+            idx += 1;
+        }
         if !matches!(self.peek_kind_at(idx), Some(TokenKind::Identifier(_))) {
             return idx;
         }
@@ -1319,7 +1376,83 @@ impl Parser {
             }
         }
 
+        if matches!(self.peek_kind_at(idx), Some(TokenKind::Question)) {
+            idx += 1;
+        }
+
         idx
+    }
+
+    fn parse_optional_borrow_mode(&mut self) -> Option<ReceiverKind> {
+        if self.eat_simple(&TokenKind::KwBorrow).is_none() {
+            return None;
+        }
+        if self.eat_simple(&TokenKind::KwMut).is_some() {
+            Some(ReceiverKind::BorrowMut)
+        } else {
+            Some(ReceiverKind::Borrow)
+        }
+    }
+
+    fn at_copy_class_start(&self) -> bool {
+        matches!(
+            (self.current_kind(), self.peek_kind_at(self.index + 1)),
+            (TokenKind::Identifier(name), Some(TokenKind::KwClass)) if name == "copy"
+        )
+    }
+
+    fn parse_format_parts(&self, value: &str, span: Span) -> Result<Vec<FormatPart>> {
+        let mut parts = Vec::new();
+        let mut literal_start = 0usize;
+        let chars = value.char_indices().collect::<Vec<_>>();
+        let mut index = 0usize;
+
+        while index < chars.len() {
+            let (offset, ch) = chars[index];
+            if ch != '{' {
+                index += 1;
+                continue;
+            }
+
+            if literal_start < offset {
+                parts.push(FormatPart::Literal(value[literal_start..offset].to_string()));
+            }
+
+            let expr_start = offset + ch.len_utf8();
+            index += 1;
+            let mut expr_end = None;
+            while index < chars.len() {
+                let (candidate_offset, candidate) = chars[index];
+                if candidate == '}' {
+                    expr_end = Some(candidate_offset);
+                    break;
+                }
+                index += 1;
+            }
+
+            let Some(expr_end) = expr_end else {
+                return Err(Diagnostic::at(span, "unterminated f-string interpolation"));
+            };
+            let expr_text = value[expr_start..expr_end].trim();
+            if expr_text.is_empty() {
+                return Err(Diagnostic::at(span, "f-string interpolation cannot be empty"));
+            }
+            let expr = parse_expression(expr_text).map_err(|error| {
+                Diagnostic::at(
+                    span,
+                    format!("invalid f-string interpolation `{}`: {}", expr_text, error),
+                )
+            })?;
+            parts.push(FormatPart::Expr(expr));
+            index += 1;
+            literal_start = expr_end + 1;
+        }
+
+        if literal_start < value.len() {
+            parts.push(FormatPart::Literal(value[literal_start..].to_string()));
+        }
+
+        Ok(parts)
     }
 
     fn skip_newlines(&mut self) {

@@ -1,0 +1,19 @@
+def worker(jobs: Channel[int32], out: Channel[int32]):
+    for job in jobs:
+        out.send(job * 2)
+
+def main() -> None:
+    jobs = Channel[int32](capacity=10)
+    out = Channel[int32](capacity=10)
+    
+    with task_group() as group:
+        group.spawn(worker, jobs.clone(), out.clone())
+        jobs.send(5)
+        jobs.close()
+    
+    res = out.recv()
+    match res:
+        case Some(v):
+            print(v)
+        case None:
+            print(0)

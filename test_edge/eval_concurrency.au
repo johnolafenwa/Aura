@@ -1,0 +1,25 @@
+def worker(id: int32, jobs: Channel[int32], out: Channel[int32]):
+    while true:
+        match jobs.recv():
+            case Option.Some(job):
+                out.send(job * 2)
+            case Option.None:
+                break
+
+def main() -> int32:
+    jobs: Channel[int32] = channel()
+    out: Channel[int32] = channel()
+    with task_group() as group:
+        group.spawn(worker, 1, jobs.clone(), out.clone())
+        jobs.send(5)
+        jobs.send(10)
+        jobs.close()
+        
+        v1 = out.recv()
+        v2 = out.recv()
+        match v1:
+            case Option.Some(v):
+                print(v)
+            case Option.None:
+                pass
+    return 0

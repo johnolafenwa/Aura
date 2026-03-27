@@ -107,6 +107,9 @@ pub enum Instruction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Rvalue {
     Use(Operand),
+    FormatString {
+        parts: Vec<MirFormatPart>,
+    },
     Unary {
         op: UnaryOp,
         value: Operand,
@@ -175,6 +178,12 @@ pub struct MirArg {
 pub struct MirFieldInit {
     pub name: String,
     pub value: Operand,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum MirFormatPart {
+    Literal(String),
+    Value(Operand),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -687,6 +696,7 @@ impl<'a> Lowerer<'a> {
                 .and_then(|namespace| namespace.imported_modules.get(name))
                 .or_else(|| self.program.imported_modules.get(name))
                 .map(|namespace| namespace.path.clone()),
+            ExprKind::Specialize { expr, .. } => self.infer_module_path(expr),
             ExprKind::Group(inner) => self.infer_module_path(inner),
             ExprKind::Member { object, field } => {
                 let parent = self.infer_module_path(object)?;
@@ -699,6 +709,7 @@ impl<'a> Lowerer<'a> {
 
     fn qualified_module_item(&self, expr: &Expr) -> Option<(String, String)> {
         match &expr.kind {
+            ExprKind::Specialize { expr, .. } => self.qualified_module_item(expr),
             ExprKind::Member { object, field } => self
                 .infer_module_path(object)
                 .map(|path| (path, field.clone())),
@@ -1020,11 +1031,14 @@ impl<'a> Lowerer<'a> {
                     arm_block,
                     match &arm.pattern {
                         Pattern::Variant(pattern) => MirMatchArm {
-                            enum_name: Some(
-                                self.resolve_enum_info(&pattern.enum_name)
-                                    .map(|enum_info| enum_info.decl.name.clone())
-                                    .unwrap_or_else(|| pattern.enum_name.clone()),
-                            ),
+                            enum_name: pattern
+                                .enum_name
+                                .as_deref()
+                                .map(|enum_name| {
+                                    self.resolve_enum_info(enum_name)
+                                        .map(|enum_info| enum_info.decl.name.clone())
+                                        .unwrap_or_else(|| enum_name.to_string())
+                                }),
                             variant_name: Some(pattern.variant_name.clone()),
                             wildcard: false,
                             label: self.label(arm_block),
@@ -1069,19 +1083,79 @@ impl<'a> Lowerer<'a> {
 
     fn lower_for(&mut self, for_stmt: &crate::ast::ForStmt) {
         let iterable = self.lower_expr(&for_stmt.iterable);
+        let iterable_ty = self.infer_expr_type(&for_stmt.iterable);
         let dispatch_block = self.new_block("for_iter");
         let body_block = self.new_block("for_body");
         let after_block = self.new_block("for_end");
 
         self.terminate(Terminator::Goto(self.label(dispatch_block)));
 
-        self.switch_to(dispatch_block);
-        self.terminate(Terminator::ForRange {
-            binding: for_stmt.binding.clone(),
-            iterable,
-            body_label: self.label(body_block),
-            exit_label: self.label(after_block),
-        });
+        match iterable_ty {
+            Some(Type::Named(name, _)) if name == "Range" => {
+                self.switch_to(dispatch_block);
+                self.terminate(Terminator::ForRange {
+                    binding: for_stmt.binding.clone(),
+                    iterable,
+                    body_label: self.label(body_block),
+                    exit_label: self.label(after_block),
+                });
+            }
+            Some(Type::Named(name, args)) if name == "Channel" && args.len() == 1 => {
+                let element_ty = args[0].clone();
+                let next_value = self.new_typed_temp(Type::Named(
+                    "Option".to_string(),
+                    vec![element_ty.clone()],
+                ));
+                self.local_types
+                    .insert(for_stmt.binding.clone(), element_ty);
+                self.switch_to(dispatch_block);
+                self.emit(Instruction::Assign {
+                    target: next_value.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Member {
+                            object: iterable.clone(),
+                            field: "recv".to_string(),
+                            receiver_place: self.render_place_expr_option(&for_stmt.iterable),
+                        },
+                        args: Vec::new(),
+                    },
+                });
+                self.terminate(Terminator::Match {
+                    scrutinee: Operand::Place(next_value.clone()),
+                    arms: vec![
+                        MirMatchArm {
+                            enum_name: Some("Option".to_string()),
+                            variant_name: Some("Some".to_string()),
+                            wildcard: false,
+                            label: self.label(body_block),
+                        },
+                        MirMatchArm {
+                            enum_name: Some("Option".to_string()),
+                            variant_name: Some("None".to_string()),
+                            wildcard: false,
+                            label: self.label(after_block),
+                        },
+                    ],
+                    otherwise: self.label(after_block),
+                });
+                self.switch_to(body_block);
+                self.emit(Instruction::Assign {
+                    target: for_stmt.binding.clone(),
+                    value: Rvalue::VariantPayload {
+                        scrutinee: Operand::Place(next_value),
+                    },
+                });
+            }
+            _ => {
+                self.switch_to(dispatch_block);
+                self.terminate(Terminator::ForRange {
+                    binding: for_stmt.binding.clone(),
+                    iterable,
+                    body_label: self.label(body_block),
+                    exit_label: self.label(after_block),
+                });
+            }
+        }
 
         self.loop_stack.push(LoopLabels {
             break_label: self.label(after_block),
@@ -1190,6 +1264,22 @@ impl<'a> Lowerer<'a> {
             ExprKind::Float(value) => Operand::Float(*value),
             ExprKind::Bool(value) => Operand::Bool(*value),
             ExprKind::String(value) => Operand::String(value.clone()),
+            ExprKind::FString(parts) => {
+                let temp = self.new_typed_temp(Type::named("String"));
+                let parts = parts
+                    .iter()
+                    .map(|part| match part {
+                        crate::ast::FormatPart::Literal(text) => MirFormatPart::Literal(text.clone()),
+                        crate::ast::FormatPart::Expr(expr) => MirFormatPart::Value(self.lower_expr(expr)),
+                    })
+                    .collect::<Vec<_>>();
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::FormatString { parts },
+                });
+                Operand::Place(temp)
+            }
+            ExprKind::Specialize { expr, .. } => self.lower_expr(expr),
             ExprKind::Group(inner) => self.lower_expr(inner),
             ExprKind::Unary { op, expr: value } => {
                 let value = self.lower_expr(value);
@@ -1366,8 +1456,12 @@ impl<'a> Lowerer<'a> {
 
     fn lower_call(&mut self, expr: &Expr, callee: &Expr, args: &[Argument]) -> Operand {
         let temp = self.new_temp_for_expr(expr);
+        let base_callee = match &callee.kind {
+            ExprKind::Specialize { expr, .. } => &**expr,
+            _ => callee,
+        };
 
-        match &callee.kind {
+        match &base_callee.kind {
             ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
                 let class = self
                     .resolve_class_info(name)
@@ -1399,6 +1493,16 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Construct {
                         class_name: name.clone(),
                         fields,
+                    },
+                });
+            }
+            ExprKind::Name(name) if name == "Channel" => {
+                let lowered_args = self.lower_args(args);
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name("channel".to_string()),
+                        args: lowered_args,
                     },
                 });
             }
@@ -1760,6 +1864,8 @@ impl<'a> Lowerer<'a> {
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
             ExprKind::String(_) => Some(Type::named("String")),
+            ExprKind::FString(_) => Some(Type::named("String")),
+            ExprKind::Specialize { expr, .. } => self.infer_expr_type(expr),
             ExprKind::DurationMillis(_) => Some(Type::named("Duration")),
             ExprKind::Unary { expr, .. } => self.infer_expr_type(expr),
             ExprKind::Try(inner) => match self.infer_expr_type(inner)? {
@@ -1962,8 +2068,13 @@ fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
     if type_ref.name == "None" {
         return Type::Unit;
     }
+    let name = if type_ref.name == "str" {
+        "String"
+    } else {
+        &type_ref.name
+    };
     Type::Named(
-        type_ref.name.clone(),
+        name.to_string(),
         type_ref.args.iter().map(lower_type_ref).collect(),
     )
 }

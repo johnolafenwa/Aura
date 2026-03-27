@@ -63,6 +63,14 @@ The examples are organized by topic so they can serve both as quick references a
   - prints:
     - `6`
     - `1`
+- `copy_class.au`
+  - `copy class` for explicit copy semantics on fully copyable fields
+  - prints:
+    - `1`
+    - `2`
+- `indirect_recursive.au`
+  - recursive fields with `indirect Node?` and optional children
+  - prints `2`
 
 ### `control_flow/`
 
@@ -96,6 +104,9 @@ The examples are organized by topic so they can serve both as quick references a
     - `4`
     - `division by zero`
     - `7`
+- `match_borrow.au`
+  - `match borrow ...:` plus unqualified built-in enum variants like `case Ok(value):`
+  - prints `ok`
 - `wildcard_match.au`
   - wildcard `case _:` arms in statement-form `match`
   - prints `2`
@@ -110,6 +121,9 @@ The examples are organized by topic so they can serve both as quick references a
 - `generic_method_calls.au`
   - method calls on generic class instances inside generic functions
   - prints `7`
+- `generic_constructor_specialization.au`
+  - explicit type arguments on class and channel constructors such as `Box[int32](...)`
+  - prints `42`
 - `bounded_types.au`
   - trait bounds on generic class and enum type parameters
   - prints:
@@ -171,6 +185,11 @@ The examples are organized by topic so they can serve both as quick references a
   - prints:
     - `2`
     - `4`
+- `channel_iteration.au`
+  - `for value in jobs:` iteration over a `Channel[T]` until close
+  - prints:
+    - `1`
+    - `2`
 - `send_result.au`
   - `Channel.send()` returning `Result[None, SendError[T]]`
   - prints `7`
@@ -243,6 +262,12 @@ The examples are organized by topic so they can serve both as quick references a
 - `string_clone.au`
   - `String.clone()` on owned strings
   - prints `aurora`
+- `borrow_str.au`
+  - borrowed string parameters with `borrow str`
+  - prints `Hello, Aurora`
+- `f_strings.au`
+  - interpolated `f"..."` strings producing owned `String` values
+  - prints `Hello, Aurora 42`
 
 ## Stable Bootstrap Examples
 

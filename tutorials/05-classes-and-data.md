@@ -1,6 +1,6 @@
 # Classes And Data
 
-The implemented class model currently covers fields, default values, keyword construction, member access, `public` fields and methods, instance methods, associated methods, mutating methods, and trait impl blocks for behavior conformance.
+The implemented class model currently covers fields, default values, keyword construction, member access, `public` fields and methods, instance methods, associated methods, mutating methods, explicit `copy class` declarations, and indirect recursive fields.
 
 ## Declaring A Class
 
@@ -18,6 +18,16 @@ Generic classes are also supported:
 class Box[T]:
     value: T
 ```
+
+Aurora also supports explicit copy classes when every field is itself copyable:
+
+```python
+copy class Point:
+    x: int32
+    y: int32
+```
+
+See [examples/classes/copy_class.au](../examples/classes/copy_class.au).
 
 ## Constructing A Value
 
@@ -51,6 +61,20 @@ named = ServerConfig(host="aurora.dev")
 ```
 
 See [examples/classes/default_fields.au](../examples/classes/default_fields.au).
+
+## Recursive Fields With `indirect`
+
+Recursive class fields must be marked `indirect` so the value is stored out of line instead of inline:
+
+```python
+class Node:
+    value: int32
+    next: indirect Node?
+```
+
+The `?` suffix is shorthand for `Option[...]`, so `indirect Node?` means an optional owned child stored indirectly.
+
+See [examples/classes/indirect_recursive.au](../examples/classes/indirect_recursive.au).
 
 ## `public` Fields And Methods
 
@@ -187,5 +211,4 @@ The bootstrap compiler does not yet support:
 
 - separate `impl` blocks
 - method visibility modifiers
-- enforced field privacy
 - positional class constructor arguments; bootstrap constructors are keyword-only

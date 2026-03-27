@@ -14,6 +14,7 @@ pub enum TokenKind {
     FloatLiteral(f64),
     BoolLiteral(bool),
     StringLiteral(String),
+    FStringLiteral(String),
     Newline,
     Indent,
     Dedent,
@@ -25,6 +26,7 @@ pub enum TokenKind {
     Colon,
     Comma,
     Dot,
+    Question,
     Equal,
     EqEq,
     NotEq,
@@ -52,6 +54,7 @@ pub enum TokenKind {
     KwFrom,
     KwMut,
     KwBorrow,
+    KwIndirect,
     KwPublic,
     KwReturn,
     KwIf,
@@ -191,6 +194,10 @@ fn tokenize_line(
                 tokens.push(simple(TokenKind::Dot, line_no, column));
                 index += 1;
             }
+            '?' => {
+                tokens.push(simple(TokenKind::Question, line_no, column));
+                index += 1;
+            }
             '=' => {
                 if let Some((_, '=')) = chars.get(index + 1) {
                     tokens.push(simple(TokenKind::EqEq, line_no, column));
@@ -276,6 +283,56 @@ fn tokenize_line(
                     tokens.push(simple(TokenKind::Minus, line_no, column));
                     index += 1;
                 }
+            }
+            'f' if matches!(chars.get(index + 1), Some((_, '"'))) => {
+                index += 2;
+                let mut value = String::new();
+
+                while index < chars.len() {
+                    let (_, current) = chars[index];
+                    if current == '"' {
+                        break;
+                    }
+                    if current == '\\' {
+                        index += 1;
+                        let Some((_, escaped)) = chars.get(index) else {
+                            return Err(Diagnostic::at(
+                                Span::new(line_no, column),
+                                "unterminated f-string literal",
+                            ));
+                        };
+                        let decoded = match escaped {
+                            'n' => '\n',
+                            't' => '\t',
+                            '"' => '"',
+                            '\\' => '\\',
+                            other => {
+                                return Err(Diagnostic::at(
+                                    Span::new(line_no, column),
+                                    format!("unsupported escape sequence `\\{}`", other),
+                                ));
+                            }
+                        };
+                        value.push(decoded);
+                        index += 1;
+                        continue;
+                    }
+                    value.push(current);
+                    index += 1;
+                }
+
+                if !matches!(chars.get(index), Some((_, '"'))) {
+                    return Err(Diagnostic::at(
+                        Span::new(line_no, column),
+                        "unterminated f-string literal",
+                    ));
+                }
+
+                index += 1;
+                tokens.push(Token {
+                    kind: TokenKind::FStringLiteral(value),
+                    span: Span::new(line_no, column),
+                });
             }
             '"' => {
                 index += 1;
@@ -454,6 +511,7 @@ fn tokenize_line(
                     "from" => TokenKind::KwFrom,
                     "mut" => TokenKind::KwMut,
                     "borrow" => TokenKind::KwBorrow,
+                    "indirect" => TokenKind::KwIndirect,
                     "public" => TokenKind::KwPublic,
                     "return" => TokenKind::KwReturn,
                     "if" => TokenKind::KwIf,

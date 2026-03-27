@@ -1,0 +1,22 @@
+class Box[T]:
+    value: T
+
+def main() -> int32:
+    box = Box[int32](value=42)
+    jobs = Channel[int32](capacity=4)
+    sent = jobs.send(box.value)
+    jobs.close()
+
+    match sent:
+        case Ok(_):
+            pass
+        case Err(_):
+            print("send failed")
+
+    match jobs.recv():
+        case Some(value):
+            print(value)
+        case None:
+            print(0)
+
+    return 0

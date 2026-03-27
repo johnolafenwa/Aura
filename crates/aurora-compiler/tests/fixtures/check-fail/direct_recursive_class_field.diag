@@ -1,4 +1,4 @@
-error: recursive field `next` on class `Node` requires `indirect`, which is not implemented yet in the compiler
+error: recursive field `next` on class `Node` requires `indirect`
  --> crates/aurora-compiler/tests/fixtures/check-fail/direct_recursive_class_field.au:3:5
   |
 3 |     next: Node

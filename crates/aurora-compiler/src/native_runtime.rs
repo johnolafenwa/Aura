@@ -372,6 +372,12 @@ pub extern "C" fn aurora_direct_string_literal(ptr: *const u8, len: usize) -> *m
 }
 
 #[no_mangle]
+pub extern "C" fn aurora_direct_stringify_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    let rendered = unsafe { value_ref(value) }.render();
+    boxed_value(Value::String(rendered))
+}
+
+#[no_mangle]
 pub extern "C" fn aurora_direct_duration_literal(value: i64) -> *mut OpaqueValue {
     boxed_value(Value::Duration(value as i128))
 }

@@ -1,0 +1,14 @@
+trait Show:
+    def show(borrow self)
+
+class Box[T]:
+    item: T
+
+impl Show for Box[int32]:
+    def show(borrow self):
+        print(self.item)
+
+def main() -> int32:
+    b: Box[int32] = Box(item=42)
+    b.show()
+    return 0

@@ -847,7 +847,7 @@ impl<'a> AnalysisBuilder<'a> {
             return;
         };
         let binding_ty = self
-            .match_binding_type(scrutinee_type, &variant.enum_name, &variant.variant_name)
+            .match_binding_type(scrutinee_type, variant.enum_name.as_deref(), &variant.variant_name)
             .unwrap_or(Type::Unit);
         self.bind_named_value(binding_name, binding_ty, arm.span.line, "local", scope);
     }
@@ -865,7 +865,7 @@ impl<'a> AnalysisBuilder<'a> {
             return;
         };
         let binding_ty = self
-            .match_binding_type(scrutinee_type, &variant.enum_name, &variant.variant_name)
+            .match_binding_type(scrutinee_type, variant.enum_name.as_deref(), &variant.variant_name)
             .unwrap_or(Type::Unit);
         self.insert_scope_binding(binding_name, binding_ty, arm.span.line, "local", scope);
     }
@@ -919,10 +919,18 @@ impl<'a> AnalysisBuilder<'a> {
                     );
                 }
             }
+            ExprKind::Specialize { expr, .. } => self.visit_expr(expr, scope),
             ExprKind::Call { callee, args } => {
                 self.visit_expr(callee, scope);
                 for arg in args {
                     self.visit_expr(&arg.value, scope);
+                }
+            }
+            ExprKind::FString(parts) => {
+                for part in parts {
+                    if let crate::ast::FormatPart::Expr(expr) = part {
+                        self.visit_expr(expr, scope);
+                    }
                 }
             }
             ExprKind::Binary { left, right, .. } => {
@@ -1212,6 +1220,8 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
             ExprKind::String(_) => Some(Type::named("String")),
+            ExprKind::FString(_) => Some(Type::named("String")),
+            ExprKind::Specialize { expr, .. } => self.infer_expr_type(expr, scope),
             ExprKind::Group(inner) => self.infer_expr_type(inner, scope),
             ExprKind::Cast { ty, .. } => Some(lower_type_ref(ty)),
             ExprKind::Unary { op, expr } => {
@@ -1350,7 +1360,7 @@ impl<'a> AnalysisBuilder<'a> {
     fn match_binding_type(
         &self,
         scrutinee_type: Option<&Type>,
-        enum_name: &str,
+        enum_name: Option<&str>,
         variant_name: &str,
     ) -> Option<Type> {
         if let Some(ty) = scrutinee_type {
@@ -1365,7 +1375,7 @@ impl<'a> AnalysisBuilder<'a> {
 
         self.program
             .enums
-            .get(enum_name)
+            .get(enum_name?)
             .and_then(|info| info.variants.get(variant_name))
             .and_then(|variant| variant.payload.clone())
     }
@@ -1631,8 +1641,9 @@ fn lower_type_ref(ty: &TypeRef) -> Type {
     if ty.name == "None" {
         return Type::Unit;
     }
+    let name = if ty.name == "str" { "String" } else { &ty.name };
     Type::Named(
-        ty.name.clone(),
+        name.to_string(),
         ty.args.iter().map(lower_type_ref).collect(),
     )
 }

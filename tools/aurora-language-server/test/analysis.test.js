@@ -106,6 +106,22 @@ const borrowParametersSource = fs.readFileSync(
   path.join(__dirname, "../../../examples/basics/borrow_parameters.au"),
   "utf8"
 );
+const fStringsSource = fs.readFileSync(
+  path.join(__dirname, "../../../examples/strings/f_strings.au"),
+  "utf8"
+);
+const copyClassSource = fs.readFileSync(
+  path.join(__dirname, "../../../examples/classes/copy_class.au"),
+  "utf8"
+);
+const matchBorrowSource = fs.readFileSync(
+  path.join(__dirname, "../../../examples/enums/match_borrow.au"),
+  "utf8"
+);
+const channelIterationSource = fs.readFileSync(
+  path.join(__dirname, "../../../examples/concurrency/channel_iteration.au"),
+  "utf8"
+);
 
 test("analyzeDocument finds classes and functions", () => {
   const moduleInfo = analyzeDocument(pointSource);
@@ -612,4 +628,11 @@ test("fallback analysis accepts pass and sleep builtins", () => {
   const completions = completionsForDocument("", 0, 0, null);
   assert.ok(completions.some((item) => item.name === "pass"));
   assert.ok(completions.some((item) => item.name === "sleep"));
+});
+
+test("fallback analysis accepts f-strings, copy classes, borrowed match, and channel iteration", () => {
+  assert.equal(diagnosticsForDocument(fStringsSource).length, 0);
+  assert.equal(diagnosticsForDocument(copyClassSource).length, 0);
+  assert.equal(diagnosticsForDocument(matchBorrowSource).length, 0);
+  assert.equal(diagnosticsForDocument(channelIterationSource).length, 0);
 });

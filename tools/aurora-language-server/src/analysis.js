@@ -751,16 +751,17 @@ function populateFunctionLocals(functionInfo, lines, moduleInfo) {
     }
 
     const caseBindingMatch = trimmed.match(
-      /^case\s+[A-Z][A-Za-z0-9_]*\.[A-Z][A-Za-z0-9_]*\(([a-zA-Z_][A-Za-z0-9_]*)\)\s*:/
+      /^case\s+(?:[A-Z][A-Za-z0-9_]*\.)?[A-Z][A-Za-z0-9_]*\(([a-zA-Z_][A-Za-z0-9_]*)\)\s*:/
     );
     if (caseBindingMatch) {
       const bindingName = caseBindingMatch[1];
       if (!functionInfo.locals.has(bindingName)) {
+        const inferredType = inferCaseBindingType(trimmed, moduleInfo) || "Unknown";
         functionInfo.locals.set(bindingName, {
           kind: "local",
           name: bindingName,
-          type: inferCaseBindingType(trimmed, moduleInfo) || "Unknown",
-          detail: `${bindingName}: ${inferCaseBindingType(trimmed, moduleInfo) || "Unknown"}`,
+          type: inferredType,
+          detail: `${bindingName}: ${inferredType}`,
           line: i,
           startCharacter: rawLine.indexOf(bindingName),
           endCharacter: rawLine.indexOf(bindingName) + bindingName.length
@@ -941,7 +942,14 @@ function extractExpressionSegments(rawLine) {
   }
 
   const selectExprMatch = trimmed.match(/^case\s+(.+)\s*:\s*$/);
-  if (selectExprMatch && !/^[A-Z][A-Za-z0-9_]*\.[A-Z][A-Za-z0-9_]*(?:\(|$)/.test(selectExprMatch[1])) {
+  if (selectExprMatch) {
+    if (
+      /^(?:_|[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)?(?:\([a-zA-Z_][A-Za-z0-9_]*\))?)$/.test(
+        selectExprMatch[1]
+      )
+    ) {
+      return [];
+    }
     return [
       {
         text: selectExprMatch[1],
@@ -1046,6 +1054,9 @@ function diagnoseResolvedMemberAccess(moduleInfo, functionInfo, line, chain, rec
 
   const memberSymbol = resolveTypeMember(moduleInfo, receiverType, chain.text);
   if (!memberSymbol) {
+    if (isUnresolvedTypeParamType(moduleInfo, receiverType)) {
+      return;
+    }
     pushDiagnosticIfNew(
       moduleInfo,
       makeDiagnostic(
@@ -1103,6 +1114,9 @@ function diagnoseMemberChain(moduleInfo, functionInfo, line, chain) {
     const memberName = parts[index];
     const memberSymbol = resolveTypeMember(moduleInfo, currentType, memberName);
     if (!memberSymbol) {
+      if (isUnresolvedTypeParamType(moduleInfo, currentType)) {
+        return;
+      }
       pushDiagnosticIfNew(
         moduleInfo,
         makeDiagnostic(
@@ -1138,6 +1152,11 @@ function collectIdentifierChains(expression, baseCharacter) {
 
   while (index < expression.length) {
     const ch = expression[index];
+
+    if (ch === "f" && expression[index + 1] === '"') {
+      index = skipStringLiteral(expression, index + 2);
+      continue;
+    }
 
     if (ch === '"') {
       index = skipStringLiteral(expression, index + 1);
@@ -1928,22 +1947,51 @@ function baseTypeName(typeName) {
   return typeName.replace(/\[.*\]$/, "").trim();
 }
 
+function isUnresolvedTypeParamType(moduleInfo, typeName) {
+  const base = baseTypeName(typeName);
+  if (!/^[A-Z][A-Za-z0-9_]*$/.test(base)) {
+    return false;
+  }
+  if (PRIMITIVE_TYPES.has(base) || BUILTIN_ENUMS.has(base) || BUILTIN_MEMBERS[base]) {
+    return false;
+  }
+  return !moduleInfo.classes.has(base) && !moduleInfo.enums.has(base);
+}
+
 function inferCaseBindingType(trimmed, moduleInfo) {
-  const match = trimmed.match(/^case\s+([A-Z][A-Za-z0-9_]*)\.([A-Z][A-Za-z0-9_]*)\([a-zA-Z_][A-Za-z0-9_]*\)\s*:/);
+  const match = trimmed.match(
+    /^case\s+(?:([A-Z][A-Za-z0-9_]*)\.)?([A-Z][A-Za-z0-9_]*)\([a-zA-Z_][A-Za-z0-9_]*\)\s*:/
+  );
   if (!match) {
     return null;
   }
-  const enumInfo = moduleInfo.enums.get(match[1]);
-  if (enumInfo) {
-    const variant = enumInfo.members.get(match[2]);
+  if (match[1]) {
+    const enumInfo = moduleInfo.enums.get(match[1]);
+    if (enumInfo) {
+      const variant = enumInfo.members.get(match[2]);
+      return variant ? variant.payloadType : null;
+    }
+    const builtinEnum = BUILTIN_ENUMS.get(match[1]);
+    if (!builtinEnum) {
+      return null;
+    }
+    const variant = builtinEnum.variants.find((item) => item.name === match[2]);
     return variant ? variant.payloadType : null;
   }
-  const builtinEnum = BUILTIN_ENUMS.get(match[1]);
-  if (!builtinEnum) {
-    return null;
+
+  for (const enumInfo of moduleInfo.enums.values()) {
+    const variant = enumInfo.members.get(match[2]);
+    if (variant && variant.payloadType) {
+      return variant.payloadType;
+    }
   }
-  const variant = builtinEnum.variants.find((item) => item.name === match[2]);
-  return variant ? variant.payloadType : null;
+  for (const builtinEnum of BUILTIN_ENUMS.values()) {
+    const variant = builtinEnum.variants.find((item) => item.name === match[2]);
+    if (variant && variant.payloadType) {
+      return variant.payloadType;
+    }
+  }
+  return null;
 }
 
 function inferForBindingType(iterableExpression, moduleInfo, functionInfo) {

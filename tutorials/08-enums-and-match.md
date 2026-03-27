@@ -39,6 +39,12 @@ ok = ParseResult.Success(42)
 bad = ParseResult.Failure("bad")
 ```
 
+Generic enum constructors may also use explicit type arguments on the enum name when needed:
+
+```python
+wrapped = Result[int32, String].Ok(7)
+```
+
 ## Matching Exhaustively
 
 Aurora's current `match` support requires coverage of every enum variant, either explicitly or through a final wildcard arm:
@@ -74,6 +80,22 @@ case ParseResult.Success(value):
     return value
 ```
 
+Aurora also supports borrowed matching with `match borrow ...:` and `match borrow mut ...:`. In borrowed matches, non-copy payloads are exposed as borrowed values instead of moving the scrutinee:
+
+```python
+result: Result[String, String] = Result.Ok("ok")
+
+match borrow result:
+    case Ok(value):
+        print(value.clone())
+    case Err(message):
+        print(message)
+```
+
+Unqualified variants like `case Ok(value):` are supported when the scrutinee already determines the enum type.
+
+See [examples/enums/match_borrow.au](../examples/enums/match_borrow.au).
+
 ## Current Limits
 
 The bootstrap compiler currently supports:
@@ -82,11 +104,12 @@ The bootstrap compiler currently supports:
 - zero-payload and single-payload variants
 - statement-form `match`
 - variant patterns of the form `Enum.Variant` and `Enum.Variant(name)`
+- unqualified variant patterns such as `case Ok(value):` when the scrutinee type is known
+- `match borrow value:` and `match borrow mut value:`
 - wildcard patterns with `case _:`
 
 It does not yet support:
 
-- borrowed `match`
 - nested patterns
 - expression-form `match`
 - keyword arguments for variant payload construction

@@ -50,6 +50,7 @@ pub enum ImportKind {
 #[derive(Clone, Debug, Serialize)]
 pub struct ClassDecl {
     pub public: bool,
+    pub copy: bool,
     pub name: String,
     pub type_params: Vec<String>,
     pub type_param_bounds: BTreeMap<String, Vec<TypeRef>>,
@@ -190,6 +191,7 @@ pub struct IfBranch {
 #[derive(Clone, Debug, Serialize)]
 pub struct MatchStmt {
     pub scrutinee: Expr,
+    pub borrow_mode: Option<ReceiverKind>,
     pub arms: Vec<MatchArm>,
     pub span: Span,
 }
@@ -209,7 +211,7 @@ pub enum Pattern {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct VariantPattern {
-    pub enum_name: String,
+    pub enum_name: Option<String>,
     pub variant_name: String,
     pub binding: Option<String>,
     pub span: Span,
@@ -219,6 +221,7 @@ pub struct VariantPattern {
 pub struct ForStmt {
     pub binding: String,
     pub iterable: Expr,
+    pub borrow_mode: Option<ReceiverKind>,
     pub body: Vec<Stmt>,
     pub span: Span,
 }
@@ -282,6 +285,7 @@ pub enum ExprKind {
     Float(f64),
     Bool(bool),
     String(String),
+    FString(Vec<FormatPart>),
     Unary {
         op: UnaryOp,
         expr: Box<Expr>,
@@ -298,6 +302,10 @@ pub enum ExprKind {
     Call {
         callee: Box<Expr>,
         args: Vec<Argument>,
+    },
+    Specialize {
+        expr: Box<Expr>,
+        type_args: Vec<TypeRef>,
     },
     Member {
         object: Box<Expr>,
@@ -341,9 +349,16 @@ pub struct Argument {
     pub span: Span,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub enum FormatPart {
+    Literal(String),
+    Expr(Expr),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TypeRef {
     pub name: String,
     pub args: Vec<TypeRef>,
+    pub indirect: bool,
     pub span: Span,
 }

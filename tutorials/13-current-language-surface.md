@@ -12,7 +12,9 @@ Aurora currently supports these top-level declarations:
 - `public enum`
 - `public def`
 - `public trait`
+- `public copy class`
 - `class`
+- `copy class`
 - `enum`
 - `def`
 - `trait`
@@ -42,6 +44,7 @@ Builtin scalar and utility type names currently accepted by the compiler:
 - `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize`
 - `float32`, `float64`
 - `String`
+- `str` in borrowed type positions
 - `None`
 - `Duration`
 - `Range`
@@ -64,6 +67,7 @@ The current compiler supports these statement forms:
 - `if` / `elif` / `else`
 - `while`
 - `for value in range(n):`
+- `for value in jobs:`
 - `match`
 - `with`
 - `select`
@@ -77,12 +81,13 @@ The current compiler supports these statement forms:
 The current compiler supports these expression forms:
 
 - names
-- integer, float, string, boolean, `None`, and duration literals
+- integer, float, string, f-string, boolean, `None`, and duration literals
 - arithmetic, comparison, and boolean operators
 - unary prefix operators `-` and `not`
 - explicit numeric casts with `expr as Type`
 - member access with `.`
 - function and method calls
+- explicit type arguments on call targets such as `Box[int32](...)` and `Result[int32, String].Ok(...)`
 - enum and built-in enum variant construction
 - `spawn ...`
 - `spawn detached ...`
@@ -159,16 +164,20 @@ The current compiler supports:
 
 - `Enum.Variant`
 - `Enum.Variant(name)`
+- unqualified variants such as `Ok(value)` and `None` when the scrutinee type is known
+- `match borrow value:`
+- `match borrow mut value:`
 - `case _:`
 - exhaustive statement-form `match`
 
-It does not yet support nested patterns inside a single `case` or expression-form `match`, but ordinary nested `match` statements are supported.
+It does not yet support expression-form `match`, but ordinary nested `match` statements are supported.
 
 ## Concurrency
 
 The current bootstrap concurrency surface includes:
 
 - typed channels
+- `for` iteration over channels until close
 - spawned tasks
 - detached tasks
 - task groups

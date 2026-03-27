@@ -92,10 +92,31 @@ See [examples/numbers/numeric_casts.au](../examples/numbers/numeric_casts.au).
 greeting = "hello" + ", aurora"
 ```
 
+Borrowed string parameters use `borrow str`:
+
+```python
+def greet(name: borrow str) -> String:
+    return "Hello, " + name
+```
+
+See [examples/strings/borrow_str.au](../examples/strings/borrow_str.au).
+
+Aurora also supports interpolated strings with `f"..."`. An f-string produces an owned `String`:
+
+```python
+name: String = "Aurora"
+answer: int32 = 42
+print(f"Hello, {name} {answer}")
+```
+
+See [examples/strings/f_strings.au](../examples/strings/f_strings.au).
+
 The current compiler supports:
 
 - string literals with double quotes
 - string concatenation with `+`
+- borrowed `str` parameters
+- interpolated `f"..."` strings
 - equality and inequality comparisons
 - `String.clone()`
 

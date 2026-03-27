@@ -659,6 +659,7 @@ impl Interpreter {
                 .and_then(|namespace| namespace.imported_modules.get(name))
                 .or_else(|| self.program.imported_modules.get(name))
                 .map(|namespace| namespace.path.clone()),
+            ExprKind::Specialize { expr, .. } => self.infer_module_path(expr),
             ExprKind::Member { object, field } => {
                 let module_path = self.infer_module_path(object)?;
                 let namespace = self.module_namespace(&module_path)?;
@@ -671,6 +672,7 @@ impl Interpreter {
 
     fn qualified_module_item(&self, expr: &Expr) -> Option<(String, String)> {
         match &expr.kind {
+            ExprKind::Specialize { expr, .. } => self.qualified_module_item(expr),
             ExprKind::Member { object, field } => self
                 .infer_module_path(object)
                 .map(|path| (path, field.clone())),
@@ -841,8 +843,13 @@ impl Interpreter {
         if type_ref.name == "None" {
             return Type::Unit;
         }
+        let name = if type_ref.name == "str" {
+            "String"
+        } else {
+            &type_ref.name
+        };
         Type::Named(
-            type_ref.name.clone(),
+            name.to_string(),
             type_ref.args.iter().map(Self::lower_runtime_type).collect(),
         )
     }
@@ -911,6 +918,8 @@ impl Interpreter {
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
             ExprKind::String(_) => Some(Type::named("String")),
+            ExprKind::FString(_) => Some(Type::named("String")),
+            ExprKind::Specialize { expr, .. } => self.infer_expr_type(expr, env),
             ExprKind::Group(inner) => self.infer_expr_type(inner, env),
             ExprKind::Cast { ty, .. } => Some(Self::lower_runtime_type(ty)),
             ExprKind::Unary { op, expr } => match op {
@@ -1329,32 +1338,66 @@ impl Interpreter {
                     EvalOutcome::Value(value) => value,
                     EvalOutcome::Return(value) => return Ok(ExecFlow::Return(value)),
                 };
-                let Value::Range(range) = iterable else {
-                    return Err(Diagnostic::at(
+                match iterable {
+                    Value::Range(range) => {
+                        for current in range.start..range.end {
+                            env.push_scope();
+                            env.define_typed(
+                                for_stmt.binding.clone(),
+                                Type::named("int32"),
+                                Value::Int(IntegerValue::from_signed(current)),
+                            );
+                            let flow = self.exec_block(&for_stmt.body, env, false)?;
+                            env.pop_scope();
+                            match flow {
+                                ExecFlow::Continue => {}
+                                ExecFlow::Return(value) => return Ok(ExecFlow::Return(value)),
+                                ExecFlow::Break => break,
+                                ExecFlow::ContinueLoop => continue,
+                            }
+                        }
+                        Ok(ExecFlow::Continue)
+                    }
+                    Value::Channel(channel) => {
+                        let binding_ty = match self.infer_expr_type(&for_stmt.iterable, env) {
+                            Some(Type::Named(name, args)) if name == "Channel" && args.len() == 1 => {
+                                args[0].clone()
+                            }
+                            _ => Type::named("Unknown"),
+                        };
+                        loop {
+                            match channel.recv_blocking() {
+                                Some(value) => {
+                                    env.push_scope();
+                                    env.define_typed(
+                                        for_stmt.binding.clone(),
+                                        binding_ty.clone(),
+                                        value,
+                                    );
+                                    let flow = self.exec_block(&for_stmt.body, env, false)?;
+                                    env.pop_scope();
+                                    match flow {
+                                        ExecFlow::Continue => {}
+                                        ExecFlow::Return(value) => {
+                                            return Ok(ExecFlow::Return(value))
+                                        }
+                                        ExecFlow::Break => break,
+                                        ExecFlow::ContinueLoop => continue,
+                                    }
+                                }
+                                None => break,
+                            }
+                        }
+                        Ok(ExecFlow::Continue)
+                    }
+                    other => Err(Diagnostic::at(
                         for_stmt.span,
                         format!(
-                            "`for` currently requires a `Range` iterable, found `{}`",
-                            iterable.render()
+                            "`for` currently requires a `Range` or `Channel[T]` iterable, found `{}`",
+                            other.render()
                         ),
-                    ));
-                };
-                for current in range.start..range.end {
-                    env.push_scope();
-                    env.define_typed(
-                        for_stmt.binding.clone(),
-                        Type::named("int32"),
-                        Value::Int(IntegerValue::from_signed(current)),
-                    );
-                    let flow = self.exec_block(&for_stmt.body, env, false)?;
-                    env.pop_scope();
-                    match flow {
-                        ExecFlow::Continue => {}
-                        ExecFlow::Return(value) => return Ok(ExecFlow::Return(value)),
-                        ExecFlow::Break => break,
-                        ExecFlow::ContinueLoop => continue,
-                    }
+                    )),
                 }
-                Ok(ExecFlow::Continue)
             }
             Stmt::With(with_stmt) => {
                 let resource = match self.eval_expr(&with_stmt.value, env)? {
@@ -1432,10 +1475,15 @@ impl Interpreter {
                         ),
                     ));
                 };
-                let pattern_enum_name = self
-                    .resolve_enum_info(&pattern.enum_name)
-                    .map(|enum_info| enum_info.decl.name.clone())
-                    .unwrap_or_else(|| pattern.enum_name.clone());
+                let pattern_enum_name = pattern
+                    .enum_name
+                    .as_deref()
+                    .and_then(|enum_name| {
+                        self.resolve_enum_info(enum_name)
+                            .map(|enum_info| enum_info.decl.name.clone())
+                            .or_else(|| Some(enum_name.to_string()))
+                    })
+                    .unwrap_or_else(|| variant.enum_name.clone());
                 if variant.enum_name != pattern_enum_name
                     || variant.variant_name != pattern.variant_name
                 {
@@ -1647,6 +1695,25 @@ impl Interpreter {
             ExprKind::Float(value) => Ok(EvalOutcome::Value(Value::Float(*value))),
             ExprKind::Bool(value) => Ok(EvalOutcome::Value(Value::Bool(*value))),
             ExprKind::String(value) => Ok(EvalOutcome::Value(Value::String(value.clone()))),
+            ExprKind::FString(parts) => {
+                let mut rendered = String::new();
+                for part in parts {
+                    match part {
+                        crate::ast::FormatPart::Literal(text) => rendered.push_str(text),
+                        crate::ast::FormatPart::Expr(expr) => {
+                            let value = match self.eval_expr(expr, env)? {
+                                EvalOutcome::Value(value) => value,
+                                EvalOutcome::Return(value) => {
+                                    return Ok(EvalOutcome::Return(value))
+                                }
+                            };
+                            rendered.push_str(&value.render());
+                        }
+                    }
+                }
+                Ok(EvalOutcome::Value(Value::String(rendered)))
+            }
+            ExprKind::Specialize { expr, .. } => self.eval_expr(expr, env),
             ExprKind::Group(inner) => self.eval_expr(inner, env),
             ExprKind::Cast { expr: value, ty } => {
                 let value = match self.eval_expr(value, env)? {
@@ -1893,6 +1960,34 @@ impl Interpreter {
         env: &mut Env,
     ) -> Result<EvalOutcome> {
         match &callee.kind {
+            ExprKind::Specialize { expr, .. }
+                if matches!(&expr.kind, ExprKind::Name(name) if name == "Channel") =>
+            {
+                let ordered_args = bind_call_arguments(
+                    "class `Channel`",
+                    &[crate::call::CallableParam::optional("capacity")],
+                    args,
+                    callee.span,
+                    crate::call::CallConvention::PositionalOrNamed,
+                )?;
+                if let Some(argument) = ordered_args[0] {
+                    match self.eval_expr(&argument.value, env)? {
+                        EvalOutcome::Value(Value::Int(_)) => {}
+                        EvalOutcome::Value(other) => {
+                            return Err(Diagnostic::at(
+                                argument.span,
+                                format!(
+                                    "field `capacity` expects `int32`, found `{}`",
+                                    other.render()
+                                ),
+                            ))
+                        }
+                        EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                    }
+                }
+                Ok(EvalOutcome::Value(Value::Channel(ChannelValue::new())))
+            }
+            ExprKind::Specialize { expr, .. } => self.eval_call(expr, args, env),
             ExprKind::Name(name) if BuiltinFunction::from_name(name).is_some() => {
                 let builtin = BuiltinFunction::from_name(name).unwrap();
                 let ordered_args = builtin.bind_args(args, callee.span)?;

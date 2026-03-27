@@ -15,8 +15,8 @@ use crate::interpreter::{
     RangeValue, RunOutput, TaskGroupValue, TaskValue, TryRecvResult, Value,
 };
 use crate::mir::{
-    CallTarget, Instruction, MirArg, MirClass, MirFunction, MirMethod, MirModule, MirParam,
-    MirReceiverKind, MirSelectKind, MirTraitImpl, Operand, Rvalue, Terminator,
+    CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod, MirModule,
+    MirParam, MirReceiverKind, MirSelectKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::sema::Type;
 
@@ -629,6 +629,8 @@ impl MirRuntime {
                 };
                 for arm in arms {
                     if arm.wildcard
+                        || (arm.enum_name.is_none()
+                            && arm.variant_name.as_deref() == Some(variant.variant_name.as_str()))
                         || (arm.enum_name.as_deref() == Some(variant.enum_name.as_str())
                             && arm.variant_name.as_deref() == Some(variant.variant_name.as_str()))
                     {
@@ -731,6 +733,18 @@ impl MirRuntime {
     fn evaluate_rvalue(&mut self, value: &Rvalue, env: &mut Env) -> Result<RvalueOutcome> {
         match value {
             Rvalue::Use(operand) => Ok(RvalueOutcome::Value(self.evaluate_operand(operand, env)?)),
+            Rvalue::FormatString { parts } => {
+                let mut rendered = String::new();
+                for part in parts {
+                    match part {
+                        MirFormatPart::Literal(text) => rendered.push_str(text),
+                        MirFormatPart::Value(value) => {
+                            rendered.push_str(&self.evaluate_operand(value, env)?.render())
+                        }
+                    }
+                }
+                Ok(RvalueOutcome::Value(Value::String(rendered)))
+            }
             Rvalue::Unary { op, value, .. } => {
                 let value = self.evaluate_operand(value, env)?;
                 let result = match (op, value) {
@@ -906,7 +920,11 @@ impl MirRuntime {
 
                 if name == "channel" {
                     let values = evaluate_named_args(args, env)?;
-                    bind_builtin_args(&[], values)?;
+                    if values.len() > 1 {
+                        return Err(Diagnostic::new(
+                            "`channel()` expects at most one optional `capacity` argument",
+                        ));
+                    }
                     return Ok(Value::Channel(ChannelValue::new()));
                 }
 

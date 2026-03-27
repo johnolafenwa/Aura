@@ -1,0 +1,22 @@
+def main() -> int32:
+    jobs: Channel[int32] = channel()
+    send_one = jobs.send(1)
+    send_two = jobs.send(2)
+    jobs.close()
+
+    match send_one:
+        case Ok(_):
+            pass
+        case Err(_):
+            print("send failed")
+
+    match send_two:
+        case Ok(_):
+            pass
+        case Err(_):
+            print("send failed")
+
+    for job in jobs:
+        print(job)
+
+    return 0

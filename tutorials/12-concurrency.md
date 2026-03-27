@@ -18,6 +18,7 @@ The current bootstrap supports:
 - `send(value)`
 - `recv()`
 - `close()`
+- `for value in jobs:` iteration over a channel until it closes
 
 `recv()` returns `Option[T]`:
 
@@ -28,6 +29,20 @@ The current bootstrap supports:
 
 - `Result.Ok(None)` when the value was queued successfully
 - `Result.Err(SendError.Closed(value))` when the channel was already closed
+
+Channels can also act as `for` iterables:
+
+```aurora
+jobs: Channel[int32] = channel()
+jobs.send(1)
+jobs.send(2)
+jobs.close()
+
+for job in jobs:
+    print(job)
+```
+
+See [examples/concurrency/channel_iteration.au](../examples/concurrency/channel_iteration.au).
 
 ## Spawning work
 
@@ -168,4 +183,3 @@ The bootstrap concurrency runtime does not yet provide:
 - network or socket integration
 - general async I/O APIs
 - detached-task ownership restrictions from the full proposal
-- richer iterable channel consumption through `for`

@@ -19,6 +19,12 @@ boxed: Box[int32] = Box(value=7)
 print(boxed.get())
 ```
 
+Aurora also supports explicit type arguments on constructor calls when you want to state the instantiation directly at the call site:
+
+```python
+boxed = Box[int32](value=7)
+```
+
 The current compiler supports inferring the constructor type arguments from:
 
 - the surrounding expected type
@@ -96,6 +102,7 @@ The implemented generic surface currently supports:
 - generic `class`, `enum`, and `def` declarations
 - trait bounds on class and enum type parameters
 - generic type arguments in type positions such as `Box[int32]`
+- explicit type arguments on class constructor calls such as `Box[int32](...)`
 - inference for generic function calls
 - inference for generic class constructors and enum payload constructors
 - method calls on generic class instances inside generic functions
@@ -103,7 +110,6 @@ The implemented generic surface currently supports:
 
 It does not yet support:
 
-- explicit type arguments on call expressions
 - generic trait declarations
 
-See [examples/generics/box_and_wrapper.au](../examples/generics/box_and_wrapper.au), [examples/generics/generic_method_calls.au](../examples/generics/generic_method_calls.au), and [examples/generics/bounded_types.au](../examples/generics/bounded_types.au).
+See [examples/generics/box_and_wrapper.au](../examples/generics/box_and_wrapper.au), [examples/generics/generic_method_calls.au](../examples/generics/generic_method_calls.au), [examples/generics/generic_constructor_specialization.au](../examples/generics/generic_constructor_specialization.au), and [examples/generics/bounded_types.au](../examples/generics/bounded_types.au).

@@ -1,0 +1,23 @@
+copy class Color:
+    r: int32
+    g: int32
+    b: int32
+
+class Node:
+    value: int32
+    next: indirect Node?
+
+class Box[T]:
+    value: T
+
+def inspect(result: Result[int32, String]):
+    match borrow result:
+        case Ok(value):
+            print(f"value={value}")
+        case Err(message):
+            print(message)
+
+def main() -> int32:
+    box = Box[int32](value=42)
+    print(box.value)
+    return 0
