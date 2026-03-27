@@ -1,0 +1,4 @@
+def main() -> int32:
+    value = Ok(1)
+    print(value)
+    return 0

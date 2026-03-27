@@ -640,7 +640,7 @@ impl<'a> AnalysisBuilder<'a> {
             }
         }
 
-        for trait_impl in &self.program.trait_impls {
+        for trait_impl in self.trait_impls_in_scope() {
             if &trait_impl.for_type == receiver_type {
                 for (name, method) in &trait_impl.methods {
                     if completions.iter().any(|existing| existing.name == *name) {
@@ -676,6 +676,15 @@ impl<'a> AnalysisBuilder<'a> {
             completions.push(builtin);
         }
         completions
+    }
+
+    fn trait_impls_in_scope(&self) -> impl Iterator<Item = &crate::sema::TraitImplInfo> + '_ {
+        self.program.trait_impls.iter().chain(
+            self.program
+                .module_registry
+                .values()
+                .flat_map(|namespace| namespace.trait_impls.iter()),
+        )
     }
 
     fn module_namespace(&self, path: &str) -> Option<&crate::sema::ModuleNamespace> {
@@ -1119,9 +1128,7 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         if let Some(trait_method) = self
-            .program
-            .trait_impls
-            .iter()
+            .trait_impls_in_scope()
             .find(|trait_impl| &trait_impl.for_type == receiver_type)
             .and_then(|trait_impl| trait_impl.methods.get(field))
         {
@@ -2031,9 +2038,17 @@ where
     F: FnMut(&str) -> Result<Program>,
 {
     let sanitized = sanitize_member_completion_source(source, line, character);
-    parser::parse(&sanitized)
+    if let Some(program) = parser::parse(&sanitized)
         .ok()
         .and_then(|_| check_program(&sanitized).ok())
+    {
+        return Some(program);
+    }
+
+    let fallback = replace_dangling_member_stmt_with_recovery_stmt(source, line);
+    parser::parse(&fallback)
+        .ok()
+        .and_then(|_| check_program(&fallback).ok())
 }
 
 fn sanitize_member_completion_source(source: &str, line: usize, character: usize) -> String {
@@ -2061,6 +2076,80 @@ fn sanitize_member_completion_source(source: &str, line: usize, character: usize
 
     line_text.remove(dot_index);
     lines.join("\n")
+}
+
+fn replace_dangling_member_stmt_with_recovery_stmt(source: &str, line: usize) -> String {
+    let mut lines = source.lines().map(str::to_string).collect::<Vec<_>>();
+    let Some(line_text) = lines.get_mut(line) else {
+        return source.to_string();
+    };
+    let indent = line_text
+        .chars()
+        .take_while(|ch| ch.is_whitespace())
+        .collect::<String>();
+    let replacement = enclosing_function_return_placeholder(source, line)
+        .map(|value| format!("{}{}", indent, value))
+        .unwrap_or_else(|| format!("{}pass", indent));
+    *line_text = replacement;
+    lines.join("\n")
+}
+
+fn enclosing_function_return_placeholder(source: &str, line: usize) -> Option<String> {
+    let lines = source.lines().collect::<Vec<_>>();
+    let target_indent = lines
+        .get(line)?
+        .chars()
+        .take_while(|ch| ch.is_whitespace())
+        .count();
+
+    for candidate in (0..line).rev() {
+        let text = lines[candidate];
+        let indent = text.chars().take_while(|ch| ch.is_whitespace()).count();
+        if indent >= target_indent {
+            continue;
+        }
+        let trimmed = text.trim_start();
+        if !trimmed.starts_with("def ") && !trimmed.starts_with("public def ") {
+            continue;
+        }
+        let return_type = trimmed
+            .split_once("->")
+            .and_then(|(_, rest)| rest.split_once(':').map(|(ty, _)| ty.trim()))
+            .unwrap_or("None");
+        return placeholder_stmt_for_return_type(return_type);
+    }
+
+    None
+}
+
+fn placeholder_stmt_for_return_type(return_type: &str) -> Option<String> {
+    match return_type {
+        "None" => Some("return".to_string()),
+        "bool" => Some("return false".to_string()),
+        "float32" | "float64" => Some("return 0.0".to_string()),
+        "String" | "str" => Some("return \"\"".to_string()),
+        "Duration" => Some("return 0ms".to_string()),
+        ty if matches!(
+            ty,
+            "int8"
+                | "int16"
+                | "int32"
+                | "int64"
+                | "int128"
+                | "intsize"
+                | "uint8"
+                | "uint16"
+                | "uint32"
+                | "uint64"
+                | "uint128"
+                | "uintsize"
+        ) =>
+        {
+            Some("return 0".to_string())
+        }
+        ty if ty.starts_with("Option[") => Some("return Option.None".to_string()),
+        _ => None,
+    }
 }
 
 fn extract_receiver_ending_before(line_text: &str, end_index_exclusive: usize) -> Option<&str> {
@@ -2311,6 +2400,28 @@ mod tests {
     }
 
     #[test]
+    fn compiler_member_completion_tolerates_dangling_dot_at_eof_buffers() {
+        let source = [
+            "class Counter:",
+            "    value: int32",
+            "",
+            "def main() -> int32:",
+            "    counter = Counter(value=1)",
+            "    counter.",
+        ]
+        .join("\n");
+
+        let completions =
+            complete_source(&source, 5, 12, Some('.')).expect("completion should work");
+        let names = completions
+            .into_iter()
+            .map(|item| item.name)
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"value".to_string()));
+    }
+
+    #[test]
     fn machine_readable_analysis_recovers_symbols_for_dangling_dot_buffers() {
         let source = [
             "class Counter:",
@@ -2320,6 +2431,28 @@ mod tests {
             "    counter = Counter(value=1)",
             "    counter.",
             "    return 0",
+        ]
+        .join("\n");
+
+        let analysis = analyze_source(&source);
+
+        assert!(!analysis.symbols.is_empty());
+        assert!(analysis
+            .symbols
+            .iter()
+            .any(|symbol| symbol.kind == "class" && symbol.name == "Counter"));
+        assert!(!analysis.occurrences.is_empty());
+    }
+
+    #[test]
+    fn machine_readable_analysis_recovers_symbols_for_dangling_dot_at_eof_buffers() {
+        let source = [
+            "class Counter:",
+            "    value: int32",
+            "",
+            "def main() -> int32:",
+            "    counter = Counter(value=1)",
+            "    counter.",
         ]
         .join("\n");
 

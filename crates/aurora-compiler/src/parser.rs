@@ -834,7 +834,7 @@ impl Parser {
     fn parse_type(&mut self) -> Result<TypeRef> {
         let span = self.current_span();
         let indirect = self.eat_simple(&TokenKind::KwIndirect).is_some();
-        let name = self.expect_identifier()?;
+        let name = self.parse_identifier_path()?.join(".");
         let mut args = Vec::new();
 
         if self.eat_simple(&TokenKind::LBracket).is_some() {
@@ -1218,6 +1218,14 @@ impl Parser {
                     span: token.span,
                 })
             }
+            TokenKind::KwBorrow => Err(Diagnostic::at(
+                token.span,
+                "call arguments cannot start with `borrow`; pass the value directly",
+            )),
+            TokenKind::LBracket => Err(Diagnostic::at(
+                token.span,
+                "list literals are not implemented yet",
+            )),
             other => Err(Diagnostic::at(
                 token.span,
                 format!("unexpected token in expression: {:?}", other),
@@ -1357,6 +1365,11 @@ impl Parser {
             return idx;
         }
         idx += 1;
+        while matches!(self.peek_kind_at(idx), Some(TokenKind::Dot))
+            && matches!(self.peek_kind_at(idx + 1), Some(TokenKind::Identifier(_)))
+        {
+            idx += 2;
+        }
 
         while matches!(self.peek_kind_at(idx), Some(TokenKind::LBracket)) {
             let mut depth = 0usize;

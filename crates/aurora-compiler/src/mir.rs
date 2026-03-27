@@ -334,35 +334,27 @@ pub fn lower(program: &Program) -> MirModule {
     );
 
     let mut trait_impls = Vec::new();
+    let mut seen_trait_impls = BTreeSet::new();
     for trait_impl in &program.trait_impls {
-        let mut methods = Vec::new();
-        for method in trait_impl.methods.values() {
-            let qualified_name = format!(
-                "{} for {}.{}",
-                trait_impl.trait_name, trait_impl.for_type, method.decl.name
-            );
-            functions.push(lower_function(
-                program,
-                &qualified_name,
-                &program.module_name,
-                method.decl.receiver,
-                Some(trait_impl.for_type.clone()),
-                &method.decl,
-                &method.signature.params,
-                &method.signature.return_type,
-            ));
-            methods.push(MirMethod {
-                name: method.decl.name.clone(),
-                function_name: qualified_name,
-                receiver: method.decl.receiver.map(lower_receiver_kind),
-            });
-        }
-        trait_impls.push(MirTraitImpl {
-            trait_name: trait_impl.trait_name.clone(),
-            for_type: trait_impl.for_type.clone(),
-            methods,
-        });
+        seen_trait_impls.insert(format!(
+            "{} for {}",
+            trait_impl.trait_name, trait_impl.for_type
+        ));
+        trait_impls.push(lower_trait_impl(
+            program,
+            &program.module_name,
+            trait_impl,
+            &mut functions,
+            &mut seen_function_names,
+        ));
     }
+    push_imported_module_trait_impls(
+        program,
+        &mut functions,
+        &mut trait_impls,
+        &mut seen_function_names,
+        &mut seen_trait_impls,
+    );
 
     let top_level = if program.top_level_stmts.is_empty() {
         None
@@ -481,6 +473,68 @@ fn push_imported_module_classes_from_namespace(
             seen_function_names,
             seen_class_names,
         );
+    }
+}
+
+fn push_imported_module_trait_impls(
+    program: &Program,
+    functions: &mut Vec<MirFunction>,
+    trait_impls: &mut Vec<MirTraitImpl>,
+    seen_function_names: &mut BTreeSet<String>,
+    seen_trait_impls: &mut BTreeSet<String>,
+) {
+    for namespace in program.module_registry.values() {
+        for trait_impl in &namespace.trait_impls {
+            let impl_key = format!("{} for {}", trait_impl.trait_name, trait_impl.for_type);
+            if !seen_trait_impls.insert(impl_key) {
+                continue;
+            }
+            trait_impls.push(lower_trait_impl(
+                program,
+                &namespace.path,
+                trait_impl,
+                functions,
+                seen_function_names,
+            ));
+        }
+    }
+}
+
+fn lower_trait_impl(
+    program: &Program,
+    module_name: &str,
+    trait_impl: &crate::sema::TraitImplInfo,
+    functions: &mut Vec<MirFunction>,
+    seen_function_names: &mut BTreeSet<String>,
+) -> MirTraitImpl {
+    let mut methods = Vec::new();
+    for method in trait_impl.methods.values() {
+        let qualified_name = format!(
+            "{} for {}.{}",
+            trait_impl.trait_name, trait_impl.for_type, method.decl.name
+        );
+        if seen_function_names.insert(qualified_name.clone()) {
+            functions.push(lower_function(
+                program,
+                &qualified_name,
+                module_name,
+                method.decl.receiver,
+                Some(trait_impl.for_type.clone()),
+                &method.decl,
+                &method.signature.params,
+                &method.signature.return_type,
+            ));
+        }
+        methods.push(MirMethod {
+            name: method.decl.name.clone(),
+            function_name: qualified_name,
+            receiver: method.decl.receiver.map(lower_receiver_kind),
+        });
+    }
+    MirTraitImpl {
+        trait_name: trait_impl.trait_name.clone(),
+        for_type: trait_impl.for_type.clone(),
+        methods,
     }
 }
 
@@ -1022,6 +1076,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_match(&mut self, match_stmt: &MatchStmt) {
         let scrutinee = self.lower_expr(&match_stmt.scrutinee);
+        let scrutinee_ty = self.infer_expr_type(&match_stmt.scrutinee);
         let after_block = self.new_block("match_end");
         let arms = match_stmt
             .arms
@@ -1062,6 +1117,12 @@ impl<'a> Lowerer<'a> {
             self.switch_to(*arm_block);
             if let Pattern::Variant(pattern) = &arm.pattern {
                 if let Some(binding) = &pattern.binding {
+                    if let Some(payload_ty) = scrutinee_ty
+                        .as_ref()
+                        .and_then(|ty| self.variant_payload_type(ty, &pattern.variant_name))
+                    {
+                        self.local_types.insert(binding.clone(), payload_ty);
+                    }
                     self.emit(Instruction::Assign {
                         target: binding.clone(),
                         value: Rvalue::VariantPayload {
@@ -1769,22 +1830,24 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        if let Some((_, method)) = self.program.trait_impls.iter().find_map(|trait_impl| {
-            if trait_impl.for_type == receiver_type {
-                trait_impl
-                    .methods
-                    .get(field)
-                    .map(|method| (trait_impl, method))
-            } else {
-                None
+        let trait_method_params = {
+            let mut found = None;
+            for trait_impl in self.trait_impls_in_scope() {
+                if trait_impl.for_type == receiver_type {
+                    found = trait_impl
+                        .methods
+                        .get(field)
+                        .map(|method| method.decl.params.clone());
+                    if found.is_some() {
+                        break;
+                    }
+                }
             }
-        }) {
-            return self.lower_user_args(
-                &format!("method `{}`", field),
-                &method.decl.params,
-                args,
-                span,
-            );
+            found
+        };
+
+        if let Some(params) = trait_method_params {
+            return self.lower_user_args(&format!("method `{}`", field), &params, args, span);
         }
 
         self.lower_args(args)
@@ -1968,7 +2031,12 @@ impl<'a> Lowerer<'a> {
                                 }
                             }
                         }
-                        self.program.trait_impls.iter().find_map(|trait_impl| {
+                        if let Some(runtime_ty) =
+                            self.builtin_runtime_member_return_type(&receiver_type, field)
+                        {
+                            return Some(runtime_ty);
+                        }
+                        self.trait_impls_in_scope().find_map(|trait_impl| {
                             if trait_impl.for_type == receiver_type {
                                 trait_impl
                                     .methods
@@ -2023,6 +2091,83 @@ impl<'a> Lowerer<'a> {
                     None
                 }
             }
+        }
+    }
+
+    fn trait_impls_in_scope(&self) -> impl Iterator<Item = &crate::sema::TraitImplInfo> + '_ {
+        self.program.trait_impls.iter().chain(
+            self.program
+                .module_registry
+                .values()
+                .flat_map(|namespace| namespace.trait_impls.iter()),
+        )
+    }
+
+    fn variant_payload_type(&self, enum_ty: &Type, variant_name: &str) -> Option<Type> {
+        match enum_ty {
+            Type::Named(name, args) if name == "Option" && args.len() == 1 => {
+                (variant_name == "Some").then(|| args[0].clone())
+            }
+            Type::Named(name, args) if name == "Result" && args.len() == 2 => match variant_name {
+                "Ok" => Some(args[0].clone()),
+                "Err" => Some(args[1].clone()),
+                _ => None,
+            },
+            Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
+                (variant_name == "Closed").then(|| args[0].clone())
+            }
+            Type::Named(name, args) => {
+                let enum_info = self.resolve_enum_info(name)?;
+                let payload = enum_info.variants.get(variant_name)?.payload.as_ref()?;
+                let substitutions = enum_info
+                    .decl
+                    .type_params
+                    .iter()
+                    .cloned()
+                    .zip(args.iter().cloned())
+                    .collect::<std::collections::HashMap<_, _>>();
+                Some(substitute_type(payload, &substitutions))
+            }
+            _ => None,
+        }
+    }
+
+    fn builtin_runtime_member_return_type(
+        &self,
+        receiver_type: &Type,
+        field: &str,
+    ) -> Option<Type> {
+        let Type::Named(name, args) = receiver_type else {
+            return None;
+        };
+        match (name.as_str(), field) {
+            ("Channel", "clone") => Some(Type::Named("Channel".to_string(), args.clone())),
+            ("Channel", "recv") => Some(Type::Named(
+                "Option".to_string(),
+                vec![args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            )),
+            ("Channel", "send") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Unit,
+                    Type::Named(
+                        "SendError".to_string(),
+                        vec![args
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| Type::named("Unknown"))],
+                    ),
+                ],
+            )),
+            ("Channel", "close") | ("TaskGroup", "cancel") | ("TaskGroup", "close") => {
+                Some(Type::Unit)
+            }
+            ("Task", "clone") => Some(Type::Named("Task".to_string(), args.clone())),
+            ("Task", "join") => Some(args.first().cloned().unwrap_or(Type::Unit)),
+            _ => None,
         }
     }
 

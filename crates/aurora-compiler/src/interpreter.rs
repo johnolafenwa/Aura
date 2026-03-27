@@ -1120,7 +1120,7 @@ impl Interpreter {
         receiver_ty: &Type,
         field: &str,
     ) -> Option<&crate::sema::TraitImplMethodInfo> {
-        self.program.trait_impls.iter().find_map(|trait_impl| {
+        self.trait_impls_in_scope().find_map(|trait_impl| {
             if &trait_impl.for_type != receiver_ty {
                 return None;
             }
@@ -1134,9 +1134,7 @@ impl Interpreter {
         field: &str,
     ) -> Option<&crate::sema::TraitImplMethodInfo> {
         let mut matches =
-            self.program
-                .trait_impls
-                .iter()
+            self.trait_impls_in_scope()
                 .filter_map(|trait_impl| match &trait_impl.for_type {
                     Type::Named(name, _) if name == class_name => trait_impl.methods.get(field),
                     _ => None,
@@ -1146,6 +1144,15 @@ impl Interpreter {
             return None;
         }
         Some(first)
+    }
+
+    fn trait_impls_in_scope(&self) -> impl Iterator<Item = &crate::sema::TraitImplInfo> + '_ {
+        self.program.trait_impls.iter().chain(
+            self.program
+                .module_registry
+                .values()
+                .flat_map(|namespace| namespace.trait_impls.iter()),
+        )
     }
 
     fn validate_value_fits_type(

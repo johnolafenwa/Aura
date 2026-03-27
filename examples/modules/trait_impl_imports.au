@@ -1,0 +1,10 @@
+from pkg.named import Named
+from pkg.user import User
+
+def show[T: Named](value: T) -> String:
+    return value.name()
+
+def main() -> int32:
+    print(show(value=User(label="Ada")))
+    print(User(label="Ada").name())
+    return 0

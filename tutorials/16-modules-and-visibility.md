@@ -25,6 +25,12 @@ counter = pkg.types.Counter(value=4)
 status = pkg.types.Status.Ready
 ```
 
+Module-qualified type annotations now work too:
+
+```python
+counter: pkg.types.Counter = pkg.types.Counter(value=4)
+```
+
 ## Importing Names Directly
 
 Use `from ... import ...` when you want a direct local binding:
@@ -33,7 +39,7 @@ Use `from ... import ...` when you want a direct local binding:
 from helpers.counter import Counter
 ```
 
-This is also the current way to bring types into annotations and constructors without repeating a module path.
+This is also the most concise way to bring types into annotations and constructors without repeating a module path.
 
 ## `public`
 
@@ -58,6 +64,7 @@ Across module boundaries:
 - reading a private field is rejected
 - calling a private method is rejected
 - keyword construction only exposes participating `public` fields
+- trait impls defined in imported modules still participate in generic bounds and method lookup
 
 Within the same module, private members remain usable.
 
@@ -67,8 +74,9 @@ See [examples/modules/simple_import.au](../examples/modules/simple_import.au) wi
 
 See [examples/modules/namespace_import_types.au](../examples/modules/namespace_import_types.au) with its helper module under [examples/modules/pkg](../examples/modules/pkg).
 
+See [examples/modules/trait_impl_imports.au](../examples/modules/trait_impl_imports.au) with helper modules under [examples/modules/pkg](../examples/modules/pkg).
+
 ## Current Limits
 
 - module resolution is local-file based for now
 - package manifests and external dependency resolution are still proposal-only
-- module-qualified type annotations are not implemented yet; import types with `from ... import Type`

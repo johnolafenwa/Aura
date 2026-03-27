@@ -1150,23 +1150,14 @@ impl<'a> NativeCodegen<'a> {
         let unbox_bool = self
             .object
             .declare_func_in_func(self.unbox_bool, builder.func);
-        let box_i64 = self.object.declare_func_in_func(self.box_i64, builder.func);
-        let box_f64 = self.object.declare_func_in_func(self.box_f64, builder.func);
-        let box_bool = self
-            .object
-            .declare_func_in_func(self.box_bool, builder.func);
-        let box_unit = self
-            .object
-            .declare_func_in_func(self.box_unit, builder.func);
 
         let mut lowered_args = Vec::new();
-        for (index, param_ty) in self
+        let param_types = self
             .function_param_types
             .get(&function.name)
-            .into_iter()
-            .flatten()
-            .enumerate()
-        {
+            .cloned()
+            .unwrap_or_default();
+        for (index, param_ty) in param_types.iter().enumerate() {
             let raw = builder
                 .ins()
                 .load(types::I64, MemFlags::new(), args_ptr, (index as i32) * 8);
@@ -1188,11 +1179,8 @@ impl<'a> NativeCodegen<'a> {
                 DirectType::Scalar(ScalarKind::Unit) => {
                     lowered_args.push(builder.ins().iconst(types::I64, 0));
                 }
-                DirectType::PlainClass(class) => {
-                    return Err(format!(
-                        "direct backend does not yet support spawn thunks for plain-class parameter types like `{}` on `{}`",
-                        class.class_name, function.name
-                    ));
+                DirectType::PlainClass(_) => {
+                    lowered_args.extend(unbox_thunk_value(self, &mut builder, raw, param_ty)?);
                 }
             }
         }
@@ -1202,42 +1190,14 @@ impl<'a> NativeCodegen<'a> {
         let return_ty = self
             .function_return_types
             .get(&function.name)
+            .cloned()
             .ok_or_else(|| {
                 format!(
                     "direct backend does not know return type for `{}`",
                     function.name
                 )
             })?;
-        let boxed = match return_ty {
-            DirectType::Opaque(_) => results.first().copied().ok_or_else(|| {
-                format!(
-                    "thunk for `{}` expected an opaque return value",
-                    function.name
-                )
-            })?,
-            DirectType::Scalar(ScalarKind::Int32) => {
-                let boxed = builder.ins().call(box_i64, &[results[0]]);
-                builder.inst_results(boxed)[0]
-            }
-            DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
-                let boxed = builder.ins().call(box_f64, &[results[0]]);
-                builder.inst_results(boxed)[0]
-            }
-            DirectType::Scalar(ScalarKind::Bool) => {
-                let boxed = builder.ins().call(box_bool, &[results[0]]);
-                builder.inst_results(boxed)[0]
-            }
-            DirectType::Scalar(ScalarKind::Unit) => {
-                let boxed = builder.ins().call(box_unit, &[]);
-                builder.inst_results(boxed)[0]
-            }
-            DirectType::PlainClass(class) => {
-                return Err(format!(
-                    "direct backend does not yet support spawn thunks for plain-class return types like `{}` on `{}`",
-                    class.class_name, function.name
-                ));
-            }
-        };
+        let boxed = box_thunk_value(self, &mut builder, &results, &return_ty)?;
         builder.ins().return_(&[boxed]);
         builder.finalize();
 
@@ -4149,7 +4109,17 @@ fn infer_rvalue_type(
                         let method = find_method(classes.get(&class_ty.class_name), field)?;
                         function_return_types.get(&method.function_name).cloned()
                     }
-                    DirectType::Opaque(_) => Some(DirectType::Opaque(Type::named("Unknown"))),
+                    DirectType::Opaque(Type::Named(name, args)) => {
+                        if let Some(method) = find_method(classes.get(&name), field) {
+                            return function_return_types.get(&method.function_name).cloned();
+                        }
+                        builtin_opaque_member_return_type(&Type::Named(name, args), field, classes)
+                            .or_else(|| Some(DirectType::Opaque(Type::named("Unknown"))))
+                    }
+                    DirectType::Opaque(ty) => {
+                        builtin_opaque_member_return_type(&ty, field, classes)
+                            .or_else(|| Some(DirectType::Opaque(Type::named("Unknown"))))
+                    }
                     DirectType::Scalar(_) => None,
                 }
             }
@@ -4161,8 +4131,12 @@ fn infer_rvalue_type(
             }
         }
         Rvalue::EnumVariant { enum_name, .. } => Some(DirectType::Opaque(Type::named(enum_name))),
-        Rvalue::VariantPayload { .. } => Some(DirectType::Opaque(Type::named("Unknown"))),
-        Rvalue::Try { .. } => Some(DirectType::Opaque(Type::named("Unknown"))),
+        Rvalue::VariantPayload { scrutinee } => {
+            infer_variant_payload_type(scrutinee, variable_types, classes)
+                .or_else(|| Some(DirectType::Opaque(Type::named("Unknown"))))
+        }
+        Rvalue::Try { value } => infer_try_type(value, variable_types, classes)
+            .or_else(|| Some(DirectType::Opaque(Type::named("Unknown")))),
         Rvalue::Spawn {
             detached, function, ..
         } => {
@@ -4238,6 +4212,90 @@ fn infer_select_binding_type(
     }
 }
 
+fn builtin_opaque_member_return_type(
+    object_ty: &Type,
+    field: &str,
+    classes: &HashMap<String, MirClass>,
+) -> Option<DirectType> {
+    let Type::Named(name, args) = object_ty else {
+        return None;
+    };
+    match (name.as_str(), field) {
+        ("Channel", "clone") => Some(DirectType::Opaque(Type::Named(
+            "Channel".to_string(),
+            args.clone(),
+        ))),
+        ("Channel", "recv") => direct_type(
+            &Type::Named(
+                "Option".to_string(),
+                vec![args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            ),
+            classes,
+        ),
+        ("Channel", "send") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Unit,
+                    Type::Named(
+                        "SendError".to_string(),
+                        vec![args
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| Type::named("Unknown"))],
+                    ),
+                ],
+            ),
+            classes,
+        ),
+        ("Channel", "close") | ("TaskGroup", "cancel") | ("TaskGroup", "close") => {
+            Some(DirectType::Scalar(ScalarKind::Unit))
+        }
+        ("Task", "clone") => Some(DirectType::Opaque(Type::Named(
+            "Task".to_string(),
+            args.clone(),
+        ))),
+        ("Task", "join") => direct_type(args.first().unwrap_or(&Type::Unit), classes),
+        _ => None,
+    }
+}
+
+fn infer_variant_payload_type(
+    scrutinee: &Operand,
+    variable_types: &HashMap<String, DirectType>,
+    classes: &HashMap<String, MirClass>,
+) -> Option<DirectType> {
+    let scrutinee_ty = infer_operand_type(scrutinee, variable_types, classes)?;
+    let DirectType::Opaque(Type::Named(name, args)) = scrutinee_ty else {
+        return None;
+    };
+    let payload_ty = match (name.as_str(), args.as_slice()) {
+        ("Option", [inner]) => inner.clone(),
+        ("Result", [ok, _]) => ok.clone(),
+        ("SendError", [inner]) => inner.clone(),
+        _ => return None,
+    };
+    direct_type(&payload_ty, classes)
+}
+
+fn infer_try_type(
+    value: &Operand,
+    variable_types: &HashMap<String, DirectType>,
+    classes: &HashMap<String, MirClass>,
+) -> Option<DirectType> {
+    let value_ty = infer_operand_type(value, variable_types, classes)?;
+    let DirectType::Opaque(Type::Named(name, args)) = value_ty else {
+        return None;
+    };
+    match (name.as_str(), args.as_slice()) {
+        ("Result", [ok, _]) => direct_type(ok, classes),
+        _ => None,
+    }
+}
+
 fn direct_field_type(
     ty: &DirectType,
     field: &str,
@@ -4299,6 +4357,154 @@ fn render_direct_type(ty: &DirectType) -> String {
         DirectType::Scalar(ScalarKind::Unit) => "None".to_string(),
         DirectType::PlainClass(class) => class.class_name.clone(),
         DirectType::Opaque(ty) => ty.to_string(),
+    }
+}
+
+fn thunk_string_constant(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    bytes: &[u8],
+) -> std::result::Result<(Value, Value), String> {
+    let id = if let Some(id) = codegen.string_data.get(bytes) {
+        *id
+    } else {
+        let name = format!("aurora_data_{}", codegen.string_data.len());
+        let id = codegen
+            .object
+            .declare_data(&name, Linkage::Local, false, false)
+            .map_err(|error| format!("failed to declare string data: {}", error))?;
+        let mut data = DataDescription::new();
+        data.define(bytes.to_vec().into_boxed_slice());
+        codegen
+            .object
+            .define_data(id, &data)
+            .map_err(|error| format!("failed to define string data: {}", error))?;
+        codegen.string_data.insert(bytes.to_vec(), id);
+        id
+    };
+    let global = codegen.object.declare_data_in_func(id, builder.func);
+    let ptr = builder.ins().symbol_value(types::I64, global);
+    let len = builder.ins().iconst(types::I64, bytes.len() as i64);
+    Ok((ptr, len))
+}
+
+fn box_thunk_value(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    values: &[Value],
+    ty: &DirectType,
+) -> std::result::Result<Value, String> {
+    match ty {
+        DirectType::Opaque(_) => values.first().copied().ok_or_else(|| {
+            format!(
+                "spawn thunk expected an opaque value for `{}`",
+                render_direct_type(ty)
+            )
+        }),
+        DirectType::Scalar(ScalarKind::Int32) => {
+            let box_i64 = codegen
+                .object
+                .declare_func_in_func(codegen.box_i64, builder.func);
+            let inst = builder.ins().call(box_i64, &[values[0]]);
+            Ok(builder.inst_results(inst)[0])
+        }
+        DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
+            let box_f64 = codegen
+                .object
+                .declare_func_in_func(codegen.box_f64, builder.func);
+            let inst = builder.ins().call(box_f64, &[values[0]]);
+            Ok(builder.inst_results(inst)[0])
+        }
+        DirectType::Scalar(ScalarKind::Bool) => {
+            let box_bool = codegen
+                .object
+                .declare_func_in_func(codegen.box_bool, builder.func);
+            let inst = builder.ins().call(box_bool, &[values[0]]);
+            Ok(builder.inst_results(inst)[0])
+        }
+        DirectType::Scalar(ScalarKind::Unit) => {
+            let box_unit = codegen
+                .object
+                .declare_func_in_func(codegen.box_unit, builder.func);
+            let inst = builder.ins().call(box_unit, &[]);
+            Ok(builder.inst_results(inst)[0])
+        }
+        DirectType::PlainClass(class) => {
+            let instance_empty = codegen
+                .object
+                .declare_func_in_func(codegen.instance_empty, builder.func);
+            let instance_set_field = codegen
+                .object
+                .declare_func_in_func(codegen.instance_set_field, builder.func);
+            let (class_ptr, class_len) =
+                thunk_string_constant(codegen, builder, class.class_name.as_bytes())?;
+            let init = builder.ins().call(instance_empty, &[class_ptr, class_len]);
+            let mut current = builder.inst_results(init)[0];
+            let mut start = 0usize;
+            for field in &class.fields {
+                let end = start + field.ty.value_count();
+                let field_value =
+                    box_thunk_value(codegen, builder, &values[start..end], &field.ty)?;
+                let (field_ptr, field_len) =
+                    thunk_string_constant(codegen, builder, field.name.as_bytes())?;
+                let inst = builder.ins().call(
+                    instance_set_field,
+                    &[current, field_ptr, field_len, field_value],
+                );
+                current = builder.inst_results(inst)[0];
+                start = end;
+            }
+            Ok(current)
+        }
+    }
+}
+
+fn unbox_thunk_value(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    raw: Value,
+    ty: &DirectType,
+) -> std::result::Result<Vec<Value>, String> {
+    match ty {
+        DirectType::Opaque(_) => Ok(vec![raw]),
+        DirectType::Scalar(ScalarKind::Int32) => {
+            let unbox_i64 = codegen
+                .object
+                .declare_func_in_func(codegen.unbox_i64, builder.func);
+            let inst = builder.ins().call(unbox_i64, &[raw]);
+            Ok(builder.inst_results(inst).to_vec())
+        }
+        DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
+            let unbox_f64 = codegen
+                .object
+                .declare_func_in_func(codegen.unbox_f64, builder.func);
+            let inst = builder.ins().call(unbox_f64, &[raw]);
+            Ok(builder.inst_results(inst).to_vec())
+        }
+        DirectType::Scalar(ScalarKind::Bool) => {
+            let unbox_bool = codegen
+                .object
+                .declare_func_in_func(codegen.unbox_bool, builder.func);
+            let inst = builder.ins().call(unbox_bool, &[raw]);
+            Ok(builder.inst_results(inst).to_vec())
+        }
+        DirectType::Scalar(ScalarKind::Unit) => Ok(vec![builder.ins().iconst(types::I64, 0)]),
+        DirectType::PlainClass(class) => {
+            let instance_get_field = codegen
+                .object
+                .declare_func_in_func(codegen.instance_get_field, builder.func);
+            let mut values = Vec::new();
+            for field in &class.fields {
+                let (field_ptr, field_len) =
+                    thunk_string_constant(codegen, builder, field.name.as_bytes())?;
+                let inst = builder
+                    .ins()
+                    .call(instance_get_field, &[raw, field_ptr, field_len]);
+                let field_raw = builder.inst_results(inst)[0];
+                values.extend(unbox_thunk_value(codegen, builder, field_raw, &field.ty)?);
+            }
+            Ok(values)
+        }
     }
 }
 

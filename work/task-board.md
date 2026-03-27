@@ -19,6 +19,10 @@ Last updated: 2026-03-27
 
 ## Done
 
+- Fixed module-crossing trait impl resolution across checking, interpreter/MIR execution, direct builds, compiler-backed completions, and the LSP bridge.
+- Added module-qualified type annotations to the maintained module surface and updated the examples/tutorials to use them directly.
+- Extended compiler-backed dangling-member recovery so `aura analyze` / `aura complete` still recover symbols and completions when `counter.` is the final buffer line.
+- Fixed direct-backend native builds for recursive match payloads and `Task.join()` values that carry plain classes, including spawned functions that return plain-class values.
 - Hardened compiler, MIR/runtime, and direct-backend parity around external regression cases, including stdin-backed local-module execution, generic dispatch/composition, borrowed field projections, large negative literals, float rendering, and maintained-example native builds.
 - Added a Rust workspace root with `aurora-compiler` and `aura`.
 - Added the first compiler modules: diagnostics, AST, lexer, parser, semantic checker, and evaluator.

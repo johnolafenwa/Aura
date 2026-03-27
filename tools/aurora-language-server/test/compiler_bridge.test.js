@@ -3,6 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const {
@@ -95,4 +96,65 @@ test("compiler bridge resolves local module imports for analysis and completions
 
   assert.ok(completions);
   assert.ok(completions.some((item) => item.name === "double"));
+});
+
+test("compiler bridge includes imported trait methods in completions", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-imported-trait-"));
+  try {
+    fs.mkdirSync(path.join(tempRoot, "pkg"));
+    fs.writeFileSync(
+      path.join(tempRoot, "pkg/named.au"),
+      "public trait Named:\n    def name(borrow self) -> String\n"
+    );
+    fs.writeFileSync(
+      path.join(tempRoot, "pkg/user.au"),
+      "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.label\n"
+    );
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source =
+      "from pkg.user import User\n\ndef main() -> int32:\n    user = User(label=\"Ada\")\n    user.\n    return 0\n";
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.ok(Array.isArray(analysis.diagnostics));
+
+    const lineIndex = source.split("\n").findIndex((line) => line.includes("user."));
+    const lineText = source.split("\n")[lineIndex];
+    const character = lineText.indexOf(".") + 1;
+    const completions = await completeWithCompiler(mainUri, source, lineIndex, character, ".");
+
+    assert.ok(completions);
+    assert.ok(completions.some((item) => item.name === "label"));
+    assert.ok(completions.some((item) => item.name === "name"));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge recovers completions and symbols for dangling-dot EOF buffers", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-dangling-dot-"));
+  try {
+    const mainPath = path.join(tempRoot, "counter.au");
+    const mainUri = `file://${mainPath}`;
+    const source =
+      "class Counter:\n    value: int32\n\ndef main() -> int32:\n    counter = Counter(value=1)\n    counter.";
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.ok(Array.isArray(analysis.symbols));
+    assert.ok(analysis.symbols.some((symbol) => symbol.name === "Counter"));
+
+    const lineIndex = source.split("\n").findIndex((line) => line.includes("counter."));
+    const lineText = source.split("\n")[lineIndex];
+    const character = lineText.indexOf(".") + 1;
+    const completions = await completeWithCompiler(mainUri, source, lineIndex, character, ".");
+
+    assert.ok(completions);
+    assert.ok(completions.some((item) => item.name === "value"));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });

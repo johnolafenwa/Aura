@@ -48,7 +48,7 @@ Current editor support includes:
 - diagnostics
 - document symbols
 
-The editor now prefers compiler-backed analysis and completions through `aura analyze` and `aura complete`. That compiler path now resolves local imports for both file-backed programs and stdin-backed editor buffers when the supplied path points at a real workspace file. The local JS analysis layer is kept only as a fallback when the compiler cannot analyze the current buffer.
+The editor now prefers compiler-backed analysis and completions through `aura analyze` and `aura complete`. That compiler path now resolves local imports for both file-backed programs and stdin-backed editor buffers when the supplied path points at a real workspace file, keeps imported trait methods visible in completions, and recovers dangling-member buffers even when the dot is currently at EOF. The local JS analysis layer is kept only as a fallback when the compiler cannot analyze the current buffer.
 
 ## Keeping Tutorials Current
 

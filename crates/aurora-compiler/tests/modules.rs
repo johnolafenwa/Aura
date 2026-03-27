@@ -123,6 +123,37 @@ def main() -> int32:
 }
 
 #[test]
+fn dotted_import_supports_namespace_qualified_type_annotations() {
+    let temp = TempDir::new("aurora-modules-qualified-annotations");
+    temp.write(
+        "pkg/types.au",
+        r#"public class Counter:
+    public value: int32
+
+    public def read(borrow self) -> int32:
+        return self.value
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"import pkg.types
+
+def main() -> int32:
+    counter: pkg.types.Counter = pkg.types.Counter(value=9)
+    print(counter.read())
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("qualified type annotations should run");
+    assert_eq!(output.stdout, "9\n");
+
+    let mir_output =
+        run_path_via_mir(&main_path).expect("qualified type annotations should run via MIR");
+    assert_eq!(mir_output.stdout, "9\n");
+}
+
+#[test]
 fn dotted_import_supports_enum_variants_and_qualified_match_patterns() {
     let temp = TempDir::new("aurora-modules-dotted-import-enums");
     temp.write(
@@ -229,6 +260,49 @@ def main() -> int32:
     let mir_output =
         run_path_via_mir(&main_path).expect("imported constructor/method flow should run via MIR");
     assert_eq!(mir_output.stdout, "4\n");
+}
+
+#[test]
+fn imported_trait_impls_apply_across_module_boundaries() {
+    let temp = TempDir::new("aurora-modules-imported-trait-impls");
+    temp.write(
+        "pkg/named.au",
+        r#"public trait Named:
+    def name(borrow self) -> String
+"#,
+    );
+    temp.write(
+        "pkg/user.au",
+        r#"from pkg.named import Named
+
+public class User:
+    public label: String
+
+impl Named for User:
+    def name(borrow self) -> String:
+        return self.label
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"from pkg.named import Named
+from pkg.user import User
+
+def show[T: Named](value: T) -> String:
+    return value.name()
+
+def main() -> int32:
+    print(show(value=User(label="Ada")))
+    print(User(label="Ada").name())
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("imported trait impls should run");
+    assert_eq!(output.stdout, "Ada\nAda\n");
+
+    let mir_output = run_path_via_mir(&main_path).expect("imported trait impls should run via MIR");
+    assert_eq!(mir_output.stdout, "Ada\nAda\n");
 }
 
 #[test]

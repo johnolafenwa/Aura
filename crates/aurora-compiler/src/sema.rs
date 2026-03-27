@@ -120,6 +120,7 @@ pub struct ModuleNamespace {
     pub classes: BTreeMap<String, ClassInfo>,
     pub enums: BTreeMap<String, EnumInfo>,
     pub traits: BTreeMap<String, TraitInfo>,
+    pub trait_impls: Vec<TraitImplInfo>,
     pub all_functions: BTreeMap<String, FunctionInfo>,
     pub all_classes: BTreeMap<String, ClassInfo>,
     pub all_enums: BTreeMap<String, EnumInfo>,
@@ -295,6 +296,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             }
             ImportedBinding::Module(namespace) => {
                 item_names.insert(name.clone(), ("module", crate::diag::Span::new(1, 1)));
+                register_module_namespace_types(namespace, &mut type_names, &mut type_arities);
                 imported_modules.insert(name.clone(), namespace.clone());
             }
         }
@@ -992,12 +994,41 @@ fn lower_type(
     }
 
     if is_builtin_type(type_name) || type_names.contains_key(type_name) {
-        Ok(Type::Named(type_name.to_string(), args))
+        let canonical_name = type_name
+            .rsplit_once('.')
+            .map(|(_, leaf)| leaf)
+            .unwrap_or(type_name);
+        Ok(Type::Named(canonical_name.to_string(), args))
     } else {
         Err(Diagnostic::at(
             type_ref.span,
             format!("unknown type `{}`", type_ref.name),
         ))
+    }
+}
+
+fn register_module_namespace_types(
+    namespace: &ModuleNamespace,
+    type_names: &mut BTreeMap<String, crate::diag::Span>,
+    type_arities: &mut BTreeMap<String, usize>,
+) {
+    for class in namespace.classes.values() {
+        let qualified_name = format!("{}.{}", namespace.path, class.decl.name);
+        type_names.insert(qualified_name.clone(), class.decl.span);
+        type_arities.insert(qualified_name, class.decl.type_params.len());
+    }
+    for enum_info in namespace.enums.values() {
+        let qualified_name = format!("{}.{}", namespace.path, enum_info.decl.name);
+        type_names.insert(qualified_name.clone(), enum_info.decl.span);
+        type_arities.insert(qualified_name, enum_info.decl.type_params.len());
+    }
+    for trait_info in namespace.traits.values() {
+        let qualified_name = format!("{}.{}", namespace.path, trait_info.decl.name);
+        type_names.insert(qualified_name.clone(), trait_info.decl.span);
+        type_arities.insert(qualified_name, trait_info.decl.type_params.len());
+    }
+    for child in namespace.modules.values() {
+        register_module_namespace_types(child, type_names, type_arities);
     }
 }
 
@@ -3917,7 +3948,49 @@ impl<'a> FunctionChecker<'a> {
                     )),
                 }
             }
-            _ => Err(Diagnostic::at(span, "unsupported call target")),
+            _ => Err(self.unsupported_call_target_diagnostic(callee, span)),
+        }
+    }
+
+    fn unsupported_call_target_diagnostic(
+        &self,
+        callee: &Expr,
+        span: crate::diag::Span,
+    ) -> Diagnostic {
+        let bare_name = match &callee.kind {
+            ExprKind::Name(name) => Some(name.as_str()),
+            ExprKind::Specialize { expr, .. } => match &expr.kind {
+                ExprKind::Name(name) => Some(name.as_str()),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        match bare_name {
+            Some("String") => {
+                Diagnostic::at(span, "strings use quoted literals; `String(...)` is not a constructor")
+            }
+            Some("Some") => Diagnostic::at(
+                span,
+                "enum variants are not callable by bare name; use a qualified form such as `Option.Some(...)`",
+            ),
+            Some("None") => Diagnostic::at(
+                span,
+                "enum variants are not callable by bare name; use a qualified form such as `Option.None`",
+            ),
+            Some("Ok") => Diagnostic::at(
+                span,
+                "enum variants are not callable by bare name; use a qualified form such as `Result.Ok(...)`",
+            ),
+            Some("Err") => Diagnostic::at(
+                span,
+                "enum variants are not callable by bare name; use a qualified form such as `Result.Err(...)`",
+            ),
+            Some("Closed") => Diagnostic::at(
+                span,
+                "enum variants are not callable by bare name; use a qualified form such as `SendError.Closed(...)`",
+            ),
+            _ => Diagnostic::at(span, "unsupported call target"),
         }
     }
 
@@ -4470,9 +4543,16 @@ impl<'a> FunctionChecker<'a> {
         owner_module != self.module_name
     }
 
+    fn trait_impls_in_scope(&self) -> impl Iterator<Item = &TraitImplInfo> + '_ {
+        self.trait_impls.iter().chain(
+            self.module_registry
+                .values()
+                .flat_map(|namespace| namespace.trait_impls.iter()),
+        )
+    }
+
     fn type_implements_trait(&self, ty: &Type, trait_name: &str) -> bool {
-        self.trait_impls
-            .iter()
+        self.trait_impls_in_scope()
             .any(|trait_impl| &trait_impl.for_type == ty && trait_impl.trait_name == trait_name)
     }
 
@@ -4549,7 +4629,7 @@ impl<'a> FunctionChecker<'a> {
         ty: &Type,
         method_name: &str,
     ) -> Option<(&TraitImplInfo, &TraitImplMethodInfo)> {
-        self.trait_impls.iter().find_map(|trait_impl| {
+        self.trait_impls_in_scope().find_map(|trait_impl| {
             if &trait_impl.for_type != ty {
                 return None;
             }

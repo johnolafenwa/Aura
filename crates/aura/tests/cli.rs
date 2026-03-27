@@ -256,6 +256,61 @@ fn analyze_recovers_symbols_for_dangling_dot_stdin_buffers() {
 }
 
 #[test]
+fn analyze_recovers_symbols_for_dangling_dot_at_eof_stdin_buffers() {
+    let source = [
+        "class Counter:",
+        "    value: int32",
+        "",
+        "def main() -> int32:",
+        "    counter = Counter(value=1)",
+        "    counter.",
+    ]
+    .join("\n");
+
+    let mut child = Command::new(aura_bin())
+        .arg("analyze")
+        .arg("--stdin")
+        .arg("/virtual/counter.au")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura analyze");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(source.as_bytes())
+        .expect("failed to write source");
+
+    let output = child
+        .wait_with_output()
+        .expect("failed to collect aura analyze output");
+
+    assert!(
+        output.status.success(),
+        "analyze should succeed on dangling-dot EOF buffers, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("analyze should return valid JSON");
+    assert!(
+        !json["symbols"]
+            .as_array()
+            .expect("symbols should be an array")
+            .is_empty(),
+        "dangling-dot EOF analysis should still return symbols"
+    );
+    assert!(
+        !json["occurrences"]
+            .as_array()
+            .expect("occurrences should be an array")
+            .is_empty(),
+        "dangling-dot EOF analysis should still return occurrences"
+    );
+}
+
+#[test]
 fn analyze_stdin_resolves_local_module_imports() {
     let temp = TempDir::new("aurora-cli-analyze-modules");
     fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
@@ -494,6 +549,131 @@ fn complete_stdin_resolves_local_module_member_completions() {
             .iter()
             .any(|item| item["name"].as_str() == Some("double")),
         "module member completions should include exported functions"
+    );
+}
+
+#[test]
+fn complete_stdin_includes_imported_trait_methods() {
+    let temp = TempDir::new("aurora-cli-complete-imported-trait");
+    fs::create_dir_all(temp.path().join("pkg")).expect("failed to create package dir");
+    fs::write(
+        temp.path().join("pkg/named.au"),
+        "public trait Named:\n    def name(borrow self) -> String\n",
+    )
+    .expect("failed to write trait module");
+    fs::write(
+        temp.path().join("pkg/user.au"),
+        "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.label\n",
+    )
+    .expect("failed to write user module");
+    let main_path = temp.path().join("main.au");
+    let source =
+        "from pkg.user import User\n\ndef main() -> int32:\n    user = User(label=\"Ada\")\n    user.\n    return 0\n";
+
+    let mut child = Command::new(aura_bin())
+        .arg("complete")
+        .arg("--line")
+        .arg("4")
+        .arg("--character")
+        .arg("9")
+        .arg("--trigger")
+        .arg(".")
+        .arg("--stdin")
+        .arg(&main_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura complete");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(source.as_bytes())
+        .expect("failed to write source");
+
+    let output = child
+        .wait_with_output()
+        .expect("failed to collect aura complete output");
+
+    assert!(
+        output.status.success(),
+        "complete should succeed for imported trait impl members, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .expect("complete should return valid JSON");
+    let names = json
+        .as_array()
+        .expect("completions should be an array")
+        .iter()
+        .filter_map(|item| item["name"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    assert!(
+        names.contains(&"label".to_string()),
+        "completions should still include class fields"
+    );
+    assert!(
+        names.contains(&"name".to_string()),
+        "completions should include imported trait methods"
+    );
+}
+
+#[test]
+fn complete_recovers_member_completions_for_dangling_dot_at_eof_stdin_buffers() {
+    let source = [
+        "class Counter:",
+        "    value: int32",
+        "",
+        "def main() -> int32:",
+        "    counter = Counter(value=1)",
+        "    counter.",
+    ]
+    .join("\n");
+
+    let mut child = Command::new(aura_bin())
+        .arg("complete")
+        .arg("--line")
+        .arg("5")
+        .arg("--character")
+        .arg("12")
+        .arg("--trigger")
+        .arg(".")
+        .arg("--stdin")
+        .arg("/virtual/counter.au")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura complete");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(source.as_bytes())
+        .expect("failed to write source");
+
+    let output = child
+        .wait_with_output()
+        .expect("failed to collect aura complete output");
+
+    assert!(
+        output.status.success(),
+        "complete should succeed on dangling-dot EOF buffers, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("complete should return valid JSON");
+    assert!(
+        json.as_array()
+            .expect("completions should be an array")
+            .iter()
+            .any(|item| item["name"].as_str() == Some("value")),
+        "dangling-dot EOF completions should still include members"
     );
 }
 
@@ -923,6 +1103,73 @@ fn build_with_direct_backend_supports_trait_impls_on_builtin_types() {
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "int\n");
+}
+
+#[test]
+fn build_with_direct_backend_runs_indirect_recursive_example() {
+    assert_direct_backend_example_runs(
+        "examples/classes/indirect_recursive.au",
+        "indirect-recursive-direct",
+        "2\n",
+    );
+}
+
+#[test]
+fn build_runs_indirect_recursive_example() {
+    assert_default_backend_example_runs(
+        "examples/classes/indirect_recursive.au",
+        "indirect-recursive-default",
+        "2\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_task_join_returning_plain_classes() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-task-join-class",
+        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    task = spawn make_box()\n    box = task.join()\n    print(box.value)\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct-backend task join binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
+}
+
+#[test]
+fn build_supports_task_join_returning_plain_classes() {
+    let (temp, source_path) = write_temp_source(
+        "aurora-build-default-task-join-class",
+        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    task = spawn make_box()\n    box = task.join()\n    print(box.value)\n    return 0\n",
+    );
+    let output_path = temp.path().join("out");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build");
+
+    assert!(
+        build.status.success(),
+        "default build should support task join returning plain classes, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run built binary");
+
+    assert!(
+        run.status.success(),
+        "built binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
 }
 
 #[test]

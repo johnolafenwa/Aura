@@ -1,0 +1,5 @@
+error: enum variants are not callable by bare name; use a qualified form such as `Result.Ok(...)`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/bare_enum_variant_constructor_not_supported.au:2:13
+  |
+2 |     value = Ok(1)
+  |             ^

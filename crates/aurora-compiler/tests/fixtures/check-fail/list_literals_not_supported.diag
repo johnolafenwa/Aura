@@ -1,0 +1,5 @@
+error: list literals are not implemented yet
+ --> crates/aurora-compiler/tests/fixtures/check-fail/list_literals_not_supported.au:2:14
+  |
+2 |     values = [1, 2, 3]
+  |              ^
