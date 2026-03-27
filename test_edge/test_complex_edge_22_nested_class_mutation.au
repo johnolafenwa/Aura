@@ -1,0 +1,28 @@
+# Edge test: Mutating fields on nested classes
+
+class Inner:
+    value: int32
+
+class Outer:
+    inner: Inner
+    name: String
+
+    def bump_inner(borrow mut self):
+        self.inner.value += 1
+
+def main() -> int32:
+    mut obj = Outer(inner=Inner(value=10), name="test")
+    print(obj.inner.value)
+
+    obj.bump_inner()
+    print(obj.inner.value)
+
+    obj.bump_inner()
+    obj.bump_inner()
+    print(obj.inner.value)
+
+    # Direct mutation of nested field
+    obj.inner.value = 100
+    print(obj.inner.value)
+
+    return 0

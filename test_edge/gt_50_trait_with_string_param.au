@@ -1,0 +1,20 @@
+## Test 50: Trait method that takes a String parameter
+## Expects: "greeting: hi aurora"
+
+trait Formatter:
+    def format(borrow self, prefix: String) -> String
+
+class Name:
+    text: String
+
+impl Formatter for Name:
+    def format(borrow self, prefix: String) -> String:
+        return prefix + " " + self.text
+
+def render[T: Formatter](item: T, prefix: String):
+    print(item.format(prefix))
+
+def main() -> int32:
+    n = Name(text="aurora")
+    render(item=n, prefix="greeting: hi")
+    return 0

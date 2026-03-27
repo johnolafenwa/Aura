@@ -1,0 +1,19 @@
+# Test: recursive enum type (like a linked list node)
+# This is a very common pattern - does Aurora handle it?
+enum IntList:
+    Cons(int32)
+    Nil
+
+def sum_list(l: IntList) -> int32:
+    match l:
+        case IntList.Cons(v):
+            return v
+        case IntList.Nil:
+            return 0
+
+def main() -> int32:
+    a = IntList.Cons(10)
+    b = IntList.Nil
+    print(sum_list(a))
+    print(sum_list(b))
+    return 0

@@ -1,0 +1,34 @@
+def main() -> int32:
+    # intsize basic ops
+    a: intsize = 42
+    b: intsize = 10
+    print(a + b)     # 52
+    print(a - b)     # 32
+    print(a * b)     # 420
+    print(a / b)     # 4
+    print(a % b)     # 2
+
+    # uintsize basic ops
+    c: uintsize = 100
+    d: uintsize = 7
+    print(c + d)     # 107
+    print(c - d)     # 93
+    print(c * d)     # 700
+    print(c / d)     # 14
+    print(c % d)     # 2
+
+    # intsize negative
+    e: intsize = -42
+    print(e)         # -42
+
+    # Cast intsize to int32
+    f: intsize = 100
+    g: int32 = f as int32
+    print(g)         # 100
+
+    # Cast int32 to intsize
+    h: int32 = 200
+    i: intsize = h as intsize
+    print(i)         # 200
+
+    return 0

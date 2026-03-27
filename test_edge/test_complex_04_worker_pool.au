@@ -1,0 +1,42 @@
+# Test 4: Worker pool - multiple workers reading from shared job channel
+# Tests: channels, task_group, spawn, clone, channel iteration, concurrency
+
+def worker(id: int32, jobs: Channel[int32], results: Channel[int32]):
+    for job in jobs:
+        # Each worker squares the job value
+        result = job * job
+        results.send(result)
+
+def main() -> int32:
+    jobs: Channel[int32] = Channel[int32](capacity=10)
+    results: Channel[int32] = Channel[int32](capacity=10)
+
+    # Spawn 3 workers
+    with task_group() as group:
+        group.spawn(worker, 1, jobs.clone(), results.clone())
+        group.spawn(worker, 2, jobs.clone(), results.clone())
+        group.spawn(worker, 3, jobs.clone(), results.clone())
+
+        # Send 5 jobs
+        jobs.send(2)
+        jobs.send(3)
+        jobs.send(4)
+        jobs.send(5)
+        jobs.send(6)
+        jobs.close()
+
+        # Collect results
+        mut total: int32 = 0
+        mut count: int32 = 0
+        while count < 5:
+            match results.recv():
+                case Option.Some(v):
+                    total += v
+                    count += 1
+                case Option.None:
+                    break
+
+        # 4 + 9 + 16 + 25 + 36 = 90
+        print(total)
+
+    return 0

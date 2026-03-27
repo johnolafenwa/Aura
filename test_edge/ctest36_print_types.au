@@ -1,0 +1,33 @@
+def main() -> int32:
+    # Print various types to check display format
+    print(0)            # 0
+    print(-0)           # -0 or 0?
+    print(true)         # true
+    print(false)        # false
+    print(0.0)          # 0.0
+    print(-0.0)         # -0.0
+    print(1.0)          # 1.0
+    print(100.0)        # 100.0
+    print(0.1)          # 0.1
+    print(0.01)         # 0.01
+
+    # int8 print
+    a: int8 = 0
+    print(a)            # 0
+
+    # uint8 print
+    b: uint8 = 0
+    print(b)            # 0
+
+    # int128 zero
+    c: int128 = 0
+    print(c)            # 0
+
+    # bool from expression
+    d: bool = 1 == 1
+    print(d)            # true
+
+    e: bool = 1 == 2
+    print(e)            # false
+
+    return 0

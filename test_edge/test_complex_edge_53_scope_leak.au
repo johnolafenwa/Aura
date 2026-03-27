@@ -1,0 +1,20 @@
+# Edge test: Do variables from if/while/match leak to outer scope?
+
+def make_result() -> Result[int32, String]:
+    return Result.Ok(5)
+
+def main() -> int32:
+    # Variable in if block
+    if true:
+        x: int32 = 42
+
+    # Variable from match
+    res = make_result()
+    match res:
+        case Result.Ok(v):
+            inner_val: int32 = v * 2
+        case Result.Err(e):
+            pass
+
+    print("scoping OK")
+    return 0

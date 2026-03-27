@@ -1,0 +1,23 @@
+def string_sender(ch: Channel[String]):
+    ch.send("hello")
+    ch.send("aurora")
+    ch.send("world")
+    ch.close()
+
+def main() -> int32:
+    ch: Channel[String] = channel()
+    task = spawn string_sender(ch.clone())
+
+    mut count: int32 = 0
+    while true:
+        match ch.recv():
+            case Option.Some(v):
+                print(v)
+                count += 1
+            case Option.None:
+                break
+
+    task.join()
+    print(count)
+    print("string channel ok")
+    return 0

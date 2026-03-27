@@ -1,0 +1,20 @@
+class Pos:
+    x: int32
+    y: int32
+
+def main() -> int32:
+    mut p = Pos(x=1, y=2)
+    print(p.x)
+    print(p.y)
+
+    p.x = 10
+    p.y = 20
+    print(p.x)
+    print(p.y)
+
+    p.x += 5
+    p.y += 5
+    print(p.x)
+    print(p.y)
+
+    return 0

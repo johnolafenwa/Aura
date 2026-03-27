@@ -1,0 +1,18 @@
+## Test 54: Mutating a field on a generic class via borrow mut method
+## Expects: 10 then 20
+
+class Counter[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+    def set(borrow mut self, new_val: T):
+        self.value = new_val
+
+def main() -> int32:
+    mut c: Counter[int32] = Counter(value=10)
+    print(c.get())
+    c.set(20)
+    print(c.get())
+    return 0

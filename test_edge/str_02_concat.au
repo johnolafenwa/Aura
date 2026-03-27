@@ -1,0 +1,29 @@
+def main() -> int32:
+    # Basic concatenation
+    a = "Hello" + ", " + "World"
+    print(a)
+
+    # Concat with empty string
+    b = "" + "start"
+    print(b)
+
+    c = "end" + ""
+    print(c)
+
+    # Multiple concatenations
+    d = "a" + "b" + "c" + "d" + "e"
+    print(d)
+
+    # Concat with variable
+    prefix = "pre"
+    suffix = "fix"
+    combined = prefix + suffix
+    print(combined)
+
+    # Concat preserves content
+    left = "left"
+    right = "right"
+    both = left + "-" + right
+    print(both)
+
+    return 0

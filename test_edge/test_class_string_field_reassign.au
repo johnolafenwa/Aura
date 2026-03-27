@@ -1,0 +1,11 @@
+class Holder:
+    name: String
+
+def main() -> int32:
+    mut h = Holder(name="first")
+    print(h.name)
+    h.name = "second"
+    print(h.name)
+    h.name = "third"
+    print(h.name)
+    return 0

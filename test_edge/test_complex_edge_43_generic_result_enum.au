@@ -1,0 +1,35 @@
+# Edge test: Using Result inside a generic enum, then matching on it
+
+enum ApiResponse[T]:
+    Data(Result[T, String])
+    Empty
+
+def fetch_data(success: bool) -> ApiResponse[int32]:
+    if success:
+        return ApiResponse.Data(Result.Ok(42))
+    return ApiResponse.Data(Result.Err("not found"))
+
+def main() -> int32:
+    r1 = fetch_data(success=true)
+    match r1:
+        case ApiResponse.Data(result):
+            match result:
+                case Result.Ok(v):
+                    print(f"got: {v}")
+                case Result.Err(e):
+                    print(f"err: {e}")
+        case ApiResponse.Empty:
+            print("empty")
+
+    r2 = fetch_data(success=false)
+    match r2:
+        case ApiResponse.Data(result):
+            match result:
+                case Result.Ok(v):
+                    print(f"got: {v}")
+                case Result.Err(e):
+                    print(f"err: {e}")
+        case ApiResponse.Empty:
+            print("empty")
+
+    return 0

@@ -1,0 +1,14 @@
+## Test 55: Trait implemented for String type
+## Expects: "hello" (testing if traits work on String like on int32)
+
+trait Shoutify:
+    def shout(borrow self) -> String
+
+impl Shoutify for String:
+    def shout(borrow self) -> String:
+        return self.clone()
+
+def main() -> int32:
+    s: String = "hello"
+    print(s.shout())
+    return 0

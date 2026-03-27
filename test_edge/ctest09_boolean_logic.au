@@ -1,0 +1,47 @@
+def main() -> int32:
+    # Basic and
+    print(true and true)    # true
+    print(true and false)   # false
+    print(false and true)   # false
+    print(false and false)  # false
+
+    # Basic or
+    print(true or true)     # true
+    print(true or false)    # true
+    print(false or true)    # true
+    print(false or false)   # false
+
+    # not
+    print(not true)         # false
+    print(not false)        # true
+
+    # Complex boolean expressions
+    print(true and true or false)           # true
+    print(false or false and true)          # false
+    print(not (true and false))             # true
+    print(not true or true)                 # true
+    print(not (true or false))              # false
+
+    # Boolean from comparisons
+    a: int32 = 5
+    b: int32 = 10
+    print(a < b and b > 0)                 # true
+    print(a > b or a == 5)                  # true
+    print(not (a == b))                     # true
+
+    # Short-circuit test:
+    # If false and X, X should not be evaluated
+    # If true or X, X should not be evaluated
+    # Can test indirectly through side-effect-free logic
+    c: int32 = 0
+    print(c == 0 and true)                 # true
+    print(c != 0 and true)                 # false
+    print(c == 0 or false)                 # true
+    print(c != 0 or false)                 # false
+
+    # Nested not
+    print(not not true)                    # true
+    print(not not false)                   # false
+    print(not not not true)                # false
+
+    return 0

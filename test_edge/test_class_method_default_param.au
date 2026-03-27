@@ -1,0 +1,15 @@
+class Logger:
+    prefix: String
+
+    def log(borrow self, msg: String, level: int32 = 0):
+        if level == 0:
+            print(self.prefix + ": " + msg)
+        else:
+            print(self.prefix + " [WARN]: " + msg)
+
+def main() -> int32:
+    logger = Logger(prefix="APP")
+    logger.log(msg="started")
+    logger.log(msg="problem detected", level=1)
+    logger.log(msg="all good")
+    return 0

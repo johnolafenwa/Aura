@@ -1,0 +1,21 @@
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    ch.send(1)
+    ch.close()
+
+    match ch.recv():
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("error: should get buffered value")
+
+    ch.close()
+    print("double close ok")
+
+    match ch.recv():
+        case Option.Some(v):
+            print("error: expected None after double close")
+        case Option.None:
+            print("recv after double close ok")
+
+    return 0

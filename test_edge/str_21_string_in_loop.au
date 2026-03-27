@@ -1,0 +1,22 @@
+# Test string operations inside loops
+
+def main() -> int32:
+    # Build string in loop
+    mut result: String = ""
+    mut i: int32 = 0
+    while i < 5:
+        result += "x"
+        i += 1
+    print(result)
+
+    # String comparison in loop
+    mut count: int32 = 0
+    mut j: int32 = 0
+    while j < 3:
+        s = "match"
+        if s == "match":
+            count += 1
+        j += 1
+    print(count)
+
+    return 0

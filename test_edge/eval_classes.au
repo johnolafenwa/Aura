@@ -1,12 +1,9 @@
-class Point:
-    x: int32
-    y: int32
-
-class Rect:
-    p1: Point
-    p2: Point
+copy class Point:
+    x: float64
+    y: float64
 
 def main() -> int32:
-    r = Rect(p1=Point(x=0, y=0), p2=Point(x=10, y=10))
-    print(r.p2.x)
+    p1 = Point(x=1.0, y=2.0)
+    p2 = p1
+    print(p2.x)
     return 0

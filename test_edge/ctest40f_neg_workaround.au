@@ -1,0 +1,11 @@
+def main() -> int32:
+    # Workaround: use subtraction to get large negatives
+    a: int64 = 0 - 3000000000
+    print(a)     # -3000000000
+
+    # Another workaround: negate a positive variable
+    b: int64 = 3000000000
+    c: int64 = -b
+    print(c)     # -3000000000
+
+    return 0

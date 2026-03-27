@@ -1,0 +1,5 @@
+class Empty:
+
+def main() -> int32:
+    e = Empty()
+    return 0

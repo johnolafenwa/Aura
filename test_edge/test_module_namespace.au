@@ -1,0 +1,10 @@
+## Test 4: Namespace access - module.function() style calls
+import modules.helpers.math
+import modules.shapes.circle
+
+def main() -> int32:
+    sum = modules.helpers.math.add(a=10, b=20)
+    print(sum)
+    c = modules.shapes.circle.Circle(radius=5.0)
+    print(c.area())
+    return 0

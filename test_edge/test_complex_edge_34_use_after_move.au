@@ -1,0 +1,14 @@
+# Edge test: Using a moved value (should be caught by compiler)
+
+class Resource:
+    name: String
+
+def consume(r: Resource):
+    print(r.name)
+
+def main() -> int32:
+    r = Resource(name="file")
+    consume(r=r)
+    # This should fail - r was moved
+    consume(r=r)
+    return 0

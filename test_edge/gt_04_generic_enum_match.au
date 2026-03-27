@@ -1,0 +1,22 @@
+## Test 04: Generic enum with match - Maybe/Option pattern
+## Expects: 42 then "nothing"
+
+enum Maybe[T]:
+    Some(T)
+    Nothing
+
+def main() -> int32:
+    val: Maybe[int32] = Maybe.Some(42)
+    match val:
+        case Maybe.Some(inner):
+            print(inner)
+        case Maybe.Nothing:
+            print("nothing")
+
+    empty: Maybe[String] = Maybe.Nothing
+    match empty:
+        case Maybe.Some(inner):
+            print(inner)
+        case Maybe.Nothing:
+            print("nothing")
+    return 0

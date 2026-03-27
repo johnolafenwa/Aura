@@ -1,0 +1,16 @@
+## Test 39: Generic class method returning bool
+## Expects: true then false
+
+class OptionalVal[T]:
+    has_value: bool
+    value: T
+
+    def present(borrow self) -> bool:
+        return self.has_value
+
+def main() -> int32:
+    v1: OptionalVal[int32] = OptionalVal(has_value=true, value=42)
+    print(v1.present())
+    v2: OptionalVal[String] = OptionalVal(has_value=false, value="none")
+    print(v2.present())
+    return 0

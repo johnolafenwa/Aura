@@ -1,0 +1,4 @@
+def main() -> int32:
+    for j in range():
+        pass
+    return 0

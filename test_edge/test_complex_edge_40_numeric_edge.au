@@ -1,0 +1,35 @@
+# Edge test: Numeric edge cases - negative, casting, modulo
+
+def main() -> int32:
+    # Integer limits
+    max32: int32 = 2147483647
+    min32: int32 = -2147483648
+    print(max32)
+    print(min32)
+
+    # Negative modulo
+    neg_mod: int32 = -7 % 3
+    print(neg_mod)
+
+    # Integer division truncation
+    trunc: int32 = 7 / 2
+    print(trunc)
+
+    neg_trunc: int32 = -7 / 2
+    print(neg_trunc)
+
+    # Float to int casting
+    f: float64 = 3.7
+    i: int32 = f as int32
+    print(i)
+
+    # Large float
+    big: float64 = 1000000.5
+    print(big)
+
+    # Negative float to int
+    nf: float64 = -2.9
+    ni: int32 = nf as int32
+    print(ni)
+
+    return 0

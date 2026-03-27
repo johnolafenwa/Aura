@@ -259,6 +259,12 @@ impl BuiltinFunction {
                 CallConvention::PositionalOrNamed,
             ),
             Self::Range => {
+                if args.len() > 2 {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!("`range` expects 1 or 2 arguments, found {}", args.len()),
+                    ));
+                }
                 let use_two_arg_signature =
                     args.len() == 2 || args.iter().any(|arg| arg.name.as_deref() == Some("start"));
                 if use_two_arg_signature {

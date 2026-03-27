@@ -1,0 +1,35 @@
+# Edge test: Deeply nested match patterns (3+ levels)
+
+enum Wrapper[T]:
+    Wrapped(T)
+
+def main() -> int32:
+    # Result containing Option containing int
+    inner: Option[int32] = Option.Some(42)
+    outer: Result[Option[int32], String] = Result.Ok(inner)
+
+    match outer:
+        case Result.Ok(opt):
+            match opt:
+                case Option.Some(v):
+                    print(f"got {v}")
+                case Option.None:
+                    print("none")
+        case Result.Err(e):
+            print(e)
+
+    # Option containing Result
+    r: Result[int32, String] = Result.Ok(99)
+    opt_r: Option[Result[int32, String]] = Option.Some(r)
+
+    match opt_r:
+        case Option.Some(res):
+            match res:
+                case Result.Ok(v):
+                    print(f"ok {v}")
+                case Result.Err(e):
+                    print(e)
+        case Option.None:
+            print("none")
+
+    return 0

@@ -199,10 +199,9 @@ fn type_is_copy_in_context(
         Type::Named(name, args) if name == "Option" && args.len() == 1 => {
             type_is_copy_in_context(&args[0], classes, enums)
         }
-        Type::Named(name, args) if name == "Result" && args.len() == 2 => {
-            args.iter()
-                .all(|arg| type_is_copy_in_context(arg, classes, enums))
-        }
+        Type::Named(name, args) if name == "Result" && args.len() == 2 => args
+            .iter()
+            .all(|arg| type_is_copy_in_context(arg, classes, enums)),
         Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
             type_is_copy_in_context(&args[0], classes, enums)
         }
@@ -603,9 +602,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                     field_decl.span,
                     format!(
                         "field `{}` on `copy class {}` must be a copy type, found `{}`",
-                        field_decl.name,
-                        class.decl.name,
-                        field_ty
+                        field_decl.name, class.decl.name, field_ty
                     ),
                 ));
             }
@@ -1063,7 +1060,9 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
             }),
         ExprKind::FString(parts) => parts.iter().find_map(|part| match part {
             crate::ast::FormatPart::Literal(_) => None,
-            crate::ast::FormatPart::Expr(expr) => default_argument_references_param(expr, param_names),
+            crate::ast::FormatPart::Expr(expr) => {
+                default_argument_references_param(expr, param_names)
+            }
         }),
         ExprKind::Binary { left, right, .. } => {
             default_argument_references_param(left, param_names)
@@ -1424,7 +1423,12 @@ impl<'a> FunctionChecker<'a> {
         type_args
             .iter()
             .map(|type_arg| {
-                lower_type(type_arg, self.type_names, self.type_arities, &self.type_params)
+                lower_type(
+                    type_arg,
+                    self.type_names,
+                    self.type_arities,
+                    &self.type_params,
+                )
             })
             .collect()
     }
@@ -1542,6 +1546,48 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Group(inner) => self.consume_value_expr(inner, locals),
             ExprKind::Cast { expr, .. } => self.consume_value_expr(expr, locals),
             ExprKind::Specialize { expr, .. } => self.consume_value_expr(expr, locals),
+            ExprKind::Member { object, field } => {
+                if let ExprKind::Name(enum_name) = &object.kind {
+                    if enum_name == "Option" && field == "None" {
+                        return Ok(());
+                    }
+                    if let Some(enum_info) = self.resolve_enum_info(enum_name) {
+                        if enum_info
+                            .variants
+                            .get(field)
+                            .is_some_and(|variant| variant.payload.is_none())
+                        {
+                            return Ok(());
+                        }
+                    }
+                }
+                if let Some((module_path, enum_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if namespace
+                            .enums
+                            .get(&enum_name)
+                            .and_then(|enum_info| enum_info.variants.get(field))
+                            .is_some_and(|variant| variant.payload.is_none())
+                        {
+                            return Ok(());
+                        }
+                    }
+                }
+                let object_ty = self.type_of_expr(object, locals)?;
+                let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
+                if !self.is_copy_type(&member_ty) {
+                    if let Some(name) = self.borrowed_root_binding_name(object, locals) {
+                        return Err(Diagnostic::at(
+                            expr.span,
+                            format!(
+                                "cannot move non-copy field `{}` out of borrowed value `{}`",
+                                field, name
+                            ),
+                        ));
+                    }
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -2568,7 +2614,10 @@ impl<'a> FunctionChecker<'a> {
                 Ok(Type::named("String"))
             }
             ExprKind::Group(inner) => self.type_of_expr_hint(inner, locals, expected),
-            ExprKind::Specialize { expr: base, type_args } => {
+            ExprKind::Specialize {
+                expr: base,
+                type_args,
+            } => {
                 let lowered = self.lower_explicit_type_args(type_args)?;
                 match &base.kind {
                     ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
@@ -2580,7 +2629,11 @@ impl<'a> FunctionChecker<'a> {
                                     "class `{}` expects {} type argument{}, found {}",
                                     name,
                                     class.decl.type_params.len(),
-                                    if class.decl.type_params.len() == 1 { "" } else { "s" },
+                                    if class.decl.type_params.len() == 1 {
+                                        ""
+                                    } else {
+                                        "s"
+                                    },
                                     lowered.len()
                                 ),
                             ));
@@ -2596,7 +2649,11 @@ impl<'a> FunctionChecker<'a> {
                                     "enum `{}` expects {} type argument{}, found {}",
                                     name,
                                     enum_info.decl.type_params.len(),
-                                    if enum_info.decl.type_params.len() == 1 { "" } else { "s" },
+                                    if enum_info.decl.type_params.len() == 1 {
+                                        ""
+                                    } else {
+                                        "s"
+                                    },
                                     lowered.len()
                                 ),
                             ));
@@ -2770,7 +2827,11 @@ impl<'a> FunctionChecker<'a> {
                                         "enum `{}` expects {} type argument{}, found {}",
                                         enum_name,
                                         enum_info.decl.type_params.len(),
-                                        if enum_info.decl.type_params.len() == 1 { "" } else { "s" },
+                                        if enum_info.decl.type_params.len() == 1 {
+                                            ""
+                                        } else {
+                                            "s"
+                                        },
                                         explicit_args.len()
                                     ),
                                 ));
@@ -2874,17 +2935,6 @@ impl<'a> FunctionChecker<'a> {
                 }
                 let object_ty = self.type_of_expr(object, locals)?;
                 let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
-                if !self.is_copy_type(&member_ty) {
-                    if let Some(name) = self.borrowed_root_binding_name(object, locals) {
-                        return Err(Diagnostic::at(
-                            expr.span,
-                            format!(
-                                "cannot move non-copy field `{}` out of borrowed value `{}`",
-                                field, name
-                            ),
-                        ));
-                    }
-                }
                 Ok(member_ty)
             }
             ExprKind::Call { callee, args } => {
@@ -2990,10 +3040,7 @@ impl<'a> FunctionChecker<'a> {
                     if actual != Type::named("int32") {
                         return Err(Diagnostic::at(
                             capacity_arg.span,
-                            format!(
-                                "field `capacity` expects `int32`, found `{}`",
-                                actual
-                            ),
+                            format!("field `capacity` expects `int32`, found `{}`", actual),
                         ));
                     }
                 }
@@ -3137,7 +3184,10 @@ impl<'a> FunctionChecker<'a> {
                             if expected_name == name
                                 && expected_args.len() == class.decl.type_params.len() =>
                         {
-                            substitutions_from_decl_type_args(&class.decl.type_params, expected_args)
+                            substitutions_from_decl_type_args(
+                                &class.decl.type_params,
+                                expected_args,
+                            )
                         }
                         _ => HashMap::new(),
                     }
@@ -4595,7 +4645,11 @@ impl<'a> FunctionChecker<'a> {
                     ),
                 ));
             };
-            if matches!(resolved, Type::TypeParam(name) if name == type_param) {
+            if matches!(
+                resolved,
+                Type::TypeParam(name)
+                    if name == type_param && !self.type_params.contains_key(name)
+            ) {
                 return Err(Diagnostic::at(
                     span,
                     format!(

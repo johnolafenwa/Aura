@@ -1,0 +1,45 @@
+class Stack:
+    data: String
+    size: int32
+
+    def push(borrow mut self, item: String):
+        if self.size > 0:
+            self.data = self.data + "," + item
+        else:
+            self.data = item
+        self.size += 1
+
+    def get_size(borrow self) -> int32:
+        return self.size
+
+    def is_empty(borrow self) -> bool:
+        return self.size == 0
+
+    def contents(borrow self) -> String:
+        return self.data
+
+    def push_many(borrow mut self, a: String, b: String, c: String):
+        self.push(item=a)
+        self.push(item=b)
+        self.push(item=c)
+
+    def new() -> Stack:
+        return Stack(data="", size=0)
+
+def main() -> int32:
+    mut s = Stack.new()
+    print(s.is_empty())
+    print(s.get_size())
+
+    s.push(item="first")
+    s.push(item="second")
+    print(s.get_size())
+    print(s.contents())
+    print(s.is_empty())
+
+    mut s2 = Stack.new()
+    s2.push_many(a="x", b="y", c="z")
+    print(s2.get_size())
+    print(s2.contents())
+
+    return 0

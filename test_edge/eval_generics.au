@@ -1,14 +1,9 @@
-trait Show:
-    def show(borrow self)
-
-class Box[T]:
-    item: T
-
-impl Show for Box[int32]:
-    def show(borrow self):
-        print(self.item)
+enum Wrapper[T]:
+    Item(T)
 
 def main() -> int32:
-    b: Box[int32] = Box(item=42)
-    b.show()
+    w: Wrapper[int32] = Wrapper.Item(42)
+    match borrow w:
+        case Wrapper.Item(v):
+            print(v)
     return 0

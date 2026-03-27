@@ -1,0 +1,65 @@
+def main() -> int32:
+    # Simple if
+    x: int32 = 10
+    if x > 5:
+        print(1)
+
+    # if-else
+    if x > 20:
+        print(2)
+    else:
+        print(3)
+
+    # if-elif-else
+    y: int32 = 50
+    if y < 0:
+        print(10)
+    elif y < 25:
+        print(20)
+    elif y < 75:
+        print(30)
+    else:
+        print(40)
+
+    # Nested if inside elif
+    z: int32 = -5
+    if z > 0:
+        print(100)
+    elif z == 0:
+        print(200)
+    else:
+        if z > -10:
+            print(300)
+        else:
+            print(400)
+
+    # Multiple elif chain (more than 3)
+    w: int32 = 7
+    if w == 1:
+        print(501)
+    elif w == 2:
+        print(502)
+    elif w == 3:
+        print(503)
+    elif w == 4:
+        print(504)
+    elif w == 5:
+        print(505)
+    elif w == 6:
+        print(506)
+    elif w == 7:
+        print(507)
+    else:
+        print(508)
+
+    # if with boolean condition
+    flag: bool = true
+    if flag:
+        print(600)
+
+    if not flag:
+        print(700)
+    else:
+        print(800)
+
+    return 0

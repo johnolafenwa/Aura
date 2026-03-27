@@ -1,0 +1,18 @@
+# Test: try where inner function and outer function have different error types
+# This should fail if error types don't match
+
+def inner() -> Result[int32, int32]:
+    return Result.Err(42)
+
+def outer() -> Result[int32, String]:
+    # try expects inner's error type to match outer's Result error type
+    v = try inner()
+    return Result.Ok(v)
+
+def main() -> int32:
+    match outer():
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+    return 0

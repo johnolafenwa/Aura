@@ -1,0 +1,25 @@
+## Test 08: Trait with multiple methods - all must be implemented
+## Expects: "circle" then 314
+
+trait Shape:
+    def name(borrow self) -> String
+    def area(borrow self) -> int32
+
+class Circle:
+    radius: int32
+
+impl Shape for Circle:
+    def name(borrow self) -> String:
+        return "circle"
+
+    def area(borrow self) -> int32:
+        return self.radius * self.radius * 314 / 100
+
+def describe[T: Shape](s: T):
+    print(s.name())
+    print(s.area())
+
+def main() -> int32:
+    c = Circle(radius=10)
+    describe(s=c)
+    return 0

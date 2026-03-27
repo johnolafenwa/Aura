@@ -1,0 +1,15 @@
+def take_int32(x: int32) -> int32:
+    return x * 2
+
+def main() -> int32:
+    a: int8 = 10
+    # Can we cast inline in function call?
+    b: int32 = take_int32(a as int32)
+    print(b)    # 20
+
+    # Cast result of function call
+    c: int32 = 50
+    d: int8 = take_int32(c) as int8
+    print(d)    # 100
+
+    return 0

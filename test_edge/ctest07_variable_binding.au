@@ -1,0 +1,58 @@
+def main() -> int32:
+    # Immutable with explicit type
+    x: int32 = 42
+    print(x)           # 42
+
+    # Type inference for int
+    y = 100
+    print(y)           # 100
+
+    # Type inference for float
+    z = 3.14
+    print(z)           # 3.14
+
+    # Type inference for bool
+    b = true
+    print(b)           # true
+
+    # Mutable with explicit type
+    mut m: int32 = 10
+    m = 20
+    print(m)           # 20
+
+    # Mutable with type inference
+    mut n = 50
+    n = 60
+    print(n)           # 60
+
+    # Multiple assignments
+    mut a: int32 = 1
+    a = 2
+    a = 3
+    a = 4
+    print(a)           # 4
+
+    # Variable used in expression
+    p: int32 = 10
+    q: int32 = p + 5
+    print(q)           # 15
+
+    # Variable shadowing (new binding with same name)
+    v: int32 = 100
+    print(v)           # 100
+
+    # Explicit types for all numeric types
+    t1: int8 = 42
+    t2: int16 = 42
+    t3: int32 = 42
+    t4: int64 = 42
+    t5: float32 = 42.0
+    t6: float64 = 42.0
+    print(t1)
+    print(t2)
+    print(t3)
+    print(t4)
+    print(t5)
+    print(t6)
+
+    return 0

@@ -1,0 +1,47 @@
+def add(a: int32, b: int32) -> int32:
+    return a + b
+
+def multiply(a: int32, b: int32) -> int32:
+    return a * b
+
+def factorial(n: int32) -> int32:
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+def fibonacci(n: int32) -> int32:
+    if n <= 0:
+        return 0
+    if n == 1:
+        return 1
+    mut a: int32 = 0
+    mut b: int32 = 1
+    for unused in range(2, n + 1):
+        mut temp: int32 = a + b
+        a = b
+        b = temp
+    return b
+
+def is_even(n: int32) -> bool:
+    return n % 2 == 0
+
+def abs_val(n: int32) -> int32:
+    if n < 0:
+        return -n
+    return n
+
+def main() -> int32:
+    print(add(3, 4))           # 7
+    print(multiply(5, 6))      # 30
+    print(factorial(5))        # 120
+    print(factorial(10))       # 3628800
+    print(fibonacci(10))       # 55
+    print(fibonacci(0))        # 0
+    print(fibonacci(1))        # 1
+    print(is_even(4))          # true
+    print(is_even(7))          # false
+    print(abs_val(-42))        # 42
+    print(abs_val(42))         # 42
+    print(abs_val(0))          # 0
+
+    return 0

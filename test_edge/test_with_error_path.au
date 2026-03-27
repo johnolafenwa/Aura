@@ -1,0 +1,22 @@
+## Test: With statement where the function returns an error
+class Connection:
+    name: String
+
+    def query(borrow self) -> String:
+        return self.name
+
+    def close(borrow mut self):
+        print("closed " + self.name)
+
+def failing_op() -> Result[String, String]:
+    with conn = Connection(name="db"):
+        print("opened")
+        return Result.Err("something went wrong")
+
+def main() -> int32:
+    match failing_op():
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+    return 0

@@ -1,0 +1,24 @@
+# Test: match borrow on enum with String payload (should not consume)
+
+enum Container:
+    Full(String)
+    Empty
+
+def main() -> int32:
+    c = Container.Full("hello")
+
+    # match borrow should not consume c
+    match borrow c:
+        case Container.Full(s):
+            print(s)
+        case Container.Empty:
+            print("empty")
+
+    # c should still be usable after match borrow
+    match borrow c:
+        case Container.Full(s):
+            print(s)
+        case Container.Empty:
+            print("empty")
+
+    return 0

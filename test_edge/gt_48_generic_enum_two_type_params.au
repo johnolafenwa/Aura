@@ -1,0 +1,22 @@
+## Test 48: Generic enum with two type parameters
+## Expects: "left: 42" then "right: hello"
+
+enum Either[L, R]:
+    Left(L)
+    Right(R)
+
+def main() -> int32:
+    e1: Either[int32, String] = Either.Left(42)
+    match e1:
+        case Either.Left(v):
+            print(v)
+        case Either.Right(v):
+            print(v)
+
+    e2: Either[int32, String] = Either.Right("hello")
+    match e2:
+        case Either.Left(v):
+            print(v)
+        case Either.Right(v):
+            print(v)
+    return 0

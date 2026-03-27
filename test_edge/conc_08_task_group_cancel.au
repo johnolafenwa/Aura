@@ -1,0 +1,40 @@
+def long_worker(ch: Channel[int32]):
+    mut i: int32 = 0
+    while i < 10000:
+        if cancelled():
+            ch.send(-1)
+            return
+        ch.send(i)
+        i += 1
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+
+    with task_group() as group:
+        group.spawn(long_worker, ch.clone())
+
+        match ch.recv():
+            case Option.Some(v):
+                print(v)
+            case Option.None:
+                print("error")
+
+        match ch.recv():
+            case Option.Some(v):
+                print(v)
+            case Option.None:
+                print("error")
+
+        group.cancel()
+
+        match ch.recv():
+            case Option.Some(v):
+                if v == -1:
+                    print("worker noticed cancel")
+                else:
+                    print(v)
+            case Option.None:
+                print("channel closed after cancel")
+
+    print("task group cancel ok")
+    return 0

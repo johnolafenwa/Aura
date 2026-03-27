@@ -1,0 +1,57 @@
+def main() -> int32:
+    # int32 to float64
+    a: int32 = 42
+    b: float64 = a as float64
+    print(b)    # 42.0
+
+    # float64 to int32
+    c: float64 = 7.9
+    d: int32 = c as int32
+    print(d)    # 7
+
+    # int32 to int64 (widening)
+    e: int32 = 100000
+    f: int64 = e as int64
+    print(f)    # 100000
+
+    # int64 to int32 (narrowing, safe value)
+    g: int64 = 42
+    h: int32 = g as int32
+    print(h)    # 42
+
+    # float64 to float32
+    i: float64 = 3.14
+    j: float32 = i as float32
+    print(j)    # 3.14 (approx)
+
+    # float32 to float64
+    k: float32 = 2.5
+    l: float64 = k as float64
+    print(l)    # 2.5
+
+    # int32 to int8 (narrowing, safe value)
+    m: int32 = 50
+    n: int8 = m as int8
+    print(n)    # 50
+
+    # int8 to int32 (widening)
+    o: int8 = 100
+    p: int32 = o as int32
+    print(p)    # 100
+
+    # Negative float to int
+    q: float64 = -3.7
+    r: int32 = q as int32
+    print(r)    # -3
+
+    # Cast in expression
+    s: int32 = 7
+    t: float64 = (s as float64) * 1.5
+    print(t)    # 10.5
+
+    # Chained cast: int8 -> int32 -> float64
+    u: int8 = 42
+    v: float64 = (u as int32) as float64
+    print(v)    # 42.0
+
+    return 0

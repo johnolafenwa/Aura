@@ -1,0 +1,23 @@
+class User:
+    name: String
+    email: String?
+
+def main() -> int32:
+    u1 = User(name="Alice", email=Option.Some("alice@test.com"))
+    u2 = User(name="Bob", email=Option.None)
+
+    print(u1.name)
+    match u1.email:
+        case Some(e):
+            print(e)
+        case None:
+            print("no email")
+
+    print(u2.name)
+    match u2.email:
+        case Some(e):
+            print(e)
+        case None:
+            print("no email")
+
+    return 0

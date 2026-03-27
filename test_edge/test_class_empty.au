@@ -1,0 +1,24 @@
+class Empty:
+    pass
+
+class EmptyWithMethod:
+    def hello(borrow self) -> String:
+        return "hello"
+
+    def create() -> EmptyWithMethod:
+        return EmptyWithMethod()
+
+def take_empty(e: Empty):
+    pass
+
+def main() -> int32:
+    e = Empty()
+    take_empty(e=e)
+
+    ewm = EmptyWithMethod.create()
+    print(ewm.hello())
+
+    e2 = EmptyWithMethod()
+    print(e2.hello())
+
+    return 0

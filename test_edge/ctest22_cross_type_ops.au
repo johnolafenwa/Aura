@@ -1,0 +1,28 @@
+def main() -> int32:
+    # Can we mix int32 and int64 in an expression?
+    a: int32 = 10
+    b: int64 = 20
+    # This might need a cast:
+    # print(a + b)
+
+    # int and float mixing
+    c: int32 = 5
+    d: float64 = 2.5
+    # print(c + d)  # Does this work or need cast?
+
+    # What about comparing different int sizes?
+    # print(a < b)
+
+    # Let's test what works
+    # Cast then operate
+    e: int64 = a as int64 + b
+    print(e)           # 30
+
+    f: float64 = c as float64 + d
+    print(f)           # 7.5
+
+    # Cast in comparison
+    g: bool = (a as int64) < b
+    print(g)           # true
+
+    return 0

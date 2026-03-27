@@ -1,0 +1,19 @@
+class User:
+    name: String
+    age: int32
+    active: bool = true
+    role: String = "user"
+
+def main() -> int32:
+    u1 = User(name="Bob", age=25)
+    print(u1.name)
+    print(u1.age)
+    print(u1.active)
+    print(u1.role)
+
+    u2 = User(name="Admin", age=40, role="admin")
+    print(u2.name)
+    print(u2.role)
+    print(u2.active)
+
+    return 0

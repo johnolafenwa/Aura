@@ -1,0 +1,29 @@
+def main() -> int32:
+    # pass in if block
+    if true:
+        pass
+
+    # pass in else block
+    if false:
+        print(1)
+    else:
+        pass
+
+    # pass in while block
+    mut x: int32 = 0
+    while x < 3:
+        pass
+        x += 1
+
+    # pass in for loop
+    for i in range(5):
+        pass
+
+    # pass in function body
+    do_nothing()
+
+    print(42)   # verify execution continues
+    return 0
+
+def do_nothing():
+    pass

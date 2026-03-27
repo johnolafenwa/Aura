@@ -1,0 +1,42 @@
+# Test: assigning match result to a variable
+enum Token:
+    Num(int32)
+    Str(String)
+    Eof
+
+def main() -> int32:
+    t1 = Token.Num(42)
+    t2 = Token.Str("hello")
+    t3 = Token.Eof
+
+    # Can we use match as expression and assign result?
+    mut result = 0
+    match t1:
+        case Token.Num(v):
+            result = v
+        case Token.Str(s):
+            result = -1
+        case Token.Eof:
+            result = -2
+    print(result)
+
+    match t2:
+        case Token.Num(v):
+            result = v
+        case Token.Str(s):
+            print(s)
+            result = -1
+        case Token.Eof:
+            result = -2
+    print(result)
+
+    match t3:
+        case Token.Num(v):
+            result = v
+        case Token.Str(s):
+            result = -1
+        case Token.Eof:
+            result = -2
+    print(result)
+
+    return 0

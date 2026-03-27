@@ -1,0 +1,13 @@
+class Config:
+    host: String
+    port: int32
+    debug: bool
+
+def main() -> int32:
+    c = Config(
+        host="localhost",
+        port=8080,
+        debug=true,
+    )
+    print(c.host)
+    return 0

@@ -1,0 +1,26 @@
+## Test 26: Generic function with trait bound that returns a non-generic type
+## Expects: 10
+
+trait Weighted:
+    def weight(borrow self) -> int32
+
+class Apple:
+    w: int32
+
+class Orange:
+    w: int32
+
+impl Weighted for Apple:
+    def weight(borrow self) -> int32:
+        return self.w
+
+impl Weighted for Orange:
+    def weight(borrow self) -> int32:
+        return self.w
+
+def total_weight[T: Weighted](a: T, b: T) -> int32:
+    return a.weight() + b.weight()
+
+def main() -> int32:
+    print(total_weight(a=Apple(w=3), b=Apple(w=7)))
+    return 0

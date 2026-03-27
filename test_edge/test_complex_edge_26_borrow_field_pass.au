@@ -1,0 +1,19 @@
+# Edge test: Passing borrowed field to function (related to Bug 1)
+# Testing whether you can pass a borrowed class field to a function
+
+class Inner:
+    value: int32
+
+class Outer:
+    inner: Inner
+
+def read_inner(i: borrow Inner) -> int32:
+    return i.value
+
+def main() -> int32:
+    obj = Outer(inner=Inner(value=42))
+
+    # Can we pass a borrowed field to a function?
+    print(read_inner(obj.inner))
+
+    return 0

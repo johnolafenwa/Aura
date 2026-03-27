@@ -1,0 +1,15 @@
+## Test 17: Top-level script - code without main() function
+a: int32 = 10
+b: int32 = 20
+c = a + b
+print(c)
+
+if c > 25:
+    print("big")
+else:
+    print("small")
+
+mut total: int32 = 0
+for i in range(5):
+    total += i
+print(total)

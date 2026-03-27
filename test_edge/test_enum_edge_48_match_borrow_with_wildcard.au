@@ -1,0 +1,30 @@
+# Test: match borrow with wildcard pattern
+enum Status:
+    Active(int32)
+    Paused
+    Stopped
+
+def main() -> int32:
+    s = Status.Active(42)
+
+    match borrow s:
+        case Status.Active(v):
+            print(v)
+        case _:
+            print("not active")
+
+    # Use after borrow
+    match borrow s:
+        case Status.Active(v):
+            print(v)
+        case _:
+            print("not active")
+
+    s2 = Status.Paused
+    match borrow s2:
+        case Status.Active(v):
+            print(v)
+        case _:
+            print("not active")
+
+    return 0

@@ -1,0 +1,15 @@
+class Inner:
+    data: String
+
+class Outer:
+    inner: Inner
+    label: String
+
+def main() -> int32:
+    mut a = Outer(inner=Inner(data="original"), label="A")
+    mut b = Outer(inner=Inner(data="other"), label="B")
+
+    b.inner = Inner(data="replaced")
+    print(b.inner.data)
+
+    return 0

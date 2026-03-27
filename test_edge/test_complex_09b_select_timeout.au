@@ -1,0 +1,26 @@
+# Test 9b: Select with actual timeout triggering
+# Tests: select timeout fires when no data available
+
+def slow_producer(out: Channel[int32]):
+    sleep(500ms)
+    out.send(42)
+    out.close()
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+
+    with task_group() as group:
+        group.spawn(slow_producer, ch.clone())
+
+        # This should timeout since producer sleeps 500ms but we only wait 50ms
+        select:
+            case value = ch.recv():
+                match value:
+                    case Option.Some(v):
+                        print(v)
+                    case Option.None:
+                        print("closed")
+            case after(50ms):
+                print("timeout")
+
+    return 0

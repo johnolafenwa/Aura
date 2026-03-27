@@ -1,0 +1,47 @@
+# Test borrow semantics with classes having String fields
+
+class Counter:
+    value: int32
+    label: String
+
+    def get_label(borrow self) -> String:
+        return self.label.clone()
+
+    def get_value(borrow self) -> int32:
+        return self.value
+
+    def bump(borrow mut self):
+        self.value += 1
+
+    def relabel(borrow mut self, new_label: borrow str):
+        self.label = new_label + "_updated"
+
+def read_value(c: borrow Counter) -> int32:
+    return c.value
+
+def main() -> int32:
+    mut c = Counter(value=0, label="test")
+
+    # Immutable borrow via method
+    lbl = c.get_label()
+    print(lbl)
+    val = c.get_value()
+    print(val)
+
+    # Immutable borrow via free function (int32 is copy, so this works)
+    val2 = read_value(c)
+    print(val2)
+
+    # Object still usable: direct access on owned value
+    print(c.label)
+    print(c.value)
+
+    # Mutable borrow via method
+    c.bump()
+    print(c.value)
+
+    # Mutable borrow on string field via method
+    c.relabel("new")
+    print(c.label)
+
+    return 0

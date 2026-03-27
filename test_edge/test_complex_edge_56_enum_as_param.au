@@ -1,0 +1,31 @@
+# Edge test: Passing enum values as function parameters
+
+enum Status:
+    Active
+    Inactive
+
+def describe_status(s: Status) -> String:
+    match s:
+        case Status.Active:
+            return "active"
+        case Status.Inactive:
+            return "inactive"
+
+# Pass enum as borrow
+def is_active(s: borrow Status) -> bool:
+    match s:
+        case Status.Active:
+            return true
+        case Status.Inactive:
+            return false
+
+def main() -> int32:
+    s = Status.Active
+    print(describe_status(s=Status.Active))
+    print(describe_status(s=Status.Inactive))
+
+    # Borrow enum
+    s2 = Status.Inactive
+    print(is_active(s2))
+
+    return 0

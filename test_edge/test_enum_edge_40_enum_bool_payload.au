@@ -1,0 +1,33 @@
+# Test: enum variant with bool payload
+enum Flag:
+    Set(bool)
+    Unset
+
+def is_true(f: Flag) -> bool:
+    match f:
+        case Flag.Set(v):
+            return v
+        case Flag.Unset:
+            return false
+
+def main() -> int32:
+    f1 = Flag.Set(true)
+    f2 = Flag.Set(false)
+    f3 = Flag.Unset
+
+    if is_true(f1):
+        print("f1 true")
+    else:
+        print("f1 false")
+
+    if is_true(f2):
+        print("f2 true")
+    else:
+        print("f2 false")
+
+    if is_true(f3):
+        print("f3 true")
+    else:
+        print("f3 false")
+
+    return 0

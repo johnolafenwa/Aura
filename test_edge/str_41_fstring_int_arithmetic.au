@@ -1,0 +1,19 @@
+# Test: f-string with arithmetic expressions
+
+def main() -> int32:
+    x: int32 = 10
+    y: int32 = 20
+
+    # Arithmetic in f-string
+    r1 = f"sum = {x + y}"
+    print(r1)
+
+    # More complex
+    r2 = f"{x} * {y} = {x * y}"
+    print(r2)
+
+    # Nested function call
+    r3 = f"result: {x + y + 5}"
+    print(r3)
+
+    return 0

@@ -751,6 +751,9 @@ impl<'a> NativeCodegen<'a> {
         for block in &function.blocks {
             for instruction in &block.instructions {
                 if let Instruction::Assign { target, value } = instruction {
+                    if target.contains('.') {
+                        continue;
+                    }
                     if variables.contains_key(target) {
                         continue;
                     }
@@ -1938,7 +1941,10 @@ impl<'a> FunctionCompiler<'a> {
                 MirFormatPart::Value(value) => {
                     let value = self.load_operand(value)?;
                     let value = self.ensure_opaque(value)?;
-                    let call = self.builder.ins().call(self.stringify_value, &[value.values[0]]);
+                    let call = self
+                        .builder
+                        .ins()
+                        .call(self.stringify_value, &[value.values[0]]);
                     ValueRef {
                         values: self.builder.inst_results(call).to_vec(),
                         ty: DirectType::Opaque(Type::named("String")),
@@ -2310,14 +2316,13 @@ impl<'a> FunctionCompiler<'a> {
             .cloned()
             .ok_or_else(|| format!("direct backend does not know local `{}`", root))?;
         for field in segments {
-            let (_, _, field_ty) = ty.field_slice(field).ok_or_else(|| {
+            ty = direct_field_type(&ty, field, &self.classes).ok_or_else(|| {
                 format!(
                     "direct backend does not know field `{}` on `{}`",
                     field,
                     render_direct_type(&ty)
                 )
             })?;
-            ty = field_ty;
         }
         Ok(ty)
     }
@@ -2436,10 +2441,15 @@ impl<'a> FunctionCompiler<'a> {
                     self.instance_get_field,
                     &[object.values[0], field_ptr, field_len],
                 );
-                Ok(ValueRef {
+                let loaded = ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
                     ty: DirectType::Opaque(Type::named("Unknown")),
-                })
+                };
+                if let Some(field_ty) = direct_field_type(&object.ty, field, &self.classes) {
+                    self.coerce_value(loaded, &field_ty)
+                } else {
+                    Ok(loaded)
+                }
             }
             DirectType::Scalar(_) => Err(format!(
                 "direct backend does not know field `{}` on `{}`",
@@ -2455,6 +2465,7 @@ impl<'a> FunctionCompiler<'a> {
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         if &value.ty == target {
+            let value = self.normalize_scalar_value(value)?;
             if matches!(target.scalar_kind(), Some(ScalarKind::Int32)) {
                 self.emit_int32_bounds_check(value.values[0]);
             }
@@ -2490,10 +2501,10 @@ impl<'a> FunctionCompiler<'a> {
                 DirectType::Scalar(ScalarKind::Float32)
                 | DirectType::Scalar(ScalarKind::Float64) => {
                     let inst = self.builder.ins().call(self.unbox_f64, &[value.values[0]]);
-                    ValueRef {
+                    self.normalize_scalar_value(ValueRef {
                         values: self.builder.inst_results(inst).to_vec(),
                         ty: target.clone(),
-                    }
+                    })?
                 }
                 DirectType::Scalar(ScalarKind::Bool) => {
                     let inst = self.builder.ins().call(self.unbox_bool, &[value.values[0]]);
@@ -2536,10 +2547,11 @@ impl<'a> FunctionCompiler<'a> {
                 values: value.values,
                 ty: target.clone(),
             }),
-            (Some(lhs), Some(rhs)) if lhs.is_float() && rhs.is_float() => Ok(ValueRef {
-                values: value.values,
-                ty: target.clone(),
-            }),
+            (Some(lhs), Some(rhs)) if lhs.is_float() && rhs.is_float() => self
+                .normalize_scalar_value(ValueRef {
+                    values: value.values,
+                    ty: target.clone(),
+                }),
             (Some(ScalarKind::Int32), Some(ScalarKind::Bool)) => Ok(ValueRef {
                 values: value.values,
                 ty: target.clone(),
@@ -2553,6 +2565,20 @@ impl<'a> FunctionCompiler<'a> {
                 render_direct_type(&value.ty),
                 render_direct_type(target)
             )),
+        }
+    }
+
+    fn normalize_scalar_value(&mut self, value: ValueRef) -> std::result::Result<ValueRef, String> {
+        match value.ty.scalar_kind() {
+            Some(ScalarKind::Float32) => {
+                let narrowed = self.builder.ins().fdemote(types::F32, value.values[0]);
+                let widened = self.builder.ins().fpromote(types::F64, narrowed);
+                Ok(ValueRef {
+                    values: vec![widened],
+                    ty: value.ty,
+                })
+            }
+            _ => Ok(value),
         }
     }
 
@@ -4066,18 +4092,20 @@ fn infer_rvalue_type(
     classes: &HashMap<String, MirClass>,
 ) -> Option<DirectType> {
     match rvalue {
-        Rvalue::Use(operand) => infer_operand_type(operand, variable_types),
+        Rvalue::Use(operand) => infer_operand_type(operand, variable_types, classes),
         Rvalue::FormatString { .. } => Some(DirectType::Opaque(Type::named("String"))),
-        Rvalue::Unary { op, value, .. } => match (op, infer_operand_type(value, variable_types)?) {
-            (UnaryOp::Neg, DirectType::Scalar(ScalarKind::Int32)) => {
-                Some(DirectType::Scalar(ScalarKind::Int32))
+        Rvalue::Unary { op, value, .. } => {
+            match (op, infer_operand_type(value, variable_types, classes)?) {
+                (UnaryOp::Neg, DirectType::Scalar(ScalarKind::Int32)) => {
+                    Some(DirectType::Scalar(ScalarKind::Int32))
+                }
+                (UnaryOp::Neg, DirectType::Scalar(kind)) if kind.is_float() => {
+                    Some(DirectType::Scalar(kind))
+                }
+                (UnaryOp::Not, _) => Some(DirectType::Scalar(ScalarKind::Bool)),
+                _ => None,
             }
-            (UnaryOp::Neg, DirectType::Scalar(kind)) if kind.is_float() => {
-                Some(DirectType::Scalar(kind))
-            }
-            (UnaryOp::Not, _) => Some(DirectType::Scalar(ScalarKind::Bool)),
-            _ => None,
-        },
+        }
         Rvalue::Cast { ty, .. } => direct_type(ty, classes),
         Rvalue::Binary { op, left, .. } => match op {
             BinaryOp::Eq
@@ -4089,7 +4117,7 @@ fn infer_rvalue_type(
             | BinaryOp::And
             | BinaryOp::Or => Some(DirectType::Scalar(ScalarKind::Bool)),
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
-                infer_operand_type(left, variable_types)
+                infer_operand_type(left, variable_types, classes)
             }
         },
         Rvalue::Call { callee, .. } => match callee {
@@ -4110,7 +4138,7 @@ fn infer_rvalue_type(
             CallTarget::Name(name) if name == "sleep" => Some(DirectType::Scalar(ScalarKind::Unit)),
             CallTarget::Name(name) => function_return_types.get(name).cloned(),
             CallTarget::Member { object, field, .. } => {
-                let object_ty = infer_operand_type(object, variable_types)?;
+                let object_ty = infer_operand_type(object, variable_types, classes)?;
                 if matches!(object_ty.scalar_kind(), Some(kind) if kind.is_float())
                     && field == "sqrt"
                 {
@@ -4127,10 +4155,11 @@ fn infer_rvalue_type(
             }
         },
         Rvalue::Construct { class_name, .. } => direct_type(&Type::named(class_name), classes),
-        Rvalue::Member { object, field } => match infer_operand_type(object, variable_types)? {
-            ty @ DirectType::Opaque(_) => Some(ty),
-            ty => ty.field_slice(field).map(|(_, _, ty)| ty),
-        },
+        Rvalue::Member { object, field } => {
+            match infer_operand_type(object, variable_types, classes)? {
+                ty => direct_field_type(&ty, field, classes),
+            }
+        }
         Rvalue::EnumVariant { enum_name, .. } => Some(DirectType::Opaque(Type::named(enum_name))),
         Rvalue::VariantPayload { .. } => Some(DirectType::Opaque(Type::named("Unknown"))),
         Rvalue::Try { .. } => Some(DirectType::Opaque(Type::named("Unknown"))),
@@ -4158,7 +4187,7 @@ fn infer_select_binding_type(
 ) -> Option<DirectType> {
     match &arm.kind {
         MirSelectKind::Recv { channel } => {
-            let channel_ty = infer_operand_type(channel, variable_types)?;
+            let channel_ty = infer_operand_type(channel, variable_types, classes)?;
             match channel_ty {
                 DirectType::Opaque(Type::Named(name, args)) if name == "Channel" => {
                     Some(DirectType::Opaque(Type::Named(
@@ -4176,7 +4205,7 @@ fn infer_select_binding_type(
             }
         }
         MirSelectKind::Send { channel, .. } => {
-            let channel_ty = infer_operand_type(channel, variable_types)?;
+            let channel_ty = infer_operand_type(channel, variable_types, classes)?;
             match channel_ty {
                 DirectType::Opaque(Type::Named(name, args)) if name == "Channel" => {
                     Some(DirectType::Opaque(Type::Named(
@@ -4203,16 +4232,38 @@ fn infer_select_binding_type(
             }
         }
         MirSelectKind::After { duration } => {
-            let _ = classes;
-            infer_operand_type(duration, variable_types)?;
+            infer_operand_type(duration, variable_types, classes)?;
             Some(DirectType::Scalar(ScalarKind::Unit))
         }
     }
 }
 
+fn direct_field_type(
+    ty: &DirectType,
+    field: &str,
+    classes: &HashMap<String, MirClass>,
+) -> Option<DirectType> {
+    if let Some((_, _, field_ty)) = ty.field_slice(field) {
+        return Some(field_ty);
+    }
+    let DirectType::Opaque(Type::Named(class_name, args)) = ty else {
+        return None;
+    };
+    if !args.is_empty() {
+        return None;
+    }
+    let class = classes.get(class_name)?;
+    let field_info = class
+        .fields
+        .iter()
+        .find(|candidate| candidate.name == field)?;
+    direct_type(&field_info.ty, classes)
+}
+
 fn infer_operand_type(
     operand: &Operand,
     variable_types: &HashMap<String, DirectType>,
+    classes: &HashMap<String, MirClass>,
 ) -> Option<DirectType> {
     match operand {
         Operand::Place(place) => {
@@ -4220,8 +4271,7 @@ fn infer_operand_type(
             let root = segments.next()?;
             let mut ty = variable_types.get(root)?.clone();
             for field in segments {
-                let (_, _, field_ty) = ty.field_slice(field)?;
-                ty = field_ty;
+                ty = direct_field_type(&ty, field, classes)?;
             }
             Some(ty)
         }
@@ -4453,11 +4503,19 @@ mod tests {
         let classes = HashMap::new();
 
         assert_eq!(
-            infer_operand_type(&Operand::Place("flag".to_string()), &variable_types),
+            infer_operand_type(
+                &Operand::Place("flag".to_string()),
+                &variable_types,
+                &HashMap::new()
+            ),
             Some(DirectType::Scalar(ScalarKind::Bool))
         );
         assert_eq!(
-            infer_operand_type(&Operand::Place("point.x".to_string()), &variable_types),
+            infer_operand_type(
+                &Operand::Place("point.x".to_string()),
+                &variable_types,
+                &HashMap::new()
+            ),
             Some(DirectType::Scalar(ScalarKind::Float64))
         );
         assert_eq!(

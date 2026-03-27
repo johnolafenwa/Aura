@@ -1,0 +1,18 @@
+class Point:
+    x: float64
+    y: float64
+
+class Person:
+    name: String
+    age: int32
+
+def main() -> int32:
+    p = Point(x=3.14, y=2.71)
+    print(p.x)
+    print(p.y)
+
+    alice = Person(name="Alice", age=30)
+    print(alice.name)
+    print(alice.age)
+
+    return 0

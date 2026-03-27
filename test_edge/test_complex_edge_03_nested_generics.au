@@ -1,0 +1,29 @@
+# Edge test: Nested generics - Box[Box[int32]], Option[Option[int32]]
+
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def main() -> int32:
+    # Nested Box
+    inner: Box[int32] = Box(value=42)
+    outer: Box[Box[int32]] = Box(value=inner)
+    print(outer.get().get())
+
+    # Nested Option using explicit type
+    inner_opt: Option[int32] = Option.Some(99)
+    outer_opt: Option[Option[int32]] = Option.Some(inner_opt)
+
+    match outer_opt:
+        case Option.Some(mid):
+            match mid:
+                case Option.Some(v):
+                    print(v)
+                case Option.None:
+                    print(-1)
+        case Option.None:
+            print(-2)
+
+    return 0

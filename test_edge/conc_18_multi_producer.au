@@ -1,0 +1,29 @@
+def producer(ch: Channel[int32], base: int32):
+    ch.send(base + 1)
+    ch.send(base + 2)
+    ch.send(base + 3)
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    t1 = spawn producer(ch.clone(), 0)
+    t2 = spawn producer(ch.clone(), 10)
+    t3 = spawn producer(ch.clone(), 20)
+
+    mut sum: int32 = 0
+    mut count: int32 = 0
+    while count < 9:
+        match ch.recv():
+            case Option.Some(v):
+                sum += v
+                count += 1
+            case Option.None:
+                print("error: unexpected None")
+                break
+
+    t1.join()
+    t2.join()
+    t3.join()
+    print(count)
+    print(sum)
+    print("multi producer ok")
+    return 0

@@ -1,0 +1,41 @@
+def main() -> int32:
+    # Augmented assignment on int8
+    mut a: int8 = 10
+    a += 5
+    a -= 3
+    a *= 2
+    print(a)    # (10+5-3)*2 = 24
+
+    # Augmented assignment on int16
+    mut b: int16 = 1000
+    b += 500
+    b -= 200
+    print(b)    # 1300
+
+    # Augmented assignment on int64
+    mut c: int64 = 1000000000
+    c += 1000000000
+    c -= 500000000
+    print(c)    # 1500000000
+
+    # Augmented assignment on float32
+    mut d: float32 = 1.0
+    d += 0.5
+    d *= 3.0
+    print(d)    # (1.0 + 0.5) * 3.0 = 4.5
+
+    # Augmented assignment on uint32
+    mut e: uint32 = 100
+    e += 50
+    e -= 25
+    e *= 2
+    e /= 5
+    e %= 7
+    print(e)    # ((100+50-25)*2)/5 = 50, 50%7 = 1
+
+    # Augmented modulo
+    mut f: int32 = 100
+    f %= 7
+    print(f)    # 2
+
+    return 0

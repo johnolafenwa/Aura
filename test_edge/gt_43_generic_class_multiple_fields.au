@@ -1,0 +1,12 @@
+## Test 43: Generic class with multiple fields using the same type param
+## Expects: 1 then 2
+
+class Range[T]:
+    start: T
+    end: T
+
+def main() -> int32:
+    r: Range[int32] = Range(start=1, end=2)
+    print(r.start)
+    print(r.end)
+    return 0

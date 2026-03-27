@@ -1,0 +1,19 @@
+# Test: wildcard in match with payload variants - does it bind or ignore?
+enum Command:
+    Move(int32)
+    Turn(int32)
+    Stop
+
+def process(c: Command) -> int32:
+    match c:
+        case Command.Stop:
+            return 0
+        case _:
+            # Wildcard should match Move and Turn but we can't access payload
+            return -1
+
+def main() -> int32:
+    print(process(Command.Stop))
+    print(process(Command.Move(10)))
+    print(process(Command.Turn(90)))
+    return 0

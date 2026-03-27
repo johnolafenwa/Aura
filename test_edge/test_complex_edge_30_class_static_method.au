@@ -1,0 +1,39 @@
+# Edge test: Class with both static and instance methods, default values
+
+class Counter:
+    value: int32 = 0
+    step: int32 = 1
+
+    def zero() -> Counter:
+        return Counter()
+
+    def with_step(step: int32) -> Counter:
+        return Counter(step=step)
+
+    def increment(borrow mut self):
+        self.value += self.step
+
+    def decrement(borrow mut self):
+        self.value -= self.step
+
+    def read(borrow self) -> int32:
+        return self.value
+
+def main() -> int32:
+    # Default counter (step=1)
+    mut c1 = Counter.zero()
+    c1.increment()
+    c1.increment()
+    c1.increment()
+    print(c1.read())
+
+    # Counter with custom step
+    mut c2 = Counter.with_step(step=5)
+    c2.increment()
+    c2.increment()
+    print(c2.read())
+
+    c2.decrement()
+    print(c2.read())
+
+    return 0

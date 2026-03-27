@@ -1,0 +1,40 @@
+# Edge test: Generic enum containing a class with generic param
+
+class Payload[T]:
+    data: T
+    tag: int32
+
+enum Response[T]:
+    Success(Payload[T])
+    Failure(String)
+
+def make_response[T](data: T, tag: int32) -> Response[T]:
+    payload = Payload(data=data, tag=tag)
+    return Response.Success(payload)
+
+def make_error[T]() -> Response[T]:
+    return Response.Failure("error occurred")
+
+def main() -> int32:
+    r1: Response[int32] = make_response(data=42, tag=1)
+    match r1:
+        case Response.Success(p):
+            print(f"data={p.data} tag={p.tag}")
+        case Response.Failure(msg):
+            print(msg)
+
+    r2: Response[String] = make_response(data="hello", tag=2)
+    match r2:
+        case Response.Success(p):
+            print(f"data={p.data} tag={p.tag}")
+        case Response.Failure(msg):
+            print(msg)
+
+    r3: Response[int32] = make_error()
+    match r3:
+        case Response.Success(p):
+            print(p.data)
+        case Response.Failure(msg):
+            print(msg)
+
+    return 0

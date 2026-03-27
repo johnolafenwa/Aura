@@ -1,0 +1,18 @@
+## Test 20: Generic function returning a generic class
+## Expects: 99 then "wrapped"
+
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def wrap[T](item: T) -> Box[T]:
+    return Box(value=item)
+
+def main() -> int32:
+    b1 = wrap(99)
+    print(b1.get())
+    b2 = wrap("wrapped")
+    print(b2.get())
+    return 0

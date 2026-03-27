@@ -1,0 +1,19 @@
+# Edge test: Can we define methods on generic enums?
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+def unwrap_or[T](val: Maybe[T], default: T) -> T:
+    match val:
+        case Maybe.Just(v):
+            return v
+        case Maybe.Nothing:
+            return default
+
+def main() -> int32:
+    a: Maybe[int32] = Maybe.Just(42)
+    b: Maybe[int32] = Maybe.Nothing
+
+    print(unwrap_or(val=a, default=0))
+    print(unwrap_or(val=b, default=-1))
+    return 0

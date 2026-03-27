@@ -1,0 +1,40 @@
+# Edge test: Enum as a field inside a class
+
+enum Status:
+    Active
+    Inactive
+    Pending
+
+class Task:
+    name: String
+    status: Status
+    priority: int32
+
+    def is_active(borrow self) -> bool:
+        match borrow self.status:
+            case Status.Active:
+                return true
+            case _:
+                return false
+
+    def describe(borrow self) -> String:
+        match borrow self.status:
+            case Status.Active:
+                return f"{self.name}: active (p{self.priority})"
+            case Status.Inactive:
+                return f"{self.name}: inactive"
+            case Status.Pending:
+                return f"{self.name}: pending"
+
+def main() -> int32:
+    t1 = Task(name="Build", status=Status.Active, priority=1)
+    t2 = Task(name="Test", status=Status.Pending, priority=2)
+    t3 = Task(name="Deploy", status=Status.Inactive, priority=3)
+
+    print(t1.describe())
+    print(t2.describe())
+    print(t3.describe())
+    print(t1.is_active())
+    print(t2.is_active())
+
+    return 0

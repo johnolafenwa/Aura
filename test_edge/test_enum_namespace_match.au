@@ -1,0 +1,11 @@
+## Test: Enum imported via namespace (import) vs from-import in match
+import modules.shapes.circle
+
+def main() -> int32:
+    kind = modules.shapes.circle.ShapeKind.Round
+    match kind:
+        case modules.shapes.circle.ShapeKind.Round:
+            print("round via namespace")
+        case modules.shapes.circle.ShapeKind.Angular:
+            print("angular via namespace")
+    return 0

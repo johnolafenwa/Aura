@@ -1,0 +1,10 @@
+## Test: Accessing private field of imported class
+import modules.shapes.circle
+
+## circle has public radius field - this should work
+## Let's also test if non-public fields would be blocked
+
+def main() -> int32:
+    c = modules.shapes.circle.Circle(radius=2.0)
+    print(c.radius)
+    return 0

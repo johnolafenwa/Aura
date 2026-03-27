@@ -1,0 +1,23 @@
+## Test 18: With statement - resource cleanup with close()
+class Resource:
+    name: String
+
+    def use(borrow self) -> String:
+        return "using " + self.name
+
+    def close(borrow mut self):
+        print("closing " + self.name)
+
+def work() -> Result[String, String]:
+    with r = Resource(name="database"):
+        msg = r.use()
+        print(msg)
+        return Result.Ok("done")
+
+def main() -> int32:
+    match work():
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+    return 0

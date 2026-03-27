@@ -1,0 +1,3 @@
+## Test: main() without return type annotation
+def main():
+    print("no return type")

@@ -1,0 +1,65 @@
+# Test 14: Event system - channel-based event dispatcher with multiple event types
+# Tests: enums with payloads, channels of enums, select, task_group, pattern matching
+# NOTE: Enum variants only support single-field payloads, so we wrap multi-field data in classes
+
+class ClickData:
+    x: int32
+    y: int32
+
+class ResizeData:
+    width: int32
+    height: int32
+
+enum Event:
+    Click(ClickData)
+    KeyPress(int32)
+    Resize(ResizeData)
+    Quit
+
+def event_producer(events: Channel[Event]):
+    events.send(Event.Click(ClickData(x=100, y=200)))
+    events.send(Event.KeyPress(65))
+    events.send(Event.Resize(ResizeData(width=1920, height=1080)))
+    events.send(Event.Click(ClickData(x=50, y=75)))
+    events.send(Event.KeyPress(66))
+    events.send(Event.Quit)
+    events.close()
+
+def handle_event(event: Event) -> String:
+    match event:
+        case Event.Click(data):
+            return f"click at {data.x},{data.y}"
+        case Event.KeyPress(key):
+            return f"key {key}"
+        case Event.Resize(data):
+            return f"resize to {data.width}x{data.height}"
+        case Event.Quit:
+            return "quit"
+
+def main() -> int32:
+    events: Channel[Event] = channel()
+    mut event_count: int32 = 0
+    mut running: bool = true
+
+    with task_group() as group:
+        group.spawn(event_producer, events.clone())
+
+        while running:
+            select:
+                case evt = events.recv():
+                    match evt:
+                        case Option.Some(e):
+                            msg = handle_event(e)
+                            print(msg)
+                            event_count += 1
+                            if msg == "quit":
+                                running = false
+                        case Option.None:
+                            running = false
+                case after(2s):
+                    print("timeout waiting for events")
+                    running = false
+
+    print(f"total events: {event_count}")
+
+    return 0

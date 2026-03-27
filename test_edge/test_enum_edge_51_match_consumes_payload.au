@@ -1,0 +1,24 @@
+# Test: consuming match on String payload (move semantics)
+# After consuming match that extracts String, original enum should be moved
+enum Msg:
+    Text(String)
+    Empty
+
+def main() -> int32:
+    m = Msg.Text("hello")
+
+    # This match consumes m
+    match m:
+        case Msg.Text(s):
+            print(s)
+            # s is now the owned String
+            print(s)
+        case Msg.Empty:
+            print("empty")
+
+    # m should be moved now - next line should error if uncommented
+    # match m:
+    #     case Msg.Text(s): print(s)
+    #     case Msg.Empty: print("empty")
+
+    return 0

@@ -1,0 +1,39 @@
+enum Color:
+    Red
+    Blue
+    Green
+
+enum Size:
+    Small
+    Medium
+    Large
+
+def describe(c: Color, s: Size) -> String:
+    match c:
+        case Color.Red:
+            match s:
+                case Size.Small:
+                    return "small red"
+                case Size.Medium:
+                    return "medium red"
+                case Size.Large:
+                    return "large red"
+        case Color.Blue:
+            match s:
+                case Size.Small:
+                    return "small blue"
+                case _:
+                    return "big blue"
+        case Color.Green:
+            return "green anything"
+
+def main() -> int32:
+    print(describe(Color.Red, Size.Small))
+    print(describe(Color.Red, Size.Medium))
+    print(describe(Color.Red, Size.Large))
+    print(describe(Color.Blue, Size.Small))
+    print(describe(Color.Blue, Size.Medium))
+    print(describe(Color.Blue, Size.Large))
+    print(describe(Color.Green, Size.Small))
+    print(describe(Color.Green, Size.Large))
+    return 0

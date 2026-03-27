@@ -1,0 +1,53 @@
+def main() -> int32:
+    # int32 comparisons
+    a: int32 = 10
+    b: int32 = 20
+    c: int32 = 10
+    print(a < b)       # true
+    print(a > b)       # false
+    print(a <= b)      # true
+    print(a >= b)      # false
+    print(a == c)      # true
+    print(a != c)      # false
+    print(a == b)      # false
+    print(a != b)      # true
+    print(a <= c)      # true
+    print(a >= c)      # true
+
+    # float64 comparisons
+    d: float64 = 3.14
+    e: float64 = 2.71
+    f: float64 = 3.14
+    print(d < e)       # false
+    print(d > e)       # true
+    print(d == f)      # true
+    print(d != e)      # true
+    print(d <= f)      # true
+    print(d >= f)      # true
+
+    # Comparison of negative numbers
+    g: int32 = -5
+    h: int32 = -10
+    print(g < h)       # false (-5 > -10)
+    print(g > h)       # true
+    print(g == h)      # false
+
+    # Zero comparisons
+    i: int32 = 0
+    print(i == 0)      # true
+    print(i < 1)       # true
+    print(i > -1)      # true
+
+    # int64 comparisons
+    j: int64 = 1000000000
+    k: int64 = 999999999
+    print(j > k)       # true
+    print(j == k)      # false
+
+    # bool equality
+    print(true == true)     # true
+    print(false == false)   # true
+    print(true == false)    # false
+    print(true != false)    # true
+
+    return 0

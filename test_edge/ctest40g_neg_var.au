@@ -1,0 +1,7 @@
+def main() -> int32:
+    # Workaround: use variable negation
+    b: int64 = 3000000000
+    c: int64 = -b
+    print(c)     # -3000000000
+
+    return 0

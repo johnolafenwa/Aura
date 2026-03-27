@@ -1,0 +1,12 @@
+## Test 16: Shadowing - same variable name in nested scopes
+def main() -> int32:
+    x: int32 = 1
+    print(x)
+    if true:
+        x: int32 = 2
+        print(x)
+        if true:
+            x: int32 = 3
+            print(x)
+    print(x)
+    return 0

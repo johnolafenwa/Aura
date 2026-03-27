@@ -1,0 +1,34 @@
+def inner_worker(ch: Channel[int32], val: int32):
+    ch.send(val)
+
+def outer_worker(ch: Channel[int32]):
+    inner_ch: Channel[int32] = channel()
+    with task_group() as inner_group:
+        inner_group.spawn(inner_worker, inner_ch.clone(), 10)
+        inner_group.spawn(inner_worker, inner_ch.clone(), 20)
+
+        mut inner_sum: int32 = 0
+        mut i: int32 = 0
+        while i < 2:
+            match inner_ch.recv():
+                case Option.Some(v):
+                    inner_sum += v
+                case Option.None:
+                    pass
+            i += 1
+        ch.send(inner_sum)
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+
+    with task_group() as group:
+        group.spawn(outer_worker, ch.clone())
+
+        match ch.recv():
+            case Option.Some(v):
+                print(v)
+            case Option.None:
+                print("error: expected value from nested groups")
+
+    print("nested task groups ok")
+    return 0

@@ -1,0 +1,20 @@
+# BUG TEST: Can Result.Ok be constructed without return type context?
+
+def main() -> int32:
+    # With explicit type annotation
+    r1: Result[int32, String] = Result.Ok(42)
+    match r1:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Without type annotation (should be inferred)
+    r2 = Result.Ok(99)
+    match r2:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    return 0

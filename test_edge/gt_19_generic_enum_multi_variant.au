@@ -1,0 +1,36 @@
+## Test 19: Generic enum with multiple variants and payloads
+## Expects: 42 then "error: oops" then "pending"
+
+enum Status[T]:
+    Ok(T)
+    Error(String)
+    Pending
+
+def main() -> int32:
+    s1: Status[int32] = Status.Ok(42)
+    match s1:
+        case Status.Ok(val):
+            print(val)
+        case Status.Error(msg):
+            print("error: " + msg)
+        case Status.Pending:
+            print("pending")
+
+    s2: Status[int32] = Status.Error("oops")
+    match s2:
+        case Status.Ok(val):
+            print(val)
+        case Status.Error(msg):
+            print("error: " + msg)
+        case Status.Pending:
+            print("pending")
+
+    s3: Status[int32] = Status.Pending
+    match s3:
+        case Status.Ok(val):
+            print(val)
+        case Status.Error(msg):
+            print("error: " + msg)
+        case Status.Pending:
+            print("pending")
+    return 0

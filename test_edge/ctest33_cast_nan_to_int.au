@@ -1,0 +1,6 @@
+def main() -> int32:
+    # Cast NaN to int
+    a: float64 = 0.0 / 0.0
+    b: int32 = a as int32
+    print(b)
+    return 0

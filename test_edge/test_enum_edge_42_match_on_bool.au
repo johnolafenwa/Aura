@@ -1,0 +1,17 @@
+# Test: match on boolean literals is NOT supported in Aurora
+# ISSUE: case true: / case false: gives "expected identifier" error
+# Match patterns only support: EnumName.Variant, EnumName.Variant(binding), _
+# Workaround: use if/else for boolean matching
+
+def label(b: bool) -> String:
+    if b:
+        return "yes"
+    else:
+        return "no"
+
+def main() -> int32:
+    print(label(true))
+    print(label(false))
+    print(label(1 == 1))
+    print(label(1 == 2))
+    return 0

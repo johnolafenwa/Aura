@@ -1,0 +1,17 @@
+class Builder:
+    name: String
+    port: int32
+
+    def with_port(self, p: int32) -> Builder:
+        return Builder(name=self.name, port=p)
+
+    def build(self) -> String:
+        return self.name
+
+def main() -> int32:
+    b = Builder(name="server", port=0)
+    b2 = b.with_port(p=8080)
+    print(b2.port)
+    result = b2.build()
+    print(result)
+    return 0

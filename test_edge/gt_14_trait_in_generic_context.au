@@ -1,0 +1,29 @@
+## Test 14: Using trait methods in generic context - calling .method() on bounded T
+## Expects: 100 then 200
+
+trait Measurable:
+    def measure(borrow self) -> int32
+
+class Ruler:
+    length: int32
+
+class Tape:
+    length: int32
+
+impl Measurable for Ruler:
+    def measure(borrow self) -> int32:
+        return self.length
+
+impl Measurable for Tape:
+    def measure(borrow self) -> int32:
+        return self.length * 2
+
+def double_measure[T: Measurable](item: T) -> int32:
+    return item.measure() * 2
+
+def main() -> int32:
+    r = Ruler(length=50)
+    print(double_measure(item=r))
+    t = Tape(length=50)
+    print(double_measure(item=t))
+    return 0

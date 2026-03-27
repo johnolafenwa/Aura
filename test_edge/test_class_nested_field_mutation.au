@@ -1,0 +1,15 @@
+copy class Inner:
+    val: int32
+
+class Outer:
+    inner: Inner
+    name: String
+
+def main() -> int32:
+    mut o = Outer(inner=Inner(val=1), name="test")
+    print(o.inner.val)
+    o.inner.val = 99
+    print(o.inner.val)
+    o.name = "changed"
+    print(o.name)
+    return 0

@@ -1,0 +1,57 @@
+# Test 11: Fibonacci with memoization using a class
+# Tests: recursive functions, class with mutable state, conditional logic
+# Note: No array/map built-in, so we use a cache of fixed size via class fields
+
+# Since Aurora doesn't have arrays or hashmaps, we'll memoize manually
+# by passing previously computed values through the call chain
+
+def fib(n: int32) -> int32:
+    if n <= 0:
+        return 0
+    if n == 1:
+        return 1
+    # Simple recursive fibonacci
+    return fib(n - 1) + fib(n - 2)
+
+# Memoized version using iterative approach in a class
+class FibComputer:
+    n: int32
+
+    def compute(borrow self) -> int32:
+        if self.n <= 0:
+            return 0
+        if self.n == 1:
+            return 1
+
+        mut prev2: int32 = 0
+        mut prev1: int32 = 1
+        mut i: int32 = 2
+        mut current: int32 = 0
+        while i <= self.n:
+            current = prev1 + prev2
+            prev2 = prev1
+            prev1 = current
+            i += 1
+        return current
+
+def main() -> int32:
+    # Test recursive fib for small values
+    print(fib(0))
+    print(fib(1))
+    print(fib(5))
+    print(fib(10))
+
+    # Test iterative/memoized fib for larger values
+    f20 = FibComputer(n=20)
+    print(f20.compute())
+
+    f30 = FibComputer(n=30)
+    print(f30.compute())
+
+    # Verify they match for small values
+    f5 = FibComputer(n=5)
+    f10 = FibComputer(n=10)
+    print(f5.compute())
+    print(f10.compute())
+
+    return 0

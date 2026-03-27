@@ -1,0 +1,7 @@
+class Point:
+    x: int32
+    y: int32
+
+def main() -> int32:
+    p = Point(x=1, x=2, y=3)
+    return 0

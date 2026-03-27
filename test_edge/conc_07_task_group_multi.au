@@ -1,0 +1,24 @@
+def worker(id: int32, ch: Channel[int32]):
+    ch.send(id * 10)
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    mut total: int32 = 0
+
+    with task_group() as group:
+        group.spawn(worker, 1, ch.clone())
+        group.spawn(worker, 2, ch.clone())
+        group.spawn(worker, 3, ch.clone())
+
+        mut i: int32 = 0
+        while i < 3:
+            match ch.recv():
+                case Option.Some(v):
+                    total += v
+                case Option.None:
+                    print("error: unexpected None")
+            i += 1
+
+    print(total)
+    print("task group multi ok")
+    return 0

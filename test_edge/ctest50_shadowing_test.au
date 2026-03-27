@@ -1,0 +1,10 @@
+def main() -> int32:
+    # Test variable shadowing
+    x: int32 = 10
+    print(x)       # 10
+
+    # Can we shadow x with a new let binding?
+    x: int32 = 20
+    print(x)       # 20
+
+    return 0

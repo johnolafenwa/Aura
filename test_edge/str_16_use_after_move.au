@@ -1,0 +1,11 @@
+# This should produce a compile error: use after move
+
+def consume(text: String):
+    print(text)
+
+def main() -> int32:
+    s: String = "hello"
+    consume(text=s)
+    # s is moved, this should error
+    print(s)
+    return 0

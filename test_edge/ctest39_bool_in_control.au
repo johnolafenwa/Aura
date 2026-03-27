@@ -1,0 +1,48 @@
+def main() -> int32:
+    # Boolean variable in if
+    flag: bool = true
+    if flag:
+        print(1)     # 1
+
+    # Negated boolean in if
+    if not flag:
+        print(2)
+    else:
+        print(3)     # 3
+
+    # Boolean expression in while
+    mut counter: int32 = 0
+    mut done: bool = false
+    while not done:
+        counter += 1
+        if counter >= 5:
+            done = true
+    print(counter)   # 5
+
+    # Boolean AND in condition
+    a: int32 = 10
+    b: int32 = 20
+    if a > 5 and b > 15:
+        print(100)   # 100
+
+    # Boolean OR in condition
+    if a > 100 or b > 15:
+        print(200)   # 200
+
+    # Complex boolean in elif
+    c: int32 = 7
+    if c > 10:
+        print(300)
+    elif c > 5 and c < 8:
+        print(400)   # 400
+    else:
+        print(500)
+
+    # Boolean assignment from comparison
+    d: bool = a < b
+    print(d)         # true
+
+    e: bool = a > b
+    print(e)         # false
+
+    return 0

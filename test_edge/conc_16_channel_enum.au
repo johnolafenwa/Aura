@@ -1,0 +1,27 @@
+def option_producer(ch: Channel[Option[int32]]):
+    ch.send(Option.Some(42))
+    ch.send(Option.None)
+    ch.send(Option.Some(100))
+    ch.close()
+
+def main() -> int32:
+    ch: Channel[Option[int32]] = channel()
+    task = spawn option_producer(ch.clone())
+
+    mut count: int32 = 0
+    while true:
+        match ch.recv():
+            case Option.Some(inner):
+                match inner:
+                    case Option.Some(v):
+                        print(v)
+                    case Option.None:
+                        print("inner none")
+                count += 1
+            case Option.None:
+                break
+
+    task.join()
+    print(count)
+    print("channel enum ok")
+    return 0

@@ -1,0 +1,23 @@
+def main() -> int32:
+    # Can we break from an outer loop via a label or flag?
+    # Test: break inner + flag to break outer
+    mut found: bool = false
+    mut result_i: int32 = -1
+    mut result_j: int32 = -1
+    mut outer: int32 = 0
+    while outer < 10:
+        mut inner: int32 = 0
+        while inner < 10:
+            if outer * 10 + inner == 37:
+                result_i = outer
+                result_j = inner
+                found = true
+                break
+            inner += 1
+        if found:
+            break
+        outer += 1
+    print(result_i)   # 3
+    print(result_j)   # 7
+
+    return 0

@@ -1,0 +1,19 @@
+# Test: passing a borrow str through to another function
+
+def inner(s: borrow str) -> String:
+    return f"inner({s})"
+
+def outer(s: borrow str) -> String:
+    return inner(s)
+
+def main() -> int32:
+    result = outer("test")
+    print(result)
+
+    text = "variable"
+    r2 = outer(text)
+    print(r2)
+    # text still usable
+    print(text)
+
+    return 0

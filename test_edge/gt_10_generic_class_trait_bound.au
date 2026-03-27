@@ -1,0 +1,34 @@
+## Test 10: Generic class with trait bound on type parameter
+## Expects: "aurora" then "empty"
+
+trait Named:
+    def name(borrow self) -> String
+
+class User:
+    label: String
+
+impl Named for User:
+    def name(borrow self) -> String:
+        return self.label.clone()
+
+class Container[T: Named]:
+    item: T
+
+    def display(borrow self) -> String:
+        return self.item.name()
+
+enum MaybeNamed[T: Named]:
+    Present(T)
+    Absent
+
+def main() -> int32:
+    c = Container(item=User(label="aurora"))
+    print(c.display())
+
+    val: MaybeNamed[User] = MaybeNamed.Absent
+    match val:
+        case MaybeNamed.Present(inner):
+            print(inner.name())
+        case _:
+            print("empty")
+    return 0

@@ -1,0 +1,32 @@
+# Edge test: Concurrent counter using channels (testing channel as synchronization)
+
+def incrementer(ch: Channel[int32], count: int32):
+    mut i: int32 = 0
+    while i < count:
+        ch.send(1)
+        i += 1
+
+def main() -> int32:
+    ch: Channel[int32] = Channel[int32](capacity=100)
+
+    with task_group() as group:
+        # Spawn 4 workers, each sending 25 increments
+        group.spawn(incrementer, ch.clone(), 25)
+        group.spawn(incrementer, ch.clone(), 25)
+        group.spawn(incrementer, ch.clone(), 25)
+        group.spawn(incrementer, ch.clone(), 25)
+
+        # Collect all 100 increments
+        mut total: int32 = 0
+        mut received: int32 = 0
+        while received < 100:
+            match ch.recv():
+                case Option.Some(v):
+                    total += v
+                    received += 1
+                case Option.None:
+                    break
+
+        print(total)
+
+    return 0

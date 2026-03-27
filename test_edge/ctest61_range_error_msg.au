@@ -1,0 +1,15 @@
+def main() -> int32:
+    # Verify: range(start, stop) works
+    mut sum: int32 = 0
+    for i in range(2, 5):
+        sum += i
+    print(sum)    # 9
+
+    # range() with 0 args - what error?
+    # for j in range():
+    #     pass
+
+    # range(1, 2, 3) gives misleading error "expects 1 arguments"
+    # when it actually accepts 1 or 2 arguments
+
+    return 0

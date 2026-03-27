@@ -1,0 +1,19 @@
+def main() -> int32:
+    # int128 max value
+    a: int128 = 170141183460469231731687303715884105727
+    print(a)
+
+    # int128 min value
+    b: int128 = -170141183460469231731687303715884105728
+    print(b)
+
+    # int128 negative arithmetic
+    c: int128 = -100
+    d: int128 = 50
+    print(c + d)     # -50
+    print(c - d)     # -150
+    print(c * d)     # -5000
+    print(c / d)     # -2
+    print(c % d)     # 0
+
+    return 0

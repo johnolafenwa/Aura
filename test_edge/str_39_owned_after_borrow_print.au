@@ -1,0 +1,16 @@
+# Test: can we print an owned String field directly from main?
+# (This should work since print should just borrow the value)
+
+class User:
+    name: String
+
+def main() -> int32:
+    user = User(name="Alice")
+
+    # Direct field access on owned value
+    print(user.name)
+
+    # Can we use user again after print of its field?
+    print(user.name)
+
+    return 0

@@ -1,0 +1,27 @@
+def main() -> int32:
+    # Chain of casts
+    a: int8 = 42
+    b: int16 = a as int16
+    c: int32 = b as int32
+    d: int64 = c as int64
+    e: float64 = d as float64
+    f: float32 = e as float32
+    print(f)    # 42.0
+
+    # Reverse chain
+    g: float32 = 99.9
+    h: float64 = g as float64
+    i: int64 = h as int64
+    j: int32 = i as int32
+    k: int16 = j as int16
+    l: int8 = k as int8
+    print(l)    # 99
+
+    # uint chain
+    m: uint8 = 200
+    n: uint16 = m as uint16
+    o: uint32 = n as uint32
+    p: uint64 = o as uint64
+    print(p)    # 200
+
+    return 0

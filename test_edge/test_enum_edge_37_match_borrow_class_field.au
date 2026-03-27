@@ -1,0 +1,28 @@
+# Test: match borrow with class payload - accessing fields of borrowed payload
+class Point:
+    x: int32
+    y: int32
+
+enum Shape:
+    Dot(Point)
+    Line(int32)
+
+def main() -> int32:
+    s = Shape.Dot(Point(x=10, y=20))
+
+    # Borrow and access class fields
+    match borrow s:
+        case Shape.Dot(p):
+            print(p.x)
+            print(p.y)
+        case Shape.Line(len):
+            print(len)
+
+    # Use s again since we borrowed
+    match borrow s:
+        case Shape.Dot(p):
+            print(p.x + p.y)
+        case Shape.Line(len):
+            print(len)
+
+    return 0

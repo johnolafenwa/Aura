@@ -1,0 +1,29 @@
+def fire1(ch: Channel[int32]):
+    ch.send(1)
+
+def fire2(ch: Channel[int32]):
+    ch.send(2)
+
+def fire3(ch: Channel[int32]):
+    ch.send(3)
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    spawn detached fire1(ch.clone())
+    spawn detached fire2(ch.clone())
+    spawn detached fire3(ch.clone())
+
+    mut sum: int32 = 0
+    mut i: int32 = 0
+    while i < 3:
+        match ch.recv():
+            case Option.Some(v):
+                sum += v
+            case Option.None:
+                print("error: unexpected None")
+                break
+        i += 1
+
+    print(sum)
+    print("detached multi ok")
+    return 0

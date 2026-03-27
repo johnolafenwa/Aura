@@ -1,0 +1,9 @@
+public class Circle:
+    public radius: float64
+
+    public def area(borrow self) -> float64:
+        return 3.14159 * self.radius * self.radius
+
+public enum ShapeKind:
+    Round
+    Angular

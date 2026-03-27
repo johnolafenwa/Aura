@@ -1,0 +1,24 @@
+# Test: reusing the same binding name in different match arms
+enum Value:
+    IntVal(int32)
+    StrVal(String)
+    FloatVal(float64)
+
+def show(v: Value) -> String:
+    match v:
+        case Value.IntVal(x):
+            print(x)
+            return "int"
+        case Value.StrVal(x):
+            # 'x' is reused but now binds a String
+            return x
+        case Value.FloatVal(x):
+            # 'x' is reused but now binds a float64
+            print(x)
+            return "float"
+
+def main() -> int32:
+    print(show(Value.IntVal(42)))
+    print(show(Value.StrVal("test")))
+    print(show(Value.FloatVal(2.71)))
+    return 0

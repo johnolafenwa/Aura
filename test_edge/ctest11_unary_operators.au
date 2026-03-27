@@ -1,0 +1,49 @@
+def main() -> int32:
+    # Negative int32
+    a: int32 = -42
+    print(a)           # -42
+
+    # Negative int64
+    b: int64 = -1000000000
+    print(b)           # -1000000000
+
+    # Negative float64
+    c: float64 = -3.14
+    print(c)           # -3.14
+
+    # Double negation int
+    d: int32 = 5
+    e: int32 = -(-d)
+    print(e)           # 5 -- but this might fail, using parens
+
+    # Double negation on literal
+    f: int32 = -(-10)
+    print(f)           # 10
+
+    # Negative in expression
+    g: int32 = 10 + -3
+    print(g)           # 7
+
+    # Negative float32
+    h: float32 = -1.5
+    print(h)           # -1.5
+
+    # Negative zero
+    i: float64 = -0.0
+    print(i)           # -0.0 or 0.0?
+
+    # Unary minus on variable
+    j: int32 = 42
+    k: int32 = -j
+    print(k)           # -42
+
+    # Negative of negative variable
+    l: int32 = -10
+    m: int32 = -l
+    print(m)           # 10
+
+    # Negative int8
+    n: int8 = -127
+    print(n)           # -127
+
+    return 0

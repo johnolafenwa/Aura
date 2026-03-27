@@ -1,0 +1,6 @@
+def main() -> int32:
+    a: int128 = -2147483649
+    b: int128 = -99999999999999
+    print(a)
+    print(b)
+    return 0

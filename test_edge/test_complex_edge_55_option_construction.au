@@ -1,0 +1,20 @@
+# BUG: Option construction without type annotation
+
+def main() -> int32:
+    # With annotation - works
+    o1: Option[int32] = Option.Some(42)
+    match o1:
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    # Without annotation - fails?
+    o2 = Option.Some(99)
+    match o2:
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    return 0

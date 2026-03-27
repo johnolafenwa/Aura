@@ -1,0 +1,53 @@
+enum Container[T]:
+    Full(T)
+    Empty
+
+def main() -> int32:
+    # Test match borrow - should not consume the value
+    box: Container[int32] = Container.Full(42)
+
+    # First borrow match
+    match borrow box:
+        case Container.Full(v):
+            print(v)
+        case Container.Empty:
+            print("empty")
+
+    # Use box again after borrow (should work because it wasn't consumed)
+    match borrow box:
+        case Container.Full(v):
+            print(v)
+        case Container.Empty:
+            print("empty")
+
+    # Test with a more complex type
+    msg: Container[String] = Container.Full("borrowed")
+    match borrow msg:
+        case Container.Full(s):
+            print(s)
+        case Container.Empty:
+            print("empty")
+
+    # Use msg again
+    match borrow msg:
+        case Container.Full(s):
+            print(s)
+        case Container.Empty:
+            print("empty")
+
+    # Test borrow on Empty variant
+    none: Container[int32] = Container.Empty
+    match borrow none:
+        case Container.Full(v):
+            print(v)
+        case Container.Empty:
+            print("is empty")
+
+    # Use none again
+    match borrow none:
+        case Container.Full(v):
+            print(v)
+        case Container.Empty:
+            print("still empty")
+
+    return 0

@@ -1,0 +1,31 @@
+def worker_a(ch: Channel[int32]):
+    ch.send(111)
+
+def worker_b(ch: Channel[int32]):
+    ch.send(222)
+
+def worker_c(ch: Channel[int32]):
+    ch.send(333)
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    t1 = spawn worker_a(ch.clone())
+    t2 = spawn worker_b(ch.clone())
+    t3 = spawn worker_c(ch.clone())
+
+    mut sum: int32 = 0
+    mut i: int32 = 0
+    while i < 3:
+        match ch.recv():
+            case Option.Some(v):
+                sum += v
+            case Option.None:
+                print("error: unexpected None")
+        i += 1
+
+    t1.join()
+    t2.join()
+    t3.join()
+    print(sum)
+    print("spawn join multi ok")
+    return 0

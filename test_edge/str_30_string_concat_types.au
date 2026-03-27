@@ -1,0 +1,29 @@
+# Test: different combinations of concat types
+# String + String, String + str literal, str literal + String, str literal + str literal
+
+def main() -> int32:
+    # literal + literal
+    r1 = "hello" + " world"
+    print(r1)
+
+    # variable + literal
+    a = "hello"
+    r2 = a + " world"
+    print(r2)
+
+    # literal + variable
+    b = "world"
+    r3 = "hello " + b
+    print(r3)
+
+    # variable + variable (both move)
+    c = "hello "
+    d = "world"
+    r4 = c + d
+    print(r4)
+
+    # Concat result + literal
+    r5 = ("a" + "b") + "c"
+    print(r5)
+
+    return 0

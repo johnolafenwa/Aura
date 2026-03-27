@@ -1,0 +1,20 @@
+def main() -> int32:
+    # Positive max works:
+    a: int128 = 170141183460469231731687303715884105727
+    print(a)
+
+    # Smaller negative should work
+    b: int128 = -1
+    print(b)
+
+    c: int128 = -100
+    print(c)
+
+    d: int128 = -99999999999999
+    print(d)
+
+    # Try negating via operation instead of literal
+    e: int128 = 0 - a
+    print(e)
+
+    return 0

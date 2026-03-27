@@ -1,0 +1,13 @@
+## Test 32: Generic class method that uses the generic field in computation
+## Expects: 42
+
+class Container[T]:
+    item: T
+
+    def get_item(borrow self) -> T:
+        return self.item
+
+def main() -> int32:
+    c: Container[int32] = Container(item=42)
+    print(c.get_item())
+    return 0

@@ -1,0 +1,30 @@
+def slow_sender(ch: Channel[int32]):
+    sleep(50ms)
+    ch.send(42)
+
+def fast_sender(ch: Channel[int32]):
+    ch.send(99)
+
+def main() -> int32:
+    slow_ch: Channel[int32] = channel()
+    fast_ch: Channel[int32] = channel()
+
+    spawn detached slow_sender(slow_ch.clone())
+    spawn detached fast_sender(fast_ch.clone())
+
+    sleep(10ms)
+
+    select:
+        case v = slow_ch.recv():
+            print("slow first")
+        case v = fast_ch.recv():
+            match v:
+                case Option.Some(val):
+                    print(val)
+                case Option.None:
+                    print("error")
+        case after(200ms):
+            print("timeout")
+
+    print("select multi ok")
+    return 0

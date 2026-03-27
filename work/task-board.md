@@ -19,6 +19,7 @@ Last updated: 2026-03-27
 
 ## Done
 
+- Hardened compiler, MIR/runtime, and direct-backend parity around external regression cases, including stdin-backed local-module execution, generic dispatch/composition, borrowed field projections, large negative literals, float rendering, and maintained-example native builds.
 - Added a Rust workspace root with `aurora-compiler` and `aura`.
 - Added the first compiler modules: diagnostics, AST, lexer, parser, semantic checker, and evaluator.
 - Added the first milestone sample program at `examples/point.au`.

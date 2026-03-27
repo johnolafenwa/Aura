@@ -1,0 +1,34 @@
+# Edge test: Method that returns Self (same class type) - used in builder pattern
+
+copy class Vector2:
+    x: int32
+    y: int32
+
+    def add(borrow self, other: borrow Vector2) -> Vector2:
+        return Vector2(x=self.x + other.x, y=self.y + other.y)
+
+    def scale(borrow self, factor: int32) -> Vector2:
+        return Vector2(x=self.x * factor, y=self.y * factor)
+
+    def negate(borrow self) -> Vector2:
+        return Vector2(x=0 - self.x, y=0 - self.y)
+
+def main() -> int32:
+    v1 = Vector2(x=1, y=2)
+    v2 = Vector2(x=3, y=4)
+
+    v3 = v1.add(v2)
+    print(v3.x)
+    print(v3.y)
+
+    # Chain: scale then negate
+    v4 = v1.scale(factor=3).negate()
+    print(v4.x)
+    print(v4.y)
+
+    # Multiple chains
+    v5 = v1.add(v2).scale(factor=2)
+    print(v5.x)
+    print(v5.y)
+
+    return 0

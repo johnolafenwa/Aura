@@ -1,0 +1,32 @@
+def main() -> int32:
+    # Float32 display precision
+    a: float32 = 1.0
+    print(a)           # 1.0
+
+    b: float32 = 0.1
+    print(b)           # 0.1 (approx)
+
+    c: float32 = 0.3
+    print(c)           # 0.3 (approx)
+
+    # Float32 0.1 + 0.2 classic precision test
+    d: float32 = 0.1
+    e: float32 = 0.2
+    f: float32 = d + e
+    print(f)           # 0.30000001 or similar (float32 precision)
+
+    # Float64 0.1 + 0.2
+    g: float64 = 0.1
+    h: float64 = 0.2
+    i: float64 = g + h
+    print(i)           # 0.30000000000000004 (float64 precision)
+
+    # Float32 large number display
+    j: float32 = 1000000.0
+    print(j)           # 1000000.0
+
+    # Float32 very small number
+    k: float32 = 0.00001
+    print(k)           # 0.00001
+
+    return 0

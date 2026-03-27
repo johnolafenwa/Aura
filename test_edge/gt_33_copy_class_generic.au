@@ -1,0 +1,12 @@
+## Test 33: Copy class with generic parameter
+## Expects: 5 then 5
+
+copy class Wrapper[T]:
+    value: T
+
+def main() -> int32:
+    w: Wrapper[int32] = Wrapper(value=5)
+    w2 = w
+    print(w.value)
+    print(w2.value)
+    return 0

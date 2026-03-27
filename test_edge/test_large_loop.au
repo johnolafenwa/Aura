@@ -1,0 +1,7 @@
+## Test 13: Large for loop - range(10000)
+def main() -> int32:
+    mut total: int32 = 0
+    for i in range(10000):
+        total += 1
+    print(total)
+    return 0

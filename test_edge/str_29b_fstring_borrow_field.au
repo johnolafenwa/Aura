@@ -1,0 +1,11 @@
+class Holder:
+    text: String
+
+def show(h: borrow Holder) -> String:
+    return f"{h.text}"
+
+def main() -> int32:
+    h = Holder(text="hello")
+    r = show(h)
+    print(r)
+    return 0

@@ -1,0 +1,45 @@
+def main() -> int32:
+    # Integer division (truncation behavior)
+    a: int32 = 7
+    b: int32 = 2
+    print(a / b)       # 3 (truncated)
+
+    c: int32 = -7
+    d: int32 = 2
+    print(c / d)       # -3 (truncated toward zero)
+
+    e: int32 = 7
+    f: int32 = -2
+    print(e / f)       # -3 (truncated toward zero)
+
+    g: int32 = -7
+    h: int32 = -2
+    print(g / h)       # 3
+
+    # Integer modulo behavior
+    print(7 % 3)       # 1
+    print(-7 % 3)      # -1 (sign follows dividend in most languages)
+    print(7 % -3)      # 1
+    print(-7 % -3)     # -1
+
+    # Float division
+    i: float64 = 1.0
+    j: float64 = 3.0
+    print(i / j)       # 0.3333...
+
+    # Float division by zero
+    k: float64 = 1.0
+    l: float64 = 0.0
+    print(k / l)       # inf
+
+    # Negative float division by zero
+    m: float64 = -1.0
+    n: float64 = 0.0
+    print(m / n)       # -inf
+
+    # 0.0 / 0.0
+    o: float64 = 0.0
+    p: float64 = 0.0
+    print(o / p)       # NaN
+
+    return 0

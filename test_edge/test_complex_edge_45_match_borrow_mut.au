@@ -1,0 +1,25 @@
+# Edge test: Can we match on a mutable variable and modify it?
+
+enum Color:
+    Red
+    Blue
+    Green
+
+def main() -> int32:
+    mut c = Color.Red
+
+    # Match and then reassign
+    match c:
+        case Color.Red:
+            print("red")
+            c = Color.Blue
+        case _:
+            print("other")
+
+    match c:
+        case Color.Blue:
+            print("now blue")
+        case _:
+            print("not blue")
+
+    return 0

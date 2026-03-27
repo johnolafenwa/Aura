@@ -1,0 +1,19 @@
+class BigClass:
+    a: int32
+    b: int32
+    c: int32
+    d: int32
+    e: int32
+    f: int32
+    g: int32
+    h: int32
+
+    def sum(borrow self) -> int32:
+        return self.a + self.b + self.c + self.d + self.e + self.f + self.g + self.h
+
+def main() -> int32:
+    bc = BigClass(a=1, b=2, c=3, d=4, e=5, f=6, g=7, h=8)
+    print(bc.sum())
+    print(bc.a)
+    print(bc.h)
+    return 0

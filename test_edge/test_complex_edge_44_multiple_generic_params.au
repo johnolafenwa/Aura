@@ -1,0 +1,28 @@
+# Edge test: Class and function with multiple generic type parameters
+
+class Either[A, B]:
+    left: A?
+    right: B?
+
+def make_left[A, B](val: A) -> Either[A, B]:
+    return Either(left=Option.Some(val), right=Option.None)
+
+def make_right[A, B](val: B) -> Either[A, B]:
+    return Either(left=Option.None, right=Option.Some(val))
+
+def main() -> int32:
+    e1: Either[int32, String] = make_left(val=42)
+    match e1.left:
+        case Some(v):
+            print(v)
+        case None:
+            print("none")
+
+    e2: Either[int32, String] = make_right(val="hello")
+    match e2.right:
+        case Some(v):
+            print(v)
+        case None:
+            print("none")
+
+    return 0

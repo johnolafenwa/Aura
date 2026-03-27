@@ -1,0 +1,25 @@
+## Test: 20 local variables
+def main() -> int32:
+    v01: int32 = 1
+    v02: int32 = 2
+    v03: int32 = 3
+    v04: int32 = 4
+    v05: int32 = 5
+    v06: int32 = 6
+    v07: int32 = 7
+    v08: int32 = 8
+    v09: int32 = 9
+    v10: int32 = 10
+    v11: int32 = 11
+    v12: int32 = 12
+    v13: int32 = 13
+    v14: int32 = 14
+    v15: int32 = 15
+    v16: int32 = 16
+    v17: int32 = 17
+    v18: int32 = 18
+    v19: int32 = 19
+    v20: int32 = 20
+    total = v01 + v02 + v03 + v04 + v05 + v06 + v07 + v08 + v09 + v10 + v11 + v12 + v13 + v14 + v15 + v16 + v17 + v18 + v19 + v20
+    print(total)
+    return 0

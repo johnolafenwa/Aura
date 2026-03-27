@@ -1,0 +1,16 @@
+def main() -> int32:
+    # uint128 arithmetic
+    a: uint128 = 340282366920938463463374607431768211455
+    print(a)   # max uint128
+
+    b: uint128 = 1
+    c: uint128 = a - b
+    print(c)   # max - 1
+
+    # uint128 division
+    d: uint128 = 100
+    e: uint128 = 7
+    print(d / e)    # 14
+    print(d % e)    # 2
+
+    return 0

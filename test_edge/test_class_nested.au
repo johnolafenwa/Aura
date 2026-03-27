@@ -1,0 +1,32 @@
+copy class Color:
+    r: int32
+    g: int32
+    b: int32
+
+class Shape:
+    name: String
+    color: Color
+
+    def describe(borrow self):
+        print(self.name)
+        print(self.color.r)
+        print(self.color.g)
+        print(self.color.b)
+
+class Canvas:
+    shape: Shape
+    width: int32
+    height: int32
+
+def main() -> int32:
+    red = Color(r=255, g=0, b=0)
+    s = Shape(name="circle", color=red)
+    s.describe()
+
+    inner_shape = Shape(name="rect", color=Color(r=0, g=255, b=0))
+    canvas = Canvas(shape=inner_shape, width=800, height=600)
+    print(canvas.width)
+    print(canvas.height)
+    canvas.shape.describe()
+
+    return 0

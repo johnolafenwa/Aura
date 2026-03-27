@@ -1,0 +1,25 @@
+# Test: match borrow then consume the value in a subsequent non-borrow match
+enum Box[T]:
+    Full(T)
+    Empty
+
+def main() -> int32:
+    box: Box[int32] = Box.Full(42)
+
+    # Borrow first
+    match borrow box:
+        case Box.Full(v):
+            print(v)
+        case Box.Empty:
+            print("empty")
+
+    # Then consume
+    match box:
+        case Box.Full(v):
+            print(v)
+        case Box.Empty:
+            print("empty")
+
+    # box is now consumed - using it again should be an error
+    # (We don't test that here since it would fail to compile)
+    return 0

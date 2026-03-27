@@ -1,0 +1,19 @@
+def main() -> int32:
+    # range(start, stop, step) is NOT supported
+    # Workaround: manual stepping with while
+    mut sum1: int32 = 0
+    mut idx: int32 = 0
+    while idx < 10:
+        sum1 += idx
+        idx += 2
+    print(sum1)    # 0+2+4+6+8 = 20
+
+    # Counting down
+    mut sum2: int32 = 0
+    mut jdx: int32 = 10
+    while jdx > 0:
+        sum2 += jdx
+        jdx -= 1
+    print(sum2)    # 10+9+8+7+6+5+4+3+2+1 = 55
+
+    return 0

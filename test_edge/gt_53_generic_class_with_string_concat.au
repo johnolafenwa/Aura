@@ -1,0 +1,15 @@
+## Test 53: Generic function where T is String and we do operations
+## Expects: "hello world"
+
+class Holder[T]:
+    item: T
+
+    def get(borrow self) -> T:
+        return self.item
+
+def main() -> int32:
+    h1: Holder[String] = Holder(item="hello")
+    h2: Holder[String] = Holder(item="world")
+    result = h1.get() + " " + h2.get()
+    print(result)
+    return 0

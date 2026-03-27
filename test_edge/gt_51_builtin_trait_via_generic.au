@@ -1,0 +1,18 @@
+## Test 51: Calling trait method on builtin type through generic function
+## BUG REPRO: This should work but gives "unsupported call target"
+## Expects: "int" but actually errors
+
+trait Show:
+    def show(borrow self) -> String
+
+impl Show for int32:
+    def show(borrow self) -> String:
+        return "int"
+
+def display[T: Show](val: T):
+    print(val.show())
+
+def main() -> int32:
+    x: int32 = 42
+    display(val=x)
+    return 0

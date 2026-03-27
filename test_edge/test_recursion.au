@@ -1,0 +1,17 @@
+## Test 14: Recursive functions - factorial and fibonacci
+def factorial(n: int32) -> int32:
+    if n <= 1:
+        return 1
+    return n * factorial(n=n - 1)
+
+def fibonacci(n: int32) -> int32:
+    if n <= 0:
+        return 0
+    if n == 1:
+        return 1
+    return fibonacci(n=n - 1) + fibonacci(n=n - 2)
+
+def main() -> int32:
+    print(factorial(n=10))
+    print(fibonacci(n=10))
+    return 0

@@ -1,0 +1,37 @@
+# Test: match arm returns an enum value (not just primitive)
+enum State:
+    Running
+    Paused
+    Stopped
+
+def transition(s: State) -> State:
+    match s:
+        case State.Running:
+            return State.Paused
+        case State.Paused:
+            return State.Stopped
+        case State.Stopped:
+            return State.Running
+
+def name(s: State) -> String:
+    match s:
+        case State.Running:
+            return "running"
+        case State.Paused:
+            return "paused"
+        case State.Stopped:
+            return "stopped"
+
+def main() -> int32:
+    s1 = State.Running
+    s2 = transition(s1)
+    s3 = transition(s2)
+    s4 = transition(s3)
+
+    print(name(s2))
+    print(name(s3))
+    print(name(s4))
+
+    # Chain transitions
+    print(name(transition(transition(transition(State.Running)))))
+    return 0

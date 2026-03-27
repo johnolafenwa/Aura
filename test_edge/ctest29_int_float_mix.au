@@ -1,0 +1,6 @@
+def main() -> int32:
+    # Test mixing int and float without cast - should error
+    a: int32 = 10
+    b: float64 = 2.5
+    print(a + b)
+    return 0

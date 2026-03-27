@@ -1,0 +1,56 @@
+def main() -> int32:
+    # int8 arithmetic
+    a8: int8 = 10
+    b8: int8 = 3
+    print(a8 + b8)     # 13
+    print(a8 - b8)     # 7
+    print(a8 * b8)     # 30
+    print(a8 / b8)     # 3
+    print(a8 % b8)     # 1
+
+    # int16 arithmetic
+    a16: int16 = 100
+    b16: int16 = 30
+    print(a16 + b16)   # 130
+    print(a16 - b16)   # 70
+    print(a16 * b16)   # 3000
+    print(a16 / b16)   # 3
+    print(a16 % b16)   # 10
+
+    # int32 arithmetic (smaller values to avoid overflow)
+    a32: int32 = 10000
+    b32: int32 = 3333
+    print(a32 + b32)   # 13333
+    print(a32 - b32)   # 6667
+    print(a32 * b32)   # 33330000
+    print(a32 / b32)   # 3
+    print(a32 % b32)   # 1
+
+    # int64 arithmetic
+    a64: int64 = 1000000000
+    b64: int64 = 333333333
+    print(a64 + b64)   # 1333333333
+    print(a64 - b64)   # 666666667
+    print(a64 * b64)   # 333333333000000000
+    print(a64 / b64)   # 3
+    print(a64 % b64)   # 1
+
+    # int128 arithmetic
+    a128: int128 = 99999999999999
+    b128: int128 = 33333333333333
+    print(a128 + b128)  # 133333333333332
+    print(a128 - b128)  # 66666666666666
+    print(a128 * b128)  # large number
+    print(a128 / b128)  # 3
+    print(a128 % b128)  # 0
+
+    # intsize arithmetic
+    ais: intsize = 50000
+    bis: intsize = 12345
+    print(ais + bis)    # 62345
+    print(ais - bis)    # 37655
+    print(ais * bis)    # 617250000
+    print(ais / bis)    # 4
+    print(ais % bis)    # 620
+
+    return 0

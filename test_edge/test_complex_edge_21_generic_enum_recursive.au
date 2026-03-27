@@ -1,0 +1,16 @@
+# Edge test: Can we have a generic enum with indirect? (enum-based linked list)
+# This tests whether enum supports indirect for recursive types
+
+enum List[T]:
+    Cons(T)
+    Nil
+
+def main() -> int32:
+    # Simple non-recursive generic enum
+    l: List[int32] = List.Cons(42)
+    match l:
+        case List.Cons(v):
+            print(v)
+        case List.Nil:
+            print(0)
+    return 0

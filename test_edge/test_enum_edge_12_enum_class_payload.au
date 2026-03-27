@@ -1,0 +1,45 @@
+class Coordinates:
+    x: int32
+    y: int32
+    z: int32
+
+class Label:
+    name: String
+    priority: int32
+
+enum MapItem:
+    Marker(Coordinates)
+    Tag(Label)
+    Empty
+
+def describe_item(item: MapItem) -> String:
+    match item:
+        case MapItem.Marker(coords):
+            print(coords.x)
+            print(coords.y)
+            print(coords.z)
+            return "marker"
+        case MapItem.Tag(label):
+            print(label.name)
+            print(label.priority)
+            return "tag"
+        case MapItem.Empty:
+            return "empty"
+
+def main() -> int32:
+    c = Coordinates(x=10, y=20, z=30)
+    m1 = MapItem.Marker(c)
+    print(describe_item(m1))
+
+    lbl = Label(name="important", priority=1)
+    m2 = MapItem.Tag(lbl)
+    print(describe_item(m2))
+
+    m3 = MapItem.Empty
+    print(describe_item(m3))
+
+    # Inline class construction inside enum variant
+    m4 = MapItem.Marker(Coordinates(x=99, y=88, z=77))
+    print(describe_item(m4))
+
+    return 0

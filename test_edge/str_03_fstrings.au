@@ -1,0 +1,38 @@
+def get_name() -> String:
+    return "Aurora"
+
+class Person:
+    name: String
+    age: int32
+
+def main() -> int32:
+    # Basic f-string
+    name = "World"
+    greeting = f"Hello, {name}!"
+    print(greeting)
+
+    # f-string with expression
+    x: int32 = 42
+    msg = f"The answer is {x}"
+    print(msg)
+
+    # f-string with function call
+    result = f"Language: {get_name()}"
+    print(result)
+
+    # f-string with field access
+    p = Person(name="Alice", age=30)
+    info = f"Name: {p.name}"
+    print(info)
+
+    # Multiple interpolations
+    a = "left"
+    b = "right"
+    multi = f"{a} and {b}"
+    print(multi)
+
+    # f-string with no interpolation (just a plain string)
+    plain = f"just plain text"
+    print(plain)
+
+    return 0

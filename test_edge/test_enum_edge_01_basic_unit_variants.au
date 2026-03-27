@@ -1,0 +1,26 @@
+enum TrafficLight:
+    Red
+    Yellow
+    Green
+
+def show(t: TrafficLight) -> String:
+    match t:
+        case TrafficLight.Red:
+            return "STOP"
+        case TrafficLight.Yellow:
+            return "CAUTION"
+        case TrafficLight.Green:
+            return "GO"
+
+def main() -> int32:
+    a = TrafficLight.Red
+    b = TrafficLight.Yellow
+    c = TrafficLight.Green
+    print(show(a))
+    print(show(b))
+    print(show(c))
+
+    # Construct inline and use immediately
+    print(show(TrafficLight.Green))
+
+    return 0

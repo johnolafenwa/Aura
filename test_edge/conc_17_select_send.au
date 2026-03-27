@@ -1,0 +1,21 @@
+def consumer(ch: Channel[int32]):
+    sleep(10ms)
+    match ch.recv():
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("error: consumer got None")
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    spawn detached consumer(ch.clone())
+
+    select:
+        case ch.send(55):
+            print("send via select ok")
+        case after(200ms):
+            print("send timeout")
+
+    sleep(50ms)
+    print("select send ok")
+    return 0

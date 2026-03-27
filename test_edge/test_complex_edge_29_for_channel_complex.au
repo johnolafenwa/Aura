@@ -1,0 +1,41 @@
+# Edge test: Complex channel iteration with for loop and enum payloads
+
+enum Command:
+    Add(int32)
+    Multiply(int32)
+    Reset
+
+def processor(commands: Channel[Command], results: Channel[int32]):
+    mut acc: int32 = 0
+    for cmd in commands:
+        match cmd:
+            case Command.Add(n):
+                acc += n
+            case Command.Multiply(n):
+                acc = acc * n
+            case Command.Reset:
+                acc = 0
+    results.send(acc)
+    results.close()
+
+def main() -> int32:
+    cmds: Channel[Command] = channel()
+    results: Channel[int32] = channel()
+
+    task = spawn processor(cmds.clone(), results.clone())
+
+    cmds.send(Command.Add(10))
+    cmds.send(Command.Add(5))
+    cmds.send(Command.Multiply(3))
+    cmds.send(Command.Add(1))
+    cmds.close()
+
+    match results.recv():
+        case Option.Some(v):
+            # (10 + 5) * 3 + 1 = 46
+            print(v)
+        case Option.None:
+            print("no result")
+
+    task.join()
+    return 0

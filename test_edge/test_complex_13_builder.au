@@ -1,0 +1,60 @@
+# Test 13: Builder pattern - fluent interface using borrow mut self methods
+# Tests: method chaining, borrow mut self, default values, class construction
+
+class ServerConfig:
+    host: String = "localhost"
+    port: int32 = 8080
+    max_connections: int32 = 100
+    timeout_ms: int32 = 5000
+    debug: bool = false
+
+    def set_host(borrow mut self, h: String):
+        self.host = h
+
+    def set_port(borrow mut self, p: int32):
+        self.port = p
+
+    def set_max_connections(borrow mut self, m: int32):
+        self.max_connections = m
+
+    def set_timeout(borrow mut self, t: int32):
+        self.timeout_ms = t
+
+    def set_debug(borrow mut self, d: bool):
+        self.debug = d
+
+    def describe(borrow self) -> String:
+        return f"{self.host}:{self.port} max={self.max_connections} timeout={self.timeout_ms}"
+
+def main() -> int32:
+    # Default config
+    config1 = ServerConfig()
+    print(config1.describe())
+
+    # Custom config via builder methods
+    mut config2 = ServerConfig()
+    config2.set_host(h="api.example.com")
+    config2.set_port(p=443)
+    config2.set_max_connections(m=1000)
+    config2.set_timeout(t=30000)
+    config2.set_debug(d=true)
+    print(config2.describe())
+
+    # Partially customized
+    mut config3 = ServerConfig()
+    config3.set_port(p=3000)
+    config3.set_debug(d=true)
+    print(config3.describe())
+
+    # Check debug flag
+    if config2.debug:
+        print("debug enabled")
+    else:
+        print("debug disabled")
+
+    if config1.debug:
+        print("debug enabled")
+    else:
+        print("debug disabled")
+
+    return 0

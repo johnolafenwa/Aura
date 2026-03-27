@@ -1,0 +1,29 @@
+# Edge test: Implementing a trait for an enum (not a class)
+
+trait Describe:
+    def describe(borrow self) -> String
+
+enum Color:
+    Red
+    Green
+    Blue
+
+impl Describe for Color:
+    def describe(borrow self) -> String:
+        match self:
+            case Color.Red:
+                return "red"
+            case Color.Green:
+                return "green"
+            case Color.Blue:
+                return "blue"
+
+def show[T: Describe](item: T):
+    print(item.describe())
+
+def main() -> int32:
+    c1 = Color.Red
+    c2 = Color.Blue
+    show(item=c1)
+    show(item=c2)
+    return 0

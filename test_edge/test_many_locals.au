@@ -1,0 +1,55 @@
+## Test 12: 50+ local variables in one function
+def main() -> int32:
+    v01: int32 = 1
+    v02: int32 = 2
+    v03: int32 = 3
+    v04: int32 = 4
+    v05: int32 = 5
+    v06: int32 = 6
+    v07: int32 = 7
+    v08: int32 = 8
+    v09: int32 = 9
+    v10: int32 = 10
+    v11: int32 = 11
+    v12: int32 = 12
+    v13: int32 = 13
+    v14: int32 = 14
+    v15: int32 = 15
+    v16: int32 = 16
+    v17: int32 = 17
+    v18: int32 = 18
+    v19: int32 = 19
+    v20: int32 = 20
+    v21: int32 = 21
+    v22: int32 = 22
+    v23: int32 = 23
+    v24: int32 = 24
+    v25: int32 = 25
+    v26: int32 = 26
+    v27: int32 = 27
+    v28: int32 = 28
+    v29: int32 = 29
+    v30: int32 = 30
+    v31: int32 = 31
+    v32: int32 = 32
+    v33: int32 = 33
+    v34: int32 = 34
+    v35: int32 = 35
+    v36: int32 = 36
+    v37: int32 = 37
+    v38: int32 = 38
+    v39: int32 = 39
+    v40: int32 = 40
+    v41: int32 = 41
+    v42: int32 = 42
+    v43: int32 = 43
+    v44: int32 = 44
+    v45: int32 = 45
+    v46: int32 = 46
+    v47: int32 = 47
+    v48: int32 = 48
+    v49: int32 = 49
+    v50: int32 = 50
+    total = v01 + v02 + v03 + v04 + v05 + v06 + v07 + v08 + v09 + v10 + v11 + v12 + v13 + v14 + v15 + v16 + v17 + v18 + v19 + v20 + v21 + v22 + v23 + v24 + v25 + v26 + v27 + v28 + v29 + v30 + v31 + v32 + v33 + v34 + v35 + v36 + v37 + v38 + v39 + v40 + v41 + v42 + v43 + v44 + v45 + v46 + v47 + v48 + v49 + v50
+    print(total)
+    return 0

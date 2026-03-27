@@ -1,0 +1,13 @@
+## Test: Duration arithmetic operations
+def main() -> int32:
+    d1 = 100ms
+    d2 = 200ms
+    d3 = d1 + d2
+    print(d3)
+
+    d4 = 1s
+    d5 = 500ms
+    d6 = d4 + d5
+    print(d6)
+
+    return 0

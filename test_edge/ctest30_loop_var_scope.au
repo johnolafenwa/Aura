@@ -1,0 +1,7 @@
+def main() -> int32:
+    # Test: is the loop variable accessible after the loop?
+    for i in range(5):
+        pass
+    # Try to use i after the loop - should this work or error?
+    print(i)
+    return 0

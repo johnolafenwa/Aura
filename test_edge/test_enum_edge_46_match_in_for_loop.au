@@ -1,0 +1,40 @@
+# Test: match inside a for loop
+enum Op:
+    Add(int32)
+    Sub(int32)
+    Nop
+
+def apply(base: int32, op: Op) -> int32:
+    match op:
+        case Op.Add(v):
+            return base + v
+        case Op.Sub(v):
+            return base - v
+        case Op.Nop:
+            return base
+
+def main() -> int32:
+    mut total = 100
+
+    # Apply operations in a loop by constructing different enums per iteration
+    for i in range(0, 5):
+        op = Op.Add(i * 10)
+        total = apply(total, op)
+
+    print(total)
+
+    # Reset and use match inside for
+    total = 0
+    for i in range(0, 4):
+        op = Op.Add(i)
+        match op:
+            case Op.Add(v):
+                total = total + v
+            case Op.Sub(v):
+                total = total - v
+            case Op.Nop:
+                pass
+
+    print(total)
+
+    return 0

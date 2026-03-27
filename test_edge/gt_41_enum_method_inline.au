@@ -1,0 +1,18 @@
+## Test 41: Enum with methods defined inline (should fail or work?)
+## This tests whether enums can have methods directly defined on them
+
+enum Color:
+    Red
+    Blue
+
+    def name(borrow self) -> String:
+        match self:
+            case Color.Red:
+                return "red"
+            case Color.Blue:
+                return "blue"
+
+def main() -> int32:
+    c = Color.Red
+    print(c.name())
+    return 0

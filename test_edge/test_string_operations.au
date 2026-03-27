@@ -1,0 +1,22 @@
+## Test: Various string operations
+def main() -> int32:
+    ## Concatenation
+    a: String = "hello"
+    b: String = " world"
+    c = a + b
+    print(c)
+
+    ## F-string with expressions
+    x: int32 = 42
+    msg = f"the answer is {x}"
+    print(msg)
+
+    ## Empty string
+    empty: String = ""
+    print(empty)
+
+    ## String with special chars
+    special: String = "tab\there"
+    print(special)
+
+    return 0

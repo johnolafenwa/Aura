@@ -1,0 +1,30 @@
+class Node:
+    value: int32
+    next: indirect Node?
+
+def main() -> int32:
+    n3 = Node(value=3, next=Option.None)
+    n2 = Node(value=2, next=Option.Some(n3))
+    n1 = Node(value=1, next=Option.Some(n2))
+
+    print(n1.value)
+
+    match n1.next:
+        case Some(n):
+            print(n.value)
+            match n.next:
+                case Some(nn):
+                    print(nn.value)
+                case None:
+                    print(0)
+        case None:
+            print(0)
+
+    single = Node(value=42, next=Option.None)
+    match single.next:
+        case Some(n):
+            print(n.value)
+        case None:
+            print(single.value)
+
+    return 0

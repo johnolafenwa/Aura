@@ -1,0 +1,20 @@
+# Test: truly generic function unwrap_or[T]
+def unwrap_or[T](opt: Option[T], default_val: T) -> T:
+    match opt:
+        case Option.Some(v):
+            return v
+        case Option.None:
+            return default_val
+
+def main() -> int32:
+    a: Option[int32] = Option.Some(42)
+    b: Option[int32] = Option.None
+    print(unwrap_or(a, 0))
+    print(unwrap_or(b, -1))
+
+    c: Option[String] = Option.Some("hello")
+    d: Option[String] = Option.None
+    print(unwrap_or(c, "default"))
+    print(unwrap_or(d, "default"))
+
+    return 0

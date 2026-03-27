@@ -1,0 +1,14 @@
+## Test 40: Deeply nested generics - Box[Box[int32]]
+## Expects: 7
+
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def main() -> int32:
+    inner: Box[int32] = Box(value=7)
+    outer: Box[Box[int32]] = Box(value=inner)
+    print(outer.get().get())
+    return 0

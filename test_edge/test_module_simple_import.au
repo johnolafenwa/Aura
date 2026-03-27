@@ -1,0 +1,9 @@
+## Test 1: Simple import - import a module and use its functions
+import modules.helpers.math
+
+def main() -> int32:
+    result = modules.helpers.math.add(a=3, b=4)
+    print(result)
+    product = modules.helpers.math.multiply(a=5, b=6)
+    print(product)
+    return 0

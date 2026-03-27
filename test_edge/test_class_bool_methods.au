@@ -1,0 +1,31 @@
+class User:
+    name: String
+    active: bool
+    login_count: int32
+
+    def is_new(borrow self) -> bool:
+        return self.login_count == 0
+
+    def status(borrow self) -> String:
+        if self.active:
+            if self.is_new():
+                return "new"
+            return "active"
+        return "inactive"
+
+    def login(borrow mut self):
+        self.login_count += 1
+
+def main() -> int32:
+    mut u = User(name="Alice", active=true, login_count=0)
+    print(u.status())
+    print(u.is_new())
+
+    u.login()
+    print(u.status())
+    print(u.is_new())
+
+    u.active = false
+    print(u.status())
+
+    return 0

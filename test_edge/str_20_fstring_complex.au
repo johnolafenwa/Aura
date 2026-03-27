@@ -1,0 +1,38 @@
+# Complex f-string scenarios
+
+class Point:
+    x: int32
+    y: int32
+
+    def describe(borrow self) -> String:
+        return f"({self.x}, {self.y})"
+
+def add(a: int32, b: int32) -> int32:
+    return a + b
+
+def main() -> int32:
+    # Nested field access in f-string
+    p = Point(x=3, y=4)
+    s = f"Point: {p.describe()}"
+    print(s)
+
+    # Multiple field accesses
+    info = f"x={p.x}, y={p.y}"
+    print(info)
+
+    # f-string with function result
+    sum_str = f"sum={add(10, 20)}"
+    print(sum_str)
+
+    # f-string concat
+    a = "hello"
+    b = "world"
+    result = f"{a} {b}!"
+    print(result)
+
+    # Nested f-string result used in concat
+    base = f"base-{p.x}"
+    extended = base + "-end"
+    print(extended)
+
+    return 0

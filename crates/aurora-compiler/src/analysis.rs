@@ -847,7 +847,11 @@ impl<'a> AnalysisBuilder<'a> {
             return;
         };
         let binding_ty = self
-            .match_binding_type(scrutinee_type, variant.enum_name.as_deref(), &variant.variant_name)
+            .match_binding_type(
+                scrutinee_type,
+                variant.enum_name.as_deref(),
+                &variant.variant_name,
+            )
             .unwrap_or(Type::Unit);
         self.bind_named_value(binding_name, binding_ty, arm.span.line, "local", scope);
     }
@@ -865,7 +869,11 @@ impl<'a> AnalysisBuilder<'a> {
             return;
         };
         let binding_ty = self
-            .match_binding_type(scrutinee_type, variant.enum_name.as_deref(), &variant.variant_name)
+            .match_binding_type(
+                scrutinee_type,
+                variant.enum_name.as_deref(),
+                &variant.variant_name,
+            )
             .unwrap_or(Type::Unit);
         self.insert_scope_binding(binding_name, binding_ty, arm.span.line, "local", scope);
     }

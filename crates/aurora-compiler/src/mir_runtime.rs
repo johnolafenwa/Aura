@@ -18,7 +18,7 @@ use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod, MirModule,
     MirParam, MirReceiverKind, MirSelectKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
-use crate::sema::Type;
+use crate::sema::{substitute_type, Type};
 
 pub fn run(module: &MirModule) -> Result<RunOutput> {
     let stdout = Arc::new(Mutex::new(String::new()));
@@ -431,9 +431,17 @@ impl MirRuntime {
         receiver: Option<Value>,
         args: Vec<EvaluatedMirArg>,
     ) -> Result<CallOutcome> {
+        let bound_args = bind_args(&function.params, args)?;
+        let mut substitutions = HashMap::new();
+        for (param, argument) in function.params.iter().zip(bound_args.iter()) {
+            if let Some(actual_ty) = Self::infer_value_type(&argument.value) {
+                collect_runtime_type_substitutions(&param.ty, &actual_ty, &mut substitutions);
+            }
+        }
+
         let mut env = Env::default();
         for local in &function.local_types {
-            env.set_place_type(&local.name, local.ty.clone());
+            env.set_place_type(&local.name, substitute_type(&local.ty, &substitutions));
         }
         if function.receiver.is_some() {
             let Some(receiver) = receiver else {
@@ -447,10 +455,10 @@ impl MirRuntime {
             env.define_typed("self", receiver_ty, receiver);
         }
 
-        let bound_args = bind_args(&function.params, args)?;
         for (param, argument) in function.params.iter().zip(bound_args.iter()) {
-            let value = self.coerce_value_to_type(argument.value.clone(), &param.ty, None)?;
-            env.define_typed(&param.name, param.ty.clone(), value);
+            let ty = substitute_type(&param.ty, &substitutions);
+            let value = self.coerce_value_to_type(argument.value.clone(), &ty, None)?;
+            env.define_typed(&param.name, ty, value);
         }
 
         let value = self.execute_function(function, &mut env)?;
@@ -1100,8 +1108,8 @@ impl MirRuntime {
                         let resolved_receiver_ty = receiver_place
                             .as_ref()
                             .and_then(|place| self.resolve_place_type(place, env))
-                            .or_else(|| Self::infer_value_type(other))
-                            .filter(|ty| !matches!(ty, Type::TypeParam(_)));
+                            .and_then(|ty| (!matches!(ty, Type::TypeParam(_))).then_some(ty))
+                            .or_else(|| Self::infer_value_type(other));
                         if let Some(resolved_receiver_ty) = resolved_receiver_ty {
                             if let Some(method) = self
                                 .find_trait_impl_method(&resolved_receiver_ty, field)
@@ -1756,6 +1764,32 @@ fn bind_builtin_args(
         .into_iter()
         .map(|value| value.ok_or_else(|| Diagnostic::new("missing MIR argument")))
         .collect()
+}
+
+fn collect_runtime_type_substitutions(
+    pattern: &Type,
+    actual: &Type,
+    substitutions: &mut HashMap<String, Type>,
+) {
+    match pattern {
+        Type::TypeParam(name) => {
+            substitutions
+                .entry(name.clone())
+                .or_insert_with(|| actual.clone());
+        }
+        Type::Named(name, pattern_args) => {
+            let Type::Named(actual_name, actual_args) = actual else {
+                return;
+            };
+            if name != actual_name || pattern_args.len() != actual_args.len() {
+                return;
+            }
+            for (pattern_arg, actual_arg) in pattern_args.iter().zip(actual_args.iter()) {
+                collect_runtime_type_substitutions(pattern_arg, actual_arg, substitutions);
+            }
+        }
+        Type::Unit | Type::Module(_) => {}
+    }
 }
 
 fn build_range(args: Vec<EvaluatedMirArg>) -> Result<Value> {

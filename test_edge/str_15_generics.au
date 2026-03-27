@@ -1,0 +1,51 @@
+# String in generic containers
+
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+enum Wrapper[T]:
+    Some(T)
+    None
+
+def unwrap_or(w: Wrapper[String], default: borrow str) -> String:
+    match w:
+        case Wrapper.Some(v):
+            return v
+        case Wrapper.None:
+            return default + ""
+
+def main() -> int32:
+    # Box[String]
+    boxed: Box[String] = Box(value="boxed string")
+    print(boxed.get())
+
+    # Wrapper[String] with Some
+    wrapped: Wrapper[String] = Wrapper.Some("wrapped")
+    result = unwrap_or(wrapped, "default")
+    print(result)
+
+    # Wrapper[String] with None
+    empty: Wrapper[String] = Wrapper.None
+    result2 = unwrap_or(empty, "fallback")
+    print(result2)
+
+    # Option[String] builtin
+    some_str: Option[String] = Option.Some("option_value")
+    match some_str:
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    # Result[String, String]
+    ok_res: Result[String, String] = Result.Ok("success")
+    match ok_res:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    return 0

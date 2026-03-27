@@ -1,0 +1,26 @@
+## Test 24: Implementing two different traits for the same type
+## Expects: "alice" then 30
+
+trait HasName:
+    def name(borrow self) -> String
+
+trait HasAge:
+    def age(borrow self) -> int32
+
+class Person:
+    n: String
+    a: int32
+
+impl HasName for Person:
+    def name(borrow self) -> String:
+        return self.n.clone()
+
+impl HasAge for Person:
+    def age(borrow self) -> int32:
+        return self.a
+
+def main() -> int32:
+    p = Person(n="alice", a=30)
+    print(p.name())
+    print(p.age())
+    return 0

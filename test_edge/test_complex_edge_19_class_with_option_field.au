@@ -1,0 +1,38 @@
+# Edge test: Class with optional fields and methods that handle None
+
+class UserProfile:
+    name: String
+    email: String?
+    age: int32?
+
+    def display_email(borrow self) -> String:
+        match borrow self.email:
+            case Some(e):
+                return e.clone()
+            case None:
+                return "no email"
+
+    def display_age(borrow self) -> String:
+        match borrow self.age:
+            case Some(a):
+                return f"age {a}"
+            case None:
+                return "age unknown"
+
+def main() -> int32:
+    # Full profile
+    u1 = UserProfile(name="Alice", email=Option.Some("alice@example.com"), age=Option.Some(30))
+    print(u1.display_email())
+    print(u1.display_age())
+
+    # Partial profile
+    u2 = UserProfile(name="Bob", email=Option.None, age=Option.Some(25))
+    print(u2.display_email())
+    print(u2.display_age())
+
+    # Minimal profile
+    u3 = UserProfile(name="Eve", email=Option.None, age=Option.None)
+    print(u3.display_email())
+    print(u3.display_age())
+
+    return 0

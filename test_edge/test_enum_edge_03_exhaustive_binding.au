@@ -1,0 +1,30 @@
+enum Expr:
+    Lit(int32)
+    Neg(int32)
+    Add(int32)
+
+def eval_expr(e: Expr) -> int32:
+    match e:
+        case Expr.Lit(val):
+            return val
+        case Expr.Neg(val):
+            return 0 - val
+        case Expr.Add(val):
+            return val + val
+
+def main() -> int32:
+    # Test that binding variables from each variant works correctly
+    a = Expr.Lit(42)
+    b = Expr.Neg(10)
+    c = Expr.Add(7)
+
+    print(eval_expr(a))
+    print(eval_expr(b))
+    print(eval_expr(c))
+
+    # Use result of match in further computation
+    x = eval_expr(Expr.Lit(100))
+    y = eval_expr(Expr.Neg(50))
+    print(x + y)
+
+    return 0

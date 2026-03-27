@@ -1,0 +1,8 @@
+## Test 6: Importing classes - import a class from another module
+from modules.shapes.circle import Circle
+
+def main() -> int32:
+    c = Circle(radius=3.0)
+    print(c.area())
+    print(c.radius)
+    return 0

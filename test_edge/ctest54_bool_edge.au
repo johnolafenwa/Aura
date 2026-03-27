@@ -1,0 +1,31 @@
+def main() -> int32:
+    # Bool equality
+    print(true == true)     # true
+    print(false == false)   # true
+    print(true == false)    # false
+    print(true != false)    # true
+
+    # Bool in arithmetic context - should this work?
+    # a: int32 = true as int32  # cast bool to int?
+
+    # Multiple not operations
+    print(not true)              # false
+    print(not not true)          # true
+    print(not not not true)      # false
+    print(not not not not true)  # true
+
+    # Bool with parentheses
+    print(not (true and false))   # true
+    print(not (false or false))   # true
+    print(not (true or false))    # false
+
+    # Complex bool chain
+    a: bool = true
+    b: bool = false
+    c: bool = true
+    print(a and b or c)           # true (a and b = false, false or c = true)
+    print(a or b and c)           # true (b and c = false, a or false = true)
+    print((a or b) and c)         # true
+    print(a and (b or c))         # true
+
+    return 0

@@ -43,7 +43,15 @@ fn int32_overflow_message(value: i64) -> String {
 }
 
 fn render_float(value: f64) -> String {
-    let mut rendered = value.to_string();
+    if !value.is_finite() {
+        return value.to_string();
+    }
+    let roundtripped_f32 = (value as f32) as f64;
+    let mut rendered = if value == roundtripped_f32 {
+        (value as f32).to_string()
+    } else {
+        value.to_string()
+    };
     if !rendered.contains(['.', 'e', 'E']) {
         rendered.push_str(".0");
     }
@@ -134,10 +142,15 @@ fn compare_values(
     right: Value,
     op: BinaryOp,
 ) -> std::result::Result<Value, Diagnostic> {
-    match (left, right) {
-        (Value::Int(left), Value::Int(right)) => Ok(Value::Bool(match op {
+    if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+        return Ok(Value::Bool(match op {
             BinaryOp::Eq => left == right,
             BinaryOp::NotEq => left != right,
+            _ => unreachable!("equality branch only handles `==` and `!=`"),
+        }));
+    }
+    match (left, right) {
+        (Value::Int(left), Value::Int(right)) => Ok(Value::Bool(match op {
             BinaryOp::Less => left < right,
             BinaryOp::LessEq => left <= right,
             BinaryOp::Greater => left > right,
@@ -150,8 +163,6 @@ fn compare_values(
             }
         })),
         (Value::Float(left), Value::Float(right)) => Ok(Value::Bool(match op {
-            BinaryOp::Eq => left == right,
-            BinaryOp::NotEq => left != right,
             BinaryOp::Less => left < right,
             BinaryOp::LessEq => left <= right,
             BinaryOp::Greater => left > right,
@@ -163,19 +174,7 @@ fn compare_values(
                 )))
             }
         })),
-        (Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(match op {
-            BinaryOp::Eq => left == right,
-            BinaryOp::NotEq => left != right,
-            _ => {
-                return Err(Diagnostic::new(format!(
-                    "unsupported comparison operator `{:?}` for bool values",
-                    op
-                )))
-            }
-        })),
         (Value::String(left), Value::String(right)) => Ok(Value::Bool(match op {
-            BinaryOp::Eq => left == right,
-            BinaryOp::NotEq => left != right,
             BinaryOp::Less => left < right,
             BinaryOp::LessEq => left <= right,
             BinaryOp::Greater => left > right,
@@ -187,6 +186,13 @@ fn compare_values(
                 )))
             }
         })),
+        (left, right) if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) => {
+            Ok(Value::Bool(match op {
+                BinaryOp::Eq => left == right,
+                BinaryOp::NotEq => left != right,
+                _ => unreachable!("guarded to equality operators"),
+            }))
+        }
         (left, right) => Err(Diagnostic::new(format!(
             "unsupported comparison between `{}` and `{}`",
             value_type_name(&left),
@@ -1040,6 +1046,12 @@ mod tests {
     fn render_float_preserves_whole_number_fraction() {
         assert_eq!(render_float(42.0), "42.0");
         assert_eq!(render_float(3.5), "3.5");
+    }
+
+    #[test]
+    fn render_float_hides_float32_roundtrip_noise() {
+        let float32_value = (834.5999755859375_f64 as f32) as f64;
+        assert_eq!(render_float(float32_value), "834.6");
     }
 
     #[test]

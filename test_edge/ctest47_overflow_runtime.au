@@ -1,0 +1,18 @@
+def get_max_int8() -> int8:
+    return 127
+
+def main() -> int32:
+    # Try to overflow at runtime through function call
+    a: int8 = get_max_int8()
+    b: int8 = 1
+    # c: int8 = a + b  # Will this overflow at runtime or compile-time?
+    print(a)   # 127
+
+    # Overflow through augmented assignment
+    mut d: int8 = 120
+    d += 5     # 125
+    print(d)   # 125
+    d += 5     # 130 > 127 -- overflow!
+    print(d)
+
+    return 0

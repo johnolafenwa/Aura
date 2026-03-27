@@ -1,0 +1,6 @@
+def main() -> int32:
+    infinite: float64 = 1.0 / 0.0
+    nan_value: float64 = infinite - infinite
+    print(infinite)
+    print(nan_value)
+    return 0

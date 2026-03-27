@@ -1,0 +1,12 @@
+# Test: can borrow self method do print(self.text)?
+
+class Holder:
+    text: String
+
+    def show(borrow self):
+        print(self.text)
+
+def main() -> int32:
+    h = Holder(text="test")
+    h.show()
+    return 0

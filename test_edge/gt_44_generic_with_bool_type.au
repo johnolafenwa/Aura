@@ -1,0 +1,13 @@
+## Test 44: Generic class instantiated with bool type
+## Expects: true
+
+class Wrapper[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def main() -> int32:
+    w: Wrapper[bool] = Wrapper(value=true)
+    print(w.get())
+    return 0

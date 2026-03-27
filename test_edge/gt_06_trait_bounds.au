@@ -1,0 +1,27 @@
+## Test 06: Trait bounds on generic functions
+## Expects: "Robot says beep" then "Dog says woof"
+
+trait Speakable:
+    def speak(borrow self) -> String
+
+class Robot:
+    sound: String
+
+class Dog:
+    sound: String
+
+impl Speakable for Robot:
+    def speak(borrow self) -> String:
+        return "Robot says " + self.sound
+
+impl Speakable for Dog:
+    def speak(borrow self) -> String:
+        return "Dog says " + self.sound
+
+def announce[T: Speakable](creature: T):
+    print(creature.speak())
+
+def main() -> int32:
+    announce(creature=Robot(sound="beep"))
+    announce(creature=Dog(sound="woof"))
+    return 0

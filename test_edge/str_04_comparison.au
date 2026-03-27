@@ -1,0 +1,56 @@
+def main() -> int32:
+    # Equal strings
+    a = "hello"
+    b = "hello"
+    if a == b:
+        print("eq same: pass")
+    else:
+        print("eq same: FAIL")
+
+    # Not equal strings
+    c = "hello"
+    d = "world"
+    if c != d:
+        print("ne diff: pass")
+    else:
+        print("ne diff: FAIL")
+
+    # Equal empty strings
+    e = ""
+    f = ""
+    if e == f:
+        print("eq empty: pass")
+    else:
+        print("eq empty: FAIL")
+
+    # Different lengths
+    g = "abc"
+    h = "abcd"
+    if g != h:
+        print("ne len: pass")
+    else:
+        print("ne len: FAIL")
+
+    # Same prefix different suffix
+    i = "abcX"
+    j = "abcY"
+    if i != j:
+        print("ne suffix: pass")
+    else:
+        print("ne suffix: FAIL")
+
+    # String literal comparison
+    if "test" == "test":
+        print("literal eq: pass")
+    else:
+        print("literal eq: FAIL")
+
+    # Not-equal on same string
+    k = "same"
+    l = "same"
+    if k != l:
+        print("ne same: FAIL")
+    else:
+        print("ne same: pass")
+
+    return 0

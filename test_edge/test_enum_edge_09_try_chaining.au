@@ -1,0 +1,51 @@
+def add_checked(a: int32, b: int32) -> Result[int32, String]:
+    result = a + b
+    if result > 1000:
+        return Result.Err("overflow")
+    if result < 0:
+        return Result.Err("underflow")
+    return Result.Ok(result)
+
+def mul_checked(a: int32, b: int32) -> Result[int32, String]:
+    result = a * b
+    if result > 1000:
+        return Result.Err("mul overflow")
+    return Result.Ok(result)
+
+def complex_calc(a: int32, b: int32, c: int32, d: int32) -> Result[int32, String]:
+    s1 = try add_checked(a, b)
+    s2 = try add_checked(s1, c)
+    s3 = try mul_checked(s2, d)
+    s4 = try add_checked(s3, 1)
+    return Result.Ok(s4)
+
+def main() -> int32:
+    # All steps succeed: (10 + 20 + 30) * 2 + 1 = 121
+    match complex_calc(10, 20, 30, 2):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Fails at step 3 (mul overflow): (100 + 200 + 300) * 5 = 3000
+    match complex_calc(100, 200, 300, 5):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Fails at first add (overflow): 600 + 500 = 1100
+    match complex_calc(600, 500, 0, 1):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Verify try propagates first error encountered
+    match complex_calc(999, 999, 999, 999):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    return 0

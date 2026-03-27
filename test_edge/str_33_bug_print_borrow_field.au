@@ -1,0 +1,14 @@
+# BUG: Cannot print String field on borrow param in free function
+# Expected: print(h.text) should work (print should borrow)
+# Actual: "cannot move non-copy field out of borrowed value"
+
+class Holder:
+    text: String
+
+def show(h: borrow Holder):
+    print(h.text)
+
+def main() -> int32:
+    h = Holder(text="hello")
+    show(h)
+    return 0

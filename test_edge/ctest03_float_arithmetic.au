@@ -1,0 +1,40 @@
+def main() -> int32:
+    # float32 arithmetic
+    a32: float32 = 3.14
+    b32: float32 = 2.0
+    print(a32 + b32)   # 5.14
+    print(a32 - b32)   # 1.14
+    print(a32 * b32)   # 6.28
+    print(a32 / b32)   # 1.57
+
+    # float64 arithmetic
+    a64: float64 = 3.141592653589793
+    b64: float64 = 2.718281828459045
+    print(a64 + b64)   # 5.859874482048838
+    print(a64 - b64)   # 0.423310825130748
+    print(a64 * b64)   # 8.539734222673566
+    print(a64 / b64)   # 1.155727349790922
+
+    # float32 with whole number results
+    c32: float32 = 6.0
+    d32: float32 = 3.0
+    print(c32 + d32)   # 9.0
+    print(c32 / d32)   # 2.0
+
+    # float64 very small numbers
+    e64: float64 = 0.000001
+    f64: float64 = 0.000002
+    print(e64 + f64)   # 0.000003
+    print(e64 * f64)   # very small
+
+    # float64 very large numbers
+    g64: float64 = 1000000000.0
+    h64: float64 = 999999999.0
+    print(g64 - h64)   # 1.0
+
+    # float modulo
+    i64: float64 = 10.5
+    j64: float64 = 3.0
+    print(i64 % j64)   # 1.5
+
+    return 0

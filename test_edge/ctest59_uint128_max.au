@@ -1,0 +1,17 @@
+def main() -> int32:
+    # uint128 max value
+    a: uint128 = 340282366920938463463374607431768211455
+    print(a)
+
+    # uint128 max + 1 should overflow
+    # b: uint128 = 340282366920938463463374607431768211456  # test separately
+
+    # uint128 zero
+    c: uint128 = 0
+    print(c)
+
+    # int128 max
+    d: int128 = 170141183460469231731687303715884105727
+    print(d)
+
+    return 0

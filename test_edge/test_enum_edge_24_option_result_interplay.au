@@ -1,0 +1,44 @@
+# Test: interplay between Option and Result types
+def find_item(id: int32) -> Option[String]:
+    if id == 1:
+        return Option.Some("apple")
+    if id == 2:
+        return Option.Some("banana")
+    return Option.None
+
+def process_item(id: int32) -> Result[String, String]:
+    item = find_item(id)
+    match item:
+        case Option.Some(name):
+            return Result.Ok("found: " + name)
+        case Option.None:
+            return Result.Err("item not found")
+
+def batch_process(id1: int32, id2: int32) -> Result[String, String]:
+    r1 = try process_item(id1)
+    r2 = try process_item(id2)
+    return Result.Ok(r1 + " and " + r2)
+
+def main() -> int32:
+    # Both found
+    match batch_process(1, 2):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # First not found
+    match batch_process(99, 1):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Second not found
+    match batch_process(1, 99):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    return 0

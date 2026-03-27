@@ -1,0 +1,12 @@
+def main() -> int32:
+    # int64 max works fine
+    a: int64 = 9223372036854775807
+    print(a)
+
+    # int64 min via workaround
+    b: int64 = 9223372036854775807
+    c: int64 = -b
+    d: int64 = c - 1
+    print(d)    # should be -9223372036854775808
+
+    return 0

@@ -1,0 +1,24 @@
+def main() -> int32:
+    # Float to int truncation (not rounding)
+    print(0.9 as int32)      # 0
+    print(1.1 as int32)      # 1
+    print(1.5 as int32)      # 1
+    print(1.9 as int32)      # 1
+    print(2.0 as int32)      # 2
+    print(-0.9 as int32)     # 0
+    print(-1.1 as int32)     # -1
+    print(-1.5 as int32)     # -1
+    print(-1.9 as int32)     # -1
+    print(-2.0 as int32)     # -2
+
+    # Very large float to int
+    a: float64 = 2147483646.0
+    b: int32 = a as int32
+    print(b)               # 2147483646
+
+    # Float just over int32 max
+    c: float64 = 2147483648.0
+    d: int64 = c as int64
+    print(d)               # 2147483648
+
+    return 0

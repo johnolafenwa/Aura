@@ -1,0 +1,18 @@
+class Node:
+    value: int32
+    next: indirect Node?
+
+def print_list(node: borrow Node):
+    print(node.value)
+    match borrow node.next:
+        case Some(next):
+            print_list(node=next)
+        case None:
+            pass
+
+def main() -> int32:
+    tail = Node(value=3, next=Option.None)
+    middle = Node(value=2, next=Option.Some(tail))
+    head = Node(value=1, next=Option.Some(middle))
+    print_list(node=head)
+    return 0

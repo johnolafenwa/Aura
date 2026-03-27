@@ -1,0 +1,45 @@
+class Counter:
+    value: int32
+
+    def get(borrow self) -> int32:
+        return self.value
+
+    def doubled(borrow self) -> int32:
+        return self.value * 2
+
+    def increment(borrow mut self):
+        self.value += 1
+
+    def add(borrow mut self, amount: int32):
+        self.value += amount
+
+    def zero() -> Counter:
+        return Counter(value=0)
+
+    def with_value(v: int32) -> Counter:
+        return Counter(value=v)
+
+def main() -> int32:
+    c = Counter(value=5)
+    print(c.get())
+    print(c.doubled())
+
+    mut mc = Counter(value=0)
+    mc.increment()
+    mc.increment()
+    mc.increment()
+    print(mc.get())
+
+    mc.add(amount=7)
+    print(mc.get())
+
+    z = Counter.zero()
+    print(z.get())
+
+    w = Counter.with_value(v=99)
+    print(w.get())
+
+    print(Counter.with_value(v=42).get())
+    print(Counter.with_value(v=42).doubled())
+
+    return 0

@@ -1,0 +1,33 @@
+# Edge test: String operations and f-string edge cases
+
+def main() -> int32:
+    # Empty string
+    empty: String = ""
+    print(empty)
+
+    # String comparison
+    a: String = "hello"
+    b: String = "hello"
+    if a == b:
+        print("equal")
+    else:
+        print("not equal")
+
+    # String concatenation chain
+    result = "a" + "b" + "c" + "d"
+    print(result)
+
+    # F-string with expressions
+    x: int32 = 5
+    y: int32 = 10
+    print(f"{x} + {y} = {x + y}")
+
+    # Nested f-string fields
+    name: String = "test"
+    print(f"name={name}")
+
+    # String with special characters
+    slash: String = "path/to/file"
+    print(slash)
+
+    return 0

@@ -1,0 +1,6 @@
+def main() -> int32:
+    # This tests the confusing error message
+    # range(1, 10, 2) should say "expects 1 or 2 arguments" not "expects 1 arguments"
+    for i in range(1, 10, 2):
+        print(i)
+    return 0

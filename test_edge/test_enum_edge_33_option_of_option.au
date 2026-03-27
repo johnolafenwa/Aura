@@ -1,0 +1,43 @@
+# Test: Option[Option[int32]] - nested option types
+def maybe_find(x: int32) -> Option[Option[int32]]:
+    if x < 0:
+        return Option.None
+    if x == 0:
+        return Option.Some(Option.None)
+    return Option.Some(Option.Some(x * 10))
+
+def main() -> int32:
+    # Positive: Some(Some(50))
+    match maybe_find(5):
+        case Option.Some(inner):
+            match inner:
+                case Option.Some(v):
+                    print(v)
+                case Option.None:
+                    print("inner none")
+        case Option.None:
+            print("outer none")
+
+    # Zero: Some(None)
+    match maybe_find(0):
+        case Option.Some(inner):
+            match inner:
+                case Option.Some(v):
+                    print(v)
+                case Option.None:
+                    print("inner none")
+        case Option.None:
+            print("outer none")
+
+    # Negative: None
+    match maybe_find(-1):
+        case Option.Some(inner):
+            match inner:
+                case Option.Some(v):
+                    print(v)
+                case Option.None:
+                    print("inner none")
+        case Option.None:
+            print("outer none")
+
+    return 0

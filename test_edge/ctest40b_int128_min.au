@@ -1,0 +1,11 @@
+def main() -> int32:
+    # int128 min value: -170141183460469231731687303715884105728
+    # Let's try to construct it differently
+    a: int128 = -170141183460469231731687303715884105727
+    print(a)
+
+    # Try subtracting to get min
+    b: int128 = a - 1
+    print(b)
+
+    return 0

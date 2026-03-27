@@ -1,0 +1,32 @@
+## Test: Various for loop patterns
+def main() -> int32:
+    ## Basic range
+    mut sum1: int32 = 0
+    for i in range(5):
+        sum1 += i
+    print(sum1)
+
+    ## Nested for loops
+    mut sum2: int32 = 0
+    for i in range(3):
+        for j in range(3):
+            sum2 += 1
+    print(sum2)
+
+    ## For with break
+    mut last: int32 = 0
+    for i in range(100):
+        if i == 7:
+            break
+        last = i
+    print(last)
+
+    ## For with continue
+    mut sum3: int32 = 0
+    for i in range(10):
+        if i % 2 == 0:
+            continue
+        sum3 += i
+    print(sum3)
+
+    return 0

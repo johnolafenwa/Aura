@@ -1,0 +1,9 @@
+## Test: Accessing private method on imported class
+from modules.helpers.counter import Counter
+
+def main() -> int32:
+    c = Counter(value=5)
+    ## This should fail - private_method is not public
+    result = c.private_method()
+    print(result)
+    return 0

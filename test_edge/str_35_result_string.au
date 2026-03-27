@@ -1,0 +1,47 @@
+# Test: Result[String, String] various operations
+
+def parse_int(s: borrow str) -> Result[int32, String]:
+    if s == "42":
+        return Result.Ok(42)
+    if s == "0":
+        return Result.Ok(0)
+    return Result.Err(f"invalid: {s}")
+
+def try_parse(s: borrow str) -> Result[String, String]:
+    v = try parse_int(s)
+    return Result.Ok(f"parsed: {v}")
+
+def main() -> int32:
+    # Ok case
+    r1 = try_parse("42")
+    match r1:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Err case
+    r2 = try_parse("abc")
+    match r2:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Direct Result construction
+    ok: Result[String, String] = Result.Ok("success")
+    err: Result[String, String] = Result.Err("failure")
+
+    match ok:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    match err:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    return 0

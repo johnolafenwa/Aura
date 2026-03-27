@@ -1,0 +1,35 @@
+def producer(ch: Channel[int32]):
+    ch.send(100)
+    ch.send(200)
+    ch.close()
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    task = spawn producer(ch.clone())
+
+    match ch.recv():
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("error: expected 100")
+
+    match ch.recv():
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("error: expected 200")
+
+    match ch.recv():
+        case Option.Some(v):
+            print("error: expected None after close")
+        case Option.None:
+            print("recv after close is None ok")
+
+    match ch.recv():
+        case Option.Some(v):
+            print("error: second recv should also be None")
+        case Option.None:
+            print("second recv after close is None ok")
+
+    task.join()
+    return 0

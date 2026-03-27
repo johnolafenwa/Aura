@@ -1,0 +1,27 @@
+# Edge test: Using copy class inside an enum variant payload
+
+copy class Point:
+    x: int32
+    y: int32
+
+enum Shape:
+    Circle(int32)
+    Rectangle(Point)
+
+def main() -> int32:
+    s1 = Shape.Circle(5)
+    s2 = Shape.Rectangle(Point(x=3, y=4))
+
+    match s1:
+        case Shape.Circle(r):
+            print(f"circle r={r}")
+        case Shape.Rectangle(p):
+            print(f"rect {p.x}x{p.y}")
+
+    match s2:
+        case Shape.Circle(r):
+            print(f"circle r={r}")
+        case Shape.Rectangle(p):
+            print(f"rect {p.x}x{p.y}")
+
+    return 0

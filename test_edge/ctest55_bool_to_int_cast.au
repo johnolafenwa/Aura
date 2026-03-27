@@ -1,0 +1,11 @@
+def main() -> int32:
+    # Can we cast bool to int?
+    a: bool = true
+    b: int32 = a as int32
+    print(b)     # 1?
+
+    c: bool = false
+    d: int32 = c as int32
+    print(d)     # 0?
+
+    return 0

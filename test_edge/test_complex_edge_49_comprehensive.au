@@ -1,0 +1,74 @@
+# Edge test: Comprehensive program combining many features
+# Traits + Generics + Enums + Classes + Error handling + Channels + Concurrency
+
+trait Processable:
+    def process(borrow self) -> int32
+
+copy class Temperature:
+    celsius: int32
+
+impl Processable for Temperature:
+    def process(borrow self) -> int32:
+        return self.celsius * 9 / 5 + 32
+
+copy class Distance:
+    meters: int32
+
+impl Processable for Distance:
+    def process(borrow self) -> int32:
+        return self.meters * 100
+
+enum Unit:
+    Temp(Temperature)
+    Dist(Distance)
+
+class Converter[T: Processable]:
+    input: T
+
+    def convert(borrow self) -> Result[int32, String]:
+        result = self.input.process()
+        if result < 0:
+            return Result.Err("negative result")
+        return Result.Ok(result)
+
+def process_unit(unit: Unit) -> Result[int32, String]:
+    match unit:
+        case Unit.Temp(t):
+            converter = Converter(input=t)
+            return converter.convert()
+        case Unit.Dist(d):
+            converter = Converter(input=d)
+            return converter.convert()
+
+def worker(jobs: Channel[Unit], results: Channel[String]):
+    for job in jobs:
+        match process_unit(unit=job):
+            case Result.Ok(v):
+                results.send(f"ok: {v}")
+            case Result.Err(e):
+                results.send(f"err: {e}")
+
+def main() -> int32:
+    jobs: Channel[Unit] = channel()
+    results: Channel[String] = channel()
+
+    task = spawn worker(jobs.clone(), results.clone())
+
+    # Send jobs
+    jobs.send(Unit.Temp(Temperature(celsius=100)))
+    jobs.send(Unit.Dist(Distance(meters=5)))
+    jobs.send(Unit.Temp(Temperature(celsius=0)))
+    jobs.close()
+
+    # Collect results
+    mut count: int32 = 0
+    while count < 3:
+        match results.recv():
+            case Option.Some(msg):
+                print(msg)
+                count += 1
+            case Option.None:
+                break
+
+    task.join()
+    return 0

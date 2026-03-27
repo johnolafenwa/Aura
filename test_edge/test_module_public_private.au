@@ -1,0 +1,11 @@
+## Test 3: Public vs private - try calling a private function from outside module
+import modules.helpers.math
+
+def main() -> int32:
+    ## This should work - public function
+    result = modules.helpers.math.add(a=1, b=2)
+    print(result)
+    ## This should fail - private function
+    secret = modules.helpers.math.private_helper(x=5)
+    print(secret)
+    return 0

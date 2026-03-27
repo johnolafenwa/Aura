@@ -1,0 +1,38 @@
+# Test: Result with non-String error type (int32 error code)
+def divide_or_code(a: int32, b: int32) -> Result[int32, int32]:
+    if b == 0:
+        return Result.Err(-1)
+    return Result.Ok(a / b)
+
+def chain(a: int32, b: int32, c: int32) -> Result[int32, int32]:
+    r1 = try divide_or_code(a, b)
+    r2 = try divide_or_code(r1, c)
+    return Result.Ok(r2)
+
+def main() -> int32:
+    match divide_or_code(10, 2):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(code):
+            print(code)
+
+    match divide_or_code(10, 0):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(code):
+            print(code)
+
+    # Try chaining with int error
+    match chain(100, 5, 2):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(code):
+            print(code)
+
+    match chain(100, 0, 2):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(code):
+            print(code)
+
+    return 0

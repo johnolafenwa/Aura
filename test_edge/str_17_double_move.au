@@ -1,0 +1,10 @@
+# This should produce a compile error: double move
+
+def consume(text: String):
+    print(text)
+
+def main() -> int32:
+    s: String = "hello"
+    consume(text=s)
+    consume(text=s)
+    return 0

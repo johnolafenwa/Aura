@@ -1,0 +1,20 @@
+## Test 37: Trait implemented for a copy class
+## Expects: 7
+
+trait Readable:
+    def read(borrow self) -> int32
+
+copy class Sensor:
+    val: int32
+
+impl Readable for Sensor:
+    def read(borrow self) -> int32:
+        return self.val
+
+def show_reading[T: Readable](s: T):
+    print(s.read())
+
+def main() -> int32:
+    s = Sensor(val=7)
+    show_reading(s=s)
+    return 0

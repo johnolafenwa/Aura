@@ -1,0 +1,33 @@
+# Test: Option[String] with various patterns
+
+def find(query: borrow str) -> Option[String]:
+    if query == "yes":
+        return Option.Some(f"found: {query}")
+    return Option.None
+
+def main() -> int32:
+    # Some case
+    r1 = find("yes")
+    match r1:
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("not found")
+
+    # None case
+    r2 = find("no")
+    match r2:
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("not found")
+
+    # Nested: Option in Option
+    inner: Option[String] = Option.Some("inner_value")
+    match inner:
+        case Option.Some(s):
+            print(s)
+        case Option.None:
+            print("none")
+
+    return 0

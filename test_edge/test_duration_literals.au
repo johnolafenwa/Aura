@@ -1,0 +1,9 @@
+## Test 20: Duration literals - ms, s, m in various contexts
+def main() -> int32:
+    d1 = 5ms
+    d2 = 1s
+    d3 = 2m
+    print(d1)
+    print(d2)
+    print(d3)
+    return 0

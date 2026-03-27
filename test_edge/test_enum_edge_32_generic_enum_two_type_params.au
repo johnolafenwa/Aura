@@ -1,0 +1,31 @@
+# Test: generic enum with two type parameters
+enum Pair[A, B]:
+    Both(A)
+    First(A)
+    Second(B)
+    Neither
+
+def show_pair(p: Pair[int32, String]) -> String:
+    match p:
+        case Pair.Both(a):
+            print(a)
+            return "both"
+        case Pair.First(a):
+            print(a)
+            return "first"
+        case Pair.Second(b):
+            return b
+        case Pair.Neither:
+            return "neither"
+
+def main() -> int32:
+    p1: Pair[int32, String] = Pair.Both(42)
+    p2: Pair[int32, String] = Pair.First(10)
+    p3: Pair[int32, String] = Pair.Second("hello")
+    p4: Pair[int32, String] = Pair.Neither
+
+    print(show_pair(p1))
+    print(show_pair(p2))
+    print(show_pair(p3))
+    print(show_pair(p4))
+    return 0

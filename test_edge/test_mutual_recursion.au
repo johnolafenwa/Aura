@@ -1,0 +1,16 @@
+## Test 15: Mutual recursion - is_even/is_odd
+def is_even(n: int32) -> bool:
+    if n == 0:
+        return true
+    return is_odd(n=n - 1)
+
+def is_odd(n: int32) -> bool:
+    if n == 0:
+        return false
+    return is_even(n=n - 1)
+
+def main() -> int32:
+    print(is_even(n=10))
+    print(is_odd(n=7))
+    print(is_even(n=3))
+    return 0

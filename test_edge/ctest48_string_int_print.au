@@ -1,0 +1,40 @@
+def main() -> int32:
+    # Print string and int together
+    print("hello")
+    print(42)
+    print("result:")
+    print(100 + 200)
+
+    # Can print take multiple args?
+    # print("value:", 42)  # Try this separately
+
+    # Print empty string
+    print("")
+
+    # Print boolean
+    print(true)
+    print(false)
+
+    # Print all numeric types
+    a: int8 = 1
+    b: int16 = 2
+    c: int32 = 3
+    d: int64 = 4
+    e: float32 = 5.0
+    f: float64 = 6.0
+    g: uint8 = 7
+    h: uint16 = 8
+    i: uint32 = 9
+    j: uint64 = 10
+    print(a)
+    print(b)
+    print(c)
+    print(d)
+    print(e)
+    print(f)
+    print(g)
+    print(h)
+    print(i)
+    print(j)
+
+    return 0

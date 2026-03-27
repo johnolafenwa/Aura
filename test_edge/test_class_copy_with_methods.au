@@ -1,0 +1,34 @@
+copy class Color:
+    r: int32
+    g: int32
+    b: int32
+
+    def brightness(borrow self) -> int32:
+        return (self.r + self.g + self.b) / 3
+
+    def mix(borrow self, other: borrow Color) -> Color:
+        return Color(r=(self.r + other.r) / 2, g=(self.g + other.g) / 2, b=(self.b + other.b) / 2)
+
+    def red() -> Color:
+        return Color(r=255, g=0, b=0)
+
+    def green() -> Color:
+        return Color(r=0, g=255, b=0)
+
+def main() -> int32:
+    r = Color.red()
+    g = Color.green()
+    print(r.brightness())
+    print(g.brightness())
+
+    mixed = r.mix(other=g)
+    print(mixed.r)
+    print(mixed.g)
+    print(mixed.b)
+    print(mixed.brightness())
+
+    mut c = Color(r=100, g=100, b=100)
+    c.r = 200
+    print(c.brightness())
+
+    return 0

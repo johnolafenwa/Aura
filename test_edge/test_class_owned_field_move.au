@@ -1,0 +1,12 @@
+class Inner:
+    data: String
+
+class Outer:
+    inner: Inner
+
+def main() -> int32:
+    i = Inner(data="hello")
+    o = Outer(inner=i)
+    print(o.inner.data)
+    print(i.data)
+    return 0

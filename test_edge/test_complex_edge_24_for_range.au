@@ -1,0 +1,33 @@
+# Edge test: For loop with range and various patterns
+
+def main() -> int32:
+    # Basic range
+    mut sum: int32 = 0
+    for i in range(1, 6):
+        sum += i
+    print(sum)
+
+    # Nested for loops
+    mut product: int32 = 0
+    for i in range(1, 4):
+        for j in range(1, 4):
+            product += i * j
+    print(product)
+
+    # For loop with break
+    mut count: int32 = 0
+    for i in range(0, 100):
+        if i >= 5:
+            break
+        count += 1
+    print(count)
+
+    # For loop with continue
+    mut even_sum: int32 = 0
+    for i in range(1, 11):
+        if i % 2 != 0:
+            continue
+        even_sum += i
+    print(even_sum)
+
+    return 0

@@ -4,7 +4,8 @@ use crate::ast::{
 };
 use crate::call::{bind_call_arguments, callable_params_from_decl, CallConvention};
 use crate::diag::Span;
-use crate::sema::{ModuleNamespace, Program, Type};
+use crate::integer::minimal_signed_type_for_negative_literal;
+use crate::sema::{substitute_type, ModuleNamespace, Program, Type};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1031,14 +1032,11 @@ impl<'a> Lowerer<'a> {
                     arm_block,
                     match &arm.pattern {
                         Pattern::Variant(pattern) => MirMatchArm {
-                            enum_name: pattern
-                                .enum_name
-                                .as_deref()
-                                .map(|enum_name| {
-                                    self.resolve_enum_info(enum_name)
-                                        .map(|enum_info| enum_info.decl.name.clone())
-                                        .unwrap_or_else(|| enum_name.to_string())
-                                }),
+                            enum_name: pattern.enum_name.as_deref().map(|enum_name| {
+                                self.resolve_enum_info(enum_name)
+                                    .map(|enum_info| enum_info.decl.name.clone())
+                                    .unwrap_or_else(|| enum_name.to_string())
+                            }),
                             variant_name: Some(pattern.variant_name.clone()),
                             wildcard: false,
                             label: self.label(arm_block),
@@ -1102,10 +1100,8 @@ impl<'a> Lowerer<'a> {
             }
             Some(Type::Named(name, args)) if name == "Channel" && args.len() == 1 => {
                 let element_ty = args[0].clone();
-                let next_value = self.new_typed_temp(Type::Named(
-                    "Option".to_string(),
-                    vec![element_ty.clone()],
-                ));
+                let next_value = self
+                    .new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
                 self.local_types
                     .insert(for_stmt.binding.clone(), element_ty);
                 self.switch_to(dispatch_block);
@@ -1269,8 +1265,12 @@ impl<'a> Lowerer<'a> {
                 let parts = parts
                     .iter()
                     .map(|part| match part {
-                        crate::ast::FormatPart::Literal(text) => MirFormatPart::Literal(text.clone()),
-                        crate::ast::FormatPart::Expr(expr) => MirFormatPart::Value(self.lower_expr(expr)),
+                        crate::ast::FormatPart::Literal(text) => {
+                            MirFormatPart::Literal(text.clone())
+                        }
+                        crate::ast::FormatPart::Expr(expr) => {
+                            MirFormatPart::Value(self.lower_expr(expr))
+                        }
                     })
                     .collect::<Vec<_>>();
                 self.emit(Instruction::Assign {
@@ -1867,7 +1867,13 @@ impl<'a> Lowerer<'a> {
             ExprKind::FString(_) => Some(Type::named("String")),
             ExprKind::Specialize { expr, .. } => self.infer_expr_type(expr),
             ExprKind::DurationMillis(_) => Some(Type::named("Duration")),
-            ExprKind::Unary { expr, .. } => self.infer_expr_type(expr),
+            ExprKind::Unary { op, expr } => match op {
+                UnaryOp::Not => Some(Type::named("bool")),
+                UnaryOp::Neg => match &expr.kind {
+                    ExprKind::Int(value) => Some(minimal_signed_type_for_negative_literal(*value)),
+                    _ => self.infer_expr_type(expr),
+                },
+            },
             ExprKind::Try(inner) => match self.infer_expr_type(inner)? {
                 Type::Named(name, mut args) if name == "Result" && args.len() == 2 => {
                     Some(args.remove(0))
@@ -1882,66 +1888,100 @@ impl<'a> Lowerer<'a> {
                         .map(|inner| Type::Named("Task".to_string(), vec![inner]))
                 }
             }
-            ExprKind::Call { callee, .. } => match &callee.kind {
-                ExprKind::Name(name) => self
-                    .resolve_class_info(name)
-                    .map(|_| Type::named(name))
-                    .or_else(|| {
-                        self.resolve_function_info(name)
-                            .map(|function| function.signature.return_type.clone())
-                    }),
-                ExprKind::Member { object, field } => {
-                    if let Some((module_path, item_name)) = self.qualified_module_item(object) {
-                        if let Some(namespace) = self.module_namespace(&module_path) {
-                            if let Some(class) = namespace.classes.get(&item_name) {
-                                if let Some(method) = class.methods.get(field) {
-                                    return Some(method.signature.return_type.clone());
+            ExprKind::Call { callee, .. } => {
+                let (base_callee, explicit_type_args) = match &callee.kind {
+                    ExprKind::Specialize { expr, type_args } => {
+                        (&**expr, Some(type_args.as_slice()))
+                    }
+                    _ => (&**callee, None),
+                };
+                match &base_callee.kind {
+                    ExprKind::Name(name) => {
+                        if name == "Channel" {
+                            return explicit_type_args.map(|type_args| {
+                                Type::Named(
+                                    "Channel".to_string(),
+                                    type_args.iter().map(lower_type_ref).collect(),
+                                )
+                            });
+                        }
+                        if self.resolve_class_info(name).is_some() {
+                            return Some(match explicit_type_args {
+                                Some(type_args) => Type::Named(
+                                    name.clone(),
+                                    type_args.iter().map(lower_type_ref).collect(),
+                                ),
+                                None => Type::named(name),
+                            });
+                        }
+                        self.resolve_function_info(name).map(|function| {
+                            if let Some(type_args) = explicit_type_args {
+                                let substitutions = function
+                                    .decl
+                                    .type_params
+                                    .iter()
+                                    .cloned()
+                                    .zip(type_args.iter().map(lower_type_ref))
+                                    .collect();
+                                substitute_type(&function.signature.return_type, &substitutions)
+                            } else {
+                                function.signature.return_type.clone()
+                            }
+                        })
+                    }
+                    ExprKind::Member { object, field } => {
+                        if let Some((module_path, item_name)) = self.qualified_module_item(object) {
+                            if let Some(namespace) = self.module_namespace(&module_path) {
+                                if let Some(class) = namespace.classes.get(&item_name) {
+                                    if let Some(method) = class.methods.get(field) {
+                                        return Some(method.signature.return_type.clone());
+                                    }
+                                }
+                                if let Some(enum_info) = namespace.enums.get(&item_name) {
+                                    if enum_info.variants.contains_key(field) {
+                                        return Some(Type::named(enum_info.decl.name.clone()));
+                                    }
                                 }
                             }
-                            if let Some(enum_info) = namespace.enums.get(&item_name) {
-                                if enum_info.variants.contains_key(field) {
+                        }
+                        if let Some(module_path) = self.infer_module_path(object) {
+                            if let Some(namespace) = self.module_namespace(&module_path) {
+                                if let Some(child) = namespace.modules.get(field) {
+                                    return Some(Type::Module(child.path.clone()));
+                                }
+                                if let Some(function) = namespace.functions.get(field) {
+                                    return Some(function.signature.return_type.clone());
+                                }
+                                if let Some(class) = namespace.classes.get(field) {
+                                    return Some(Type::named(class.decl.name.clone()));
+                                }
+                                if let Some(enum_info) = namespace.enums.get(field) {
                                     return Some(Type::named(enum_info.decl.name.clone()));
                                 }
                             }
                         }
-                    }
-                    if let Some(module_path) = self.infer_module_path(object) {
-                        if let Some(namespace) = self.module_namespace(&module_path) {
-                            if let Some(child) = namespace.modules.get(field) {
-                                return Some(Type::Module(child.path.clone()));
-                            }
-                            if let Some(function) = namespace.functions.get(field) {
-                                return Some(function.signature.return_type.clone());
-                            }
-                            if let Some(class) = namespace.classes.get(field) {
-                                return Some(Type::named(class.decl.name.clone()));
-                            }
-                            if let Some(enum_info) = namespace.enums.get(field) {
-                                return Some(Type::named(enum_info.decl.name.clone()));
+                        let receiver_type = self.infer_expr_type(object)?;
+                        if let Type::Named(class_name, _) = &receiver_type {
+                            if let Some(class) = self.resolve_class_info(class_name) {
+                                if let Some(method) = class.methods.get(field) {
+                                    return Some(method.signature.return_type.clone());
+                                }
                             }
                         }
-                    }
-                    let receiver_type = self.infer_expr_type(object)?;
-                    if let Type::Named(class_name, _) = &receiver_type {
-                        if let Some(class) = self.resolve_class_info(class_name) {
-                            if let Some(method) = class.methods.get(field) {
-                                return Some(method.signature.return_type.clone());
+                        self.program.trait_impls.iter().find_map(|trait_impl| {
+                            if trait_impl.for_type == receiver_type {
+                                trait_impl
+                                    .methods
+                                    .get(field)
+                                    .map(|method| method.signature.return_type.clone())
+                            } else {
+                                None
                             }
-                        }
+                        })
                     }
-                    self.program.trait_impls.iter().find_map(|trait_impl| {
-                        if trait_impl.for_type == receiver_type {
-                            trait_impl
-                                .methods
-                                .get(field)
-                                .map(|method| method.signature.return_type.clone())
-                        } else {
-                            None
-                        }
-                    })
+                    _ => None,
                 }
-                _ => None,
-            },
+            }
             ExprKind::Member { object, field } => {
                 if let Some((module_path, item_name)) = self.qualified_module_item(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {

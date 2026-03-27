@@ -1,0 +1,34 @@
+# Test string as function parameter: owned vs borrow
+
+def consume_string(s: String):
+    print(s)
+
+def borrow_string(s: borrow str):
+    print(s)
+
+def borrow_and_build(s: borrow str) -> String:
+    return f"Got: {s}"
+
+def main() -> int32:
+    # Passing owned string to consuming function
+    owned = "owned string"
+    consume_string(owned)
+
+    # Passing string literal to borrow str
+    borrow_string("literal borrow")
+
+    # Passing variable to borrow str (should not consume)
+    text = "borrow me"
+    borrow_string(text)
+    # text should still be usable after borrow
+    borrow_string(text)
+    print("borrow preserved: pass")
+
+    # Borrow and build new string
+    base = "base"
+    result = borrow_and_build(base)
+    print(result)
+    # base should still be usable
+    print(base)
+
+    return 0

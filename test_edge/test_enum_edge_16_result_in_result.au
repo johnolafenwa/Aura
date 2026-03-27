@@ -1,0 +1,46 @@
+def inner_op(x: int32) -> Result[int32, String]:
+    if x == 0:
+        return Result.Err("inner zero")
+    return Result.Ok(x * 10)
+
+def outer_op(x: int32) -> Result[Result[int32, String], String]:
+    if x < 0:
+        return Result.Err("outer negative")
+    r = inner_op(x)
+    return Result.Ok(r)
+
+def main() -> int32:
+    # Positive value: outer Ok wrapping inner Ok
+    match outer_op(5):
+        case Result.Ok(inner):
+            match inner:
+                case Result.Ok(v):
+                    print(v)
+                case Result.Err(e):
+                    print(e)
+        case Result.Err(e):
+            print(e)
+
+    # Zero value: outer Ok wrapping inner Err
+    match outer_op(0):
+        case Result.Ok(inner):
+            match inner:
+                case Result.Ok(v):
+                    print(v)
+                case Result.Err(e):
+                    print(e)
+        case Result.Err(e):
+            print(e)
+
+    # Negative value: outer Err
+    match outer_op(-1):
+        case Result.Ok(inner):
+            match inner:
+                case Result.Ok(v):
+                    print(v)
+                case Result.Err(e):
+                    print(e)
+        case Result.Err(e):
+            print(e)
+
+    return 0

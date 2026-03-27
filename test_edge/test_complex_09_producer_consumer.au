@@ -1,0 +1,42 @@
+# Test 9: Producer-consumer with select and timeout
+# Tests: channels, select, timeout, task_group, spawn, concurrent communication
+
+def producer(out: Channel[int32]):
+    mut i: int32 = 1
+    while i <= 5:
+        out.send(i * 10)
+        i += 1
+    out.close()
+
+def main() -> int32:
+    data: Channel[int32] = channel()
+    mut total: int32 = 0
+    mut received: int32 = 0
+    mut timed_out: bool = false
+
+    with task_group() as group:
+        group.spawn(producer, data.clone())
+
+        while true:
+            select:
+                case value = data.recv():
+                    match value:
+                        case Option.Some(v):
+                            total += v
+                            received += 1
+                        case Option.None:
+                            break
+                case after(1s):
+                    timed_out = true
+                    break
+
+    # Expected: 10 + 20 + 30 + 40 + 50 = 150
+    print(total)
+    print(received)
+
+    if timed_out:
+        print("timeout")
+    else:
+        print("completed")
+
+    return 0

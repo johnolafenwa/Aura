@@ -1,0 +1,20 @@
+class Pair:
+    first: int32
+    second: int32
+
+def make_pair(a: int32, b: int32) -> Pair:
+    return Pair(first=a, second=b)
+
+def swap_pair(p: Pair) -> Pair:
+    return Pair(first=p.second, second=p.first)
+
+def main() -> int32:
+    p1 = make_pair(a=10, b=20)
+    print(p1.first)
+    print(p1.second)
+
+    p2 = swap_pair(p=p1)
+    print(p2.first)
+    print(p2.second)
+
+    return 0

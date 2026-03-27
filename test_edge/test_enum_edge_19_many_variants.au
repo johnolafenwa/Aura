@@ -1,0 +1,77 @@
+enum HttpStatus:
+    Ok
+    Created
+    BadRequest
+    Unauthorized
+    Forbidden
+    NotFound
+    InternalError
+    BadGateway
+    ServiceUnavailable
+
+def status_code(s: HttpStatus) -> int32:
+    match s:
+        case HttpStatus.Ok:
+            return 200
+        case HttpStatus.Created:
+            return 201
+        case HttpStatus.BadRequest:
+            return 400
+        case HttpStatus.Unauthorized:
+            return 401
+        case HttpStatus.Forbidden:
+            return 403
+        case HttpStatus.NotFound:
+            return 404
+        case HttpStatus.InternalError:
+            return 500
+        case HttpStatus.BadGateway:
+            return 502
+        case HttpStatus.ServiceUnavailable:
+            return 503
+
+def is_success(s: HttpStatus) -> bool:
+    match s:
+        case HttpStatus.Ok:
+            return true
+        case HttpStatus.Created:
+            return true
+        case _:
+            return false
+
+def is_client_error(s: HttpStatus) -> bool:
+    match s:
+        case HttpStatus.BadRequest:
+            return true
+        case HttpStatus.Unauthorized:
+            return true
+        case HttpStatus.Forbidden:
+            return true
+        case HttpStatus.NotFound:
+            return true
+        case _:
+            return false
+
+def main() -> int32:
+    print(status_code(HttpStatus.Ok))
+    print(status_code(HttpStatus.Created))
+    print(status_code(HttpStatus.BadRequest))
+    print(status_code(HttpStatus.NotFound))
+    print(status_code(HttpStatus.InternalError))
+    print(status_code(HttpStatus.ServiceUnavailable))
+
+    if is_success(HttpStatus.Ok):
+        print("ok is success")
+    if is_success(HttpStatus.NotFound):
+        print("bug")
+    else:
+        print("404 not success")
+
+    if is_client_error(HttpStatus.Forbidden):
+        print("403 is client error")
+    if is_client_error(HttpStatus.InternalError):
+        print("bug")
+    else:
+        print("500 not client error")
+
+    return 0

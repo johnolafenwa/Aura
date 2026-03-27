@@ -1,0 +1,9 @@
+## Test 5: Nested modules - import a.b.c
+import modules.nested.deep.utils
+
+def main() -> int32:
+    msg = modules.nested.deep.utils.greet(name="Aurora")
+    print(msg)
+    sq = modules.nested.deep.utils.square(n=7)
+    print(sq)
+    return 0

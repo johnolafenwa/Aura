@@ -1,0 +1,8 @@
+class Pos:
+    x: int32
+    y: int32
+
+def main() -> int32:
+    p = Pos(x=1, y=2)
+    p.x = 10
+    return 0

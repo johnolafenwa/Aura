@@ -1,0 +1,15 @@
+## Test 02: Generic function with two type parameters
+## Expects: 10 then "world"
+
+def first[T, U](a: T, b: U) -> T:
+    return a
+
+def second[T, U](a: T, b: U) -> U:
+    return b
+
+def main() -> int32:
+    x = first(10, "world")
+    print(x)
+    y = second(10, "world")
+    print(y)
+    return 0

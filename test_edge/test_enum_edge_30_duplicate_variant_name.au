@@ -1,0 +1,29 @@
+# Test: two different enums with the same variant name
+enum Animal:
+    Cat
+    Dog
+
+enum Vehicle:
+    Cat
+    Dog
+
+def animal_name(a: Animal) -> String:
+    match a:
+        case Animal.Cat:
+            return "animal cat"
+        case Animal.Dog:
+            return "animal dog"
+
+def vehicle_name(v: Vehicle) -> String:
+    match v:
+        case Vehicle.Cat:
+            return "vehicle cat"
+        case Vehicle.Dog:
+            return "vehicle dog"
+
+def main() -> int32:
+    print(animal_name(Animal.Cat))
+    print(animal_name(Animal.Dog))
+    print(vehicle_name(Vehicle.Cat))
+    print(vehicle_name(Vehicle.Dog))
+    return 0

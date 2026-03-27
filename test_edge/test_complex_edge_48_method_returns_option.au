@@ -1,0 +1,28 @@
+# Edge test: Method returning Option, and chaining matches
+
+class NumberParser:
+    raw: String
+
+    def parse(borrow self) -> int32?:
+        if self.raw == "one":
+            return Option.Some(1)
+        if self.raw == "two":
+            return Option.Some(2)
+        if self.raw == "three":
+            return Option.Some(3)
+        return Option.None
+
+def parse_and_double(text: String) -> String:
+    parser = NumberParser(raw=text)
+    match parser.parse():
+        case Some(n):
+            doubled = n * 2
+            return f"{doubled}"
+        case None:
+            return "unknown"
+
+def main() -> int32:
+    print(parse_and_double(text="one"))
+    print(parse_and_double(text="three"))
+    print(parse_and_double(text="four"))
+    return 0

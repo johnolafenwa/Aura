@@ -1,0 +1,39 @@
+def main() -> int32:
+    # Cast int32 max to float64
+    a: int32 = 2147483647
+    b: float64 = a as float64
+    print(b)     # 2147483647.0
+
+    # Cast large float to int - what happens?
+    c: float64 = 999999999999.9
+    d: int64 = c as int64
+    print(d)     # 999999999999
+
+    # Cast float infinity to int?
+    # e: float64 = 1.0 / 0.0
+    # f: int32 = e as int32   # What happens?
+
+    # Cast negative to unsigned
+    # g: int32 = -5
+    # h: uint32 = g as uint32  # What happens?
+
+    # Cast float NaN to int?
+    # i: float64 = 0.0 / 0.0
+    # j: int32 = i as int32
+
+    # int64 to int32 within range
+    k: int64 = 12345
+    l: int32 = k as int32
+    print(l)     # 12345
+
+    # uint32 to int32 within range
+    m: uint32 = 50000
+    n: int32 = m as int32
+    print(n)     # 50000
+
+    # int32 to uint32 positive value
+    o: int32 = 42
+    p: uint32 = o as uint32
+    print(p)     # 42
+
+    return 0

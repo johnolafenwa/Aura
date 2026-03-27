@@ -1,0 +1,24 @@
+## Test 19: Nested with blocks - multiple resource cleanup
+class Handle:
+    name: String
+
+    def read(borrow self) -> String:
+        return self.name
+
+    def close(borrow mut self):
+        print("closed " + self.name)
+
+def multi_resource() -> Result[String, String]:
+    with outer = Handle(name="outer"):
+        with inner = Handle(name="inner"):
+            msg = outer.read() + " and " + inner.read()
+            print(msg)
+            return Result.Ok("ok")
+
+def main() -> int32:
+    match multi_resource():
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+    return 0

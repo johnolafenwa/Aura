@@ -1,0 +1,19 @@
+# Edge test: Mutual recursion between two functions
+
+def is_even(n: int32) -> bool:
+    if n == 0:
+        return true
+    return is_odd(n - 1)
+
+def is_odd(n: int32) -> bool:
+    if n == 0:
+        return false
+    return is_even(n - 1)
+
+def main() -> int32:
+    print(is_even(0))
+    print(is_even(1))
+    print(is_even(4))
+    print(is_odd(3))
+    print(is_odd(6))
+    return 0

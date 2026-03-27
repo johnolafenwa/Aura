@@ -1,0 +1,31 @@
+# Test: constructing and matching enums inside a loop
+enum State:
+    Running(int32)
+    Stopped
+
+def tick(s: State) -> State:
+    match s:
+        case State.Running(count):
+            if count >= 5:
+                return State.Stopped
+            return State.Running(count + 1)
+        case State.Stopped:
+            return State.Stopped
+
+def main() -> int32:
+    mut current = State.Running(0)
+    mut iterations = 0
+
+    mut done = false
+    while not done:
+        current = tick(current)
+        iterations = iterations + 1
+        match current:
+            case State.Running(n):
+                print(n)
+            case State.Stopped:
+                print("stopped")
+                done = true
+
+    print(iterations)
+    return 0

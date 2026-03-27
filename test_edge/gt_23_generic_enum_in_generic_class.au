@@ -1,0 +1,25 @@
+## Test 23: Generic enum as field in generic class
+## Expects: 99 then "empty"
+
+enum Maybe[T]:
+    Some(T)
+    Nothing
+
+class Holder[T]:
+    content: Maybe[T]
+
+def main() -> int32:
+    h1: Holder[int32] = Holder(content=Maybe.Some(99))
+    match h1.content:
+        case Maybe.Some(v):
+            print(v)
+        case Maybe.Nothing:
+            print("empty")
+
+    h2: Holder[int32] = Holder(content=Maybe.Nothing)
+    match h2.content:
+        case Maybe.Some(v):
+            print(v)
+        case Maybe.Nothing:
+            print("empty")
+    return 0

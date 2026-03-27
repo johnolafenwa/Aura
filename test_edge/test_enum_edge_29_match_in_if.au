@@ -1,0 +1,33 @@
+# Test: match inside if blocks and other control flow
+enum Level:
+    Low
+    Mid
+    High(int32)
+
+def process(l: Level, threshold: int32) -> int32:
+    if threshold > 0:
+        match l:
+            case Level.Low:
+                return 1
+            case Level.Mid:
+                return 2
+            case Level.High(v):
+                return v
+    else:
+        match l:
+            case Level.Low:
+                return -1
+            case Level.Mid:
+                return -2
+            case Level.High(v):
+                return 0 - v
+    return 0
+
+def main() -> int32:
+    print(process(Level.Low, 1))
+    print(process(Level.Mid, 1))
+    print(process(Level.High(99), 1))
+    print(process(Level.Low, -1))
+    print(process(Level.Mid, -1))
+    print(process(Level.High(99), -1))
+    return 0

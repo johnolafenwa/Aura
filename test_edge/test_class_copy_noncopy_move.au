@@ -1,0 +1,8 @@
+class Owned:
+    value: int32
+
+def main() -> int32:
+    a = Owned(value=42)
+    b = a
+    print(a.value)
+    return 0

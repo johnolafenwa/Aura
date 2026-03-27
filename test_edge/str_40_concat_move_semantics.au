@@ -1,0 +1,15 @@
+# Test: does string concatenation move the operands?
+
+def main() -> int32:
+    a = "hello"
+    b = " world"
+
+    # First concat
+    r1 = a + b
+
+    # Can we use a and b again?
+    r2 = a + b
+    print(r1)
+    print(r2)
+
+    return 0

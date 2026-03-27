@@ -1,0 +1,42 @@
+def main() -> int32:
+    # int8 boundary values
+    a: int8 = 127
+    print(a)           # 127
+    b: int8 = -128
+    print(b)           # -128
+
+    # int16 boundary values
+    c: int16 = 32767
+    print(c)           # 32767
+    d: int16 = -32768
+    print(d)           # -32768
+
+    # int32 boundary values
+    e: int32 = 2147483647
+    print(e)           # 2147483647
+    f: int32 = -2147483648
+    print(f)           # -2147483648
+
+    # int64 boundary values
+    g: int64 = 9223372036854775807
+    print(g)           # max int64
+
+    # uint8 boundary
+    h: uint8 = 255
+    print(h)           # 255
+    i: uint8 = 0
+    print(i)           # 0
+
+    # uint16 boundary
+    j: uint16 = 65535
+    print(j)           # 65535
+
+    # uint32 boundary
+    k: uint32 = 4294967295
+    print(k)           # 4294967295
+
+    # uint64 large value
+    l: uint64 = 18446744073709551615
+    print(l)           # max uint64
+
+    return 0

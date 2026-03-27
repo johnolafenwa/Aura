@@ -1,0 +1,30 @@
+# Test: generic enum holding a class instance
+class Item:
+    name: String
+    value: int32
+
+enum Holder[T]:
+    Holding(T)
+    Nothing
+
+def show_item(h: Holder[Item]) -> String:
+    match h:
+        case Holder.Holding(item):
+            print(item.value)
+            return item.name
+        case Holder.Nothing:
+            return "nothing"
+
+def main() -> int32:
+    i = Item(name="sword", value=100)
+    h: Holder[Item] = Holder.Holding(i)
+    print(show_item(h))
+
+    empty: Holder[Item] = Holder.Nothing
+    print(show_item(empty))
+
+    # Inline construction
+    h2: Holder[Item] = Holder.Holding(Item(name="shield", value=50))
+    print(show_item(h2))
+
+    return 0

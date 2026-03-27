@@ -1,0 +1,13 @@
+# Edge test: Importing from a module that has a trait, and using in generic
+
+from modules.helpers.counter import Counter
+
+def double_read(c: borrow Counter) -> int32:
+    return c.read() * 2
+
+def main() -> int32:
+    mut c = Counter(value=5)
+    print(double_read(c))
+    c.increment()
+    print(double_read(c))
+    return 0

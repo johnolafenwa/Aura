@@ -1,0 +1,36 @@
+# Test class with string fields
+# NOTE: print(borrowed_param.string_field) fails in free functions due to BUG
+#       but works in borrow self methods
+
+class User:
+    name: String
+    email: String
+
+    def greet(borrow self) -> String:
+        return f"Hello, {self.name}"
+
+    def get_email(borrow self) -> String:
+        return self.email.clone()
+
+    def show(borrow self):
+        print(self.name)
+        print(self.email)
+
+def main() -> int32:
+    user = User(name="Alice", email="alice@test.com")
+
+    # Method calls with borrow self (these work)
+    user.show()
+
+    # Method returning f-string with field
+    greeting = user.greet()
+    print(greeting)
+
+    # Method returning cloned field
+    email = user.get_email()
+    print(email)
+
+    # User still usable after borrow method calls
+    user.show()
+
+    return 0

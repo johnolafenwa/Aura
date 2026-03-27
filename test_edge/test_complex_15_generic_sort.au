@@ -1,0 +1,59 @@
+# Test 15: Generic sorting with trait bounds for comparison
+# Tests: traits, generics, trait bounds on generic functions, multiple trait impls
+
+trait Orderable:
+    def rank(borrow self) -> int32
+
+copy class Priority:
+    level: int32
+
+impl Orderable for Priority:
+    def rank(borrow self) -> int32:
+        return self.level
+
+copy class Score:
+    points: int32
+
+impl Orderable for Score:
+    def rank(borrow self) -> int32:
+        return self.points
+
+# Generic min of two values using trait
+def min_of[T: Orderable](a: T, b: T) -> T:
+    if a.rank() <= b.rank():
+        return a
+    return b
+
+# Generic max of two values using trait
+def max_of[T: Orderable](a: T, b: T) -> T:
+    if a.rank() >= b.rank():
+        return a
+    return b
+
+def main() -> int32:
+    # Test with Priority
+    p1 = Priority(level=3)
+    p2 = Priority(level=7)
+    p3 = Priority(level=1)
+
+    low = min_of(a=p1, b=p2)
+    print(low.level)
+
+    high = max_of(a=p1, b=p2)
+    print(high.level)
+
+    lowest = min_of(a=min_of(a=p1, b=p2), b=p3)
+    print(lowest.level)
+
+    # Test with Score
+    s1 = Score(points=100)
+    s2 = Score(points=50)
+    s3 = Score(points=200)
+
+    best = max_of(a=max_of(a=s1, b=s2), b=s3)
+    print(best.points)
+
+    worst = min_of(a=min_of(a=s1, b=s2), b=s3)
+    print(worst.points)
+
+    return 0

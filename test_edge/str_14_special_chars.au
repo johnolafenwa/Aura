@@ -1,0 +1,24 @@
+# Test special characters in strings
+
+def main() -> int32:
+    # Newline
+    with_newline = "line1\nline2"
+    print(with_newline)
+
+    # Tab
+    with_tab = "col1\tcol2"
+    print(with_tab)
+
+    # Backslash
+    with_backslash = "path\\to\\file"
+    print(with_backslash)
+
+    # Mixed special chars
+    mixed = "a\tb\nc"
+    print(mixed)
+
+    # Escaped quote
+    with_quote = "she said \"hi\""
+    print(with_quote)
+
+    return 0

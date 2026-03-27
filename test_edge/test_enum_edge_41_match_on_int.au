@@ -1,0 +1,18 @@
+# Test: match on integer literals is NOT supported in Aurora
+# ISSUE: case 0: / case 1: etc. gives "expected identifier" error
+# Match patterns only support: EnumName.Variant, EnumName.Variant(binding), _
+# Workaround: use if/elif chains for integer matching
+
+def classify(n: int32) -> String:
+    if n == 0:
+        return "zero"
+    elif n == 1:
+        return "one"
+    else:
+        return "other"
+
+def main() -> int32:
+    print(classify(0))
+    print(classify(1))
+    print(classify(42))
+    return 0

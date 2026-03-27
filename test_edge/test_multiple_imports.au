@@ -1,0 +1,26 @@
+## Test: Multiple imports from different modules
+import modules.helpers.math
+from modules.helpers.counter import Counter
+from modules.shapes.circle import Circle
+import modules.nested.deep.utils
+
+def main() -> int32:
+    ## Use math functions
+    sum = modules.helpers.math.add(a=5, b=3)
+    print(sum)
+
+    ## Use Counter class
+    mut c = Counter(value=0)
+    c.increment()
+    c.increment()
+    print(c.read())
+
+    ## Use Circle class
+    circle = Circle(radius=1.0)
+    print(circle.area())
+
+    ## Use nested utils
+    sq = modules.nested.deep.utils.square(n=4)
+    print(sq)
+
+    return 0

@@ -1,0 +1,18 @@
+## Test 47: Trait implemented for generic class - open (non-specialized) impl
+## i.e. impl Trait for Box[T] (for all T), not just Box[String]
+## Expects: either works or gives useful error
+
+trait Showable:
+    def show(borrow self) -> String
+
+class Box[T]:
+    value: T
+
+impl[T] Showable for Box[T]:
+    def show(borrow self) -> String:
+        return "a box"
+
+def main() -> int32:
+    b: Box[int32] = Box(value=42)
+    print(b.show())
+    return 0

@@ -1,0 +1,35 @@
+# Edge test: Channel of enum type with payloads
+
+enum Message:
+    Text(String)
+    Number(int32)
+    Done
+
+def sender(ch: Channel[Message]):
+    ch.send(Message.Text("hello"))
+    ch.send(Message.Number(42))
+    ch.send(Message.Text("world"))
+    ch.send(Message.Done)
+    ch.close()
+
+def main() -> int32:
+    ch: Channel[Message] = channel()
+    task = spawn sender(ch.clone())
+
+    mut running: bool = true
+    while running:
+        match ch.recv():
+            case Option.Some(msg):
+                match msg:
+                    case Message.Text(s):
+                        print(f"text: {s}")
+                    case Message.Number(n):
+                        print(f"num: {n}")
+                    case Message.Done:
+                        print("done signal")
+                        running = false
+            case Option.None:
+                running = false
+
+    task.join()
+    return 0

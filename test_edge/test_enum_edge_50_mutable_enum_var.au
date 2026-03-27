@@ -1,0 +1,30 @@
+# Test: mutable variable holding enum, reassigned to different variant
+enum Light:
+    Red
+    Yellow
+    Green
+
+def show(l: Light) -> String:
+    match l:
+        case Light.Red:
+            return "red"
+        case Light.Yellow:
+            return "yellow"
+        case Light.Green:
+            return "green"
+
+def main() -> int32:
+    mut light = Light.Red
+    print(show(light))
+
+    light = Light.Yellow
+    print(show(light))
+
+    light = Light.Green
+    print(show(light))
+
+    # Reassign back
+    light = Light.Red
+    print(show(light))
+
+    return 0

@@ -1,0 +1,29 @@
+# Test 10: Module-based program importing from 2+ modules
+# Tests: import, from import, cross-module class usage, module function calls
+
+from modules.geometry.shapes import Circle
+from modules.geometry.shapes import Rect
+from modules.collections.pair import Pair
+from modules.collections.pair import make_pair
+
+def main() -> int32:
+    # Use classes from geometry module
+    c = Circle(radius=5)
+    print(c.describe())
+    print(c.area())
+
+    r = Rect(width=4, height=6)
+    print(r.describe())
+    print(r.area())
+
+    # Use classes and functions from collections module
+    p = make_pair(a=10, b=20)
+    print(p.sum())
+    print(p.max())
+
+    # Direct construction
+    p2 = Pair(first=7, second=3)
+    print(p2.sum())
+    print(p2.max())
+
+    return 0

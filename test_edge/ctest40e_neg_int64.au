@@ -1,0 +1,10 @@
+def main() -> int32:
+    # Negative literal beyond int32 range in int64
+    a: int64 = -2147483649
+    print(a)
+
+    # Negative literal well within int64 range but beyond int32
+    b: int64 = -100000000000
+    print(b)
+
+    return 0

@@ -1,0 +1,19 @@
+class Defaults:
+    a: int32 = 1
+    b: int32 = 2
+    c: String = "three"
+    d: bool = true
+
+def main() -> int32:
+    d = Defaults()
+    print(d.a)
+    print(d.b)
+    print(d.c)
+    print(d.d)
+
+    d2 = Defaults(b=99)
+    print(d2.a)
+    print(d2.b)
+    print(d2.c)
+
+    return 0

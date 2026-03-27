@@ -1,0 +1,12 @@
+## Test 29b: Generic function called from generic with explicit type
+## Expects: 77
+
+def identity[T](value: T) -> T:
+    return value
+
+def wrap_identity[T](value: T) -> T:
+    return identity[T](value=value)
+
+def main() -> int32:
+    print(wrap_identity(value=77))
+    return 0

@@ -1,0 +1,6 @@
+def main() -> int32:
+    # Trying to reassign an immutable variable - should error
+    x: int32 = 10
+    x = 20
+    print(x)
+    return 0

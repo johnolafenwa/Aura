@@ -1,0 +1,27 @@
+## Test 42: Same trait implemented for two different types, used together
+## Expects: 5 then 10
+
+trait Countable:
+    def count(borrow self) -> int32
+
+class Apples:
+    n: int32
+
+class Oranges:
+    n: int32
+
+impl Countable for Apples:
+    def count(borrow self) -> int32:
+        return self.n
+
+impl Countable for Oranges:
+    def count(borrow self) -> int32:
+        return self.n
+
+def show_count[T: Countable](item: T):
+    print(item.count())
+
+def main() -> int32:
+    show_count(item=Apples(n=5))
+    show_count(item=Oranges(n=10))
+    return 0

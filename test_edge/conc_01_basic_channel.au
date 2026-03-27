@@ -1,0 +1,30 @@
+def sender(ch: Channel[int32]):
+    ch.send(10)
+    ch.send(20)
+    ch.send(30)
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    task = spawn sender(ch.clone())
+
+    match ch.recv():
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("error: expected 10")
+
+    match ch.recv():
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("error: expected 20")
+
+    match ch.recv():
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("error: expected 30")
+
+    task.join()
+    print("basic channel ok")
+    return 0

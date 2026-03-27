@@ -1,0 +1,26 @@
+# Test matching on enum variants that carry String payloads
+
+enum Message:
+    Text(String)
+    Error(String)
+    Empty
+
+def describe(msg: Message) -> String:
+    match msg:
+        case Message.Text(t):
+            return f"Text: {t}"
+        case Message.Error(e):
+            return f"Error: {e}"
+        case Message.Empty:
+            return "Empty"
+
+def main() -> int32:
+    m1 = Message.Text("hello")
+    m2 = Message.Error("oops")
+    m3 = Message.Empty
+
+    print(describe(m1))
+    print(describe(m2))
+    print(describe(m3))
+
+    return 0

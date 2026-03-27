@@ -1,0 +1,6 @@
+def main() -> int32:
+    # int8 overflow by addition
+    a: int8 = 127
+    b: int8 = 1
+    print(a + b)   # overflow: 127+1 = 128 > max int8
+    return 0

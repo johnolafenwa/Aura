@@ -1,0 +1,45 @@
+# Edge test: Class implementing 3+ traits and using them in a multi-bound generic
+
+trait Printable:
+    def label(borrow self) -> String
+
+trait Measurable:
+    def measure(borrow self) -> int32
+
+trait Validatable:
+    def is_valid(borrow self) -> bool
+
+class Item:
+    name: String
+    weight: int32
+
+impl Printable for Item:
+    def label(borrow self) -> String:
+        return self.name.clone()
+
+impl Measurable for Item:
+    def measure(borrow self) -> int32:
+        return self.weight
+
+impl Validatable for Item:
+    def is_valid(borrow self) -> bool:
+        return self.weight > 0
+
+# Function with two trait bounds
+def describe[T: Printable + Measurable](item: T) -> String:
+    return f"{item.label()} weighs {item.measure()}"
+
+# Function with all three trait bounds
+def full_check[T: Printable + Measurable + Validatable](item: T) -> String:
+    if item.is_valid():
+        return f"{item.label()}: valid ({item.measure()})"
+    return f"{item.label()}: invalid"
+
+def main() -> int32:
+    good = Item(name="Apple", weight=150)
+    bad = Item(name="Ghost", weight=0)
+
+    print(describe(item=good))
+    print(full_check(item=bad))
+
+    return 0

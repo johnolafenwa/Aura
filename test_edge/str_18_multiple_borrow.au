@@ -1,0 +1,21 @@
+# Test borrowing the same value multiple times (should be fine for immutable borrows)
+
+def first(s: borrow str) -> String:
+    return s + "_first"
+
+def second(s: borrow str) -> String:
+    return s + "_second"
+
+def main() -> int32:
+    text = "base"
+
+    # Multiple immutable borrows of same value
+    r1 = first(text)
+    r2 = second(text)
+    print(r1)
+    print(r2)
+
+    # text still usable
+    print(text)
+
+    return 0

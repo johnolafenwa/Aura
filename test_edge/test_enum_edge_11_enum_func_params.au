@@ -1,0 +1,59 @@
+enum Direction:
+    Up
+    Down
+    Left
+    Right
+
+def opposite(d: Direction) -> Direction:
+    match d:
+        case Direction.Up:
+            return Direction.Down
+        case Direction.Down:
+            return Direction.Up
+        case Direction.Left:
+            return Direction.Right
+        case Direction.Right:
+            return Direction.Left
+
+def move(x: int32, y: int32, d: Direction, steps: int32) -> int32:
+    match d:
+        case Direction.Up:
+            return y + steps
+        case Direction.Down:
+            return y - steps
+        case Direction.Left:
+            return x - steps
+        case Direction.Right:
+            return x + steps
+
+def double_reverse(d: Direction) -> Direction:
+    # Pass result of one enum function as arg to another
+    return opposite(opposite(d))
+
+def show_dir(d: Direction) -> String:
+    match d:
+        case Direction.Up:
+            return "up"
+        case Direction.Down:
+            return "down"
+        case Direction.Left:
+            return "left"
+        case Direction.Right:
+            return "right"
+
+def main() -> int32:
+    # Test opposite
+    print(show_dir(opposite(Direction.Up)))
+    print(show_dir(opposite(Direction.Down)))
+    print(show_dir(opposite(Direction.Left)))
+    print(show_dir(opposite(Direction.Right)))
+
+    # Test move with enum param
+    print(move(0, 0, Direction.Up, 5))
+    print(move(10, 10, Direction.Left, 3))
+
+    # Test double reverse (should return same direction)
+    print(show_dir(double_reverse(Direction.Up)))
+    print(show_dir(double_reverse(Direction.Left)))
+
+    return 0

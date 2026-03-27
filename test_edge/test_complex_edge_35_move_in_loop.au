@@ -1,0 +1,17 @@
+# Edge test: Moving a value in a loop iteration
+
+class Data:
+    value: int32
+
+def consume(d: Data) -> int32:
+    return d.value
+
+def main() -> int32:
+    # This should either error (use after move) or work with copy semantics
+    mut total: int32 = 0
+    d = Data(value=5)
+    # Moving d in a loop - should fail on second iteration
+    for i in range(0, 3):
+        total += consume(d=d)
+    print(total)
+    return 0

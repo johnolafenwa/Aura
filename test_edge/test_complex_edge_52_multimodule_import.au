@@ -1,0 +1,22 @@
+# Edge test: Using both import styles in one file
+
+import modules.helpers.math
+from modules.helpers.counter import Counter
+from modules.geometry.shapes import Circle
+
+def main() -> int32:
+    # Use namespace import
+    sum = modules.helpers.math.add(a=10, b=20)
+    print(sum)
+
+    # Use from import - class
+    mut c = Counter(value=0)
+    c.increment()
+    c.increment()
+    print(c.read())
+
+    # Use from import - another module
+    circle = Circle(radius=3)
+    print(circle.area())
+
+    return 0

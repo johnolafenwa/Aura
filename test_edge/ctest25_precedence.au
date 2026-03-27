@@ -1,0 +1,32 @@
+def main() -> int32:
+    # Operator precedence tests
+    # Multiplication before addition
+    print(2 + 3 * 4)      # 14 (not 20)
+
+    # Division before subtraction
+    print(10 - 6 / 2)     # 7 (not 2)
+
+    # Parentheses override
+    print((2 + 3) * 4)    # 20
+
+    # Mixed precedence
+    print(2 * 3 + 4 * 5)  # 6 + 20 = 26
+
+    # Modulo same precedence as multiply
+    print(10 % 3 + 2)     # 1 + 2 = 3
+
+    # Complex expression
+    print(1 + 2 * 3 - 4 / 2 + 5 % 3)  # 1 + 6 - 2 + 2 = 7
+
+    # Nested parentheses
+    print(((1 + 2) * (3 + 4)))  # 3 * 7 = 21
+
+    # Boolean precedence: not before and before or
+    print(true or false and false)    # true (and before or)
+    print((true or false) and false)  # false
+
+    # Comparison in boolean
+    print(1 < 2 and 3 > 2)           # true
+    print(1 > 2 or 3 < 4)            # true
+
+    return 0

@@ -46,12 +46,13 @@ cargo run -p aura -- complete --line 5 --character 11 --trigger . examples/point
   - member completion expects the cursor to be positioned just after `.`
   - the current compiler also tolerates the common incomplete-editor state where the buffer contains a dangling member access like `counter.`
 
-The machine-readable commands also support stdin for editor integration:
+The machine-readable commands support stdin for editor integration, and the ordinary `check`, `run`, `run-mir`, and `build` commands can also resolve local imports from stdin when you provide a real workspace path:
 
 ```bash
 cat examples/point.au | cargo run -p aura -- analyze --stdin /virtual/point.au
 cat examples/point.au | cargo run -p aura -- complete --line 5 --character 11 --trigger . --stdin /virtual/point.au
 cat examples/point.au | cargo run -p aura -- build -o ./target/aurora-point --stdin /virtual/point.au
+cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au
 ```
 
 ## Scripts And `main`

@@ -754,7 +754,9 @@ impl Parser {
         while self.eat_simple(&TokenKind::Dot).is_some() {
             segments.push(self.expect_identifier()?);
         }
-        let variant_name = segments.pop().expect("pattern should contain a variant segment");
+        let variant_name = segments
+            .pop()
+            .expect("pattern should contain a variant segment");
         let enum_name = if segments.is_empty() {
             None
         } else {
@@ -1415,7 +1417,9 @@ impl Parser {
             }
 
             if literal_start < offset {
-                parts.push(FormatPart::Literal(value[literal_start..offset].to_string()));
+                parts.push(FormatPart::Literal(
+                    value[literal_start..offset].to_string(),
+                ));
             }
 
             let expr_start = offset + ch.len_utf8();
@@ -1435,7 +1439,10 @@ impl Parser {
             };
             let expr_text = value[expr_start..expr_end].trim();
             if expr_text.is_empty() {
-                return Err(Diagnostic::at(span, "f-string interpolation cannot be empty"));
+                return Err(Diagnostic::at(
+                    span,
+                    "f-string interpolation cannot be empty",
+                ));
             }
             let expr = parse_expression(expr_text).map_err(|error| {
                 Diagnostic::at(

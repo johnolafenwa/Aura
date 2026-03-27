@@ -1,0 +1,12 @@
+def make_point() -> Point:
+    return Point(x=1, y=2)
+
+class Point:
+    x: int32
+    y: int32
+
+def main() -> int32:
+    p = make_point()
+    print(p.x)
+    print(p.y)
+    return 0

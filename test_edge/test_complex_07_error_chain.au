@@ -1,0 +1,58 @@
+# Test 7: Error propagation chain - 4+ functions deep with try
+# Tests: Result type, try keyword, error propagation, multiple error paths
+
+def validate_input(n: int32) -> Result[int32, String]:
+    if n < 0:
+        return Result.Err("negative input")
+    if n > 1000:
+        return Result.Err("input too large")
+    return Result.Ok(n)
+
+def compute(n: int32) -> Result[int32, String]:
+    validated = try validate_input(n)
+    if validated == 0:
+        return Result.Err("zero not allowed")
+    return Result.Ok(validated * 2)
+
+def transform(n: int32) -> Result[int32, String]:
+    doubled = try compute(n)
+    return Result.Ok(doubled + 10)
+
+def process(n: int32) -> Result[String, String]:
+    result = try transform(n)
+    return Result.Ok(f"Result: {result}")
+
+def run_pipeline(n: int32) -> Result[String, String]:
+    output = try process(n)
+    return Result.Ok(output)
+
+def main() -> int32:
+    # Success case: 5 -> validated(5) -> compute(10) -> transform(20) -> process("Result: 20")
+    match run_pipeline(5):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Error at validate_input: negative
+    match run_pipeline(-1):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Error at validate_input: too large
+    match run_pipeline(2000):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Error at compute: zero
+    match run_pipeline(0):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    return 0

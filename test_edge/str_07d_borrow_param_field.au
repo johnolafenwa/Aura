@@ -1,0 +1,13 @@
+# Investigate: free function with borrow param, accessing String fields
+
+class Holder:
+    text: String
+
+def get_text(h: borrow Holder) -> String:
+    return h.text
+
+def main() -> int32:
+    h = Holder(text="hello")
+    t = get_text(h)
+    print(t)
+    return 0

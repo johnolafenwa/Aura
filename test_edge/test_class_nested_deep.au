@@ -1,0 +1,13 @@
+copy class Inner:
+    val: int32
+
+copy class Middle:
+    inner: Inner
+
+copy class Outer:
+    middle: Middle
+
+def main() -> int32:
+    o = Outer(middle=Middle(inner=Inner(val=42)))
+    print(o.middle.inner.val)
+    return 0

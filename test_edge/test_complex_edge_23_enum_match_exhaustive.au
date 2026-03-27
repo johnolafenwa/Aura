@@ -1,0 +1,19 @@
+# Edge test: Match exhaustiveness - missing variant should be caught
+
+enum Direction:
+    North
+    South
+    East
+    West
+
+def name(d: Direction) -> String:
+    match d:
+        case Direction.North:
+            return "N"
+        case Direction.South:
+            return "S"
+        # Missing East and West - should this error?
+
+def main() -> int32:
+    print(name(Direction.North))
+    return 0

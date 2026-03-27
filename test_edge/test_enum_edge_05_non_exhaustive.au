@@ -1,0 +1,17 @@
+enum Season:
+    Spring
+    Summer
+    Fall
+    Winter
+
+def name(s: Season) -> String:
+    match s:
+        case Season.Spring:
+            return "spring"
+        case Season.Summer:
+            return "summer"
+        # Missing Fall and Winter - should be a compile error
+
+def main() -> int32:
+    print(name(Season.Spring))
+    return 0

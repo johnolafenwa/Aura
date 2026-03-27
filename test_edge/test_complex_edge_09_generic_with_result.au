@@ -1,0 +1,29 @@
+# Edge test: Generic class containing a Result field
+
+class Validated[T]:
+    result: Result[T, String]
+
+    def is_valid(borrow self) -> bool:
+        match borrow self.result:
+            case Ok(_):
+                return true
+            case Err(_):
+                return false
+
+def validate_age(age: int32) -> Validated[int32]:
+    if age < 0:
+        return Validated(result=Result.Err("negative age"))
+    if age > 150:
+        return Validated(result=Result.Err("too old"))
+    return Validated(result=Result.Ok(age))
+
+def main() -> int32:
+    v1 = validate_age(age=25)
+    v2 = validate_age(age=-5)
+    v3 = validate_age(age=200)
+
+    print(v1.is_valid())
+    print(v2.is_valid())
+    print(v3.is_valid())
+
+    return 0

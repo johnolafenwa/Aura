@@ -1,0 +1,34 @@
+# Test: direct impl block on enum (without trait) is NOT supported
+# DESIGN: Aurora requires `impl TraitName for EnumName:` syntax
+# Direct `impl EnumName:` gives "expected KwFor, found Colon"
+# Classes define methods inline; enums need traits for methods
+
+# Correct way: use a trait
+trait Checkable:
+    def is_on(borrow self) -> bool
+
+enum Status:
+    On
+    Off
+
+impl Checkable for Status:
+    def is_on(borrow self) -> bool:
+        match self:
+            case Status.On:
+                return true
+            case Status.Off:
+                return false
+
+def main() -> int32:
+    s = Status.On
+    if s.is_on():
+        print("on")
+    else:
+        print("off")
+
+    s2 = Status.Off
+    if s2.is_on():
+        print("on")
+    else:
+        print("off")
+    return 0

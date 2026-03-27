@@ -1,0 +1,37 @@
+class Rect:
+    width: float64
+    height: float64
+
+    def area(borrow self) -> float64:
+        return self.width * self.height
+
+    def perimeter(borrow self) -> float64:
+        return 2.0 * (self.width + self.height)
+
+    def is_square(borrow self) -> bool:
+        return self.width == self.height
+
+    def describe(borrow self):
+        print(self.area())
+        print(self.perimeter())
+        print(self.is_square())
+
+    def scale(borrow mut self, factor: float64):
+        self.width = self.width * factor
+        self.height = self.height * factor
+
+    def scale_and_report(borrow mut self, factor: float64):
+        self.scale(factor=factor)
+        print(self.area())
+
+def main() -> int32:
+    r = Rect(width=3.0, height=4.0)
+    r.describe()
+
+    sq = Rect(width=5.0, height=5.0)
+    sq.describe()
+
+    mut mr = Rect(width=2.0, height=3.0)
+    mr.scale_and_report(factor=2.0)
+
+    return 0

@@ -1,0 +1,9 @@
+class Config:
+    timeout: int32 = 30 * 1000
+    retries: int32 = 2 + 1
+
+def main() -> int32:
+    c = Config()
+    print(c.timeout)
+    print(c.retries)
+    return 0

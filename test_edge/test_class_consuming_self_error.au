@@ -1,0 +1,12 @@
+class Token:
+    value: String
+
+    def consume(self) -> String:
+        return self.value
+
+def main() -> int32:
+    t = Token(value="secret")
+    s = t.consume()
+    print(s)
+    print(t.value)
+    return 0

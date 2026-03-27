@@ -1,0 +1,6 @@
+class Resource:
+    name: String
+
+def main() -> int32:
+    r = Resource(name="unused")
+    return 0

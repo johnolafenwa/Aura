@@ -1,0 +1,26 @@
+# BUG INVESTIGATION: Can we print String fields of borrowed params?
+# print(borrowed.string_field) should ideally work, as print should borrow
+
+class User:
+    name: String
+    age: int32
+
+def show_age(user: borrow User):
+    # int32 is copy, this should work
+    print(user.age)
+
+def show_name_clone(user: borrow User):
+    # Workaround: clone the field first
+    n = user.name.clone()
+    print(n)
+
+def show_name_fstring(user: borrow User):
+    # Workaround: use f-string
+    print(f"{user.name}")
+
+def main() -> int32:
+    user = User(name="Alice", age=30)
+    show_age(user)
+    show_name_clone(user)
+    show_name_fstring(user)
+    return 0

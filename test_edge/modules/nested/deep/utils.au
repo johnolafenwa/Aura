@@ -1,0 +1,5 @@
+public def greet(name: borrow str) -> String:
+    return "Hello, " + name
+
+public def square(n: int32) -> int32:
+    return n * n

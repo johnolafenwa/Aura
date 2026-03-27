@@ -1,0 +1,19 @@
+# Edge test: Trait with a default method implementation (if supported)
+
+trait Describable:
+    def name(borrow self) -> String
+    def describe(borrow self) -> String:
+        return "Object: " + self.name()
+
+class Person:
+    label: String
+
+impl Describable for Person:
+    def name(borrow self) -> String:
+        return self.label.clone()
+
+def main() -> int32:
+    p = Person(label="Alice")
+    print(p.name())
+    print(p.describe())
+    return 0

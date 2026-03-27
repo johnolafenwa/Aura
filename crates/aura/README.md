@@ -103,7 +103,7 @@ aura run examples/classes/point_distance.au
 
 ## Stdin Mode
 
-The JSON-oriented commands are also usable from stdin, which is how the Aurora language server queries unsaved editor buffers.
+Compiler-facing JSON commands still use stdin for editor integration, and the ordinary `check`, `run`, `run-mir`, and `build` commands now honor the supplied stdin path when resolving local module imports.
 
 Examples:
 
@@ -113,6 +113,9 @@ cat examples/classes/point_distance.au | ./target/release/aura ast-json --stdin 
 cat examples/point.au | ./target/release/aura complete --line 5 --character 11 --trigger . --stdin /virtual/point.au
 cat examples/point.au | ./target/release/aura build -o ./target/aurora-point --stdin /virtual/point.au
 cat examples/modules/simple_import.au | ./target/release/aura analyze --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au
+cat examples/modules/simple_import.au | ./target/release/aura check --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au
+cat examples/modules/simple_import.au | ./target/release/aura run --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au
+cat examples/modules/simple_import.au | ./target/release/aura run-mir --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au
 ```
 
 ## Diagnostics

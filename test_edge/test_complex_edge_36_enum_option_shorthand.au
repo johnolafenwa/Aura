@@ -1,0 +1,22 @@
+# Edge test: Option shorthand syntax T? and its interactions
+
+class Config:
+    name: String
+    port: int32?
+
+def get_port(c: borrow Config) -> int32:
+    match borrow c.port:
+        case Some(p):
+            return p
+        case None:
+            return 8080
+
+def main() -> int32:
+    c1 = Config(name="a", port=Option.Some(3000))
+    c2 = Config(name="b", port=Option.None)
+
+    print(get_port(c1))
+    print(get_port(c2))
+
+    # Can we use ? in function return types?
+    return 0

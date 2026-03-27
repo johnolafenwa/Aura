@@ -47,6 +47,55 @@ impl Drop for TempDir {
     }
 }
 
+fn assert_default_backend_example_runs(example: &str, binary_name: &str, expected_stdout: &str) {
+    let fixture = repo_root().join(example);
+    let output_dir = TempDir::new("aurora-build-auto-full");
+    let output_path = output_dir.path().join(binary_name);
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura build");
+
+    assert!(
+        build.status.success(),
+        "default build should support {}, stderr was:\n{}",
+        example,
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run built binary");
+
+    assert!(
+        run.status.success(),
+        "built binary for {} should exit successfully, stderr was:\n{}",
+        example,
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected_stdout);
+}
+
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    timeout: std::time::Duration,
+) -> Option<std::process::ExitStatus> {
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().expect("failed to poll child process") {
+            return Some(status);
+        }
+        if start.elapsed() >= timeout {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 fn assert_direct_backend_example_runs(example: &str, binary_name: &str, expected_stdout: &str) {
     let fixture = repo_root().join(example);
     let output_dir = TempDir::new("aurora-build-direct-full");
@@ -265,6 +314,132 @@ fn analyze_stdin_resolves_local_module_imports() {
                 .contains("function double")),
         "analysis should include occurrences for imported module members"
     );
+}
+
+#[test]
+fn check_stdin_resolves_local_module_imports() {
+    let temp = TempDir::new("aurora-cli-check-modules");
+    fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
+    fs::write(
+        temp.path().join("helpers/math.au"),
+        "public def double(value: int32) -> int32:\n    return value * 2\n",
+    )
+    .expect("failed to write helper module");
+    let main_path = temp.path().join("main.au");
+    let source =
+        "import helpers.math\n\ndef main() -> int32:\n    print(helpers.math.double(value=5))\n    return 0\n";
+
+    let mut child = Command::new(aura_bin())
+        .arg("check")
+        .arg("--stdin")
+        .arg(&main_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura check");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(source.as_bytes())
+        .expect("failed to write source");
+
+    let output = child
+        .wait_with_output()
+        .expect("failed to collect aura check output");
+
+    assert!(
+        output.status.success(),
+        "check should succeed for module-aware stdin buffers, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n");
+}
+
+#[test]
+fn run_stdin_resolves_local_module_imports() {
+    let temp = TempDir::new("aurora-cli-run-modules-stdin");
+    fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
+    fs::write(
+        temp.path().join("helpers/math.au"),
+        "public def double(value: int32) -> int32:\n    return value * 2\n",
+    )
+    .expect("failed to write helper module");
+    let main_path = temp.path().join("main.au");
+    let source =
+        "import helpers.math\n\ndef main() -> int32:\n    print(helpers.math.double(value=5))\n    return 0\n";
+
+    let mut child = Command::new(aura_bin())
+        .arg("run")
+        .arg("--stdin")
+        .arg(&main_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura run");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(source.as_bytes())
+        .expect("failed to write source");
+
+    let output = child
+        .wait_with_output()
+        .expect("failed to collect aura run output");
+
+    assert!(
+        output.status.success(),
+        "run should succeed for module-aware stdin buffers, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "10\n");
+}
+
+#[test]
+fn run_mir_stdin_resolves_local_module_imports() {
+    let temp = TempDir::new("aurora-cli-run-mir-modules-stdin");
+    fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
+    fs::write(
+        temp.path().join("helpers/math.au"),
+        "public def double(value: int32) -> int32:\n    return value * 2\n",
+    )
+    .expect("failed to write helper module");
+    let main_path = temp.path().join("main.au");
+    let source =
+        "import helpers.math\n\ndef main() -> int32:\n    print(helpers.math.double(value=5))\n    return 0\n";
+
+    let mut child = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg("--stdin")
+        .arg(&main_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura run-mir");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(source.as_bytes())
+        .expect("failed to write source");
+
+    let output = child
+        .wait_with_output()
+        .expect("failed to collect aura run-mir output");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for module-aware stdin buffers, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "10\n");
 }
 
 #[test]
@@ -567,6 +742,33 @@ fn build_with_direct_backend_supports_mutating_methods_example() {
 }
 
 #[test]
+fn build_with_direct_backend_supports_simple_example() {
+    assert_direct_backend_example_runs(
+        "examples/basics/simple_example.au",
+        "simple-example-direct",
+        "Ayoola Olafenwa\n834.6\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_generic_constructor_specialization_example() {
+    assert_direct_backend_example_runs(
+        "examples/generics/generic_constructor_specialization.au",
+        "generic-specialization-direct",
+        "42\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_namespace_import_types_example() {
+    assert_direct_backend_example_runs(
+        "examples/modules/namespace_import_types.au",
+        "namespace-import-types-direct",
+        "4\ntrue\n1\n",
+    );
+}
+
+#[test]
 fn build_with_direct_backend_supports_for_range_example() {
     assert_direct_backend_example_runs(
         "examples/control_flow/for_range.au",
@@ -581,6 +783,33 @@ fn build_with_direct_backend_supports_full_range_uint128_example() {
         "examples/numbers/uint128_values.au",
         "uint128-direct",
         "340282366920938463463374607431768211455\n340282366920938463463374607431768211455\n",
+    );
+}
+
+#[test]
+fn default_build_supports_simple_example() {
+    assert_default_backend_example_runs(
+        "examples/basics/simple_example.au",
+        "simple-example-auto",
+        "Ayoola Olafenwa\n834.6\n",
+    );
+}
+
+#[test]
+fn default_build_supports_generic_constructor_specialization_example() {
+    assert_default_backend_example_runs(
+        "examples/generics/generic_constructor_specialization.au",
+        "generic-specialization-auto",
+        "42\n",
+    );
+}
+
+#[test]
+fn default_build_supports_namespace_import_types_example() {
+    assert_default_backend_example_runs(
+        "examples/modules/namespace_import_types.au",
+        "namespace-import-types-auto",
+        "4\ntrue\n1\n",
     );
 }
 
@@ -875,6 +1104,23 @@ fn run_mir_executes_supported_programs() {
 }
 
 #[test]
+fn run_mir_executes_generic_constructor_specialization_example() {
+    let fixture = repo_root().join("examples/generics/generic_constructor_specialization.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir on generic constructor specialization example");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for generic constructor specialization example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n");
+}
+
+#[test]
 fn run_mir_executes_try_example() {
     let fixture = repo_root().join("examples/error_handling/try_result.au");
     let output = Command::new(aura_bin())
@@ -941,6 +1187,46 @@ fn run_executes_programs_with_local_modules() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
+}
+
+#[test]
+fn run_handles_long_binary_expression_chains_quickly() {
+    let terms = (1..=24)
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let source = format!(
+        "def main() -> int32:\n    result = {}\n    print(result)\n    return 0\n",
+        terms
+    );
+    let (_temp, source_path) = write_temp_source("aurora-cli-long-expr", &source);
+
+    let mut child = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura run on long expression");
+
+    let status = wait_with_timeout(&mut child, std::time::Duration::from_secs(2));
+    if status.is_none() {
+        child.kill().expect("failed to kill timed out aura run");
+    }
+    let output = child
+        .wait_with_output()
+        .expect("failed to collect aura run output for long expression");
+
+    assert!(
+        status.is_some(),
+        "run should finish quickly for long binary expression chains"
+    );
+    assert!(
+        output.status.success(),
+        "run should succeed for long binary expression chains, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "300\n");
 }
 
 #[test]

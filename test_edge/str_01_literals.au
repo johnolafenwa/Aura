@@ -1,0 +1,26 @@
+def main() -> int32:
+    # Basic string literal
+    hello = "Hello, World!"
+    print(hello)
+
+    # Empty string
+    empty = ""
+    print(empty)
+
+    # Long string
+    long_str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    print(long_str)
+
+    # Single character string
+    single = "x"
+    print(single)
+
+    # String with spaces
+    spaced = "  hello  world  "
+    print(spaced)
+
+    # Numeric-looking string
+    num_str = "12345"
+    print(num_str)
+
+    return 0

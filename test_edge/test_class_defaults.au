@@ -1,0 +1,25 @@
+class Config:
+    host: String = "localhost"
+    port: int32 = 8080
+    debug: bool = false
+
+def main() -> int32:
+    c1 = Config()
+    print(c1.host)
+    print(c1.port)
+    print(c1.debug)
+
+    c2 = Config(host="example.com")
+    print(c2.host)
+    print(c2.port)
+
+    c3 = Config(port=9090)
+    print(c3.host)
+    print(c3.port)
+
+    c4 = Config(host="prod.io", port=443, debug=true)
+    print(c4.host)
+    print(c4.port)
+    print(c4.debug)
+
+    return 0

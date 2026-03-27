@@ -1,0 +1,16 @@
+# Edge test: Generic class with default field values
+
+class Config[T]:
+    value: T
+    enabled: bool = true
+
+def main() -> int32:
+    c1: Config[int32] = Config(value=42)
+    print(c1.value)
+    print(c1.enabled)
+
+    c2: Config[String] = Config(value="hello", enabled=false)
+    print(c2.value)
+    print(c2.enabled)
+
+    return 0

@@ -1,0 +1,65 @@
+# Test 2: Stack implementation using enum-based linked list
+# Tests: enum, indirect, class methods, borrow mut self, match, ownership transfer
+
+class StackNode:
+    value: int32
+    next: indirect StackNode?
+
+class Stack:
+    top: StackNode?
+    size: int32
+
+    def new() -> Stack:
+        return Stack(top=Option.None, size=0)
+
+    def push(borrow mut self, val: int32):
+        old_top = self.top
+        new_node = StackNode(value=val, next=old_top)
+        self.top = Option.Some(new_node)
+        self.size += 1
+
+    def pop(borrow mut self) -> int32:
+        match self.top:
+            case Some(node):
+                self.top = node.next
+                self.size -= 1
+                return node.value
+            case None:
+                return -1
+
+    def peek(borrow self) -> int32:
+        match borrow self.top:
+            case Some(node):
+                return node.value
+            case None:
+                return -1
+
+    def get_size(borrow self) -> int32:
+        return self.size
+
+def main() -> int32:
+    mut stack = Stack.new()
+
+    # Push elements
+    stack.push(val=10)
+    stack.push(val=20)
+    stack.push(val=30)
+
+    # Check size and peek
+    print(stack.get_size())
+    print(stack.peek())
+
+    # Pop top
+    print(stack.pop())
+    print(stack.get_size())
+    print(stack.peek())
+
+    # Pop remaining
+    print(stack.pop())
+    print(stack.pop())
+    print(stack.get_size())
+
+    # Pop from empty
+    print(stack.pop())
+
+    return 0

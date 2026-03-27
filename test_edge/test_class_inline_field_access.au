@@ -1,0 +1,21 @@
+copy class Pair:
+    a: int32
+    b: int32
+
+    def swapped(borrow self) -> Pair:
+        return Pair(a=self.b, b=self.a)
+
+def make_pair(x: int32, y: int32) -> Pair:
+    return Pair(a=x, b=y)
+
+def main() -> int32:
+    print(make_pair(x=10, y=20).a)
+    print(make_pair(x=10, y=20).b)
+
+    p = Pair(a=1, b=2)
+    print(p.swapped().a)
+    print(p.swapped().b)
+
+    print(Pair(a=5, b=6).swapped().a)
+
+    return 0

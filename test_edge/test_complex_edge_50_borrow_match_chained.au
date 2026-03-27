@@ -1,0 +1,26 @@
+# Edge test: Using borrow match result as method receiver
+
+class Container:
+    value: String
+
+    def get_length(borrow self) -> int32:
+        return 5
+
+def main() -> int32:
+    opt: Container? = Option.Some(Container(value="hello"))
+
+    # Match borrow and call method on the borrowed binding
+    match borrow opt:
+        case Some(c):
+            print(c.get_length())
+        case None:
+            print(0)
+
+    # Can still use opt after match borrow
+    match borrow opt:
+        case Some(c2):
+            print(c2.get_length())
+        case None:
+            print(0)
+
+    return 0

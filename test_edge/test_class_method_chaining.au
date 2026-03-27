@@ -1,0 +1,19 @@
+class Builder:
+    value: int32
+
+    def set(borrow mut self, v: int32):
+        self.value = v
+
+    def add(borrow mut self, v: int32):
+        self.value += v
+
+    def build(borrow self) -> int32:
+        return self.value
+
+def main() -> int32:
+    mut b = Builder(value=0)
+    b.set(v=10)
+    b.add(v=5)
+    b.add(v=3)
+    print(b.build())
+    return 0

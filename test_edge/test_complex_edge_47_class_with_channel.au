@@ -1,0 +1,29 @@
+# Edge test: Class containing a channel as a field
+
+class MessageBus:
+    ch: Channel[String]
+
+    def send_msg(borrow self, msg: String):
+        self.ch.send(msg)
+
+    def close(borrow mut self):
+        self.ch.close()
+
+def receiver(bus: MessageBus):
+    for msg in bus.ch:
+        print(msg)
+
+def main() -> int32:
+    ch: Channel[String] = channel()
+    bus = MessageBus(ch=ch.clone())
+
+    task = spawn receiver(MessageBus(ch=ch.clone()))
+
+    bus.send_msg(msg="hello")
+    bus.send_msg(msg="world")
+
+    mut bus2 = bus
+    bus2.close()
+
+    task.join()
+    return 0

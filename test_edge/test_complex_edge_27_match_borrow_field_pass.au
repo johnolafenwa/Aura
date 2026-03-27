@@ -1,0 +1,22 @@
+# BUG 1 Reproduction: Passing a field of a match-borrow binding to a function
+# This fails: "cannot move non-copy field out of borrowed value"
+
+class Node:
+    value: int32
+    next: indirect Node?
+
+def count(node: borrow Node?) -> int32:
+    match borrow node:
+        case Some(n):
+            # This line fails: trying to pass n.next (a field of borrowed n)
+            # to a function taking borrow Node?
+            return 1 + count(n.next)
+        case None:
+            return 0
+
+def main() -> int32:
+    tail = Node(value=2, next=Option.None)
+    head = Node(value=1, next=Option.Some(tail))
+    opt: Node? = Option.Some(head)
+    print(count(opt))
+    return 0

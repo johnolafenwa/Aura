@@ -1,0 +1,20 @@
+## Test 45: Trait method that also calls a class method (not from trait)
+## Expects: "item-42"
+
+trait Labelable:
+    def label(borrow self) -> String
+
+class Item:
+    id: int32
+
+    def prefix(borrow self) -> String:
+        return "item-"
+
+impl Labelable for Item:
+    def label(borrow self) -> String:
+        return self.prefix() + f"{self.id}"
+
+def main() -> int32:
+    i = Item(id=42)
+    print(i.label())
+    return 0

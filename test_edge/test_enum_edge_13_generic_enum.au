@@ -1,0 +1,50 @@
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+def unwrap_int(m: Maybe[int32], default_val: int32) -> int32:
+    match m:
+        case Maybe.Just(v):
+            return v
+        case Maybe.Nothing:
+            return default_val
+
+def unwrap_str(m: Maybe[String], default_val: String) -> String:
+    match m:
+        case Maybe.Just(v):
+            return v
+        case Maybe.Nothing:
+            return default_val
+
+enum Either[A, B]:
+    Left(A)
+    Right(B)
+
+def show_either(e: Either[int32, String]) -> String:
+    match e:
+        case Either.Left(n):
+            print(n)
+            return "left"
+        case Either.Right(s):
+            return s
+
+def main() -> int32:
+    # Test Maybe with int32
+    a: Maybe[int32] = Maybe.Just(42)
+    b: Maybe[int32] = Maybe.Nothing
+    print(unwrap_int(a, 0))
+    print(unwrap_int(b, -1))
+
+    # Test Maybe with String
+    c: Maybe[String] = Maybe.Just("hello")
+    d: Maybe[String] = Maybe.Nothing
+    print(unwrap_str(c, "default"))
+    print(unwrap_str(d, "default"))
+
+    # Test Either
+    e1: Either[int32, String] = Either.Left(100)
+    e2: Either[int32, String] = Either.Right("world")
+    print(show_either(e1))
+    print(show_either(e2))
+
+    return 0

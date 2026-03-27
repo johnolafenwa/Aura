@@ -1,0 +1,31 @@
+## Test 12: Nested generics - Box containing Maybe
+## Expects: 42 then "none"
+
+enum Maybe[T]:
+    Some(T)
+    Nothing
+
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def main() -> int32:
+    inner: Maybe[int32] = Maybe.Some(42)
+    outer: Box[Maybe[int32]] = Box(value=inner)
+
+    match outer.get():
+        case Maybe.Some(v):
+            print(v)
+        case Maybe.Nothing:
+            print("none")
+
+    empty_inner: Maybe[int32] = Maybe.Nothing
+    outer2: Box[Maybe[int32]] = Box(value=empty_inner)
+    match outer2.get():
+        case Maybe.Some(v):
+            print(v)
+        case Maybe.Nothing:
+            print("none")
+    return 0

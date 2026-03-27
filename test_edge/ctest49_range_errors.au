@@ -1,0 +1,20 @@
+def main() -> int32:
+    # range with named args
+    mut sum1: int32 = 0
+    for i in range(start=2, stop=5):
+        sum1 += i
+    print(sum1)    # 2+3+4 = 9
+
+    # Negative range argument
+    mut sum2: int32 = 0
+    for i in range(-3, 3):
+        sum2 += i
+    print(sum2)    # -3+-2+-1+0+1+2 = -3
+
+    # range(negative) - what happens?
+    mut sum3: int32 = 0
+    for i in range(-5):
+        sum3 += 1
+    print(sum3)    # 0 (empty range since -5 < 0)
+
+    return 0

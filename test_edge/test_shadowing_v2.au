@@ -1,0 +1,12 @@
+## Test 16b: Shadowing alternative - using different function scopes
+def inner() -> int32:
+    x: int32 = 99
+    return x
+
+def main() -> int32:
+    x: int32 = 1
+    print(x)
+    y = inner()
+    print(y)
+    print(x)
+    return 0

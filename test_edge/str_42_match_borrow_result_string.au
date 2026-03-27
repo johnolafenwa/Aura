@@ -1,0 +1,28 @@
+# Test: match borrow on Result[String, String] then reuse
+
+def main() -> int32:
+    result: Result[String, String] = Result.Ok("hello")
+
+    # First match borrow
+    match borrow result:
+        case Ok(v):
+            print(v)
+        case Err(e):
+            print(e)
+
+    # Second match borrow (result not consumed)
+    match borrow result:
+        case Ok(v):
+            r = v.clone()
+            print(r)
+        case Err(e):
+            print(e)
+
+    # Consuming match (moves result)
+    match result:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    return 0

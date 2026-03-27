@@ -1,0 +1,43 @@
+# Test: enum methods via trait impl
+trait Displayable:
+    def name(borrow self) -> String
+    def is_primary(borrow self) -> bool
+
+enum Color:
+    Red
+    Green
+    Blue
+
+impl Displayable for Color:
+    def name(borrow self) -> String:
+        match self:
+            case Color.Red:
+                return "red"
+            case Color.Green:
+                return "green"
+            case Color.Blue:
+                return "blue"
+
+    def is_primary(borrow self) -> bool:
+        match self:
+            case Color.Green:
+                return false
+            case _:
+                return true
+
+def main() -> int32:
+    c = Color.Red
+    print(c.name())
+    if c.is_primary():
+        print("primary")
+
+    g = Color.Green
+    print(g.name())
+    if g.is_primary():
+        print("primary")
+    else:
+        print("not primary")
+
+    b = Color.Blue
+    print(b.name())
+    return 0

@@ -1,0 +1,51 @@
+def main() -> int32:
+    # Large range loop
+    mut sum: int64 = 0
+    for i in range(1000):
+        sum += i as int64
+    print(sum)     # 499500
+
+    # Fibonacci with while
+    mut fib_a: int32 = 0
+    mut fib_b: int32 = 1
+    mut count: int32 = 0
+    while count < 10:
+        mut temp: int32 = fib_a + fib_b
+        fib_a = fib_b
+        fib_b = temp
+        count += 1
+    print(fib_a)   # fib(10) = 55
+
+    # Collatz sequence length for 27
+    mut n: int32 = 27
+    mut steps: int32 = 0
+    while n != 1:
+        if n % 2 == 0:
+            n /= 2
+        else:
+            n = n * 3 + 1
+        steps += 1
+    print(steps)   # 111
+
+    # Empty range with start >= stop
+    mut empty_count: int32 = 0
+    for i in range(5, 5):
+        empty_count += 1
+    print(empty_count)   # 0
+
+    # Empty range with start > stop
+    mut empty_count2: int32 = 0
+    for i in range(10, 5):
+        empty_count2 += 1
+    print(empty_count2)   # 0
+
+    # Very deeply nested if
+    x: int32 = 42
+    if x > 0:
+        if x > 10:
+            if x > 20:
+                if x > 30:
+                    if x > 40:
+                        print(999)
+
+    return 0

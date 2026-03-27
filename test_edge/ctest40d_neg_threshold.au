@@ -1,0 +1,20 @@
+def main() -> int32:
+    # These should work - within int32 range
+    a: int128 = -1
+    print(a)
+
+    b: int128 = -100
+    print(b)
+
+    c: int128 = -2147483647
+    print(c)
+
+    # This is int32 min, might fail
+    d: int128 = -2147483648
+    print(d)
+
+    # This exceeds int32 range - should it work for int128?
+    e: int128 = -2147483649
+    print(e)
+
+    return 0

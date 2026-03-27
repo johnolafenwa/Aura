@@ -1,0 +1,21 @@
+# Test: generic function to unwrap Result or return default
+def unwrap_result_or[T](res: Result[T, String], default_val: T) -> T:
+    match res:
+        case Result.Ok(v):
+            return v
+        case Result.Err(e):
+            print(e)
+            return default_val
+
+def main() -> int32:
+    r1: Result[int32, String] = Result.Ok(42)
+    r2: Result[int32, String] = Result.Err("oops")
+    print(unwrap_result_or(r1, 0))
+    print(unwrap_result_or(r2, -1))
+
+    r3: Result[String, String] = Result.Ok("success")
+    r4: Result[String, String] = Result.Err("fail")
+    print(unwrap_result_or(r3, "default"))
+    print(unwrap_result_or(r4, "default"))
+
+    return 0

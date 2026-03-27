@@ -1,0 +1,15 @@
+## Test: Edge case ranges
+def main() -> int32:
+    ## range(0) - should loop zero times
+    mut count: int32 = 0
+    for i in range(0):
+        count += 1
+    print(count)
+
+    ## range(1) - should loop once
+    mut count2: int32 = 0
+    for i in range(1):
+        count2 += 1
+    print(count2)
+
+    return 0

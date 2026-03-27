@@ -1,0 +1,22 @@
+def producer(ch: Channel[int32]):
+    ch.send(10)
+    ch.send(20)
+    ch.send(30)
+    ch.send(40)
+    ch.close()
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    task = spawn producer(ch.clone())
+
+    mut sum: int32 = 0
+    mut count: int32 = 0
+    for value in ch:
+        sum += value
+        count += 1
+
+    task.join()
+    print(count)
+    print(sum)
+    print("channel iteration ok")
+    return 0

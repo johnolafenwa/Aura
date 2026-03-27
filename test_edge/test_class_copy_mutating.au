@@ -1,0 +1,22 @@
+copy class Point:
+    x: int32
+    y: int32
+
+    def translate(borrow mut self, dx: int32, dy: int32):
+        self.x += dx
+        self.y += dy
+
+def main() -> int32:
+    mut p = Point(x=0, y=0)
+    p.translate(dx=3, dy=4)
+    print(p.x)
+    print(p.y)
+
+    p2 = p
+    p.translate(dx=1, dy=1)
+    print(p.x)
+    print(p.y)
+    print(p2.x)
+    print(p2.y)
+
+    return 0

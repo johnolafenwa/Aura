@@ -1,0 +1,22 @@
+def main() -> int32:
+    # Integer division truncation direction
+    print(7 / 2)       # 3
+    print(-7 / 2)      # -3 (truncate toward zero)
+    print(7 / -2)      # -3
+    print(-7 / -2)     # 3
+
+    # int64 division
+    a: int64 = 100
+    b: int64 = 3
+    print(a / b)       # 33
+
+    c: int64 = -100
+    print(c / b)       # -33
+
+    # Division by 1
+    print(42 / 1)      # 42
+
+    # Division of 0
+    print(0 / 5)       # 0
+
+    return 0

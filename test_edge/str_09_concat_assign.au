@@ -1,0 +1,28 @@
+def main() -> int32:
+    # Basic += on string
+    mut s: String = "Hello"
+    s += " World"
+    print(s)
+
+    # Multiple +=
+    mut acc: String = ""
+    acc += "a"
+    acc += "b"
+    acc += "c"
+    print(acc)
+
+    # += with variable
+    mut base: String = "base"
+    suffix = "-end"
+    base += suffix
+    print(base)
+
+    # += empty string (no-op)
+    mut unchanged: String = "stay"
+    unchanged += ""
+    if unchanged == "stay":
+        print("noop: pass")
+    else:
+        print("noop: FAIL")
+
+    return 0

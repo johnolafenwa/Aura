@@ -1,0 +1,9 @@
+def main() -> int32:
+    # Try to create a zero divisor through loop computation
+    mut divisor: int32 = 10
+    for i in range(10):
+        divisor -= 1
+    # divisor is now 0
+    mut a: int32 = 42
+    print(a / divisor)
+    return 0

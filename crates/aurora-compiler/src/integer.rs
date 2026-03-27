@@ -284,3 +284,18 @@ pub fn integer_type_bounds(ty: &Type) -> Option<IntegerBounds> {
         },
     }
 }
+
+pub fn minimal_signed_type_for_negative_literal(value: u128) -> Type {
+    let negative = IntegerValue::from_literal(value)
+        .checked_neg()
+        .expect("negative literal magnitude should fit into signed inference");
+    for name in ["int32", "int64", "int128"] {
+        let ty = Type::named(name);
+        if let Some(bounds) = integer_type_bounds(&ty) {
+            if negative.fits_bounds(bounds) {
+                return ty;
+            }
+        }
+    }
+    Type::named("int128")
+}

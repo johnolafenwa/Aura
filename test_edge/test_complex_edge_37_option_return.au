@@ -1,0 +1,21 @@
+# Edge test: Function returning Option with ? shorthand syntax
+
+def find(n: int32) -> int32?:
+    if n > 0:
+        return Option.Some(n * 10)
+    return Option.None
+
+def main() -> int32:
+    match find(5):
+        case Some(v):
+            print(v)
+        case None:
+            print("none")
+
+    match find(-1):
+        case Some(v):
+            print(v)
+        case None:
+            print("none")
+
+    return 0

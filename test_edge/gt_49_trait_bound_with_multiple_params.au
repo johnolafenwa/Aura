@@ -1,0 +1,26 @@
+## Test 49: Generic function with two bounded type params
+## Expects: 15
+
+trait HasValue:
+    def value(borrow self) -> int32
+
+class X:
+    v: int32
+
+class Y:
+    v: int32
+
+impl HasValue for X:
+    def value(borrow self) -> int32:
+        return self.v
+
+impl HasValue for Y:
+    def value(borrow self) -> int32:
+        return self.v
+
+def add_values[A: HasValue, B: HasValue](a: A, b: B) -> int32:
+    return a.value() + b.value()
+
+def main() -> int32:
+    print(add_values(a=X(v=7), b=Y(v=8)))
+    return 0

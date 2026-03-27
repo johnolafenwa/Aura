@@ -1,0 +1,47 @@
+# Test 12: Iterator pattern - class with has_next/next methods
+# Tests: class methods, borrow mut self, while loop, stateful iteration
+
+class RangeIterator:
+    current: int32
+    end: int32
+    step: int32
+
+    def new(start: int32, end: int32, step: int32) -> RangeIterator:
+        return RangeIterator(current=start, end=end, step=step)
+
+    def has_next(borrow self) -> bool:
+        return self.current < self.end
+
+    def next(borrow mut self) -> int32:
+        val = self.current
+        self.current += self.step
+        return val
+
+# Countdown iterator (decreasing)
+class Countdown:
+    remaining: int32
+
+    def has_next(borrow self) -> bool:
+        return self.remaining > 0
+
+    def next(borrow mut self) -> int32:
+        self.remaining -= 1
+        return self.remaining + 1
+
+def main() -> int32:
+    # Test range iterator: 0, 2, 4, 6, 8
+    mut iter = RangeIterator.new(start=0, end=10, step=2)
+    mut sum: int32 = 0
+    while iter.has_next():
+        val = iter.next()
+        sum += val
+        print(val)
+
+    print(f"sum = {sum}")
+
+    # Test countdown: 5, 4, 3, 2, 1
+    mut cd = Countdown(remaining=5)
+    while cd.has_next():
+        print(cd.next())
+
+    return 0

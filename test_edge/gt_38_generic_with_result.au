@@ -1,0 +1,23 @@
+## Test 38: Generic function that returns a Result
+## Expects: 42 then -1
+
+def safe_get[T](val: T, ok: bool) -> Result[T, int32]:
+    if ok:
+        return Result.Ok(val)
+    return Result.Err(-1)
+
+def main() -> int32:
+    r1 = safe_get(42, true)
+    match r1:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    r2 = safe_get("hello", false)
+    match r2:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+    return 0

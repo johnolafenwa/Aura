@@ -1,0 +1,72 @@
+# Test 3: Calculator using enums for operators and expression evaluation
+# Tests: enums with multiple variants, match, class methods, Result type
+
+enum Op:
+    Add
+    Sub
+    Mul
+    Div
+
+copy class Expr:
+    left: int32
+    op: Op
+    right: int32
+
+def eval_op(op: borrow Op, a: int32, b: int32) -> Result[int32, String]:
+    match op:
+        case Op.Add:
+            return Result.Ok(a + b)
+        case Op.Sub:
+            return Result.Ok(a - b)
+        case Op.Mul:
+            return Result.Ok(a * b)
+        case Op.Div:
+            if b == 0:
+                return Result.Err("division by zero")
+            return Result.Ok(a / b)
+
+def eval_expr(expr: borrow Expr) -> Result[int32, String]:
+    return eval_op(expr.op, expr.left, expr.right)
+
+def main() -> int32:
+    # Test addition
+    e1 = Expr(left=10, op=Op.Add, right=5)
+    match eval_expr(e1):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Test subtraction
+    e2 = Expr(left=10, op=Op.Sub, right=3)
+    match eval_expr(e2):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Test multiplication
+    e3 = Expr(left=6, op=Op.Mul, right=7)
+    match eval_expr(e3):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Test division
+    e4 = Expr(left=20, op=Op.Div, right=4)
+    match eval_expr(e4):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Test division by zero
+    e5 = Expr(left=10, op=Op.Div, right=0)
+    match eval_expr(e5):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    return 0

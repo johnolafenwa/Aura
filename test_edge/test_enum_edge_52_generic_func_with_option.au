@@ -1,0 +1,29 @@
+# Test: generic function that operates on Option[T]
+# Can we write a generic unwrap_or function?
+
+def unwrap_or_int(opt: Option[int32], default_val: int32) -> int32:
+    match opt:
+        case Option.Some(v):
+            return v
+        case Option.None:
+            return default_val
+
+def unwrap_or_str(opt: Option[String], default_val: String) -> String:
+    match opt:
+        case Option.Some(v):
+            return v
+        case Option.None:
+            return default_val
+
+def main() -> int32:
+    a: Option[int32] = Option.Some(42)
+    b: Option[int32] = Option.None
+    print(unwrap_or_int(a, 0))
+    print(unwrap_or_int(b, -1))
+
+    c: Option[String] = Option.Some("world")
+    d: Option[String] = Option.None
+    print(unwrap_or_str(c, "default"))
+    print(unwrap_or_str(d, "default"))
+
+    return 0

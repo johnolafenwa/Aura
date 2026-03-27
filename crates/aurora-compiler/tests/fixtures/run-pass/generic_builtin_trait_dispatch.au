@@ -1,0 +1,14 @@
+trait Show:
+    def show(borrow self) -> String
+
+impl Show for int32:
+    def show(borrow self) -> String:
+        return "int"
+
+def display[T: Show](value: T):
+    print(value.show())
+
+def main() -> int32:
+    number: int32 = 42
+    display(value=number)
+    return 0

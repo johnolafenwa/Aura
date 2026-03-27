@@ -1,0 +1,15 @@
+# BUG: Free function cannot access String field on borrow param
+# Expected: should work same as borrow self methods
+# Actual: "cannot move non-copy field out of borrowed value"
+
+class Holder:
+    text: String
+
+def get_text(h: borrow Holder) -> String:
+    return h.text
+
+def main() -> int32:
+    h = Holder(text="hello")
+    t = get_text(h)
+    print(t)
+    return 0

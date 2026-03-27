@@ -1,0 +1,28 @@
+# Edge test: Class method that creates another instance of itself
+
+class Point:
+    x: int32
+    y: int32
+
+    def translate(borrow self, dx: int32, dy: int32) -> Point:
+        return Point(x=self.x + dx, y=self.y + dy)
+
+    def origin() -> Point:
+        return Point(x=0, y=0)
+
+    def distance_squared(borrow self) -> int32:
+        return self.x * self.x + self.y * self.y
+
+def main() -> int32:
+    p = Point.origin()
+    print(p.distance_squared())
+
+    p2 = p.translate(dx=3, dy=4)
+    print(p2.distance_squared())
+
+    # Chain translations
+    p3 = Point.origin().translate(dx=1, dy=0).translate(dx=0, dy=1)
+    print(p3.x)
+    print(p3.y)
+
+    return 0

@@ -1,0 +1,29 @@
+# Edge test: Recursive enum - not possible with multi-field variants
+# Testing single-field recursive enum
+
+class Pair:
+    left: int32
+    right: int32
+
+enum Tree:
+    Leaf(int32)
+    Branch(Pair)
+
+def main() -> int32:
+    t1 = Tree.Leaf(42)
+    t2 = Tree.Branch(Pair(left=1, right=2))
+
+    match t1:
+        case Tree.Leaf(v):
+            print(v)
+        case Tree.Branch(p):
+            print(p.left)
+
+    match t2:
+        case Tree.Leaf(v):
+            print(v)
+        case Tree.Branch(p):
+            print(p.left)
+            print(p.right)
+
+    return 0

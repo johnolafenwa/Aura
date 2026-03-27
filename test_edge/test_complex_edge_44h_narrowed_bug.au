@@ -1,0 +1,16 @@
+# Narrowing Bug 7: Option inside generic function where the class has ? field
+
+class Box[T]:
+    value: T?
+
+def make_box[T](val: T) -> Box[T]:
+    return Box(value=Option.Some(val))
+
+def main() -> int32:
+    b: Box[int32] = make_box(val=42)
+    match b.value:
+        case Some(v):
+            print(v)
+        case None:
+            print("none")
+    return 0

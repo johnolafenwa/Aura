@@ -1,0 +1,33 @@
+# Test: match on string literals is NOT supported
+# Expected behavior: compile error on case "literal"
+# This test documents that string matching must use if/elif chains
+
+# Workaround using if/elif
+def greet(name: String) -> String:
+    if name == "Alice":
+        return "Hello Alice!"
+    elif name == "Bob":
+        return "Hey Bob!"
+    else:
+        return "Hi stranger!"
+
+# Test matching on an enum that contains string payloads (this works)
+enum Label:
+    Named(String)
+    Anonymous
+
+def show_label(l: Label) -> String:
+    match l:
+        case Label.Named(n):
+            return "label: " + n
+        case Label.Anonymous:
+            return "anon"
+
+def main() -> int32:
+    print(greet("Alice"))
+    print(greet("Bob"))
+    print(greet("Charlie"))
+
+    print(show_label(Label.Named("test")))
+    print(show_label(Label.Anonymous))
+    return 0

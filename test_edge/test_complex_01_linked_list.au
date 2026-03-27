@@ -1,0 +1,33 @@
+# Test 1: Linked list using class with indirect recursive types
+# Tests: indirect types, recursive data structures, match, ownership
+# BUG FOUND: Cannot pass borrowed field from match borrow to another function
+# that takes a borrow parameter. "cannot move non-copy field out of borrowed value"
+# Workaround: only use shallow access patterns (no recursive traversal via functions)
+
+class IntNode:
+    value: int32
+    next: indirect IntNode?
+
+def main() -> int32:
+    # Build list: 1 -> 2 -> 3 -> Nil
+    n3 = IntNode(value=3, next=Option.None)
+    n2 = IntNode(value=2, next=Option.Some(n3))
+    n1 = IntNode(value=1, next=Option.Some(n2))
+
+    # Access head
+    print(n1.value)
+
+    # Access second element
+    match n1.next:
+        case Some(second):
+            print(second.value)
+            # Access third element
+            match second.next:
+                case Some(third):
+                    print(third.value)
+                case None:
+                    pass
+        case None:
+            pass
+
+    return 0

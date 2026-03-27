@@ -1,0 +1,28 @@
+copy class Counter:
+    value: int32
+
+    def get(borrow self) -> int32:
+        return self.value
+
+def main() -> int32:
+    x = 5
+    if x > 3:
+        c = Counter(value=x)
+        print(c.get())
+    else:
+        c = Counter(value=0)
+        print(c.get())
+
+    mut total = 0
+    mut i = 0
+    while i < 5:
+        c = Counter(value=i * 10)
+        total += c.get()
+        i += 1
+    print(total)
+
+    for n in range(3):
+        c = Counter(value=n)
+        print(c.get())
+
+    return 0

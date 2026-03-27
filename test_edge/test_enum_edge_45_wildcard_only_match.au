@@ -1,0 +1,16 @@
+# Test: match with only a wildcard arm (no specific cases)
+enum Status:
+    Active
+    Inactive
+    Pending
+
+def always_same(s: Status) -> int32:
+    match s:
+        case _:
+            return 42
+
+def main() -> int32:
+    print(always_same(Status.Active))
+    print(always_same(Status.Inactive))
+    print(always_same(Status.Pending))
+    return 0

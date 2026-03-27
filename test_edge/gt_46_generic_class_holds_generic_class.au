@@ -1,0 +1,20 @@
+## Test 46: A generic class holding another generic class
+## Expects: 99
+
+class Inner[T]:
+    val: T
+
+    def get(borrow self) -> T:
+        return self.val
+
+class Outer[T]:
+    inner: Inner[T]
+
+    def get_inner_val(borrow self) -> T:
+        return self.inner.get()
+
+def main() -> int32:
+    i: Inner[int32] = Inner(val=99)
+    o: Outer[int32] = Outer(inner=i)
+    print(o.get_inner_val())
+    return 0

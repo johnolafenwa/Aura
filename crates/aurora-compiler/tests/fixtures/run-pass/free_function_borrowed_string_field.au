@@ -1,0 +1,14 @@
+class Holder:
+    text: String
+
+def show(holder: borrow Holder):
+    print(holder.text)
+
+def clone_text(holder: borrow Holder) -> String:
+    return holder.text.clone()
+
+def main() -> int32:
+    holder = Holder(text="hello")
+    show(holder)
+    print(clone_text(holder))
+    return 0

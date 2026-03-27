@@ -1,0 +1,6 @@
+def main() -> int32:
+    # Cast negative int32 to uint32 - should error?
+    a: int32 = -5
+    b: uint32 = a as uint32
+    print(b)
+    return 0

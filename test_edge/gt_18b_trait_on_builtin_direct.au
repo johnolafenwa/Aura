@@ -1,0 +1,14 @@
+## Test 18b: Trait on builtin type - direct call (not generic)
+## Expects: "num"
+
+trait Describable:
+    def describe(borrow self) -> String
+
+impl Describable for int32:
+    def describe(borrow self) -> String:
+        return "num"
+
+def main() -> int32:
+    x: int32 = 7
+    print(x.describe())
+    return 0

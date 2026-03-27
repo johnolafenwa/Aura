@@ -1,0 +1,60 @@
+def main() -> int32:
+    # += on int32
+    mut a: int32 = 10
+    a += 5
+    print(a)    # 15
+
+    # -= on int32
+    a -= 3
+    print(a)    # 12
+
+    # *= on int32
+    a *= 4
+    print(a)    # 48
+
+    # /= on int32
+    a /= 6
+    print(a)    # 8
+
+    # %= on int32
+    a %= 3
+    print(a)    # 2
+
+    # += on float64
+    mut b: float64 = 1.5
+    b += 2.5
+    print(b)    # 4.0
+
+    # -= on float64
+    b -= 1.0
+    print(b)    # 3.0
+
+    # *= on float64
+    b *= 2.0
+    print(b)    # 6.0
+
+    # /= on float64
+    b /= 3.0
+    print(b)    # 2.0
+
+    # Chained augmented assignments
+    mut c: int32 = 100
+    c += 50
+    c -= 25
+    c *= 2
+    c /= 5
+    print(c)    # ((100+50-25)*2)/5 = 250/5 = 50
+
+    # Augmented assignment with int64
+    mut d: int64 = 1000000000
+    d += 1000000000
+    print(d)    # 2000000000
+
+    # Augmented assignment with int8
+    mut e: int8 = 10
+    e += 5
+    print(e)    # 15
+    e -= 20
+    print(e)    # -5
+
+    return 0

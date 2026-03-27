@@ -1,0 +1,19 @@
+# BUG test: Can we pass a String field from match borrow binding?
+
+class Wrapper:
+    label: String
+
+def print_label(s: borrow String):
+    print(s)
+
+def main() -> int32:
+    opt: Wrapper? = Option.Some(Wrapper(label="hello"))
+
+    match borrow opt:
+        case Some(w):
+            # Can we pass w.label (borrowed String field) to a function?
+            print_label(w.label)
+        case None:
+            print("none")
+
+    return 0

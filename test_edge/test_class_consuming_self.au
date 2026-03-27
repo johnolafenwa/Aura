@@ -1,0 +1,27 @@
+class Token:
+    value: String
+
+    def consume(self) -> String:
+        return self.value
+
+    def consume_and_print(self):
+        print(self.value)
+
+class Wrapper:
+    inner: int32
+
+    def unwrap(self) -> int32:
+        return self.inner
+
+def main() -> int32:
+    t = Token(value="secret")
+    s = t.consume()
+    print(s)
+
+    t2 = Token(value="hello")
+    t2.consume_and_print()
+
+    w = Wrapper(inner=42)
+    print(w.unwrap())
+
+    return 0

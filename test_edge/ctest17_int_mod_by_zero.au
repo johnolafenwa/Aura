@@ -1,0 +1,6 @@
+def main() -> int32:
+    # Integer modulo by zero - should this crash or error?
+    a: int32 = 10
+    b: int32 = 0
+    print(a % b)
+    return 0

@@ -1,0 +1,24 @@
+# Edge test: Trait implemented for a generic class specialization
+# Plus using that trait in a generic function
+
+trait Summable:
+    def sum(borrow self) -> int32
+
+class Pair[T]:
+    first: T
+    second: T
+
+# Implement for specialized Pair[int32]
+impl Summable for Pair[int32]:
+    def sum(borrow self) -> int32:
+        return self.first + self.second
+
+# Generic function using trait bound
+def total[T: Summable](item: T) -> int32:
+    return item.sum()
+
+def main() -> int32:
+    p = Pair(first=10, second=20)
+    print(p.sum())
+    print(total(item=Pair(first=3, second=7)))
+    return 0

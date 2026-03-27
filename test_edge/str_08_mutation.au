@@ -1,0 +1,30 @@
+def main() -> int32:
+    # Mutable string reassignment
+    mut s: String = "first"
+    print(s)
+    s = "second"
+    print(s)
+    s = "third"
+    print(s)
+
+    # Mutable from concat
+    mut greeting: String = "Hello"
+    greeting = greeting + " World"
+    print(greeting)
+
+    # Reassign to empty
+    mut text: String = "content"
+    text = ""
+    if text == "":
+        print("cleared: pass")
+    else:
+        print("cleared: FAIL")
+
+    # Multiple reassignments
+    mut counter_str: String = "a"
+    counter_str = "b"
+    counter_str = "c"
+    counter_str = "d"
+    print(counter_str)
+
+    return 0

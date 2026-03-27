@@ -7,10 +7,11 @@ def process() -> Result[int32, int32]:
     v = try parse_num(-1)
     return Result.Ok(v * 2)
 
-def main():
+def main() -> int32:
     res = process()
     match res:
         case Result.Ok(v):
             print(v)
         case Result.Err(e):
             print(e)
+    return 0

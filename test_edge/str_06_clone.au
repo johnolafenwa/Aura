@@ -1,0 +1,35 @@
+def consume(s: String):
+    print(s)
+
+def main() -> int32:
+    # Basic clone
+    original: String = "original"
+    copy = original.clone()
+    print(copy)
+
+    # Clone independence: modify original, clone unchanged
+    mut source: String = "before"
+    cloned = source.clone()
+    source = "after"
+    print(source)
+    print(cloned)
+    if source != cloned:
+        print("independence: pass")
+    else:
+        print("independence: FAIL")
+
+    # Clone allows use after move
+    text: String = "hello"
+    cloned2 = text.clone()
+    consume(text)
+    print(cloned2)
+
+    # Clone of empty string
+    empty: String = ""
+    empty_copy = empty.clone()
+    if empty_copy == "":
+        print("empty clone: pass")
+    else:
+        print("empty clone: FAIL")
+
+    return 0

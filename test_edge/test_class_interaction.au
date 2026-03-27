@@ -1,0 +1,35 @@
+copy class Money:
+    amount: int32
+
+    def add(borrow self, other: borrow Money) -> Money:
+        return Money(amount=self.amount + other.amount)
+
+class Account:
+    name: String
+    balance: Money
+
+    def get_balance(borrow self) -> int32:
+        return self.balance.amount
+
+    def deposit(borrow mut self, m: Money):
+        self.balance = self.balance.add(other=m)
+
+class Bank:
+    name: String
+
+    def create_account(borrow self, holder: String) -> Account:
+        return Account(name=holder, balance=Money(amount=0))
+
+def main() -> int32:
+    bank = Bank(name="First Bank")
+    mut acct = bank.create_account(holder="Alice")
+    print(acct.name)
+    print(acct.get_balance())
+
+    acct.deposit(m=Money(amount=100))
+    print(acct.get_balance())
+
+    acct.deposit(m=Money(amount=50))
+    print(acct.get_balance())
+
+    return 0

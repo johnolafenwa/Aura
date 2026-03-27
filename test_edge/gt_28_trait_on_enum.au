@@ -1,0 +1,24 @@
+## Test 28: Trait implemented for a non-generic enum
+## Expects: "on" then "off"
+
+trait Describable:
+    def describe(borrow self) -> String
+
+enum Switch:
+    On
+    Off
+
+impl Describable for Switch:
+    def describe(borrow self) -> String:
+        match self:
+            case Switch.On:
+                return "on"
+            case Switch.Off:
+                return "off"
+
+def main() -> int32:
+    s1 = Switch.On
+    s2 = Switch.Off
+    print(s1.describe())
+    print(s2.describe())
+    return 0

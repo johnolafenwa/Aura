@@ -1,5 +1,5 @@
-def greet(name: String) -> String:
-    return "Hello, " + name
+def greet(name: borrow str) -> String:
+    return f"Hello, {name}"
 
 def main() -> int32:
     s = greet("Aurora")

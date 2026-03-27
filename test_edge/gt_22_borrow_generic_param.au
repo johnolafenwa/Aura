@@ -1,0 +1,17 @@
+## Test 22: Borrow semantics with generic function parameters
+## Expects: 42 then 42
+
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def peek[T](b: borrow Box[T]) -> T:
+    return b.get()
+
+def main() -> int32:
+    b: Box[int32] = Box(value=42)
+    print(peek(b))
+    print(b.get())
+    return 0

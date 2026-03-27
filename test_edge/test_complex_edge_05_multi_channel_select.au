@@ -1,0 +1,49 @@
+# Edge test: Select on multiple channels simultaneously
+
+def producer_a(ch: Channel[int32]):
+    sleep(10ms)
+    ch.send(1)
+    ch.close()
+
+def producer_b(ch: Channel[int32]):
+    sleep(20ms)
+    ch.send(2)
+    ch.close()
+
+def main() -> int32:
+    ch_a: Channel[int32] = channel()
+    ch_b: Channel[int32] = channel()
+
+    with task_group() as group:
+        group.spawn(producer_a, ch_a.clone())
+        group.spawn(producer_b, ch_b.clone())
+
+        mut got_a: bool = false
+        mut got_b: bool = false
+
+        while true:
+            if got_a:
+                if got_b:
+                    break
+
+            select:
+                case val_a = ch_a.recv():
+                    match val_a:
+                        case Option.Some(v):
+                            print(f"A: {v}")
+                            got_a = true
+                        case Option.None:
+                            got_a = true
+                case val_b = ch_b.recv():
+                    match val_b:
+                        case Option.Some(v):
+                            print(f"B: {v}")
+                            got_b = true
+                        case Option.None:
+                            got_b = true
+                case after(1s):
+                    print("timeout")
+                    break
+
+    print("done")
+    return 0

@@ -1,0 +1,31 @@
+enum Response:
+    Success(int32)
+    Failure(String)
+    Timeout
+    Data(float64)
+
+def describe(r: Response) -> String:
+    match r:
+        case Response.Success(code):
+            print(code)
+            return "success"
+        case Response.Failure(msg):
+            return "fail: " + msg
+        case Response.Timeout:
+            return "timeout"
+        case Response.Data(val):
+            print(val)
+            return "data"
+
+def main() -> int32:
+    r1 = Response.Success(200)
+    r2 = Response.Failure("not found")
+    r3 = Response.Timeout
+    r4 = Response.Data(3.14)
+
+    print(describe(r1))
+    print(describe(r2))
+    print(describe(r3))
+    print(describe(r4))
+
+    return 0

@@ -1,0 +1,55 @@
+def parse_positive(n: int32) -> Result[int32, String]:
+    if n < 0:
+        return Result.Err("negative number")
+    if n == 0:
+        return Result.Err("zero not allowed")
+    return Result.Ok(n)
+
+def safe_sqrt_approx(n: int32) -> Result[int32, String]:
+    if n < 0:
+        return Result.Err("negative input")
+    # Simple integer square root approximation
+    mut i = 0
+    while i * i <= n:
+        i = i + 1
+    return Result.Ok(i - 1)
+
+def main() -> int32:
+    # Test Ok path
+    r1 = parse_positive(42)
+    match r1:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Test Err path - negative
+    r2 = parse_positive(-5)
+    match r2:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Test Err path - zero
+    r3 = parse_positive(0)
+    match r3:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    # Test sqrt
+    match safe_sqrt_approx(25):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    match safe_sqrt_approx(-1):
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+
+    return 0

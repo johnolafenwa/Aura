@@ -1,0 +1,26 @@
+## Test 30: Multiple trait bounds - violation when only one trait implemented
+## Expects: Compile error about missing trait implementation
+
+trait CanFly:
+    def fly(borrow self) -> String
+
+trait CanSwim:
+    def swim(borrow self) -> String
+
+class Duck:
+    name: String
+
+impl CanFly for Duck:
+    def fly(borrow self) -> String:
+        return "flying"
+
+## Note: CanSwim is NOT implemented for Duck
+
+def amphibious[T: CanFly + CanSwim](creature: T):
+    print(creature.fly())
+    print(creature.swim())
+
+def main() -> int32:
+    d = Duck(name="donald")
+    amphibious(creature=d)
+    return 0

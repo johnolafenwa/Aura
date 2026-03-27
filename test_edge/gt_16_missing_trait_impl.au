@@ -1,0 +1,16 @@
+## Test 16: Missing trait impl - should produce a compile error
+## Expects: Compile error about Gadget not implementing Speakable
+
+trait Speakable:
+    def speak(borrow self) -> String
+
+class Gadget:
+    name: String
+
+def announce[T: Speakable](item: T):
+    print(item.speak())
+
+def main() -> int32:
+    g = Gadget(name="phone")
+    announce(item=g)
+    return 0

@@ -1,0 +1,6 @@
+def main() -> int32:
+    # Trying augmented assign on immutable variable - should error
+    x: int32 = 10
+    x += 5
+    print(x)
+    return 0

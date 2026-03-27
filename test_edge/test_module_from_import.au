@@ -1,0 +1,9 @@
+## Test 2: From import - import a class directly
+from modules.helpers.counter import Counter
+
+def main() -> int32:
+    mut c = Counter(value=10)
+    print(c.read())
+    c.increment()
+    print(c.read())
+    return 0

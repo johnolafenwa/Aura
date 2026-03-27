@@ -1,0 +1,29 @@
+# Edge test: Default arguments with complex interactions
+
+class Config:
+    host: String = "localhost"
+    port: int32 = 8080
+    debug: bool = false
+
+def connect(host: String = "localhost", port: int32 = 3000, retries: int32 = 3) -> String:
+    return f"{host}:{port} (retries={retries})"
+
+def main() -> int32:
+    # All defaults
+    print(connect())
+
+    # Some overridden
+    print(connect(port=5000))
+    print(connect(host="api.com", retries=1))
+
+    # All overridden
+    print(connect(host="db.com", port=5432, retries=5))
+
+    # Class with defaults
+    c1 = Config()
+    print(f"{c1.host}:{c1.port}")
+
+    c2 = Config(port=443)
+    print(f"{c2.host}:{c2.port}")
+
+    return 0

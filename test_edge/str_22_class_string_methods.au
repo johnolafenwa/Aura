@@ -1,0 +1,34 @@
+# Test class with string field and various methods
+
+class NamedCounter:
+    name: String
+    count: int32
+
+    def new(name: String) -> NamedCounter:
+        return NamedCounter(name=name, count=0)
+
+    def increment(borrow mut self):
+        self.count += 1
+
+    def describe(borrow self) -> String:
+        return f"{self.name}: {self.count}"
+
+    def get_name(borrow self) -> String:
+        return self.name.clone()
+
+def main() -> int32:
+    mut nc = NamedCounter.new("hits")
+    nc.increment()
+    nc.increment()
+    nc.increment()
+
+    desc = nc.describe()
+    print(desc)
+
+    name = nc.get_name()
+    print(name)
+
+    # name is independent of nc
+    print(nc.name)
+
+    return 0

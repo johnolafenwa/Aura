@@ -1,0 +1,14 @@
+## Test 13: Generic method on non-generic class
+## Expects: 42 then "hello"
+
+class Converter:
+    factor: int32
+
+    def passthrough[T](borrow self, value: T) -> T:
+        return value
+
+def main() -> int32:
+    c = Converter(factor=10)
+    print(c.passthrough(42))
+    print(c.passthrough("hello"))
+    return 0

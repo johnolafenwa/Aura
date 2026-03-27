@@ -1,0 +1,23 @@
+# Test: using an enum after consuming match (should error)
+enum Box[T]:
+    Full(T)
+    Empty
+
+def main() -> int32:
+    box: Box[int32] = Box.Full(42)
+
+    # Consuming match
+    match box:
+        case Box.Full(v):
+            print(v)
+        case Box.Empty:
+            print("empty")
+
+    # Attempt to use box again after consumption - should be a move error
+    match box:
+        case Box.Full(v):
+            print(v)
+        case Box.Empty:
+            print("empty")
+
+    return 0

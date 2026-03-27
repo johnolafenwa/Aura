@@ -1,0 +1,13 @@
+class Person:
+    name: String
+    age: int32
+
+    def describe(borrow self) -> String:
+        return f"{self.name} is {self.age} years old"
+
+def main() -> int32:
+    p = Person(name="Alice", age=30)
+    print(f"Name: {p.name}")
+    print(f"Age: {p.age}")
+    print(p.describe())
+    return 0

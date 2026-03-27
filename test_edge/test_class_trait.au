@@ -1,0 +1,30 @@
+trait Printable:
+    def to_string(borrow self) -> String
+
+class Dog:
+    name: String
+    breed: String
+
+impl Printable for Dog:
+    def to_string(borrow self) -> String:
+        return self.name + " (" + self.breed + ")"
+
+class Cat:
+    name: String
+
+impl Printable for Cat:
+    def to_string(borrow self) -> String:
+        return "Cat: " + self.name
+
+def show[T: Printable](item: borrow T):
+    print(item.to_string())
+
+def main() -> int32:
+    d = Dog(name="Rex", breed="Labrador")
+    show(item=d)
+    print(d.to_string())
+
+    c = Cat(name="Whiskers")
+    show(item=c)
+
+    return 0

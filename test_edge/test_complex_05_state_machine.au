@@ -1,0 +1,113 @@
+# Test 5: State machine - TCP-like protocol state transitions
+# Tests: enums for states and events, match, mutable reassignment, loops
+
+enum State:
+    Closed
+    Listen
+    SynSent
+    SynReceived
+    Established
+    FinWait
+    TimeWait
+
+enum Event:
+    PassiveOpen
+    ActiveOpen
+    SynAck
+    Ack
+    Close
+    Timeout
+
+def transition(state: State, event: Event) -> State:
+    match state:
+        case State.Closed:
+            match event:
+                case Event.PassiveOpen:
+                    return State.Listen
+                case Event.ActiveOpen:
+                    return State.SynSent
+                case _:
+                    return State.Closed
+        case State.Listen:
+            match event:
+                case Event.SynAck:
+                    return State.SynReceived
+                case Event.Close:
+                    return State.Closed
+                case _:
+                    return State.Listen
+        case State.SynSent:
+            match event:
+                case Event.SynAck:
+                    return State.Established
+                case Event.Close:
+                    return State.Closed
+                case _:
+                    return State.SynSent
+        case State.SynReceived:
+            match event:
+                case Event.Ack:
+                    return State.Established
+                case _:
+                    return State.SynReceived
+        case State.Established:
+            match event:
+                case Event.Close:
+                    return State.FinWait
+                case _:
+                    return State.Established
+        case State.FinWait:
+            match event:
+                case Event.Ack:
+                    return State.TimeWait
+                case _:
+                    return State.FinWait
+        case State.TimeWait:
+            match event:
+                case Event.Timeout:
+                    return State.Closed
+                case _:
+                    return State.TimeWait
+
+def state_name(state: borrow State) -> String:
+    match state:
+        case State.Closed:
+            return "Closed"
+        case State.Listen:
+            return "Listen"
+        case State.SynSent:
+            return "SynSent"
+        case State.SynReceived:
+            return "SynReceived"
+        case State.Established:
+            return "Established"
+        case State.FinWait:
+            return "FinWait"
+        case State.TimeWait:
+            return "TimeWait"
+
+def main() -> int32:
+    # Simulate a connection lifecycle
+    # Closed -> Listen -> SynReceived -> Established -> FinWait -> TimeWait -> Closed
+    mut state = State.Closed
+    print(state_name(state))
+
+    state = transition(state, Event.PassiveOpen)
+    print(state_name(state))
+
+    state = transition(state, Event.SynAck)
+    print(state_name(state))
+
+    state = transition(state, Event.Ack)
+    print(state_name(state))
+
+    state = transition(state, Event.Close)
+    print(state_name(state))
+
+    state = transition(state, Event.Ack)
+    print(state_name(state))
+
+    state = transition(state, Event.Timeout)
+    print(state_name(state))
+
+    return 0

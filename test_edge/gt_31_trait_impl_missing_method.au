@@ -1,0 +1,19 @@
+## Test 31: Trait impl that's missing one of two required methods
+## Expects: Compile error about incomplete implementation
+
+trait Displayable:
+    def label(borrow self) -> String
+    def icon(borrow self) -> String
+
+class Button:
+    text: String
+
+impl Displayable for Button:
+    def label(borrow self) -> String:
+        return self.text.clone()
+    ## Note: icon() is NOT implemented
+
+def main() -> int32:
+    b = Button(text="OK")
+    print(b.label())
+    return 0

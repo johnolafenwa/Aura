@@ -1,0 +1,16 @@
+def compute_value(x: int32) -> int32:
+    if x > 0:
+        return x + 1
+    return x
+
+def main() -> int32:
+    mut val: int8 = 100
+    mut temp: int32 = compute_value(val as int32)
+    val = temp as int8
+    print(val)     # 101
+
+    temp = compute_value(val as int32)
+    val = temp as int8
+    print(val)     # 102
+
+    return 0

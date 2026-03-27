@@ -1,0 +1,16 @@
+# Test: alternative borrow syntax (borrow before param name)
+
+class Data:
+    value: int32
+
+def read_alt(borrow d: Data) -> int32:
+    return d.value
+
+def main() -> int32:
+    d = Data(value=99)
+    v = read_alt(d)
+    print(v)
+    # d still usable
+    v2 = read_alt(d)
+    print(v2)
+    return 0

@@ -1,0 +1,36 @@
+# Edge test: Chaining Option operations manually (map/unwrap pattern)
+
+def add_one(n: int32) -> int32:
+    return n + 1
+
+def option_map(val: Option[int32]) -> Option[int32]:
+    match val:
+        case Option.Some(v):
+            return Option.Some(add_one(v))
+        case Option.None:
+            return Option.None
+
+def option_unwrap_or(val: Option[int32], default: int32) -> int32:
+    match val:
+        case Option.Some(v):
+            return v
+        case Option.None:
+            return default
+
+def main() -> int32:
+    a: Option[int32] = Option.Some(5)
+    b: Option[int32] = Option.None
+
+    # Map Some
+    mapped_a = option_map(val=a)
+    print(option_unwrap_or(val=mapped_a, default=0))
+
+    # Map None
+    mapped_b = option_map(val=b)
+    print(option_unwrap_or(val=mapped_b, default=-1))
+
+    # Chain: map twice
+    twice = option_map(val=option_map(val=Option.Some(10)))
+    print(option_unwrap_or(val=twice, default=0))
+
+    return 0

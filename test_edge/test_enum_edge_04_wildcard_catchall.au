@@ -1,0 +1,41 @@
+enum Animal:
+    Dog
+    Cat
+    Bird
+    Fish
+    Snake
+
+def is_pet(a: Animal) -> bool:
+    match a:
+        case Animal.Dog:
+            return true
+        case Animal.Cat:
+            return true
+        case _:
+            return false
+
+def sound(a: Animal) -> String:
+    match a:
+        case Animal.Dog:
+            return "woof"
+        case Animal.Cat:
+            return "meow"
+        case Animal.Bird:
+            return "chirp"
+        case _:
+            return "..."
+
+def main() -> int32:
+    if is_pet(Animal.Dog):
+        print("dog is pet")
+    if is_pet(Animal.Snake):
+        print("bug")
+    else:
+        print("snake not pet")
+
+    print(sound(Animal.Dog))
+    print(sound(Animal.Cat))
+    print(sound(Animal.Bird))
+    print(sound(Animal.Fish))
+    print(sound(Animal.Snake))
+    return 0

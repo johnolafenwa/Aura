@@ -1,0 +1,9 @@
+## Test 52: Attempting to use str() to convert int to string
+## Documents whether str() exists as a builtin function
+## Expects: either "42" or a compile error
+
+def main() -> int32:
+    x: int32 = 42
+    s = str(x)
+    print(s)
+    return 0

@@ -1,0 +1,17 @@
+## Test 11: Trait implemented for specialized generic class
+## Expects: "boxed: hello"
+
+trait Showable:
+    def show(borrow self) -> String
+
+class Box[T]:
+    value: T
+
+impl Showable for Box[String]:
+    def show(borrow self) -> String:
+        return "boxed: " + self.value
+
+def main() -> int32:
+    b: Box[String] = Box(value="hello")
+    print(b.show())
+    return 0

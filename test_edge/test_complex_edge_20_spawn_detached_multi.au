@@ -1,0 +1,29 @@
+# Edge test: Multiple detached spawns communicating through a shared channel
+
+def worker(id: int32, out: Channel[int32]):
+    out.send(id * 100)
+
+def main() -> int32:
+    results: Channel[int32] = channel()
+
+    # Spawn 5 detached workers
+    spawn detached worker(1, results.clone())
+    spawn detached worker(2, results.clone())
+    spawn detached worker(3, results.clone())
+    spawn detached worker(4, results.clone())
+    spawn detached worker(5, results.clone())
+
+    # Collect all 5 results
+    mut total: int32 = 0
+    mut count: int32 = 0
+    while count < 5:
+        match results.recv():
+            case Option.Some(v):
+                total += v
+                count += 1
+            case Option.None:
+                break
+
+    # Expected: 100 + 200 + 300 + 400 + 500 = 1500
+    print(total)
+    return 0

@@ -1,0 +1,27 @@
+def main() -> int32:
+    # Compare int8 and int32 (different sizes) via cast
+    a: int8 = 10
+    b: int32 = 10
+    print((a as int32) == b)    # true
+    print((a as int32) < b)     # false
+
+    # Compare int32 and int64 via cast
+    c: int32 = 100
+    d: int64 = 100
+    print((c as int64) == d)    # true
+
+    # Compare int and float via cast
+    e: int32 = 5
+    f: float64 = 5.0
+    print((e as float64) == f)  # true
+
+    g: int32 = 5
+    h: float64 = 5.1
+    print((g as float64) < h)   # true
+
+    # Compare uint and int via cast
+    i: uint32 = 42
+    j: int32 = 42
+    print((i as int32) == j)    # true but might overflow for large uint32
+
+    return 0

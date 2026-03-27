@@ -1,0 +1,37 @@
+def make_greeting(name: borrow str) -> String:
+    return f"Hello, {name}!"
+
+def concat_three(a: borrow str, b: borrow str, c: borrow str) -> String:
+    return a + b + c
+
+def empty_string() -> String:
+    return ""
+
+def conditional_string(flag: bool) -> String:
+    if flag:
+        return "true_branch"
+    return "false_branch"
+
+def main() -> int32:
+    # Return f-string
+    g = make_greeting("World")
+    print(g)
+
+    # Return concatenation
+    r = concat_three("a", "b", "c")
+    print(r)
+
+    # Return empty string
+    e = empty_string()
+    if e == "":
+        print("empty return: pass")
+    else:
+        print("empty return: FAIL")
+
+    # Conditional return
+    t = conditional_string(true)
+    f = conditional_string(false)
+    print(t)
+    print(f)
+
+    return 0

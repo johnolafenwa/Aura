@@ -1,0 +1,17 @@
+# Test: can we pass String arguments positionally (without named args)?
+
+def greet(name: borrow str) -> String:
+    return f"Hi {name}"
+
+def consume(text: String):
+    print(text)
+
+def main() -> int32:
+    # Positional borrow str
+    r = greet("World")
+    print(r)
+
+    # Positional owned String
+    consume("owned")
+
+    return 0

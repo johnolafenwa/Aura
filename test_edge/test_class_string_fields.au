@@ -1,0 +1,32 @@
+class Person:
+    first: String
+    last: String
+
+    def full_name(borrow self) -> String:
+        return self.first + " " + self.last
+
+    def greet(borrow self) -> String:
+        return "Hello, " + self.full_name()
+
+def borrow_person(p: borrow Person):
+    print(p.full_name())
+
+def consume_person(p: Person):
+    print(p.greet())
+
+def main() -> int32:
+    p = Person(first="John", last="Doe")
+    borrow_person(p=p)
+    borrow_person(p=p)
+    print(p.greet())
+
+    consume_person(p=p)
+
+    p2 = Person(first="Jane", last="Smith")
+    print(p2.full_name())
+
+    mut p3 = Person(first="Bob", last="A")
+    p3.last = "B"
+    print(p3.full_name())
+
+    return 0

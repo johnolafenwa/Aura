@@ -1,0 +1,55 @@
+# Test 8: Complex class hierarchy - nested composition A->B->C
+# Tests: class composition, methods at each level, borrow, mutation
+
+class Address:
+    city: String
+    zip: int32
+
+    def format(borrow self) -> String:
+        return f"{self.city} {self.zip}"
+
+class Department:
+    name: String
+    floor: int32
+    location: Address
+
+    def summary(borrow self) -> String:
+        return f"{self.name} on floor {self.floor} at {self.location.format()}"
+
+class Employee:
+    name: String
+    id: int32
+    department: Department
+
+    def full_info(borrow self) -> String:
+        return f"Employee {self.name} (#{self.id}) in {self.department.summary()}"
+
+    def get_city(borrow self) -> String:
+        return self.department.location.city.clone()
+
+class Company:
+    name: String
+    ceo: Employee
+
+    def describe(borrow self) -> String:
+        return f"{self.name} led by {self.ceo.name}"
+
+def main() -> int32:
+    addr = Address(city="NYC", zip=10001)
+    dept = Department(name="Engineering", floor=5, location=addr)
+    emp = Employee(name="Alice", id=42, department=dept)
+    company = Company(name="TechCorp", ceo=emp)
+
+    # Access deeply nested data
+    print(company.describe())
+    print(company.ceo.full_info())
+    print(company.ceo.get_city())
+    print(company.ceo.department.location.zip)
+
+    # Create another employee with different department
+    addr2 = Address(city="SF", zip=94102)
+    dept2 = Department(name="Design", floor=3, location=addr2)
+    emp2 = Employee(name="Bob", id=99, department=dept2)
+    print(emp2.full_info())
+
+    return 0

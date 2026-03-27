@@ -1,0 +1,26 @@
+# BUG DEMO: String field access on borrow param in free function fails
+# but same access works in borrow self methods.
+# Also, error message points to wrong line (line 1 instead of actual error).
+
+class Holder:
+    text: String
+    value: int32
+
+    def get_text_method(borrow self) -> String:
+        return self.text
+
+def get_value_free(h: borrow Holder) -> int32:
+    return h.value
+
+def main() -> int32:
+    h = Holder(text="hello", value=42)
+
+    # Method works fine
+    t1 = h.get_text_method()
+    print(t1)
+
+    # Copy field in free function works
+    v = get_value_free(h)
+    print(v)
+
+    return 0

@@ -90,6 +90,12 @@ Current bootstrap compiler workflow:
   - member completion expects the cursor positioned just after `.`
   - the CLI tolerates the common incomplete-editor state where the current buffer contains a dangling member access such as `counter.`
   - stdin-backed completion now also resolves local imported modules relative to the supplied file path
+- `cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au`
+  - execute an editor-style buffer while still resolving local imports relative to the supplied path
+- `cat examples/modules/simple_import.au | cargo run -p aura -- run-mir --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au`
+  - run the MIR path against stdin-backed source while still resolving local imports relative to the supplied path
+- `cat examples/modules/simple_import.au | cargo run -p aura -- check --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au`
+  - type-check an editor-style buffer while still resolving local imports relative to the supplied path
 - `npm run coverage:compiler`
   - measure current Rust compiler-library coverage with `cargo-llvm-cov`
 - `npm run coverage:compiler:check`

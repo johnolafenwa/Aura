@@ -1,0 +1,19 @@
+# Investigate: does borrow self allow field access that free functions don't?
+
+class Holder:
+    text: String
+
+    def get_text(borrow self) -> String:
+        return self.text
+
+    def clone_text(borrow self) -> String:
+        return self.text.clone()
+
+    def print_text(borrow self):
+        print(self.text)
+
+def main() -> int32:
+    h = Holder(text="hello")
+    t = h.get_text()
+    print(t)
+    return 0

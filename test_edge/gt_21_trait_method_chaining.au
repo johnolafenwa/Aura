@@ -1,0 +1,21 @@
+## Test 21: Trait method chaining - call multiple trait methods in sequence
+## Expects: "hello world"
+
+trait Transformable:
+    def transform(borrow self) -> String
+
+class Word:
+    text: String
+
+impl Transformable for Word:
+    def transform(borrow self) -> String:
+        return self.text.clone()
+
+def combine[T: Transformable](a: T, b: T) -> String:
+    return a.transform() + " " + b.transform()
+
+def main() -> int32:
+    w1 = Word(text="hello")
+    w2 = Word(text="world")
+    print(combine(a=w1, b=w2))
+    return 0

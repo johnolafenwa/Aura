@@ -1,0 +1,33 @@
+# Edge case: enum with only one variant
+enum Wrapper:
+    Value(int32)
+
+# Single unit variant
+enum Unit:
+    Only
+
+def extract(w: Wrapper) -> int32:
+    match w:
+        case Wrapper.Value(v):
+            return v
+
+def check(u: Unit) -> String:
+    match u:
+        case Unit.Only:
+            return "only"
+
+def main() -> int32:
+    w = Wrapper.Value(42)
+    print(extract(w))
+    print(extract(Wrapper.Value(99)))
+
+    u = Unit.Only
+    print(check(u))
+
+    # Single variant with wildcard - should wildcard be allowed?
+    w2 = Wrapper.Value(7)
+    match w2:
+        case Wrapper.Value(v):
+            print(v)
+
+    return 0

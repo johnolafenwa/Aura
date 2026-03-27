@@ -1,0 +1,32 @@
+# Edge test: Generic class with methods that use the type parameter
+# Testing: generic methods, generic return types, multiple instantiations
+
+class Pair[T]:
+    first: T
+    second: T
+
+    def get_first(borrow self) -> T:
+        return self.first
+
+    def get_second(borrow self) -> T:
+        return self.second
+
+    def swap(borrow self) -> Pair[T]:
+        return Pair(first=self.second, second=self.first)
+
+def main() -> int32:
+    # Int pair
+    ip = Pair(first=1, second=2)
+    print(ip.get_first())
+    print(ip.get_second())
+
+    swapped = ip.swap()
+    print(swapped.get_first())
+    print(swapped.get_second())
+
+    # String pair
+    sp = Pair(first="hello", second="world")
+    print(sp.get_first())
+    print(sp.get_second())
+
+    return 0

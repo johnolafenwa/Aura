@@ -1,0 +1,22 @@
+def main() -> int32:
+    ch = Channel[int32](capacity=5)
+
+    ch.send(1)
+    ch.send(2)
+    ch.send(3)
+    ch.send(4)
+    ch.send(5)
+
+    mut sum: int32 = 0
+    mut i: int32 = 0
+    while i < 5:
+        match ch.recv():
+            case Option.Some(v):
+                sum += v
+            case Option.None:
+                print("error: unexpected None")
+        i += 1
+
+    print(sum)
+    print("buffered channel ok")
+    return 0

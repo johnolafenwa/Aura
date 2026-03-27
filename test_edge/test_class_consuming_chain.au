@@ -1,0 +1,24 @@
+class Builder:
+    name: String
+    port: int32
+    debug: bool
+
+    def with_port(self, p: int32) -> Builder:
+        return Builder(name=self.name, port=p, debug=self.debug)
+
+    def with_debug(self, d: bool) -> Builder:
+        return Builder(name=self.name, port=self.port, debug=d)
+
+    def build(self) -> String:
+        return self.name
+
+def main() -> int32:
+    result = Builder(name="app", port=0, debug=false).with_port(p=3000).with_debug(d=true).build()
+    print(result)
+
+    b = Builder(name="srv", port=0, debug=false)
+    b2 = b.with_port(p=8080).with_debug(d=true)
+    print(b2.port)
+    print(b2.debug)
+
+    return 0

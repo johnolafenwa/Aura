@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,8 +14,8 @@ use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinFunction, BuiltinMember, CallConvention,
 };
 use crate::diag::{Diagnostic, Result, Span};
-use crate::integer::{IntegerBounds, IntegerValue};
-use crate::sema::{ModuleNamespace, Program, Type};
+use crate::integer::{minimal_signed_type_for_negative_literal, IntegerBounds, IntegerValue};
+use crate::sema::{substitute_type, ModuleNamespace, Program, Type};
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -315,12 +316,18 @@ impl Value {
 }
 
 fn render_float(value: f64) -> String {
+    if !value.is_finite() {
+        return value.to_string();
+    }
     let roundtripped_f32 = (value as f32) as f64;
     let mut rendered = if value == roundtripped_f32 {
         (value as f32).to_string()
     } else {
         value.to_string()
     };
+    if !value.is_finite() {
+        return rendered;
+    }
     if !rendered.contains(['.', 'e', 'E']) {
         rendered.push_str(".0");
     }
@@ -506,6 +513,7 @@ pub fn run(program: &Program) -> Result<RunOutput> {
         stdout: stdout.clone(),
         cancellation: CancellationContext::default(),
         module_stack: Vec::new(),
+        expr_type_cache: RefCell::new(HashMap::new()),
     };
     let value = interpreter.run_main()?;
     let rendered_stdout = stdout.lock().unwrap().clone();
@@ -520,6 +528,7 @@ struct Interpreter {
     stdout: Arc<Mutex<String>>,
     cancellation: CancellationContext,
     module_stack: Vec<String>,
+    expr_type_cache: RefCell<HashMap<(usize, usize), Type>>,
 }
 
 struct CallOutcome {
@@ -840,6 +849,13 @@ impl Interpreter {
     }
 
     fn lower_runtime_type(type_ref: &crate::ast::TypeRef) -> Type {
+        Self::lower_runtime_type_with_type_params(type_ref, &[])
+    }
+
+    fn lower_runtime_type_with_type_params(
+        type_ref: &crate::ast::TypeRef,
+        type_params: &[String],
+    ) -> Type {
         if type_ref.name == "None" {
             return Type::Unit;
         }
@@ -848,9 +864,16 @@ impl Interpreter {
         } else {
             &type_ref.name
         };
+        if type_ref.args.is_empty() && type_params.iter().any(|type_param| type_param == name) {
+            return Type::TypeParam(name.to_string());
+        }
         Type::Named(
             name.to_string(),
-            type_ref.args.iter().map(Self::lower_runtime_type).collect(),
+            type_ref
+                .args
+                .iter()
+                .map(|arg| Self::lower_runtime_type_with_type_params(arg, type_params))
+                .collect(),
         )
     }
 
@@ -892,7 +915,12 @@ impl Interpreter {
     }
 
     fn infer_expr_type(&self, expr: &Expr, env: &Env) -> Option<Type> {
-        match &expr.kind {
+        let cache_key = (expr.span.line, expr.span.column);
+        if let Some(cached) = self.expr_type_cache.borrow().get(&cache_key).cloned() {
+            return Some(cached);
+        }
+
+        let inferred = match &expr.kind {
             ExprKind::Name(name) if name == "None" => Some(Type::Unit),
             ExprKind::Name(name) => env
                 .get_type(name)
@@ -924,7 +952,10 @@ impl Interpreter {
             ExprKind::Cast { ty, .. } => Some(Self::lower_runtime_type(ty)),
             ExprKind::Unary { op, expr } => match op {
                 UnaryOp::Not => Some(Type::named("bool")),
-                UnaryOp::Neg => self.infer_expr_type(expr, env),
+                UnaryOp::Neg => match &expr.kind {
+                    ExprKind::Int(value) => Some(minimal_signed_type_for_negative_literal(*value)),
+                    _ => self.infer_expr_type(expr, env),
+                },
             },
             ExprKind::Spawn { detached, value } => {
                 if *detached {
@@ -1037,7 +1068,15 @@ impl Interpreter {
                 None
             }
             ExprKind::Call { callee, .. } => self.infer_call_type(callee, env),
+        };
+
+        if let Some(ty) = inferred.clone() {
+            if !matches!(ty, Type::TypeParam(_)) {
+                self.expr_type_cache.borrow_mut().insert(cache_key, ty);
+            }
         }
+
+        inferred
     }
 
     fn infer_call_type(&self, callee: &Expr, env: &Env) -> Option<Type> {
@@ -1142,6 +1181,36 @@ impl Interpreter {
         }
     }
 
+    fn collect_runtime_type_substitutions(
+        pattern: &Type,
+        actual: &Type,
+        substitutions: &mut HashMap<String, Type>,
+    ) {
+        match pattern {
+            Type::TypeParam(name) => {
+                substitutions
+                    .entry(name.clone())
+                    .or_insert_with(|| actual.clone());
+            }
+            Type::Named(name, pattern_args) => {
+                let Type::Named(actual_name, actual_args) = actual else {
+                    return;
+                };
+                if name != actual_name || pattern_args.len() != actual_args.len() {
+                    return;
+                }
+                for (pattern_arg, actual_arg) in pattern_args.iter().zip(actual_args.iter()) {
+                    Self::collect_runtime_type_substitutions(
+                        pattern_arg,
+                        actual_arg,
+                        substitutions,
+                    );
+                }
+            }
+            Type::Unit | Type::Module(_) => {}
+        }
+    }
+
     fn call_function(
         &mut self,
         function: &FunctionDecl,
@@ -1161,20 +1230,41 @@ impl Interpreter {
             {
                 self.seed_module_imports(&mut env, &namespace.imported_modules);
             }
-            let mut values = args.into_iter();
-            if function.receiver.is_some() {
-                let Some(receiver) = values.next() else {
+            let mut values = args;
+            let receiver = if function.receiver.is_some() {
+                if values.is_empty() {
                     return Err(Diagnostic::at(
                         function.span,
                         format!("method `{}` is missing its receiver", function.name),
                     ));
-                };
+                }
+                Some(values.remove(0))
+            } else {
+                None
+            };
+            let mut substitutions = HashMap::new();
+            for (param, value) in function.params.iter().zip(values.iter()) {
+                let pattern_ty =
+                    Self::lower_runtime_type_with_type_params(&param.ty, &function.type_params);
+                if let Some(actual_ty) = Self::infer_value_type(value) {
+                    Self::collect_runtime_type_substitutions(
+                        &pattern_ty,
+                        &actual_ty,
+                        &mut substitutions,
+                    );
+                }
+            }
+            if function.receiver.is_some() {
+                let receiver = receiver.expect("receiver should be available after pre-check");
                 let receiver_ty =
                     Self::infer_value_type(&receiver).unwrap_or_else(|| Type::named("Unknown"));
                 env.define_typed("self".to_string(), receiver_ty, receiver);
             }
-            for (param, value) in function.params.iter().zip(values) {
-                let ty = Self::lower_runtime_type(&param.ty);
+            for (param, value) in function.params.iter().zip(values.into_iter()) {
+                let ty = substitute_type(
+                    &Self::lower_runtime_type_with_type_params(&param.ty, &function.type_params),
+                    &substitutions,
+                );
                 let value = self.coerce_value_to_type(value, &ty, param.span)?;
                 env.define_typed(param.name.clone(), ty, value);
             }
@@ -1756,10 +1846,11 @@ impl Interpreter {
                         ))
                     }
                 };
-                if let Some(result_ty) = self.infer_expr_type(expr, env) {
-                    let result = self.coerce_value_to_type(result, &result_ty, expr.span)?;
-                    return Ok(EvalOutcome::Value(result));
-                }
+                let result = if let Some(inferred_ty) = self.infer_expr_type(expr, env) {
+                    self.coerce_value_to_type(result, &inferred_ty, expr.span)?
+                } else {
+                    result
+                };
                 Ok(EvalOutcome::Value(result))
             }
             ExprKind::Spawn { detached, value } => {
@@ -1845,10 +1936,11 @@ impl Interpreter {
                     EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
                 };
                 let result = self.eval_binary(expr.span, *op, left_value, right_value)?;
-                if let Some(result_ty) = self.infer_expr_type(expr, env) {
-                    let result = self.coerce_value_to_type(result, &result_ty, expr.span)?;
-                    return Ok(EvalOutcome::Value(result));
-                }
+                let result = if let Some(inferred_ty) = self.infer_expr_type(expr, env) {
+                    self.coerce_value_to_type(result, &inferred_ty, expr.span)?
+                } else {
+                    result
+                };
                 Ok(EvalOutcome::Value(result))
             }
             ExprKind::Member { object, field } => {
@@ -1960,8 +2052,7 @@ impl Interpreter {
         env: &mut Env,
     ) -> Result<EvalOutcome> {
         match &callee.kind {
-            ExprKind::Specialize { expr, .. }
-                if matches!(&expr.kind, ExprKind::Name(name) if name == "Channel") =>
+            ExprKind::Specialize { expr, .. } if matches!(&expr.kind, ExprKind::Name(name) if name == "Channel") =>
             {
                 let ordered_args = bind_call_arguments(
                     "class `Channel`",
@@ -2635,8 +2726,8 @@ impl Interpreter {
                     other => {
                         let resolved_receiver_ty = self
                             .infer_expr_type(object, env)
-                            .or_else(|| Self::infer_value_type(&other))
-                            .filter(|ty| !matches!(ty, Type::TypeParam(_)));
+                            .and_then(|ty| (!matches!(ty, Type::TypeParam(_))).then_some(ty))
+                            .or_else(|| Self::infer_value_type(&other));
                         if let Some(resolved_receiver_ty) = resolved_receiver_ty {
                             if let Some(method) = self
                                 .find_trait_impl_method(&resolved_receiver_ty, field)
@@ -2885,6 +2976,7 @@ impl Interpreter {
                 stdout,
                 cancellation,
                 module_stack: Vec::new(),
+                expr_type_cache: RefCell::new(HashMap::new()),
             };
             interpreter
                 .call_function(&function, &function_info.module_name, values)
@@ -3039,6 +3131,7 @@ impl Interpreter {
                         stdout,
                         cancellation,
                         module_stack: Vec::new(),
+                        expr_type_cache: RefCell::new(HashMap::new()),
                     };
                     interpreter
                         .call_function(&function, &function_info.module_name, values)

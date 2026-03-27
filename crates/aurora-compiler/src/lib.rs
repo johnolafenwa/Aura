@@ -42,8 +42,19 @@ pub fn run_source(source: &str) -> Result<RunOutput> {
     run(&program)
 }
 
+pub fn run_path_with_source(path: &Path, source: &str) -> Result<RunOutput> {
+    let program = check_path_with_source(path, source)?;
+    run(&program)
+}
+
 pub fn run_source_via_mir(source: &str) -> Result<RunOutput> {
     let program = check_source(source)?;
+    let mir = lower_to_mir(&program);
+    run_mir(&mir)
+}
+
+pub fn run_path_with_source_via_mir(path: &Path, source: &str) -> Result<RunOutput> {
+    let program = check_path_with_source(path, source)?;
     let mir = lower_to_mir(&program);
     run_mir(&mir)
 }

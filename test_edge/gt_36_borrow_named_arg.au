@@ -1,0 +1,14 @@
+## Test 36: Borrow with named argument at call site
+## This tests whether borrow can be used with named arguments
+## Expects: Likely compile error (documenting a limitation)
+
+class Data:
+    value: int32
+
+def read(d: borrow Data) -> int32:
+    return d.value
+
+def main() -> int32:
+    d = Data(value=42)
+    print(read(d=borrow d))
+    return 0

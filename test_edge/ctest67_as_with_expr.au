@@ -1,0 +1,21 @@
+def main() -> int32:
+    # as with simple expression
+    a: float64 = (10 + 20) as float64
+    print(a)    # 30.0
+
+    # as with variable arithmetic
+    b: int32 = 10
+    c: int32 = 20
+    d: float64 = (b + c) as float64
+    print(d)    # 30.0
+
+    # as on literal
+    e: float64 = 42 as float64
+    print(e)    # 42.0
+
+    # as on variable
+    f: int32 = 99
+    g: float64 = f as float64
+    print(g)    # 99.0
+
+    return 0

@@ -1,0 +1,11 @@
+class Item:
+    name: String
+
+    def name(borrow self) -> String:
+        return self.name
+
+def main() -> int32:
+    i = Item(name="test")
+    print(i.name)
+    print(i.name())
+    return 0

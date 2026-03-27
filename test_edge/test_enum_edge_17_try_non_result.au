@@ -1,0 +1,13 @@
+def may_fail(x: int32) -> Result[int32, String]:
+    if x < 0:
+        return Result.Err("negative")
+    return Result.Ok(x)
+
+# This function returns int32, not Result - try should be invalid here
+def bad_func() -> int32:
+    v = try may_fail(5)
+    return v
+
+def main() -> int32:
+    print(bad_func())
+    return 0

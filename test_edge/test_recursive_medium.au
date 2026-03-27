@@ -1,0 +1,10 @@
+## Test: Medium recursion depth
+def count_down(n: int32) -> int32:
+    if n <= 0:
+        return 0
+    return count_down(n=n - 1)
+
+def main() -> int32:
+    result = count_down(n=1000)
+    print(result)
+    return 0

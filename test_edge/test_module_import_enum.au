@@ -1,0 +1,11 @@
+## Test 7: Importing enums - import an enum from another module
+from modules.shapes.circle import ShapeKind
+
+def main() -> int32:
+    kind = ShapeKind.Round
+    match kind:
+        case ShapeKind.Round:
+            print("round")
+        case ShapeKind.Angular:
+            print("angular")
+    return 0
