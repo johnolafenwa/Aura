@@ -1,0 +1,17 @@
+def main() -> int32:
+    left = Option[int32].Some(42)
+    right = Option[float64].Some(3.5)
+
+    match left:
+        case Some(value):
+            print(value)
+        case None:
+            print(0)
+
+    match right:
+        case Some(value):
+            print(value)
+        case None:
+            print(0.0)
+
+    return 0

@@ -19,6 +19,11 @@ Last updated: 2026-03-28
 
 ## Done
 
+- Fixed f-string lexing/parsing so interpolations can contain inner string literals and nested braces, with maintained compiler fixture coverage for both checking and execution.
+- Added maintained regression coverage for `Option.None` inference, namespace-qualified imports inside imported module bodies, and closed-channel `select` timers.
+- Fixed field-level move tracking for owned member reads so Aurora now rejects reusing a moved field while still allowing access to untouched fields and explicit field reinitialization.
+- Fixed `select` with `after(...)` over closed-and-empty channels so timer arms no longer starve behind immediate `recv()` closure results, and added maintained runtime regression coverage for that path.
+- Fixed specialized generic trait impl dispatch across interpreter, MIR runtime, and direct native builds, and added maintained examples plus CLI coverage for specialized dispatch and trait-associated methods.
 - Fixed direct-backend multi-implementor trait dispatch so bounded generic calls like `animal.describe()` now build natively across multiple concrete receiver types, with maintained example and CLI coverage.
 - Reserved built-in type names such as `Task`, `Channel`, and `Result` for the language/runtime surface so user-defined classes, enums, and traits now fail early with a clear diagnostic instead of later type-arity confusion.
 - Fixed module-crossing trait impl resolution across checking, interpreter/MIR execution, direct builds, compiler-backed completions, and the LSP bridge.

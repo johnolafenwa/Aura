@@ -1,0 +1,10 @@
+class Pair:
+    first: String
+    second: String
+
+def main() -> int32:
+    pair = Pair(first="a", second="b")
+    first = pair.first
+    print(first)
+    print(pair.first)
+    return 0

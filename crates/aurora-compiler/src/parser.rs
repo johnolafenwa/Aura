@@ -1452,11 +1452,31 @@ impl Parser {
             let expr_start = offset + ch.len_utf8();
             index += 1;
             let mut expr_end = None;
+            let mut brace_depth = 0usize;
+            let mut in_string = false;
+            let mut escaped = false;
             while index < chars.len() {
                 let (candidate_offset, candidate) = chars[index];
-                if candidate == '}' {
-                    expr_end = Some(candidate_offset);
-                    break;
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                    } else if candidate == '\\' {
+                        escaped = true;
+                    } else if candidate == '"' {
+                        in_string = false;
+                    }
+                    index += 1;
+                    continue;
+                }
+                match candidate {
+                    '"' => in_string = true,
+                    '{' => brace_depth += 1,
+                    '}' if brace_depth == 0 => {
+                        expr_end = Some(candidate_offset);
+                        break;
+                    }
+                    '}' => brace_depth -= 1,
+                    _ => {}
                 }
                 index += 1;
             }

@@ -287,13 +287,16 @@ fn tokenize_line(
             'f' if matches!(chars.get(index + 1), Some((_, '"'))) => {
                 index += 2;
                 let mut value = String::new();
+                let mut interpolation_depth = 0usize;
+                let mut interpolation_in_string = false;
+                let mut interpolation_escape = false;
 
                 while index < chars.len() {
                     let (_, current) = chars[index];
-                    if current == '"' {
+                    if interpolation_depth == 0 && current == '"' {
                         break;
                     }
-                    if current == '\\' {
+                    if interpolation_depth == 0 && current == '\\' {
                         index += 1;
                         let Some((_, escaped)) = chars.get(index) else {
                             return Err(Diagnostic::at(
@@ -318,6 +321,26 @@ fn tokenize_line(
                         continue;
                     }
                     value.push(current);
+                    if interpolation_depth > 0 {
+                        if interpolation_in_string {
+                            if interpolation_escape {
+                                interpolation_escape = false;
+                            } else if current == '\\' {
+                                interpolation_escape = true;
+                            } else if current == '"' {
+                                interpolation_in_string = false;
+                            }
+                        } else {
+                            match current {
+                                '"' => interpolation_in_string = true,
+                                '{' => interpolation_depth += 1,
+                                '}' => interpolation_depth = interpolation_depth.saturating_sub(1),
+                                _ => {}
+                            }
+                        }
+                    } else if current == '{' {
+                        interpolation_depth = 1;
+                    }
                     index += 1;
                 }
 

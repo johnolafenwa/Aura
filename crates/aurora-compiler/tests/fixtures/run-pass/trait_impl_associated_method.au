@@ -1,0 +1,13 @@
+trait Factory:
+    def make() -> int32
+
+class Widget:
+    value: int32
+
+impl Factory for Widget:
+    def make() -> int32:
+        return 7
+
+def main() -> int32:
+    print(Widget.make())
+    return 0

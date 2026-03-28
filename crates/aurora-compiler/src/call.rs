@@ -45,6 +45,10 @@ pub fn callable_params_from_decl<'a>(params: &'a [Param]) -> Vec<CallableParam<'
         .collect()
 }
 
+fn format_argument_count(count: usize) -> String {
+    format!("{} argument{}", count, if count == 1 { "" } else { "s" })
+}
+
 pub fn bind_call_arguments<'arg, 'param>(
     callee_name: &str,
     params: &[CallableParam<'param>],
@@ -56,9 +60,9 @@ pub fn bind_call_arguments<'arg, 'param>(
         return Err(Diagnostic::at(
             span,
             format!(
-                "{} expects {} arguments, found {}",
+                "{} expects {}, found {}",
                 callee_name,
-                params.len(),
+                format_argument_count(params.len()),
                 args.len()
             ),
         ));
@@ -126,9 +130,9 @@ pub fn bind_call_arguments<'arg, 'param>(
             return Err(Diagnostic::at(
                 argument.span,
                 format!(
-                    "{} expects {} arguments, found {}",
+                    "{} expects {}, found {}",
                     callee_name,
-                    params.len(),
+                    format_argument_count(params.len()),
                     args.len()
                 ),
             ));

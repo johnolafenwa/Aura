@@ -62,6 +62,8 @@ Current bootstrap compiler workflow:
   - execute trait declarations, `impl Trait for Type`, and bounded generic calls
 - `cargo run -p aura -- run examples/traits/generic_trait_impl.au`
   - execute generic trait declarations and generic impl headers
+- `cargo run -p aura -- run examples/traits/specialized_trait_dispatch.au`
+  - execute bounded dispatch across specialized generic trait impls
 - `cargo run -p aura -- run examples/numbers/numeric_casts.au`
   - execute explicit numeric casts with `expr as Type`
 - `cargo run -p aura -- run examples/resources/with_resource.au`

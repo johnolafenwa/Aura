@@ -1,0 +1,9 @@
+def main() -> int32:
+    mut outer = 0
+    for i in range(3):
+        outer += 1
+        for j in range(3):
+            print(i * 10 + j)
+            break
+    print(outer)
+    return 0

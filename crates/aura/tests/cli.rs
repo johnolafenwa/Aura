@@ -1693,3 +1693,102 @@ fn build_produces_runnable_binary_for_program_with_local_modules() {
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "10\n");
 }
+
+#[test]
+fn build_executes_multiple_specialized_trait_impl_dispatch() {
+    let source = r#"trait Show:
+    def show(borrow self) -> String
+
+class Box[T]:
+    value: T
+
+impl Show for Box[int32]:
+    def show(borrow self) -> String:
+        return f"{self.value}"
+
+impl Show for Box[String]:
+    def show(borrow self) -> String:
+        return self.value.clone()
+
+def render[T: Show](value: T) -> None:
+    print(value.show())
+
+def main() -> int32:
+    render(Box(value=7))
+    render(Box(value="hi"))
+    return 0
+"#;
+    let (temp, source_path) = write_temp_source("aurora-cli-build-specialized-trait-impls", source);
+    let output_path = temp.path().join("specialized-trait-impls");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build specialized trait impl program");
+
+    assert!(
+        build.status.success(),
+        "build should succeed for multiple specialized trait impls, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run built specialized trait impl program");
+
+    assert!(
+        run.status.success(),
+        "built specialized trait impl binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "7\nhi\n");
+}
+
+#[test]
+fn build_executes_trait_impl_associated_methods() {
+    let source = r#"trait Factory:
+    def make() -> int32
+
+class Widget:
+    value: int32
+
+impl Factory for Widget:
+    def make() -> int32:
+        return 7
+
+def main() -> int32:
+    print(Widget.make())
+    return 0
+"#;
+    let (temp, source_path) =
+        write_temp_source("aurora-cli-build-trait-associated-methods", source);
+    let output_path = temp.path().join("trait-associated-methods");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build trait impl associated method program");
+
+    assert!(
+        build.status.success(),
+        "build should succeed for trait impl associated methods, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run built trait impl associated method program");
+
+    assert!(
+        run.status.success(),
+        "built trait impl associated method binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
+}

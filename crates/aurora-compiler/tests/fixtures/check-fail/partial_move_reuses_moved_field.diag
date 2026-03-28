@@ -1,0 +1,5 @@
+error: use of moved field `first` from `pair`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/partial_move_reuses_moved_field.au:9:16
+  |
+9 |     print(pair.first)
+  |                ^

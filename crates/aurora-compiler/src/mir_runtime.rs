@@ -369,8 +369,78 @@ impl MirRuntime {
             Value::ModuleNamespace(_) => None,
             Value::Unit => Some(Type::Unit),
             Value::Instance(instance) => Some(Type::named(&instance.class_name)),
-            Value::EnumVariant(variant) => Some(Type::named(&variant.enum_name)),
+            Value::EnumVariant(variant) => match (
+                variant.enum_name.as_str(),
+                variant.variant_name.as_str(),
+                variant.payload.as_deref(),
+            ) {
+                ("Option", "Some", Some(payload)) => Self::infer_value_type(payload)
+                    .map(|inner| Type::Named("Option".to_string(), vec![inner])),
+                ("Option", "None", _) => Some(Type::Named("Option".to_string(), vec![Type::Unit])),
+                ("Result", "Ok", Some(payload)) => Self::infer_value_type(payload)
+                    .map(|ok| Type::Named("Result".to_string(), vec![ok, Type::Unit])),
+                ("Result", "Err", Some(payload)) => Self::infer_value_type(payload)
+                    .map(|err| Type::Named("Result".to_string(), vec![Type::Unit, err])),
+                ("SendError", "Closed", Some(payload)) => Self::infer_value_type(payload)
+                    .map(|inner| Type::Named("SendError".to_string(), vec![inner])),
+                _ => Some(Type::named(&variant.enum_name)),
+            },
             Value::Channel(_) | Value::Task(_) | Value::TaskGroup(_) => None,
+        }
+    }
+
+    fn infer_instance_type(&self, instance: &InstanceValue) -> Option<Type> {
+        let class = self.classes.get(&instance.class_name)?;
+        if class.type_params.is_empty() {
+            return Some(Type::named(&instance.class_name));
+        }
+
+        let mut substitutions = HashMap::new();
+        for field in &class.fields {
+            let actual_value = instance.fields.get(&field.name)?;
+            let actual_ty = self.infer_runtime_value_type(actual_value)?;
+            collect_runtime_type_substitutions(&field.ty, &actual_ty, &mut substitutions);
+        }
+
+        let resolved_args = class
+            .type_params
+            .iter()
+            .map(|type_param| {
+                substitutions
+                    .get(type_param)
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))
+            })
+            .collect();
+        Some(Type::Named(instance.class_name.clone(), resolved_args))
+    }
+
+    fn infer_runtime_value_type(&self, value: &Value) -> Option<Type> {
+        match value {
+            Value::Instance(instance) => self.infer_instance_type(instance),
+            Value::EnumVariant(_variant) => Self::infer_value_type(value).map(|ty| match ty {
+                Type::Named(name, args) if name == "Option" && args == vec![Type::Unit] => {
+                    Type::Named(name, vec![Type::named("Unknown")])
+                }
+                Type::Named(name, args)
+                    if name == "Result" && args.iter().any(|arg| *arg == Type::Unit) =>
+                {
+                    Type::Named(
+                        name,
+                        args.into_iter()
+                            .map(|arg| {
+                                if arg == Type::Unit {
+                                    Type::named("Unknown")
+                                } else {
+                                    arg
+                                }
+                            })
+                            .collect(),
+                    )
+                }
+                other => other,
+            }),
+            _ => Self::infer_value_type(value),
         }
     }
 
@@ -430,7 +500,7 @@ impl MirRuntime {
         let mut current = env.place_type(root).cloned().or_else(|| {
             env.read_place(root)
                 .ok()
-                .and_then(|value| Self::infer_value_type(&value))
+                .and_then(|value| self.infer_runtime_value_type(&value))
         })?;
 
         for segment in segments {
@@ -468,7 +538,7 @@ impl MirRuntime {
             let bound_args = bind_args(&function.params, args)?;
             let mut substitutions = HashMap::new();
             for (param, argument) in function.params.iter().zip(bound_args.iter()) {
-                if let Some(actual_ty) = Self::infer_value_type(&argument.value) {
+                if let Some(actual_ty) = self.infer_runtime_value_type(&argument.value) {
                     collect_runtime_type_substitutions(&param.ty, &actual_ty, &mut substitutions);
                 }
             }
@@ -484,8 +554,9 @@ impl MirRuntime {
                         function.name
                     )));
                 };
-                let receiver_ty =
-                    Self::infer_value_type(&receiver).unwrap_or_else(|| Type::named("Unknown"));
+                let receiver_ty = self
+                    .infer_runtime_value_type(&receiver)
+                    .unwrap_or_else(|| Type::named("Unknown"));
                 env.define_typed("self", receiver_ty, receiver);
             }
 
@@ -556,7 +627,31 @@ impl MirRuntime {
                     self.unwind_cleanups(&mut cleanup_stack, env, true)?;
                     return Ok(value);
                 }
-                BlockOutcome::Goto(next) => current_label = next,
+                BlockOutcome::Goto(next) => {
+                    Self::clear_exited_for_range_states(
+                        function,
+                        &block.label,
+                        &next,
+                        &mut loop_state,
+                    );
+                    current_label = next;
+                }
+            }
+        }
+    }
+
+    fn clear_exited_for_range_states(
+        function: &MirFunction,
+        current_label: &str,
+        next_label: &str,
+        loop_state: &mut HashMap<String, i128>,
+    ) {
+        for block in &function.blocks {
+            let Terminator::ForRange { exit_label, .. } = &block.terminator else {
+                continue;
+            };
+            if block.label != current_label && exit_label == next_label {
+                loop_state.remove(&block.label);
             }
         }
     }
@@ -582,7 +677,7 @@ impl MirRuntime {
                         env.write_place(target, evaluated)?;
                         return Ok(None);
                     } else if !target.contains('.') {
-                        if let Some(inferred_ty) = Self::infer_value_type(&evaluated) {
+                        if let Some(inferred_ty) = self.infer_runtime_value_type(&evaluated) {
                             env.set_place_type(target, inferred_ty);
                         }
                     }
@@ -1146,7 +1241,7 @@ impl MirRuntime {
                             .as_ref()
                             .and_then(|place| self.resolve_place_type(place, env))
                             .and_then(|ty| (!matches!(ty, Type::TypeParam(_))).then_some(ty))
-                            .or_else(|| Self::infer_value_type(other));
+                            .or_else(|| self.infer_runtime_value_type(other));
                         if let Some(resolved_receiver_ty) = resolved_receiver_ty {
                             if let Some(method) = self
                                 .find_trait_impl_method(&resolved_receiver_ty, field)
@@ -1480,10 +1575,13 @@ impl MirRuntime {
                 _ => Ok(None),
             })
             .collect::<Result<Vec<_>>>()?;
+        let ignore_closed_recv = deadlines.iter().any(Option::is_some);
 
         loop {
             for (index, arm) in arms.iter().enumerate() {
-                if let Some(value) = self.try_select_arm(arm, env, deadlines[index])? {
+                if let Some(value) =
+                    self.try_select_arm(arm, env, deadlines[index], ignore_closed_recv)?
+                {
                     if let Some(binding) = &arm.binding {
                         env.write_place(binding, value)?;
                     }
@@ -1499,6 +1597,7 @@ impl MirRuntime {
         arm: &crate::mir::MirSelectArm,
         env: &mut Env,
         deadline: Option<Instant>,
+        ignore_closed_recv: bool,
     ) -> Result<Option<Value>> {
         match &arm.kind {
             MirSelectKind::After { .. } => {
@@ -1518,6 +1617,7 @@ impl MirRuntime {
                 };
                 match channel.try_recv() {
                     TryRecvResult::Value(value) => Ok(Some(option_some(value))),
+                    TryRecvResult::Closed if ignore_closed_recv => Ok(None),
                     TryRecvResult::Closed => Ok(Some(option_none())),
                     TryRecvResult::Empty => Ok(None),
                 }

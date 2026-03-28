@@ -43,6 +43,10 @@ p1 = Point(x=0.0, y=0.0)
 dx = a.x - b.x
 ```
 
+Reading a non-copy field from an owned value moves that field out of the instance. You can still
+read other untouched fields, but you cannot read the moved field again until you assign a new value
+back into it.
+
 ## Default Field Values
 
 The implemented subset already supports field defaults:

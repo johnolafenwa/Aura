@@ -1,0 +1,16 @@
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    ch.close()
+    mut ticks = 0
+    while ticks < 3:
+        select:
+            case item = ch.recv():
+                match item:
+                    case Some(value):
+                        print(value)
+                    case None:
+                        print("closed")
+            case after(1ms):
+                print("timeout")
+                ticks += 1
+    return 0

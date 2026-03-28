@@ -1,0 +1,14 @@
+class Box[T]:
+    value: Option[T]
+
+    def empty() -> Box[T]:
+        return Box(value=Option.None)
+
+def main() -> int32:
+    box = Box[int32].empty()
+    match box.value:
+        case Some(inner):
+            print(inner)
+        case None:
+            print(0)
+    return 0

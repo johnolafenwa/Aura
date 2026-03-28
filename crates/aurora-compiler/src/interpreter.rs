@@ -634,6 +634,25 @@ impl Env {
 }
 
 impl Interpreter {
+    fn find_namespace_in_modules<'a>(
+        modules: &'a BTreeMap<String, ModuleNamespace>,
+        path: &str,
+    ) -> Option<&'a ModuleNamespace> {
+        for namespace in modules.values() {
+            if namespace.path == path {
+                return Some(namespace);
+            }
+            if let Some(found) = Self::find_namespace_in_modules(&namespace.modules, path) {
+                return Some(found);
+            }
+            if let Some(found) = Self::find_namespace_in_modules(&namespace.imported_modules, path)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+
     fn seed_imported_modules(&self, env: &mut Env) {
         self.seed_module_imports(env, &self.program.imported_modules);
     }
@@ -835,13 +854,9 @@ impl Interpreter {
         if let Some(namespace) = self.program.module_registry.get(path) {
             return Some(namespace);
         }
-        let mut segments = path.split('.');
-        let first = segments.next()?;
-        let mut namespace = self.program.imported_modules.get(first)?;
-        for segment in segments {
-            namespace = namespace.modules.get(segment)?;
-        }
-        Some(namespace)
+        self.current_module_namespace()
+            .and_then(|current| Self::find_namespace_in_modules(&current.imported_modules, path))
+            .or_else(|| Self::find_namespace_in_modules(&self.program.imported_modules, path))
     }
 
     fn run_main(&mut self) -> Result<Value> {
@@ -932,6 +947,70 @@ impl Interpreter {
         }
     }
 
+    fn infer_instance_type(&self, instance: &InstanceValue) -> Option<Type> {
+        let class_info = self.resolve_class_info(&instance.class_name)?;
+        if class_info.decl.type_params.is_empty() {
+            return Some(Type::named(&instance.class_name));
+        }
+
+        let mut substitutions = HashMap::new();
+        for (field_name, field_info) in &class_info.fields {
+            let actual_value = instance.fields.get(field_name)?;
+            let actual_ty = self.infer_runtime_value_type(actual_value)?;
+            Self::collect_runtime_type_substitutions(
+                &field_info.ty,
+                &actual_ty,
+                &mut substitutions,
+            );
+        }
+
+        let resolved_args = class_info
+            .decl
+            .type_params
+            .iter()
+            .map(|type_param| {
+                substitutions
+                    .get(type_param)
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))
+            })
+            .collect();
+        Some(Type::Named(instance.class_name.clone(), resolved_args))
+    }
+
+    fn infer_runtime_value_type(&self, value: &Value) -> Option<Type> {
+        match value {
+            Value::Instance(instance) => self.infer_instance_type(instance),
+            Value::EnumVariant(variant) => match variant.enum_name.as_str() {
+                "Option" => match &variant.payload {
+                    Some(payload) => self
+                        .infer_runtime_value_type(payload)
+                        .map(|inner| Type::Named("Option".to_string(), vec![inner])),
+                    None => Some(Type::Named(
+                        "Option".to_string(),
+                        vec![Type::named("Unknown")],
+                    )),
+                },
+                "Result" => match (variant.variant_name.as_str(), &variant.payload) {
+                    ("Ok", Some(payload)) => self.infer_runtime_value_type(payload).map(|ok| {
+                        Type::Named("Result".to_string(), vec![ok, Type::named("Unknown")])
+                    }),
+                    ("Err", Some(payload)) => self.infer_runtime_value_type(payload).map(|err| {
+                        Type::Named("Result".to_string(), vec![Type::named("Unknown"), err])
+                    }),
+                    _ => Self::infer_value_type(value),
+                },
+                "SendError" => variant
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| self.infer_runtime_value_type(payload))
+                    .map(|inner| Type::Named("SendError".to_string(), vec![inner])),
+                _ => Self::infer_value_type(value),
+            },
+            _ => Self::infer_value_type(value),
+        }
+    }
+
     fn infer_expr_type(&self, expr: &Expr, env: &Env) -> Option<Type> {
         let cache_key = (expr.span.line, expr.span.column);
         if let Some(cached) = self.expr_type_cache.borrow().get(&cache_key).cloned() {
@@ -943,7 +1022,10 @@ impl Interpreter {
             ExprKind::Name(name) => env
                 .get_type(name)
                 .cloned()
-                .or_else(|| env.get(name).and_then(Self::infer_value_type))
+                .or_else(|| {
+                    env.get(name)
+                        .and_then(|value| self.infer_runtime_value_type(value))
+                })
                 .or_else(|| {
                     self.current_module_namespace()
                         .and_then(|namespace| namespace.all_functions.get(name))
@@ -1204,11 +1286,13 @@ impl Interpreter {
         &self,
         class_name: &str,
         field: &str,
-    ) -> Option<&crate::sema::TraitImplMethodInfo> {
+    ) -> Option<crate::sema::TraitImplMethodInfo> {
         let mut matches =
             self.trait_impls_in_scope()
                 .filter_map(|trait_impl| match &trait_impl.for_type {
-                    Type::Named(name, _) if name == class_name => trait_impl.methods.get(field),
+                    Type::Named(name, _) if name == class_name => {
+                        trait_impl.methods.get(field).cloned()
+                    }
                     _ => None,
                 });
         let first = matches.next()?;
@@ -1336,7 +1420,7 @@ impl Interpreter {
             for (param, value) in function.params.iter().zip(values.iter()) {
                 let pattern_ty =
                     Self::lower_runtime_type_with_type_params(&param.ty, &function.type_params);
-                if let Some(actual_ty) = Self::infer_value_type(value) {
+                if let Some(actual_ty) = self.infer_runtime_value_type(value) {
                     Self::collect_runtime_type_substitutions(
                         &pattern_ty,
                         &actual_ty,
@@ -1346,8 +1430,9 @@ impl Interpreter {
             }
             if function.receiver.is_some() {
                 let receiver = receiver.expect("receiver should be available after pre-check");
-                let receiver_ty =
-                    Self::infer_value_type(&receiver).unwrap_or_else(|| Type::named("Unknown"));
+                let receiver_ty = self
+                    .infer_runtime_value_type(&receiver)
+                    .unwrap_or_else(|| Type::named("Unknown"));
                 env.define_typed("self".to_string(), receiver_ty, receiver);
             }
             for (param, value) in function.params.iter().zip(values.into_iter()) {
@@ -1440,7 +1525,7 @@ impl Interpreter {
                             .as_ref()
                             .map(Self::lower_runtime_type)
                             .or_else(|| self.infer_expr_type(&assign.value, env))
-                            .or_else(|| Self::infer_value_type(&final_value));
+                            .or_else(|| self.infer_runtime_value_type(&final_value));
                         if let Some(binding_ty) = binding_ty {
                             let final_value =
                                 self.coerce_value_to_type(final_value, &binding_ty, assign.span)?;
@@ -1501,7 +1586,8 @@ impl Interpreter {
                     if let Some(binding) = self.match_pattern(&arm.pattern, &scrutinee)? {
                         env.push_scope();
                         if let Some((name, value)) = binding {
-                            let binding_ty = Self::infer_value_type(&value)
+                            let binding_ty = self
+                                .infer_runtime_value_type(&value)
                                 .unwrap_or_else(|| Type::named("Unknown"));
                             env.define_typed(name, binding_ty, value);
                         }
@@ -1589,7 +1675,7 @@ impl Interpreter {
                 env.push_scope();
                 let resource_ty = self
                     .infer_expr_type(&with_stmt.value, env)
-                    .or_else(|| Self::infer_value_type(&resource));
+                    .or_else(|| self.infer_runtime_value_type(&resource));
                 if let Some(resource_ty) = resource_ty {
                     let resource =
                         self.coerce_value_to_type(resource, &resource_ty, with_stmt.span)?;
@@ -1691,10 +1777,13 @@ impl Interpreter {
             .iter()
             .map(|arm| self.prepare_select_deadline(&arm.expr, env))
             .collect::<Result<Vec<_>>>()?;
+        let ignore_closed_recv = deadlines.iter().any(Option::is_some);
 
         loop {
             for (index, arm) in arms.iter().enumerate() {
-                if let Some(ready_value) = self.try_select_arm(&arm.expr, env, deadlines[index])? {
+                if let Some(ready_value) =
+                    self.try_select_arm(&arm.expr, env, deadlines[index], ignore_closed_recv)?
+                {
                     env.push_scope();
                     if let Some(binding) = &arm.binding {
                         env.define(binding.clone(), ready_value);
@@ -1764,6 +1853,7 @@ impl Interpreter {
         expr: &Expr,
         env: &mut Env,
         deadline: Option<Instant>,
+        ignore_closed_recv: bool,
     ) -> Result<Option<Value>> {
         let ExprKind::Call { callee, args } = &expr.kind else {
             return Err(Diagnostic::at(
@@ -1809,6 +1899,7 @@ impl Interpreter {
                 };
                 match channel.try_recv() {
                     TryRecvResult::Value(value) => Ok(Some(option_some(value))),
+                    TryRecvResult::Closed if ignore_closed_recv => Ok(None),
                     TryRecvResult::Closed => Ok(Some(option_none())),
                     TryRecvResult::Empty => Ok(None),
                 }
@@ -2453,13 +2544,16 @@ impl Interpreter {
                                     }))
                                 }
                                 None => {
-                                    return Err(Diagnostic::at(
-                                        callee.span,
-                                        format!(
-                                            "variant `{}` of enum `{}` does not take a payload",
-                                            field, item_name
-                                        ),
-                                    ));
+                                    if !args.is_empty() {
+                                        return Err(Diagnostic::at(
+                                            callee.span,
+                                            format!(
+                                                "variant `{}` of enum `{}` does not take a payload",
+                                                field, item_name
+                                            ),
+                                        ));
+                                    }
+                                    None
                                 }
                             };
                             return Ok(EvalOutcome::Value(Value::EnumVariant(EnumVariantValue {
@@ -2502,17 +2596,45 @@ impl Interpreter {
                             return Ok(EvalOutcome::Value(outcome.value));
                         }
                     }
+                    if let Some(method) = self
+                        .find_trait_impl_method_for_class_name(class_name, field)
+                        .filter(|method| method.decl.receiver.is_none())
+                    {
+                        let module_name = self.current_module_name().to_string();
+                        let evaluated_args = self.eval_callable_args(
+                            &format!("method `{}`", field),
+                            &method.decl.params,
+                            args,
+                            env,
+                            callee.span,
+                        )?;
+                        let values = evaluated_args
+                            .iter()
+                            .map(|argument| argument.value.clone())
+                            .collect();
+                        let outcome = self.call_function(&method.decl, &module_name, values)?;
+                        self.apply_borrowed_param_writebacks(
+                            &method.decl.params,
+                            &evaluated_args,
+                            &outcome.updated_params,
+                            env,
+                        )?;
+                        return Ok(EvalOutcome::Value(outcome.value));
+                    }
                 }
 
                 if let ExprKind::Name(enum_name) = &base_object.kind {
                     if matches!(
                         (enum_name.as_str(), field.as_str()),
                         ("Option", "Some")
+                            | ("Option", "None")
                             | ("Result", "Ok")
                             | ("Result", "Err")
                             | ("SendError", "Closed")
                     ) {
-                        if args.len() != 1 {
+                        let expects_payload =
+                            !matches!((enum_name.as_str(), field.as_str()), ("Option", "None"));
+                        if expects_payload && args.len() != 1 {
                             return Err(Diagnostic::at(
                                 callee.span,
                                 format!(
@@ -2521,15 +2643,28 @@ impl Interpreter {
                                 ),
                             ));
                         }
+                        if !expects_payload && !args.is_empty() {
+                            return Err(Diagnostic::at(
+                                callee.span,
+                                format!(
+                                    "variant `{}` of enum `{}` does not take a payload",
+                                    field, enum_name
+                                ),
+                            ));
+                        }
                         return Ok(EvalOutcome::Value(Value::EnumVariant(EnumVariantValue {
                             enum_name: enum_name.clone(),
                             variant_name: field.clone(),
-                            payload: Some(Box::new(match self.eval_expr(&args[0].value, env)? {
-                                EvalOutcome::Value(value) => value,
-                                EvalOutcome::Return(value) => {
-                                    return Ok(EvalOutcome::Return(value))
-                                }
-                            })),
+                            payload: if expects_payload {
+                                Some(Box::new(match self.eval_expr(&args[0].value, env)? {
+                                    EvalOutcome::Value(value) => value,
+                                    EvalOutcome::Return(value) => {
+                                        return Ok(EvalOutcome::Return(value))
+                                    }
+                                }))
+                            } else {
+                                None
+                            },
                         })));
                     }
                     if let Some(enum_info) = self.program.enums.get(enum_name) {
@@ -2558,13 +2693,16 @@ impl Interpreter {
                                 }))
                             }
                             None => {
-                                return Err(Diagnostic::at(
-                                    callee.span,
-                                    format!(
-                                        "variant `{}` of enum `{}` does not take a payload",
-                                        field, enum_name
-                                    ),
-                                ));
+                                if !args.is_empty() {
+                                    return Err(Diagnostic::at(
+                                        callee.span,
+                                        format!(
+                                            "variant `{}` of enum `{}` does not take a payload",
+                                            field, enum_name
+                                        ),
+                                    ));
+                                }
+                                None
                             }
                         };
                         return Ok(EvalOutcome::Value(Value::EnumVariant(EnumVariantValue {
@@ -2776,7 +2914,6 @@ impl Interpreter {
                                     &instance.class_name,
                                     field,
                                 )
-                                .cloned()
                                 .map(|method| (method, HashMap::new()))
                             })
                         {
@@ -2828,7 +2965,7 @@ impl Interpreter {
                         let resolved_receiver_ty = self
                             .infer_expr_type(object, env)
                             .and_then(|ty| (!matches!(ty, Type::TypeParam(_))).then_some(ty))
-                            .or_else(|| Self::infer_value_type(&other));
+                            .or_else(|| self.infer_runtime_value_type(&other));
                         if let Some(resolved_receiver_ty) = resolved_receiver_ty {
                             if let Some((method, _substitutions)) =
                                 self.find_trait_impl_method(&resolved_receiver_ty, field)

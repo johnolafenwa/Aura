@@ -116,6 +116,9 @@ Duration literals currently include `ms`, `s`, and `m`.
 
 `after(...)` is a builtin helper that turns a `Duration` into a timeout arm.
 
+When a `select` mixes `recv()` arms with at least one `after(...)` arm, a closed-and-empty channel
+does not starve the timer. The timeout arm still gets a chance to fire.
+
 Aurora also provides a simple blocking sleep helper for the current runtime:
 
 ```aurora

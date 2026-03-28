@@ -187,6 +187,8 @@ The current bootstrap concurrency surface includes:
 - `select` over send, receive, and timer arms
 - duration literals with `ms`, `s`, and `m`
 
+Timed `select` loops now treat closed receive arms as inactive when an `after(...)` arm is present, so timeout arms can still fire as an escape path.
+
 ## Tooling
 
 The current CLI commands are:

@@ -156,9 +156,17 @@ The examples are organized by topic so they can serve both as quick references a
 - `specialized_generic_impl.au`
   - specialized trait impls for concrete generic instances
   - prints `hello`
+- `specialized_trait_dispatch.au`
+  - bounded generic dispatch over specialized generic trait impls
+  - prints:
+    - `7`
+    - `hi`
 - `generic_trait_impl.au`
   - generic trait declarations plus generic impl headers for generic classes
   - prints `11`
+- `trait_associated_factory.au`
+  - associated trait methods called through the implementing type name
+  - prints `7`
 
 ### `modules/`
 

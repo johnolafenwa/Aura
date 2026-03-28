@@ -263,6 +263,113 @@ def main() -> int32:
 }
 
 #[test]
+fn transitive_reexported_imports_run_via_mir() {
+    let temp = TempDir::new("aurora-modules-transitive-reexport");
+    temp.write(
+        "pkg/base.au",
+        r#"public def answer() -> int32:
+    return 42
+"#,
+    );
+    temp.write(
+        "pkg/reexport.au",
+        r#"from pkg.base import answer
+
+public def wrapped() -> int32:
+    return answer()
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"from pkg.reexport import wrapped
+
+def main() -> int32:
+    print(wrapped())
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("transitive re-export should run");
+    assert_eq!(output.stdout, "42\n");
+
+    let mir_output = run_path_via_mir(&main_path).expect("transitive re-export should run via MIR");
+    assert_eq!(mir_output.stdout, "42\n");
+}
+
+#[test]
+fn namespace_imports_inside_imported_modules_resolve_in_their_own_scope() {
+    let temp = TempDir::new("aurora-modules-nested-namespace-scope");
+    temp.write(
+        "pkg/types.au",
+        r#"public class Counter:
+    public value: int32
+"#,
+    );
+    temp.write(
+        "pkg/helpers.au",
+        r#"import pkg.types
+
+public def make_counter() -> pkg.types.Counter:
+    return pkg.types.Counter(value=7)
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"from pkg.helpers import make_counter
+
+def main() -> int32:
+    counter = make_counter()
+    print(counter.value)
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("namespace imports in imported modules should run");
+    assert_eq!(output.stdout, "7\n");
+
+    let mir_output = run_path_via_mir(&main_path)
+        .expect("namespace imports in imported modules should run via MIR");
+    assert_eq!(mir_output.stdout, "7\n");
+}
+
+#[test]
+fn namespace_imports_inside_imported_modules_resolve_in_function_bodies() {
+    let temp = TempDir::new("aurora-modules-nested-namespace-body");
+    temp.write(
+        "pkg/types.au",
+        r#"public class Counter:
+    public value: int32
+"#,
+    );
+    temp.write(
+        "pkg/helpers.au",
+        r#"import pkg.types
+
+public def read_value() -> int32:
+    counter = pkg.types.Counter(value=7)
+    return counter.value
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"from pkg.helpers import read_value
+
+def main() -> int32:
+    print(read_value())
+    return 0
+"#,
+    );
+
+    let output =
+        run_path(&main_path).expect("namespace imports in imported module bodies should run");
+    assert_eq!(output.stdout, "7\n");
+
+    let mir_output = run_path_via_mir(&main_path)
+        .expect("namespace imports in imported module bodies should run via MIR");
+    assert_eq!(mir_output.stdout, "7\n");
+}
+
+#[test]
 fn imported_trait_impls_apply_across_module_boundaries() {
     let temp = TempDir::new("aurora-modules-imported-trait-impls");
     temp.write(

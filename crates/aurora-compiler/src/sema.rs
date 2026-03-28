@@ -1156,6 +1156,27 @@ fn register_module_namespace_types(
     for child in namespace.modules.values() {
         register_module_namespace_types(child, type_names, type_arities);
     }
+    for imported in namespace.imported_modules.values() {
+        register_module_namespace_types(imported, type_names, type_arities);
+    }
+}
+
+fn find_namespace_in_modules<'a>(
+    modules: &'a BTreeMap<String, ModuleNamespace>,
+    path: &str,
+) -> Option<&'a ModuleNamespace> {
+    for namespace in modules.values() {
+        if namespace.path == path {
+            return Some(namespace);
+        }
+        if let Some(found) = find_namespace_in_modules(&namespace.modules, path) {
+            return Some(found);
+        }
+        if let Some(found) = find_namespace_in_modules(&namespace.imported_modules, path) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn validate_type_params(
@@ -1528,6 +1549,7 @@ struct LocalBinding {
     mutable_place: bool,
     passing: ReceiverKind,
     moved: bool,
+    moved_fields: BTreeSet<String>,
 }
 
 struct FunctionChecker<'a> {
@@ -1571,6 +1593,7 @@ impl<'a> FunctionChecker<'a> {
                     mutable_place: false,
                     passing: ReceiverKind::Value,
                     moved: false,
+                    moved_fields: BTreeSet::new(),
                 },
             );
         }
@@ -1798,7 +1821,11 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Cast { expr, .. } => self.consume_value_expr(expr, locals),
             ExprKind::Specialize { expr, .. } => self.consume_value_expr(expr, locals),
             ExprKind::Member { object, field } => {
-                if let ExprKind::Name(enum_name) = &object.kind {
+                let base_object = match &object.kind {
+                    ExprKind::Specialize { expr, .. } => &**expr,
+                    _ => object,
+                };
+                if let ExprKind::Name(enum_name) = &base_object.kind {
                     if enum_name == "Option" && field == "None" {
                         return Ok(());
                     }
@@ -1824,7 +1851,7 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
                 }
-                let object_ty = self.type_of_expr(object, locals)?;
+                let object_ty = self.type_of_member_object_expr(object, locals)?;
                 let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
                 if !self.is_copy_type(&member_ty) {
                     if let Some(name) = self.borrowed_root_binding_name(object, locals) {
@@ -1835,6 +1862,11 @@ impl<'a> FunctionChecker<'a> {
                                 field, name
                             ),
                         ));
+                    }
+                    if let Some((binding_name, path)) = self.member_access_path(expr) {
+                        if let Some(binding) = locals.get_mut(&binding_name) {
+                            binding.moved_fields.insert(path);
+                        }
                     }
                 }
                 Ok(())
@@ -1858,6 +1890,11 @@ impl<'a> FunctionChecker<'a> {
             });
             if let Some(binding) = locals.get_mut(&name) {
                 binding.moved = moved;
+                binding.moved_fields = branch_states
+                    .iter()
+                    .filter_map(|state| state.get(&name))
+                    .flat_map(|binding| binding.moved_fields.iter().cloned())
+                    .collect();
             }
         }
     }
@@ -1881,6 +1918,19 @@ impl<'a> FunctionChecker<'a> {
                     span,
                     format!(
                         "`{}` loop body moves `{}` and may execute more than once",
+                        loop_kind, name
+                    ),
+                ));
+            }
+            if body_binding
+                .moved_fields
+                .iter()
+                .any(|field| !binding.moved_fields.contains(field))
+            {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "`{}` loop body partially moves `{}` and may execute more than once",
                         loop_kind, name
                     ),
                 ));
@@ -1995,6 +2045,7 @@ impl<'a> FunctionChecker<'a> {
                     mutable_place: param.passing == ReceiverKind::BorrowMut,
                     passing: param.passing,
                     moved: false,
+                    moved_fields: BTreeSet::new(),
                 },
             );
         }
@@ -2052,6 +2103,7 @@ impl<'a> FunctionChecker<'a> {
                     mutable_place: receiver_kind == ReceiverKind::BorrowMut,
                     passing: receiver_kind,
                     moved: false,
+                    moved_fields: BTreeSet::new(),
                 },
             );
         }
@@ -2070,6 +2122,7 @@ impl<'a> FunctionChecker<'a> {
                     mutable_place: param.passing == ReceiverKind::BorrowMut,
                     passing: param.passing,
                     moved: false,
+                    moved_fields: BTreeSet::new(),
                 },
             );
         }
@@ -2119,6 +2172,7 @@ impl<'a> FunctionChecker<'a> {
                     mutable_place: receiver_kind == ReceiverKind::BorrowMut,
                     passing: receiver_kind,
                     moved: false,
+                    moved_fields: BTreeSet::new(),
                 },
             );
         }
@@ -2137,6 +2191,7 @@ impl<'a> FunctionChecker<'a> {
                     mutable_place: param.passing == ReceiverKind::BorrowMut,
                     passing: param.passing,
                     moved: false,
+                    moved_fields: BTreeSet::new(),
                 },
             );
         }
@@ -2337,6 +2392,7 @@ impl<'a> FunctionChecker<'a> {
                             mutable_place: false,
                             passing: binding_passing,
                             moved: false,
+                            moved_fields: BTreeSet::new(),
                         },
                     );
                     self.check_block(
@@ -2445,6 +2501,7 @@ impl<'a> FunctionChecker<'a> {
                 mutable_place: true,
                 passing: ReceiverKind::Value,
                 moved: false,
+                moved_fields: BTreeSet::new(),
             },
         );
         self.check_block(
@@ -2498,6 +2555,7 @@ impl<'a> FunctionChecker<'a> {
                             mutable_place: false,
                             passing: ReceiverKind::Value,
                             moved: false,
+                            moved_fields: BTreeSet::new(),
                         },
                     );
                     let arm_flow = self.check_block(
@@ -2648,6 +2706,20 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
 
+            if let Some((binding_name, path)) = self.member_target_path(object, field) {
+                if let Some(binding) = locals.get(&binding_name) {
+                    if assign.op.is_some() && Self::field_path_is_moved(binding, &path) {
+                        return Err(Diagnostic::at(
+                            assign.span,
+                            format!(
+                                "cannot read moved field `{}` from `{}` in compound assignment",
+                                path, binding_name
+                            ),
+                        ));
+                    }
+                }
+            }
+
             let target_ty = self.resolve_member_target_type(object, field, assign.span, locals)?;
             let value_ty = self.type_of_expr_hint(&assign.value, locals, Some(&target_ty))?;
             let final_value_ty = if let Some(op) = assign.op {
@@ -2668,6 +2740,12 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
 
+            self.consume_value_expr(&assign.value, locals)?;
+            if let Some((binding_name, path)) = self.member_target_path(object, field) {
+                if let Some(binding) = locals.get_mut(&binding_name) {
+                    Self::clear_moved_field_path(binding, &path);
+                }
+            }
             return Ok(());
         }
 
@@ -2763,6 +2841,7 @@ impl<'a> FunctionChecker<'a> {
             self.consume_value_expr(&assign.value, locals)?;
             if let Some(existing) = locals.get_mut(binding_name) {
                 existing.moved = false;
+                existing.moved_fields.clear();
             }
             return Ok(());
         }
@@ -2797,6 +2876,7 @@ impl<'a> FunctionChecker<'a> {
                 mutable_place: assign.mutable,
                 passing: ReceiverKind::Value,
                 moved: false,
+                moved_fields: BTreeSet::new(),
             },
         );
         Ok(())
@@ -2832,6 +2912,12 @@ impl<'a> FunctionChecker<'a> {
                         return Err(Diagnostic::at(
                             expr.span,
                             format!("use of moved value `{}`", name),
+                        ));
+                    }
+                    if !binding.moved_fields.is_empty() {
+                        return Err(Diagnostic::at(
+                            expr.span,
+                            format!("use of partially moved value `{}`", name),
                         ));
                     }
                     return Ok(binding.ty.clone());
@@ -3081,6 +3167,16 @@ impl<'a> FunctionChecker<'a> {
                 self.type_of_binary(expr.span, *op, left_ty, right_ty)
             }
             ExprKind::Member { object, field } => {
+                if let Some((binding_name, path)) = self.member_access_path(expr) {
+                    if let Some(binding) = locals.get(&binding_name) {
+                        if Self::field_path_is_moved(binding, &path) {
+                            return Err(Diagnostic::at(
+                                expr.span,
+                                format!("use of moved field `{}` from `{}`", path, binding_name),
+                            ));
+                        }
+                    }
+                }
                 if let ExprKind::Specialize {
                     expr: inner,
                     type_args,
@@ -3220,7 +3316,7 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                 }
-                let object_ty = self.type_of_expr(object, locals)?;
+                let object_ty = self.type_of_member_object_expr(object, locals)?;
                 let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
                 Ok(member_ty)
             }
@@ -3501,10 +3597,22 @@ impl<'a> FunctionChecker<'a> {
                     }
 
                     let hinted_field_ty = substitute_type(&field_info.ty, &substitutions);
-                    let actual = if has_unresolved_type_params(&hinted_field_ty) {
-                        self.type_of_expr(&argument.value, locals)?
-                    } else {
-                        self.type_of_expr_hint(&argument.value, locals, Some(&hinted_field_ty))?
+                    let actual = match self.type_of_expr_hint(
+                        &argument.value,
+                        locals,
+                        Some(&hinted_field_ty),
+                    ) {
+                        Ok(actual) => actual,
+                        Err(error)
+                            if has_unresolved_type_params(&hinted_field_ty)
+                                && !self.expr_can_use_partial_expected_hint(&argument.value) =>
+                        {
+                            match self.type_of_expr(&argument.value, locals) {
+                                Ok(actual) => actual,
+                                Err(_) => return Err(error),
+                            }
+                        }
+                        Err(error) => return Err(error),
                     };
                     if let Err(error) =
                         unify_type_pattern(&field_info.ty, &actual, &mut substitutions)
@@ -4439,6 +4547,7 @@ impl<'a> FunctionChecker<'a> {
                                     ReceiverKind::Value
                                 },
                                 moved: false,
+                                moved_fields: BTreeSet::new(),
                             },
                         );
                     }
@@ -4550,6 +4659,16 @@ impl<'a> FunctionChecker<'a> {
             }
         };
 
+        if let Some(variant_payload) = self.builtin_enum_variant_payload(object_ty, name, field) {
+            return match variant_payload {
+                Some(_) => Err(Diagnostic::at(
+                    span,
+                    format!("variant `{}` of enum `{}` requires a payload", field, name),
+                )),
+                None => Ok(object_ty.clone()),
+            };
+        }
+
         if BuiltinMember::resolve(name, field).is_some() {
             return Err(Diagnostic::at(
                 span,
@@ -4609,7 +4728,7 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
-        let object_ty = self.type_of_expr(object, locals)?;
+        let object_ty = self.type_of_member_object_expr(object, locals)?;
         self.resolve_member_type(&object_ty, field, span)
     }
 
@@ -4663,17 +4782,87 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn member_access_path(&self, expr: &Expr) -> Option<(String, String)> {
+        match &expr.kind {
+            ExprKind::Name(name) => Some((name.clone(), String::new())),
+            ExprKind::Group(inner)
+            | ExprKind::Cast { expr: inner, .. }
+            | ExprKind::Specialize { expr: inner, .. } => self.member_access_path(inner),
+            ExprKind::Member { object, field } => {
+                let (root, prefix) = self.member_access_path(object)?;
+                let path = if prefix.is_empty() {
+                    field.clone()
+                } else {
+                    format!("{}.{}", prefix, field)
+                };
+                Some((root, path))
+            }
+            _ => None,
+        }
+    }
+
+    fn member_target_path(&self, object: &Expr, field: &str) -> Option<(String, String)> {
+        let (root, prefix) = self.member_access_path(object)?;
+        let path = if prefix.is_empty() {
+            field.to_string()
+        } else {
+            format!("{}.{}", prefix, field)
+        };
+        Some((root, path))
+    }
+
+    fn field_path_is_moved(binding: &LocalBinding, path: &str) -> bool {
+        binding.moved_fields.iter().any(|moved_path| {
+            moved_path == path
+                || moved_path.starts_with(&format!("{}.", path))
+                || path.starts_with(&format!("{}.", moved_path))
+        })
+    }
+
+    fn clear_moved_field_path(binding: &mut LocalBinding, path: &str) {
+        binding.moved_fields.retain(|moved_path| {
+            moved_path != path && !moved_path.starts_with(&format!("{}.", path))
+        });
+    }
+
+    fn type_of_member_object_expr(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Type> {
+        match &expr.kind {
+            ExprKind::Name(name) => {
+                let binding = locals
+                    .get(name)
+                    .ok_or_else(|| Diagnostic::at(expr.span, format!("unknown name `{}`", name)))?;
+                if binding.moved {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        format!("use of moved value `{}`", name),
+                    ));
+                }
+                Ok(binding.ty.clone())
+            }
+            ExprKind::Group(inner)
+            | ExprKind::Cast { expr: inner, .. }
+            | ExprKind::Specialize { expr: inner, .. } => {
+                self.type_of_member_object_expr(inner, locals)
+            }
+            ExprKind::Member { object, field } => {
+                let object_ty = self.type_of_member_object_expr(object, locals)?;
+                self.resolve_member_type(&object_ty, field, expr.span)
+            }
+            _ => self.type_of_expr(expr, locals),
+        }
+    }
+
     fn module_namespace(&self, path: &str) -> Option<&ModuleNamespace> {
         if let Some(namespace) = self.module_registry.get(path) {
             return Some(namespace);
         }
-        let mut segments = path.split('.');
-        let first = segments.next()?;
-        let mut namespace = self.imported_modules.get(first)?;
-        for segment in segments {
-            namespace = namespace.modules.get(segment)?;
-        }
-        Some(namespace)
+        self.current_module_namespace()
+            .and_then(|current| find_namespace_in_modules(&current.imported_modules, path))
+            .or_else(|| find_namespace_in_modules(&self.imported_modules, path))
     }
 
     fn current_module_namespace(&self) -> Option<&ModuleNamespace> {
@@ -4995,20 +5184,30 @@ impl<'a> FunctionChecker<'a> {
         {
             let hinted_expected = substitute_type(expected, &substitutions);
             let actual = if let Some(argument) = argument {
-                if has_unresolved_type_params(&hinted_expected) {
-                    self.type_of_expr(&argument.value, locals)?
-                } else {
-                    self.type_of_expr_hint(&argument.value, locals, Some(&hinted_expected))?
+                match self.type_of_expr_hint(&argument.value, locals, Some(&hinted_expected)) {
+                    Ok(actual) => actual,
+                    Err(error) if has_unresolved_type_params(&hinted_expected) => {
+                        match self.type_of_expr(&argument.value, locals) {
+                            Ok(actual) => actual,
+                            Err(_) => return Err(error),
+                        }
+                    }
+                    Err(error) => return Err(error),
                 }
             } else {
                 let default = param_decl
                     .default
                     .as_ref()
                     .expect("optional parameter should provide a default expression");
-                if has_unresolved_type_params(&hinted_expected) {
-                    self.type_of_expr(default, locals)?
-                } else {
-                    self.type_of_expr_hint(default, locals, Some(&hinted_expected))?
+                match self.type_of_expr_hint(default, locals, Some(&hinted_expected)) {
+                    Ok(actual) => actual,
+                    Err(error) if has_unresolved_type_params(&hinted_expected) => {
+                        match self.type_of_expr(default, locals) {
+                            Ok(actual) => actual,
+                            Err(_) => return Err(error),
+                        }
+                    }
+                    Err(error) => return Err(error),
                 }
             };
             if let Err(error) = unify_type_pattern(expected, &actual, &mut substitutions) {
@@ -5200,6 +5399,27 @@ impl<'a> FunctionChecker<'a> {
         Ok(Type::Named(name.to_string(), explicit_args.to_vec()))
     }
 
+    fn expr_can_use_partial_expected_hint(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Member { object, .. } => self.is_builtin_enum_constructor_expr(object),
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Member { object, .. } => self.is_builtin_enum_constructor_expr(object),
+                _ => false,
+            },
+            ExprKind::Group(inner) => self.expr_can_use_partial_expected_hint(inner),
+            _ => false,
+        }
+    }
+
+    fn is_builtin_enum_constructor_expr(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Name(name) => matches!(name.as_str(), "Option" | "Result" | "SendError"),
+            ExprKind::Specialize { expr, .. } => self.is_builtin_enum_constructor_expr(expr),
+            ExprKind::Group(inner) => self.is_builtin_enum_constructor_expr(inner),
+            _ => false,
+        }
+    }
+
     fn type_check_builtin_enum_variant_constructor(
         &self,
         enum_name: &str,
@@ -5243,13 +5463,15 @@ impl<'a> FunctionChecker<'a> {
                 }
             }
             None => {
-                return Err(Diagnostic::at(
-                    span,
-                    format!(
-                        "variant `{}` of enum `{}` does not take a payload",
-                        variant_name, enum_name
-                    ),
-                ));
+                if !args.is_empty() {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "variant `{}` of enum `{}` does not take a payload",
+                            variant_name, enum_name
+                        ),
+                    ));
+                }
             }
         }
         Ok(enum_ty.clone())

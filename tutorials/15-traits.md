@@ -47,6 +47,20 @@ impl Greeter for Box[String]:
         return self.value.clone()
 ```
 
+Those specialized impls also dispatch correctly through bounded generic calls:
+
+```python
+trait Show:
+    def show(borrow self) -> String
+
+impl Show for Box[int32]:
+    def show(borrow self) -> String:
+        return f"{self.value}"
+
+def render[T: Show](value: T) -> None:
+    print(value.show())
+```
+
 Open generic impl headers now work too:
 
 ```python
@@ -64,6 +78,22 @@ trait Mapper[T]:
 impl Mapper[T] for Box[T]:
     def map(borrow self, value: T) -> T:
         return value
+```
+
+Traits may also declare associated methods with no receiver, and those methods are callable through the implementing type name:
+
+```python
+trait Factory:
+    def make() -> int32
+
+class Widget:
+    value: int32
+
+impl Factory for Widget:
+    def make() -> int32:
+        return 7
+
+print(Widget.make())
 ```
 
 ## Calling Through A Trait Bound
@@ -123,6 +153,8 @@ def show[T: Describe](animal: T) -> None:
 
 See [examples/traits/generic_dispatch_multiple_types.au](/Users/johnolafenwa/source2/Aurora/examples/traits/generic_dispatch_multiple_types.au) for a runnable maintained example.
 
+See [examples/traits/specialized_trait_dispatch.au](/Users/johnolafenwa/source2/Aurora/examples/traits/specialized_trait_dispatch.au) for bounded dispatch across specialized generic impls, and [examples/traits/trait_associated_factory.au](/Users/johnolafenwa/source2/Aurora/examples/traits/trait_associated_factory.au) for trait-associated methods through the type name.
+
 ## Current Limits
 
 The implemented trait surface currently supports:
@@ -139,6 +171,7 @@ The implemented trait surface currently supports:
 - bounded generic classes and enums with `T: Trait`
 - multiple bounds with `T: A + B`
 - direct trait-method calls on concrete types that implement the trait
+- associated trait methods declared without `self`
 
 Still outside the current bootstrap compiler:
 

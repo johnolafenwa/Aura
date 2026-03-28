@@ -18,7 +18,7 @@ use crate::mir::{
     MirModule, MirReceiverKind, MirSelectArm, MirSelectKind, MirTraitImpl, Operand, Rvalue,
     Terminator,
 };
-use crate::sema::Type;
+use crate::sema::{substitute_type, Type};
 
 pub fn emit_host_object(module: &MirModule) -> std::result::Result<Vec<u8>, String> {
     let context = NativeCodegen::new(module)?;
@@ -3159,14 +3159,16 @@ impl<'a> FunctionCompiler<'a> {
         if let Type::Named(name, class_args) = object_ty {
             if self.classes.contains_key(name) || self.find_trait_method(object_ty, field).is_some()
             {
-                return self.compile_class_member_call(
+                if let Ok(result) = self.compile_class_member_call(
                     name,
                     Some(object_ty.clone()),
-                    object,
+                    object.clone(),
                     field,
                     receiver_place,
                     args,
-                );
+                ) {
+                    return Ok(result);
+                }
             }
             if name == "Channel" {
                 let object = self.ensure_opaque(object)?;
@@ -3346,9 +3348,15 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         if candidates.len() == 1 {
+            let Type::Named(candidate_name, _) = &candidates[0].0 else {
+                return Err(format!(
+                    "direct backend does not know how to call dynamic method `.{}` for `{}`",
+                    field, candidates[0].0
+                ));
+            };
             return self.compile_class_member_call(
-                &candidates[0].0,
-                Some(Type::named(&candidates[0].0)),
+                candidate_name,
+                Some(candidates[0].0.clone()),
                 object,
                 field,
                 receiver_place,
@@ -3372,11 +3380,14 @@ impl<'a> FunctionCompiler<'a> {
         let mut current_fallthrough = None;
         let result_vars = self.declare_temporary_result_storage(&result_ty)?;
         for (candidate_ty, _method) in candidates.iter() {
+            let Type::Named(candidate_name, _) = candidate_ty else {
+                continue;
+            };
             let check_block = self
                 .builder
                 .current_block()
                 .expect("current block should exist");
-            let matched = self.value_matches_type(object.values[0], candidate_ty)?;
+            let matched = self.value_matches_runtime_type(object.values[0], candidate_ty)?;
             let then_block = self.builder.create_block();
             let else_block = self.builder.create_block();
             self.builder
@@ -3384,8 +3395,8 @@ impl<'a> FunctionCompiler<'a> {
                 .brif(matched, then_block, &[], else_block, &[]);
             self.builder.switch_to_block(then_block);
             let call_result = self.compile_class_member_call(
-                candidate_ty,
-                Some(Type::named(candidate_ty)),
+                candidate_name,
+                Some(candidate_ty.clone()),
                 object.clone(),
                 field,
                 receiver_place,
@@ -3627,22 +3638,63 @@ impl<'a> FunctionCompiler<'a> {
         Ok(self.builder.inst_results(inst)[0])
     }
 
-    fn dynamic_method_candidates(&self, field: &str) -> Vec<(String, MirMethod)> {
+    fn value_matches_runtime_type(
+        &mut self,
+        value: Value,
+        ty: &Type,
+    ) -> std::result::Result<Value, String> {
+        match ty {
+            Type::TypeParam(_) => Ok(self.builder.ins().iconst(types::I64, 1)),
+            Type::Unit => self.value_matches_type(value, "None"),
+            Type::Module(path) => self.value_matches_type(value, &format!("module {}", path)),
+            Type::Named(name, args) => {
+                let mut matched = self.value_matches_type(value, name)?;
+                if args.is_empty() {
+                    return Ok(matched);
+                }
+
+                let Some(class) = self.classes.get(name).cloned() else {
+                    return Ok(matched);
+                };
+                let substitutions = class
+                    .type_params
+                    .iter()
+                    .cloned()
+                    .zip(args.iter().cloned())
+                    .collect::<HashMap<_, _>>();
+                for field in &class.fields {
+                    let field_ty = substitute_type(&field.ty, &substitutions);
+                    if runtime_type_is_wildcard(&field_ty) {
+                        continue;
+                    }
+                    let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
+                    let inst = self
+                        .builder
+                        .ins()
+                        .call(self.instance_get_field, &[value, field_ptr, field_len]);
+                    let field_value = self.builder.inst_results(inst)[0];
+                    let field_matches = self.value_matches_runtime_type(field_value, &field_ty)?;
+                    matched = self.builder.ins().band(matched, field_matches);
+                }
+                Ok(matched)
+            }
+        }
+    }
+
+    fn dynamic_method_candidates(&self, field: &str) -> Vec<(Type, MirMethod)> {
         let mut candidates = Vec::new();
         for class in self.classes.values() {
             if let Some(method) = class.methods.iter().find(|method| method.name == field) {
-                candidates.push((class.name.clone(), method.clone()));
+                candidates.push((Type::named(&class.name), method.clone()));
             }
         }
         for trait_impl in &self.trait_impls {
-            if let Type::Named(name, _) = &trait_impl.for_type {
-                if let Some(method) = trait_impl
-                    .methods
-                    .iter()
-                    .find(|method| method.name == field)
-                {
-                    candidates.push((name.clone(), method.clone()));
-                }
+            if let Some(method) = trait_impl
+                .methods
+                .iter()
+                .find(|method| method.name == field)
+            {
+                candidates.push((trait_impl.for_type.clone(), method.clone()));
             }
         }
         candidates
@@ -4622,6 +4674,15 @@ fn is_numeric_type_name(ty: &Type) -> bool {
     }
 }
 
+fn runtime_type_is_wildcard(ty: &Type) -> bool {
+    match ty {
+        Type::TypeParam(_) => true,
+        Type::Named(name, _) if name == "Unknown" => true,
+        Type::Named(_, args) => args.iter().any(runtime_type_is_wildcard),
+        Type::Unit | Type::Module(_) => false,
+    }
+}
+
 fn collect_spawn_targets(module: &MirModule) -> BTreeSet<String> {
     let mut targets = BTreeSet::new();
     for function in module.functions.iter().chain(module.top_level.iter()) {
@@ -4841,6 +4902,7 @@ mod tests {
             "Point".to_string(),
             crate::mir::MirClass {
                 name: "Point".to_string(),
+                type_params: Vec::new(),
                 fields: vec![
                     crate::mir::MirClassField {
                         name: "x".to_string(),

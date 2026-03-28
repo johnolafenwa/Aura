@@ -43,6 +43,7 @@ pub struct MirLocalType {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirClass {
     pub name: String,
+    pub type_params: Vec<String>,
     pub fields: Vec<MirClassField>,
     pub methods: Vec<MirMethod>,
 }
@@ -318,6 +319,7 @@ pub fn lower(program: &Program) -> MirModule {
         }
         classes.push(MirClass {
             name: class.decl.name.clone(),
+            type_params: class.decl.type_params.clone(),
             fields,
             methods,
         });
@@ -463,6 +465,7 @@ fn push_imported_module_classes_from_namespace(
         }
         classes.push(MirClass {
             name: class.decl.name.clone(),
+            type_params: class.decl.type_params.clone(),
             fields,
             methods,
         });
@@ -675,6 +678,7 @@ struct Lowerer<'a> {
     loop_stack: Vec<LoopLabels>,
     with_stack: Vec<String>,
     local_types: std::collections::BTreeMap<String, Type>,
+    scoped_names: Vec<std::collections::HashMap<String, String>>,
 }
 
 struct LoopLabels {
@@ -690,6 +694,25 @@ struct BasicBlockBuilder {
 }
 
 impl<'a> Lowerer<'a> {
+    fn find_namespace_in_modules<'b>(
+        modules: &'b BTreeMap<String, ModuleNamespace>,
+        path: &str,
+    ) -> Option<&'b ModuleNamespace> {
+        for namespace in modules.values() {
+            if namespace.path == path {
+                return Some(namespace);
+            }
+            if let Some(found) = Self::find_namespace_in_modules(&namespace.modules, path) {
+                return Some(found);
+            }
+            if let Some(found) = Self::find_namespace_in_modules(&namespace.imported_modules, path)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+
     fn new(program: &'a Program, function_name: &'a str, module_name: &'a str) -> Self {
         Self {
             program,
@@ -706,6 +729,7 @@ impl<'a> Lowerer<'a> {
             loop_stack: Vec::new(),
             with_stack: Vec::new(),
             local_types: std::collections::BTreeMap::new(),
+            scoped_names: Vec::new(),
         }
     }
 
@@ -713,13 +737,9 @@ impl<'a> Lowerer<'a> {
         if let Some(namespace) = self.program.module_registry.get(path) {
             return Some(namespace);
         }
-        let mut segments = path.split('.');
-        let first = segments.next()?;
-        let mut namespace = self.program.imported_modules.get(first)?;
-        for segment in segments {
-            namespace = namespace.modules.get(segment)?;
-        }
-        Some(namespace)
+        self.current_module_namespace()
+            .and_then(|current| Self::find_namespace_in_modules(&current.imported_modules, path))
+            .or_else(|| Self::find_namespace_in_modules(&self.program.imported_modules, path))
     }
 
     fn current_module_namespace(&self) -> Option<&ModuleNamespace> {
@@ -1037,7 +1057,7 @@ impl<'a> Lowerer<'a> {
 
     fn render_assign_target(&self, target: &AssignTarget) -> String {
         match target {
-            AssignTarget::Name(name) => name.clone(),
+            AssignTarget::Name(name) => self.render_local_name(name),
             AssignTarget::Member { object, field } => {
                 format!("{}.{}", self.render_expr_place(object), field)
             }
@@ -1046,13 +1066,24 @@ impl<'a> Lowerer<'a> {
 
     fn render_expr_place(&self, expr: &Expr) -> String {
         match &expr.kind {
-            ExprKind::Name(name) => name.clone(),
+            ExprKind::Name(name) => self.render_local_name(name),
             ExprKind::Group(inner) => self.render_expr_place(inner),
             ExprKind::Member { object, field } => {
                 format!("{}.{}", self.render_expr_place(object), field)
             }
             _ => "<expr>".to_string(),
         }
+    }
+
+    fn scoped_local_name(&self, name: &str) -> Option<&str> {
+        self.scoped_names
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name).map(String::as_str))
+    }
+
+    fn render_local_name(&self, name: &str) -> String {
+        self.scoped_local_name(name).unwrap_or(name).to_string()
     }
 
     fn lower_if(&mut self, if_stmt: &IfStmt) {
@@ -1144,16 +1175,23 @@ impl<'a> Lowerer<'a> {
 
         for ((arm_block, _), arm) in arms.iter().zip(&match_stmt.arms) {
             self.switch_to(*arm_block);
+            self.scoped_names.push(std::collections::HashMap::new());
             if let Pattern::Variant(pattern) = &arm.pattern {
                 if let Some(binding) = &pattern.binding {
-                    if let Some(payload_ty) = scrutinee_ty
+                    let target = if let Some(payload_ty) = scrutinee_ty
                         .as_ref()
                         .and_then(|ty| self.variant_payload_type(ty, &pattern.variant_name))
                     {
-                        self.local_types.insert(binding.clone(), payload_ty);
-                    }
+                        self.new_typed_temp(payload_ty)
+                    } else {
+                        self.new_temp()
+                    };
+                    self.scoped_names
+                        .last_mut()
+                        .expect("match arm scope should exist")
+                        .insert(binding.clone(), target.clone());
                     self.emit(Instruction::Assign {
-                        target: binding.clone(),
+                        target,
                         value: Rvalue::VariantPayload {
                             scrutinee: scrutinee.clone(),
                         },
@@ -1164,6 +1202,7 @@ impl<'a> Lowerer<'a> {
             if !self.current_terminated() {
                 self.terminate(Terminator::Goto(self.label(after_block)));
             }
+            self.scoped_names.pop();
         }
 
         self.switch_to(after_block);
@@ -1344,7 +1383,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_expr(&mut self, expr: &Expr) -> Operand {
         match &expr.kind {
-            ExprKind::Name(name) => Operand::Place(name.clone()),
+            ExprKind::Name(name) => Operand::Place(self.render_local_name(name)),
             ExprKind::Int(value) => Operand::Int(*value),
             ExprKind::DurationMillis(value) => Operand::Duration(*value),
             ExprKind::Float(value) => Operand::Float(*value),
@@ -1757,6 +1796,37 @@ impl<'a> Lowerer<'a> {
                             return Operand::Place(temp);
                         }
                     }
+                    if let Some((function_name, params)) = self
+                        .trait_impl_method_for_class_name(class_name, field)
+                        .filter(|(_, method)| method.decl.receiver.is_none())
+                        .map(|(trait_impl, method)| {
+                            (
+                                format!(
+                                    "{}{} for {}.{}",
+                                    trait_impl.trait_name,
+                                    format_trait_args(&trait_impl.trait_args),
+                                    trait_impl.for_type,
+                                    field
+                                ),
+                                method.decl.params.clone(),
+                            )
+                        })
+                    {
+                        let lowered_args = self.lower_user_args(
+                            &format!("method `{}`", field),
+                            &params,
+                            args,
+                            callee.span,
+                        );
+                        self.emit(Instruction::Assign {
+                            target: temp.clone(),
+                            value: Rvalue::Call {
+                                callee: CallTarget::Name(function_name),
+                                args: lowered_args,
+                            },
+                        });
+                        return Operand::Place(temp);
+                    }
                 }
 
                 if let ExprKind::Name(enum_name) = &base_object.kind {
@@ -1794,24 +1864,28 @@ impl<'a> Lowerer<'a> {
                 });
             }
             ExprKind::Name(name) => {
-                let lowered_args =
-                    if let Some(function_info) = self.resolve_function_info(name).cloned() {
-                        self.lower_user_args(
-                            &format!("function `{}`", name),
-                            &function_info.decl.params,
-                            args,
-                            callee.span,
-                        )
-                    } else {
-                        self.lower_args(args)
-                    };
+                let resolved_function = self.resolve_function_info(name).cloned();
+                let lowered_args = if let Some(function_info) = resolved_function.as_ref() {
+                    self.lower_user_args(
+                        &format!("function `{}`", name),
+                        &function_info.decl.params,
+                        args,
+                        callee.span,
+                    )
+                } else {
+                    self.lower_args(args)
+                };
                 let callee_name = if self.program.functions.contains_key(name) {
                     name.clone()
-                } else if self
-                    .current_module_namespace()
-                    .is_some_and(|namespace| namespace.all_functions.contains_key(name))
-                {
-                    imported_module_function_name(self.module_name, name)
+                } else if let Some(function_info) = resolved_function {
+                    if function_info.module_name == self.program.module_name {
+                        name.clone()
+                    } else {
+                        imported_module_function_name(
+                            &function_info.module_name,
+                            &function_info.decl.name,
+                        )
+                    }
                 } else {
                     name.clone()
                 };
@@ -1928,24 +2002,43 @@ impl<'a> Lowerer<'a> {
             .collect()
     }
 
+    fn builtin_enum_variant_type(&self, receiver_type: &Type, field: &str) -> Option<Type> {
+        match receiver_type {
+            Type::Named(name, args) if name == "Option" && args.len() == 1 => {
+                matches!(field, "Some" | "None").then(|| receiver_type.clone())
+            }
+            Type::Named(name, args) if name == "Result" && args.len() == 2 => {
+                matches!(field, "Ok" | "Err").then(|| receiver_type.clone())
+            }
+            Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
+                (field == "Closed").then(|| receiver_type.clone())
+            }
+            _ => None,
+        }
+    }
+
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
         match &expr.kind {
-            ExprKind::Name(name) => self
-                .local_types
-                .get(name)
-                .cloned()
-                .or_else(|| {
-                    self.program
-                        .imported_modules
-                        .get(name)
-                        .map(|namespace| Type::Module(namespace.path.clone()))
-                })
-                .or_else(|| self.resolve_class_info(name).map(|_| Type::named(name)))
-                .or_else(|| self.resolve_enum_info(name).map(|_| Type::named(name)))
-                .or_else(|| {
-                    self.resolve_function_info(name)
-                        .map(|function| function.signature.return_type.clone())
-                }),
+            ExprKind::Name(name) => {
+                if let Some(mapped) = self.scoped_local_name(name) {
+                    return self.local_types.get(mapped).cloned();
+                }
+                self.local_types
+                    .get(name)
+                    .cloned()
+                    .or_else(|| {
+                        self.program
+                            .imported_modules
+                            .get(name)
+                            .map(|namespace| Type::Module(namespace.path.clone()))
+                    })
+                    .or_else(|| self.resolve_class_info(name).map(|_| Type::named(name)))
+                    .or_else(|| self.resolve_enum_info(name).map(|_| Type::named(name)))
+                    .or_else(|| {
+                        self.resolve_function_info(name)
+                            .map(|function| function.signature.return_type.clone())
+                    })
+            }
             ExprKind::Group(inner) => self.infer_expr_type(inner),
             ExprKind::Cast { ty, .. } => Some(lower_type_ref(ty)),
             ExprKind::Int(_) => Some(Type::named("int32")),
@@ -2028,6 +2121,21 @@ impl<'a> Lowerer<'a> {
                         })
                     }
                     ExprKind::Member { object, field } => {
+                        let receiver_type = match &object.kind {
+                            ExprKind::Specialize { expr, type_args }
+                                if matches!(&expr.kind, ExprKind::Name(_)) =>
+                            {
+                                let inner_name = match &expr.kind {
+                                    ExprKind::Name(name) => name,
+                                    _ => unreachable!(),
+                                };
+                                Some(Type::Named(
+                                    inner_name.clone(),
+                                    type_args.iter().map(lower_type_ref).collect(),
+                                ))
+                            }
+                            _ => self.infer_expr_type(object),
+                        };
                         if let Some((module_path, item_name)) = self.qualified_module_item(object) {
                             if let Some(namespace) = self.module_namespace(&module_path) {
                                 if let Some(class) = namespace.classes.get(&item_name) {
@@ -2058,7 +2166,11 @@ impl<'a> Lowerer<'a> {
                                 }
                             }
                         }
-                        let receiver_type = self.infer_expr_type(object)?;
+                        let receiver_type = receiver_type?;
+                        if let Some(enum_ty) = self.builtin_enum_variant_type(&receiver_type, field)
+                        {
+                            return Some(enum_ty);
+                        }
                         if let Type::Named(class_name, _) = &receiver_type {
                             if let Some(class) = self.resolve_class_info(class_name) {
                                 if let Some(method) = class.methods.get(field) {
@@ -2090,7 +2202,24 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                 }
-                let receiver_type = self.infer_expr_type(object)?;
+                let receiver_type = match &object.kind {
+                    ExprKind::Specialize { expr, type_args }
+                        if matches!(&expr.kind, ExprKind::Name(_)) =>
+                    {
+                        let inner_name = match &expr.kind {
+                            ExprKind::Name(name) => name,
+                            _ => unreachable!(),
+                        };
+                        Type::Named(
+                            inner_name.clone(),
+                            type_args.iter().map(lower_type_ref).collect(),
+                        )
+                    }
+                    _ => self.infer_expr_type(object)?,
+                };
+                if let Some(enum_ty) = self.builtin_enum_variant_type(&receiver_type, field) {
+                    return Some(enum_ty);
+                }
                 let Type::Named(class_name, _) = receiver_type else {
                     return None;
                 };
@@ -2174,6 +2303,28 @@ impl<'a> Lowerer<'a> {
                     .get(field)
                     .map(|method| (method, substitutions))
             })
+    }
+
+    fn trait_impl_method_for_class_name(
+        &self,
+        class_name: &str,
+        field: &str,
+    ) -> Option<(crate::sema::TraitImplInfo, crate::sema::TraitImplMethodInfo)> {
+        let mut matches =
+            self.trait_impls_in_scope()
+                .filter_map(|trait_impl| match &trait_impl.for_type {
+                    Type::Named(name, _) if name == class_name => trait_impl
+                        .methods
+                        .get(field)
+                        .cloned()
+                        .map(|method| (trait_impl.clone(), method)),
+                    _ => None,
+                });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(first)
     }
 
     fn variant_payload_type(&self, enum_ty: &Type, variant_name: &str) -> Option<Type> {
