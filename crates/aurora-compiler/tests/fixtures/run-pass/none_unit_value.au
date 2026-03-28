@@ -1,0 +1,8 @@
+def noop() -> None:
+    return None
+
+def main() -> int32:
+    done: None = None
+    noop()
+    print(1)
+    return 0

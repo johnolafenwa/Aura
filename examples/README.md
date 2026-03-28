@@ -14,6 +14,9 @@ The examples are organized by topic so they can serve both as quick references a
 - `main_function.au`
   - `main` with an omitted `None` return type
   - prints `16`
+- `none_values.au`
+  - bare `None` as both the unit type and unit value
+  - prints `1`
 - `mutable_bindings.au`
   - `mut`, reassignment, and compound assignment
   - prints `5`

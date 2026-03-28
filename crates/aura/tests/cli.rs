@@ -168,6 +168,34 @@ fn build_and_run_direct_source(
     (build, run)
 }
 
+fn build_and_run_default_source(
+    prefix: &str,
+    source: &str,
+) -> (std::process::Output, std::process::Output) {
+    let (temp, source_path) = write_temp_source(prefix, source);
+    let output_path = temp.path().join("out");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build");
+
+    assert!(
+        build.status.success(),
+        "default backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run default-backend binary");
+
+    (build, run)
+}
+
 #[test]
 fn ast_exits_cleanly_when_stdout_pipe_closes() {
     let fixture = repo_root().join("examples/point.au");
@@ -723,6 +751,108 @@ fn complete_recovers_member_completions_for_dangling_dot_at_eof_stdin_buffers() 
 }
 
 #[test]
+fn analyze_recovers_symbols_for_multiple_dangling_dots_with_imports() {
+    let temp = TempDir::new("aurora-analyze-multi-dangling-imports");
+    let helpers_dir = temp.path().join("helpers");
+    fs::create_dir_all(&helpers_dir).expect("failed to create helpers dir");
+    fs::write(
+        helpers_dir.join("math.au"),
+        "public def double(value: int32) -> int32:\n    return value * 2\n",
+    )
+    .expect("failed to write helper math module");
+    fs::write(
+        helpers_dir.join("counter.au"),
+        "public class Counter:\n    public value: int32\n",
+    )
+    .expect("failed to write helper counter module");
+    let source_path = temp.path().join("main.au");
+    fs::write(
+        &source_path,
+        "import helpers.math\nfrom helpers.counter import Counter\n\ndef main() -> int32:\n    counter = Counter(value=3)\n    print(helpers.math.\n    print(counter.\n    return 0\n",
+    )
+    .expect("failed to write main module");
+
+    let output = Command::new(aura_bin())
+        .arg("analyze")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura analyze");
+
+    assert!(
+        output.status.success(),
+        "analyze should succeed on recoverable multiple dangling-dot buffers, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .expect("analyze should return valid JSON");
+    assert!(
+        json["symbols"]
+            .as_array()
+            .is_some_and(|symbols| !symbols.is_empty()),
+        "analyze should still recover symbols for multiple dangling dots"
+    );
+    assert!(
+        json["occurrences"]
+            .as_array()
+            .is_some_and(|occurrences| !occurrences.is_empty()),
+        "analyze should still recover occurrences for multiple dangling dots"
+    );
+}
+
+#[test]
+fn complete_recovers_member_completions_for_multiple_dangling_dots_with_imports() {
+    let temp = TempDir::new("aurora-complete-multi-dangling-imports");
+    let helpers_dir = temp.path().join("helpers");
+    fs::create_dir_all(&helpers_dir).expect("failed to create helpers dir");
+    fs::write(
+        helpers_dir.join("math.au"),
+        "public def double(value: int32) -> int32:\n    return value * 2\npublic def triple(value: int32) -> int32:\n    return value * 3\n",
+    )
+    .expect("failed to write helper math module");
+    fs::write(
+        helpers_dir.join("counter.au"),
+        "public class Counter:\n    public value: int32\n",
+    )
+    .expect("failed to write helper counter module");
+    let source_path = temp.path().join("main.au");
+    fs::write(
+        &source_path,
+        "import helpers.math\nfrom helpers.counter import Counter\n\ndef main() -> int32:\n    counter = Counter(value=3)\n    print(helpers.math.\n    print(counter.\n    return 0\n",
+    )
+    .expect("failed to write main module");
+
+    let output = Command::new(aura_bin())
+        .arg("complete")
+        .arg("--line")
+        .arg("5")
+        .arg("--character")
+        .arg("23")
+        .arg("--trigger")
+        .arg(".")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura complete");
+
+    assert!(
+        output.status.success(),
+        "complete should succeed on recoverable multiple dangling-dot buffers, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .expect("complete should return valid JSON");
+    let names = json
+        .as_array()
+        .expect("completions should be an array")
+        .iter()
+        .filter_map(|item| item["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"double"));
+    assert!(names.contains(&"triple"));
+}
+
+#[test]
 fn build_produces_a_runnable_binary() {
     let fixture = repo_root().join("examples/point.au");
     let output_dir = TempDir::new("aurora-build");
@@ -1039,6 +1169,78 @@ fn build_with_direct_backend_supports_full_range_uint128_example() {
 }
 
 #[test]
+fn build_with_direct_backend_supports_bare_none_unit_values() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-none-unit",
+        "def noop() -> None:\n    return None\n\ndef main() -> int32:\n    done: None = None\n    noop()\n    print(1)\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
+}
+
+#[test]
+fn build_with_direct_backend_ignores_closed_recv_when_timeout_arm_exists() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-select-closed-timeout",
+        "def main() -> int32:\n    ch: Channel[int32] = channel()\n    ch.close()\n    select:\n        case value = ch.recv():\n            match value:\n                case Option.Some(v):\n                    print(v)\n                case Option.None:\n                    print(1)\n        case after(1ms):\n            print(2)\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct-backend select binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
+}
+
+#[test]
+fn built_direct_binaries_render_runtime_errors_with_source_context() {
+    let temp = TempDir::new("aurora-build-direct-runtime-diag");
+    let source_path = temp.path().join("main.au");
+    fs::write(
+        &source_path,
+        "def main() -> int32:\n    print(1 / 0)\n    return 0\n",
+    )
+    .expect("failed to write runtime-error source");
+    let output_path = temp.path().join("out");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build --backend direct");
+
+    assert!(
+        build.status.success(),
+        "direct backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run direct-backend binary");
+
+    assert!(
+        !run.status.success(),
+        "direct-backend runtime-error binary should fail"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains("error: division by zero"));
+    assert!(stderr.contains(&format!("{}:2:11", source_path.display())));
+    assert!(stderr.contains("|"));
+    assert!(stderr.contains("^"));
+}
+
+#[test]
 fn default_build_supports_simple_example() {
     assert_default_backend_example_runs(
         "examples/basics/simple_example.au",
@@ -1081,6 +1283,76 @@ fn default_build_supports_generic_trait_impl_example() {
         "generic-trait-impl-auto",
         "11\n",
     );
+}
+
+#[test]
+fn default_build_supports_bare_none_unit_values() {
+    let (_, run) = build_and_run_default_source(
+        "aurora-build-auto-none-unit",
+        "def noop() -> None:\n    return None\n\ndef main() -> int32:\n    done: None = None\n    noop()\n    print(1)\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "default-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
+}
+
+#[test]
+fn default_build_ignores_closed_recv_when_timeout_arm_exists() {
+    let (_, run) = build_and_run_default_source(
+        "aurora-build-auto-select-closed-timeout",
+        "def main() -> int32:\n    ch: Channel[int32] = channel()\n    ch.close()\n    select:\n        case value = ch.recv():\n            match value:\n                case Option.Some(v):\n                    print(v)\n                case Option.None:\n                    print(1)\n        case after(1ms):\n            print(2)\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "default-backend select binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
+}
+
+#[test]
+fn built_default_binaries_render_runtime_errors_with_source_context() {
+    let temp = TempDir::new("aurora-build-auto-runtime-diag");
+    let source_path = temp.path().join("main.au");
+    fs::write(
+        &source_path,
+        "def main() -> int32:\n    print(1 / 0)\n    return 0\n",
+    )
+    .expect("failed to write runtime-error source");
+    let output_path = temp.path().join("out");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build");
+
+    assert!(
+        build.status.success(),
+        "default backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run default-backend binary");
+
+    assert!(
+        !run.status.success(),
+        "default-backend runtime-error binary should fail"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains("error: division by zero"));
+    assert!(stderr.contains(&format!("{}:2:11", source_path.display())));
+    assert!(stderr.contains("|"));
+    assert!(stderr.contains("^"));
 }
 
 #[test]

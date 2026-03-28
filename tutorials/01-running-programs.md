@@ -31,6 +31,7 @@ cargo run -p aura -- complete --line 5 --character 11 --trigger . examples/point
   - `--backend auto` is the default
   - `--backend direct` forces the true direct native backend for the full currently implemented Aurora language surface
   - the generated binary does not depend on the original `.au` source file at runtime
+  - built binaries now preserve file, line, and caret context for arithmetic runtime failures
   - the current build step still requires Cargo/Rust and a host C compiler
 - `ast`
   - print the parsed syntax tree
@@ -44,7 +45,7 @@ cargo run -p aura -- complete --line 5 --character 11 --trigger . examples/point
   - print machine-readable completion items for a position in the file
   - `--line` and `--character` use zero-based positions
   - member completion expects the cursor to be positioned just after `.`
-  - the current compiler also tolerates the common incomplete-editor state where the buffer contains a dangling member access like `counter.`, including at EOF
+  - the current compiler also tolerates the common incomplete-editor state where the buffer contains one or more dangling member accesses like `counter.` or `helpers.math.`, including at EOF
 
 The machine-readable commands support stdin for editor integration, and the ordinary `check`, `run`, `run-mir`, and `build` commands can also resolve local imports from stdin when you provide a real workspace path:
 

@@ -4,11 +4,12 @@ use std::io::{self, Write};
 use std::process;
 use std::slice;
 use std::str;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::{BinaryOp, UnaryOp};
-use crate::diag::Diagnostic;
+use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::interpreter::{
     cast_numeric_value, CancellationContext, ChannelValue, EnumVariantValue, InstanceValue,
@@ -63,10 +64,17 @@ pub struct OpaqueValue(Value);
 
 type NativeThunk = unsafe extern "C" fn(*const i64, usize) -> *mut OpaqueValue;
 
+struct ProgramSourceContext {
+    path: String,
+    source: String,
+}
+
 thread_local! {
     static DIRECT_CANCELLATION: RefCell<CancellationContext> =
         RefCell::new(CancellationContext::default());
 }
+
+static DIRECT_PROGRAM_SOURCE: OnceLock<ProgramSourceContext> = OnceLock::new();
 
 #[repr(transparent)]
 struct Deadline(Instant);
@@ -114,9 +122,37 @@ fn decode_bytes<'a>(ptr: *const u8, len: usize) -> &'a str {
     str::from_utf8(bytes).expect("aurora direct runtime should only receive valid UTF-8")
 }
 
+fn render_runtime_diagnostic(diagnostic: Diagnostic) -> String {
+    if let Some(context) = DIRECT_PROGRAM_SOURCE.get() {
+        diagnostic.render_with_source(&context.path, &context.source)
+    } else {
+        format!("error: {}", diagnostic.message)
+    }
+}
+
 fn runtime_error(message: impl AsRef<str>) -> ! {
-    let _ = writeln!(io::stderr().lock(), "{}", message.as_ref());
+    let _ = writeln!(
+        io::stderr().lock(),
+        "{}",
+        render_runtime_diagnostic(Diagnostic::new(message.as_ref()))
+    );
     process::exit(1);
+}
+
+fn runtime_error_at(span: Span, message: impl AsRef<str>) -> ! {
+    let _ = writeln!(
+        io::stderr().lock(),
+        "{}",
+        render_runtime_diagnostic(Diagnostic::at(span, message.as_ref()))
+    );
+    process::exit(1);
+}
+
+fn runtime_span(line: i64, column: i64) -> Option<Span> {
+    if line <= 0 || column <= 0 {
+        return None;
+    }
+    Some(Span::new(line as usize, column as usize))
 }
 
 fn value_type_name(value: &Value) -> String {
@@ -319,11 +355,21 @@ fn eval_unary_value(value: Value, op: UnaryOp) -> std::result::Result<Value, Dia
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_runtime_init() {
+pub extern "C" fn aurora_direct_runtime_init(
+    path_ptr: *const u8,
+    path_len: usize,
+    source_ptr: *const u8,
+    source_len: usize,
+) {
     #[cfg(unix)]
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
+
+    let _ = DIRECT_PROGRAM_SOURCE.set(ProgramSourceContext {
+        path: decode_bytes(path_ptr, path_len).to_string(),
+        source: decode_bytes(source_ptr, source_len).to_string(),
+    });
 }
 
 #[no_mangle]
@@ -510,6 +556,27 @@ pub extern "C" fn aurora_direct_unary_value(op: i32, value: *mut OpaqueValue) ->
 }
 
 #[no_mangle]
+pub extern "C" fn aurora_direct_unary_value_at(
+    op: i32,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    let op = match op {
+        0 => UnaryOp::Neg,
+        1 => UnaryOp::Not,
+        other => runtime_error(format!("unknown unary opcode `{}`", other)),
+    };
+    match eval_unary_value(unsafe { take_value(value) }, op) {
+        Ok(value) => boxed_value(value),
+        Err(error) => match runtime_span(line, column) {
+            Some(span) => runtime_error_at(span, error.message),
+            None => runtime_error(error.message),
+        },
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn aurora_direct_binary_value(
     op: i32,
     left: *mut OpaqueValue,
@@ -542,6 +609,43 @@ pub extern "C" fn aurora_direct_binary_value(
 }
 
 #[no_mangle]
+pub extern "C" fn aurora_direct_binary_value_at(
+    op: i32,
+    left: *mut OpaqueValue,
+    right: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    let op = match op {
+        0 => BinaryOp::Add,
+        1 => BinaryOp::Sub,
+        2 => BinaryOp::Mul,
+        3 => BinaryOp::Div,
+        4 => BinaryOp::Mod,
+        5 => BinaryOp::Eq,
+        6 => BinaryOp::NotEq,
+        7 => BinaryOp::Less,
+        8 => BinaryOp::LessEq,
+        9 => BinaryOp::Greater,
+        10 => BinaryOp::GreaterEq,
+        11 => BinaryOp::And,
+        12 => BinaryOp::Or,
+        other => runtime_error(format!("unknown binary opcode `{}`", other)),
+    };
+    match eval_binary_value(
+        unsafe { take_value(left) },
+        unsafe { take_value(right) },
+        op,
+    ) {
+        Ok(value) => boxed_value(value),
+        Err(error) => match runtime_span(line, column) {
+            Some(span) => runtime_error_at(span, error.message),
+            None => runtime_error(error.message),
+        },
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn aurora_direct_cast_value(
     value: *mut OpaqueValue,
     target_ptr: *const u8,
@@ -551,6 +655,24 @@ pub extern "C" fn aurora_direct_cast_value(
     match cast_numeric_value(unsafe { take_value(value) }, &target, None) {
         Ok(value) => boxed_value(value),
         Err(error) => runtime_error(error.message),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_cast_value_at(
+    value: *mut OpaqueValue,
+    target_ptr: *const u8,
+    target_len: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    let target = Type::named(decode_bytes(target_ptr, target_len));
+    match cast_numeric_value(unsafe { take_value(value) }, &target, None) {
+        Ok(value) => boxed_value(value),
+        Err(error) => match runtime_span(line, column) {
+            Some(span) => runtime_error_at(span, error.message),
+            None => runtime_error(error.message),
+        },
     }
 }
 
@@ -831,7 +953,7 @@ pub extern "C" fn aurora_direct_channel_try_recv(channel: *mut OpaqueValue) -> i
     match unsafe { value_ref(channel) } {
         Value::Channel(channel) => match channel.try_recv() {
             TryRecvResult::Value(value) => boxed_value(option_some(value)) as i64,
-            TryRecvResult::Closed => boxed_value(option_none()) as i64,
+            TryRecvResult::Closed => 1,
             TryRecvResult::Empty => 0,
         },
         other => runtime_error(format!(
@@ -1011,15 +1133,20 @@ pub extern "C" fn aurora_direct_sqrt_f64(value: f64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fail_division_by_zero() -> ! {
-    let _ = writeln!(io::stderr().lock(), "division by zero");
-    process::exit(1);
+pub extern "C" fn aurora_direct_fail_division_by_zero(line: i64, column: i64) -> ! {
+    match runtime_span(line, column) {
+        Some(span) => runtime_error_at(span, "division by zero"),
+        None => runtime_error("division by zero"),
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fail_int32_overflow(value: i64) -> ! {
-    let _ = writeln!(io::stderr().lock(), "{}", int32_overflow_message(value));
-    process::exit(1);
+pub extern "C" fn aurora_direct_fail_int32_overflow(value: i64, line: i64, column: i64) -> ! {
+    let message = int32_overflow_message(value);
+    match runtime_span(line, column) {
+        Some(span) => runtime_error_at(span, message),
+        None => runtime_error(message),
+    }
 }
 
 #[cfg(test)]
@@ -1056,7 +1183,12 @@ mod tests {
 
     #[test]
     fn runtime_init_is_callable() {
-        super::aurora_direct_runtime_init();
+        super::aurora_direct_runtime_init(
+            b"/virtual/test.au".as_ptr(),
+            b"/virtual/test.au".len(),
+            b"def main() -> int32:\n    return 0\n".as_ptr(),
+            b"def main() -> int32:\n    return 0\n".len(),
+        );
     }
 
     #[test]
@@ -1075,7 +1207,13 @@ mod tests {
     #[test]
     fn division_by_zero_helper_exits_with_error() {
         if std::env::var("AURORA_DIRECT_RUNTIME_HELPER").as_deref() == Ok("divzero") {
-            super::aurora_direct_fail_division_by_zero();
+            super::aurora_direct_runtime_init(
+                b"/virtual/test.au".as_ptr(),
+                b"/virtual/test.au".len(),
+                b"def main() -> int32:\n    print(1 / 0)\n".as_ptr(),
+                b"def main() -> int32:\n    print(1 / 0)\n".len(),
+            );
+            super::aurora_direct_fail_division_by_zero(2, 11);
         }
 
         let output = Command::new(std::env::current_exe().expect("test binary should exist"))
@@ -1099,7 +1237,13 @@ mod tests {
     #[test]
     fn int32_overflow_helper_exits_with_error() {
         if std::env::var("AURORA_DIRECT_RUNTIME_HELPER").as_deref() == Ok("overflow") {
-            super::aurora_direct_fail_int32_overflow(999);
+            super::aurora_direct_runtime_init(
+                b"/virtual/test.au".as_ptr(),
+                b"/virtual/test.au".len(),
+                b"def main() -> int32:\n    value: int32 = 999\n".as_ptr(),
+                b"def main() -> int32:\n    value: int32 = 999\n".len(),
+            );
+            super::aurora_direct_fail_int32_overflow(999, 2, 20);
         }
 
         let output = Command::new(std::env::current_exe().expect("test binary should exist"))

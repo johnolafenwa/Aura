@@ -19,6 +19,7 @@ Last updated: 2026-03-28
 
 ## Done
 
+- Fixed bare `None` parity across `run`, `run-mir`, and native builds, recovered compiler-backed analysis/completions for buffers with multiple dangling member accesses, and restored source-aware arithmetic runtime diagnostics for built binaries.
 - Fixed f-string lexing/parsing so interpolations can contain inner string literals and nested braces, with maintained compiler fixture coverage for both checking and execution.
 - Added maintained regression coverage for `Option.None` inference, namespace-qualified imports inside imported module bodies, and closed-channel `select` timers.
 - Fixed field-level move tracking for owned member reads so Aurora now rejects reusing a moved field while still allowing access to untouched fields and explicit field reinitialization.

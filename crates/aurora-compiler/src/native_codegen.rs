@@ -13,6 +13,7 @@ use cranelift_module::{default_libcall_names, DataDescription, DataId, FuncId, L
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::ast::{BinaryOp, UnaryOp};
+use crate::diag::Span;
 use crate::mir::{
     BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod,
     MirModule, MirReceiverKind, MirSelectArm, MirSelectKind, MirTraitImpl, Operand, Rvalue,
@@ -21,7 +22,15 @@ use crate::mir::{
 use crate::sema::{substitute_type, Type};
 
 pub fn emit_host_object(module: &MirModule) -> std::result::Result<Vec<u8>, String> {
-    let context = NativeCodegen::new(module)?;
+    emit_host_object_with_metadata(module, "<aurora>", "")
+}
+
+pub fn emit_host_object_with_metadata(
+    module: &MirModule,
+    program_path: &str,
+    program_source: &str,
+) -> std::result::Result<Vec<u8>, String> {
+    let context = NativeCodegen::new(module, program_path, program_source)?;
     context.emit()
 }
 
@@ -138,6 +147,8 @@ struct ValueRef {
 
 struct NativeCodegen<'a> {
     module: &'a MirModule,
+    program_path: String,
+    program_source: String,
     object: ObjectModule,
     functions: HashMap<String, FuncId>,
     function_thunks: HashMap<String, FuncId>,
@@ -203,7 +214,11 @@ struct NativeCodegen<'a> {
 }
 
 impl<'a> NativeCodegen<'a> {
-    fn new(module: &'a MirModule) -> std::result::Result<Self, String> {
+    fn new(
+        module: &'a MirModule,
+        program_path: &str,
+        program_source: &str,
+    ) -> std::result::Result<Self, String> {
         validate_module(module)?;
         let classes = module
             .classes
@@ -228,8 +243,12 @@ impl<'a> NativeCodegen<'a> {
             .map_err(|error| format!("failed to initialize object builder: {}", error))?;
         let mut object = ObjectModule::new(builder);
 
-        let runtime_init =
-            declare_runtime_function(&mut object, "aurora_direct_runtime_init", &[], None)?;
+        let runtime_init = declare_runtime_function(
+            &mut object,
+            "aurora_direct_runtime_init",
+            &[types::I64, types::I64, types::I64, types::I64],
+            None,
+        )?;
         let print_i64 =
             declare_runtime_function(&mut object, "aurora_direct_print_i64", &[types::I64], None)?;
         let print_f64 =
@@ -251,13 +270,13 @@ impl<'a> NativeCodegen<'a> {
         let fail_division_by_zero = declare_runtime_function(
             &mut object,
             "aurora_direct_fail_division_by_zero",
-            &[],
+            &[types::I64, types::I64],
             None,
         )?;
         let fail_int32_overflow = declare_runtime_function(
             &mut object,
             "aurora_direct_fail_int32_overflow",
-            &[types::I64],
+            &[types::I64, types::I64, types::I64],
             None,
         )?;
         let box_i64 = declare_runtime_function(
@@ -360,20 +379,20 @@ impl<'a> NativeCodegen<'a> {
         )?;
         let unary_value = declare_runtime_function(
             &mut object,
-            "aurora_direct_unary_value",
-            &[types::I64, types::I64],
+            "aurora_direct_unary_value_at",
+            &[types::I64, types::I64, types::I64, types::I64],
             Some(types::I64),
         )?;
         let binary_value = declare_runtime_function(
             &mut object,
-            "aurora_direct_binary_value",
-            &[types::I64, types::I64, types::I64],
+            "aurora_direct_binary_value_at",
+            &[types::I64, types::I64, types::I64, types::I64, types::I64],
             Some(types::I64),
         )?;
         let cast_value = declare_runtime_function(
             &mut object,
-            "aurora_direct_cast_value",
-            &[types::I64, types::I64, types::I64],
+            "aurora_direct_cast_value_at",
+            &[types::I64, types::I64, types::I64, types::I64, types::I64],
             Some(types::I64),
         )?;
         let value_type_matches = declare_runtime_function(
@@ -580,6 +599,8 @@ impl<'a> NativeCodegen<'a> {
 
         Ok(Self {
             module,
+            program_path: program_path.to_string(),
+            program_source: program_source.to_string(),
             object,
             functions,
             function_thunks,
@@ -1250,7 +1271,21 @@ impl<'a> NativeCodegen<'a> {
         let runtime_init = self
             .object
             .declare_func_in_func(self.runtime_init, builder.func);
-        builder.ins().call(runtime_init, &[]);
+        let (path_ptr, path_len) = declare_string_constant(
+            &mut self.object,
+            &mut self.string_data,
+            &mut builder,
+            self.program_path.as_bytes(),
+        )?;
+        let (source_ptr, source_len) = declare_string_constant(
+            &mut self.object,
+            &mut self.string_data,
+            &mut builder,
+            self.program_source.as_bytes(),
+        )?;
+        builder
+            .ins()
+            .call(runtime_init, &[path_ptr, path_len, source_ptr, source_len]);
         let result = builder.ins().call(entry_ref, &[]);
         let return_value = builder
             .inst_results(result)
@@ -1483,20 +1518,23 @@ impl<'a> FunctionCompiler<'a> {
         match rvalue {
             Rvalue::Use(operand) => self.load_operand(operand),
             Rvalue::FormatString { parts } => self.compile_format_string(parts),
-            Rvalue::Unary { op, value, .. } => {
+            Rvalue::Unary { op, value, span } => {
                 let value = self.load_operand(value)?;
-                self.compile_unary(*op, value)
+                self.compile_unary(*op, value, Some(*span))
             }
-            Rvalue::Cast { value, ty, .. } => {
+            Rvalue::Cast { value, ty, span } => {
                 let value = self.load_operand(value)?;
-                self.compile_cast(value, ty)
+                self.compile_cast(value, ty, Some(*span))
             }
             Rvalue::Binary {
-                op, left, right, ..
+                op,
+                left,
+                right,
+                span,
             } => {
                 let left = self.load_operand(left)?;
                 let right = self.load_operand(right)?;
-                self.compile_binary(*op, left, right)
+                self.compile_binary(*op, left, right, Some(*span))
             }
             Rvalue::Call { callee, args } => self.compile_call(callee, args),
             Rvalue::Construct { class_name, fields } => self.compile_construct(class_name, fields),
@@ -1530,6 +1568,7 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         op: UnaryOp,
         value: ValueRef,
+        span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
         if matches!(value.ty, DirectType::Opaque(_)) {
             let opcode = match op {
@@ -1537,10 +1576,11 @@ impl<'a> FunctionCompiler<'a> {
                 UnaryOp::Not => 1,
             };
             let opcode = self.builder.ins().iconst(types::I64, opcode);
+            let (line, column) = self.span_values(span);
             let inst = self
                 .builder
                 .ins()
-                .call(self.unary_value, &[opcode, value.values[0]]);
+                .call(self.unary_value, &[opcode, value.values[0], line, column]);
             return Ok(ValueRef {
                 values: self.builder.inst_results(inst).to_vec(),
                 ty: DirectType::Opaque(Type::named("Unknown")),
@@ -1574,15 +1614,17 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         value: ValueRef,
         target: &Type,
+        span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
         let target_ty = ensure_direct_type(target, &self.classes, "cast target")?;
         if matches!(value.ty, DirectType::Opaque(_)) || matches!(target_ty, DirectType::Opaque(_)) {
             let boxed = self.ensure_opaque(value)?;
             let (target_ptr, target_len) = self.string_constant(target.to_string().as_bytes())?;
-            let inst = self
-                .builder
-                .ins()
-                .call(self.cast_value, &[boxed.values[0], target_ptr, target_len]);
+            let (line, column) = self.span_values(span);
+            let inst = self.builder.ins().call(
+                self.cast_value,
+                &[boxed.values[0], target_ptr, target_len, line, column],
+            );
             let boxed = ValueRef {
                 values: self.builder.inst_results(inst).to_vec(),
                 ty: DirectType::Opaque(target.clone()),
@@ -1611,7 +1653,7 @@ impl<'a> FunctionCompiler<'a> {
                 .fcvt_from_sint(target_kind.signature_type(), source),
             (kind, ScalarKind::Int32) if kind.is_float() => {
                 let converted = self.builder.ins().fcvt_to_sint_sat(types::I64, source);
-                self.emit_int32_bounds_check(converted);
+                self.emit_int32_bounds_check(converted, span);
                 converted
             }
             (lhs, rhs) if lhs.is_float() && rhs.is_float() => source,
@@ -1635,15 +1677,17 @@ impl<'a> FunctionCompiler<'a> {
         op: BinaryOp,
         left: ValueRef,
         right: ValueRef,
+        span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
         if matches!(left.ty, DirectType::Opaque(_)) || matches!(right.ty, DirectType::Opaque(_)) {
             let left = self.ensure_opaque(left)?;
             let right = self.ensure_opaque(right)?;
             let binary_opcode = self.binary_opcode(op);
             let opcode = self.builder.ins().iconst(types::I64, binary_opcode);
+            let (line, column) = self.span_values(span);
             let inst = self.builder.ins().call(
                 self.binary_value,
-                &[opcode, left.values[0], right.values[0]],
+                &[opcode, left.values[0], right.values[0], line, column],
             );
             return Ok(ValueRef {
                 values: self.builder.inst_results(inst).to_vec(),
@@ -1652,10 +1696,10 @@ impl<'a> FunctionCompiler<'a> {
         }
         match (left.ty.scalar_kind(), right.ty.scalar_kind()) {
             (Some(ScalarKind::Int32), Some(ScalarKind::Int32)) => {
-                self.compile_int32_binary(op, left.values[0], right.values[0])
+                self.compile_int32_binary(op, left.values[0], right.values[0], span)
             }
             (Some(lhs), Some(rhs)) if lhs.is_float() && rhs.is_float() => {
-                self.compile_float_binary(op, left.values[0], right.values[0], lhs)
+                self.compile_float_binary(op, left.values[0], right.values[0], lhs, span)
             }
             (Some(ScalarKind::Bool), Some(ScalarKind::Bool)) => {
                 self.compile_bool_binary(op, left.values[0], right.values[0])
@@ -1672,6 +1716,7 @@ impl<'a> FunctionCompiler<'a> {
         op: BinaryOp,
         left: Value,
         right: Value,
+        span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
         let ty = DirectType::Scalar(ScalarKind::Int32);
         let value = match op {
@@ -1688,14 +1733,14 @@ impl<'a> FunctionCompiler<'a> {
                 ty,
             },
             BinaryOp::Div => {
-                self.emit_int_division_guard(right);
+                self.emit_int_division_guard(right, span);
                 ValueRef {
                     values: vec![self.builder.ins().sdiv(left, right)],
                     ty,
                 }
             }
             BinaryOp::Mod => {
-                self.emit_int_division_guard(right);
+                self.emit_int_division_guard(right, span);
                 ValueRef {
                     values: vec![self.builder.ins().srem(left, right)],
                     ty,
@@ -1718,7 +1763,7 @@ impl<'a> FunctionCompiler<'a> {
         };
 
         if matches!(value.ty.scalar_kind(), Some(ScalarKind::Int32)) {
-            self.emit_int32_bounds_check(value.values[0]);
+            self.emit_int32_bounds_check(value.values[0], span);
         }
         Ok(value)
     }
@@ -1729,6 +1774,7 @@ impl<'a> FunctionCompiler<'a> {
         left: Value,
         right: Value,
         kind: ScalarKind,
+        span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
         let ty = DirectType::Scalar(kind);
         match op {
@@ -1745,7 +1791,7 @@ impl<'a> FunctionCompiler<'a> {
                 ty,
             }),
             BinaryOp::Div => {
-                self.emit_float_division_guard(right);
+                self.emit_float_division_guard(right, span);
                 Ok(ValueRef {
                     values: vec![self.builder.ins().fdiv(left, right)],
                     ty,
@@ -1758,10 +1804,11 @@ impl<'a> FunctionCompiler<'a> {
                 let left_boxed = self.builder.inst_results(left_box)[0];
                 let right_boxed = self.builder.inst_results(right_box)[0];
                 let opcode = self.builder.ins().iconst(types::I64, opcode_value);
-                let result = self
-                    .builder
-                    .ins()
-                    .call(self.binary_value, &[opcode, left_boxed, right_boxed]);
+                let (line, column) = self.span_values(span);
+                let result = self.builder.ins().call(
+                    self.binary_value,
+                    &[opcode, left_boxed, right_boxed, line, column],
+                );
                 let result_boxed = self.builder.inst_results(result)[0];
                 let unboxed = self.builder.ins().call(self.unbox_f64, &[result_boxed]);
                 Ok(ValueRef {
@@ -1824,26 +1871,29 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn emit_int_division_guard(&mut self, divisor: Value) {
+    fn emit_int_division_guard(&mut self, divisor: Value, span: Option<Span>) {
         let zero = self.builder.ins().iconst(types::I64, 0);
         let is_zero = self.builder.ins().icmp(IntCC::Equal, divisor, zero);
-        self.emit_division_failure_branch(is_zero);
+        self.emit_division_failure_branch(is_zero, span);
     }
 
-    fn emit_float_division_guard(&mut self, divisor: Value) {
+    fn emit_float_division_guard(&mut self, divisor: Value, span: Option<Span>) {
         let zero = self.builder.ins().f64const(Ieee64::with_float(0.0));
         let is_zero = self.builder.ins().fcmp(FloatCC::Equal, divisor, zero);
-        self.emit_division_failure_branch(is_zero);
+        self.emit_division_failure_branch(is_zero, span);
     }
 
-    fn emit_division_failure_branch(&mut self, is_zero: Value) {
+    fn emit_division_failure_branch(&mut self, is_zero: Value, span: Option<Span>) {
         let fail_block = self.builder.create_block();
         let continue_block = self.builder.create_block();
         self.builder
             .ins()
             .brif(is_zero, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
-        self.builder.ins().call(self.fail_division_by_zero, &[]);
+        let (line, column) = self.span_values(span);
+        self.builder
+            .ins()
+            .call(self.fail_division_by_zero, &[line, column]);
         self.builder.ins().trap(TrapCode::INTEGER_DIVISION_BY_ZERO);
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
@@ -1919,7 +1969,7 @@ impl<'a> FunctionCompiler<'a> {
                     }
                 }
             };
-            current = self.compile_binary(BinaryOp::Add, current, next)?;
+            current = self.compile_binary(BinaryOp::Add, current, next, None)?;
         }
         Ok(current)
     }
@@ -2435,7 +2485,7 @@ impl<'a> FunctionCompiler<'a> {
         if &value.ty == target {
             let value = self.normalize_scalar_value(value)?;
             if matches!(target.scalar_kind(), Some(ScalarKind::Int32)) {
-                self.emit_int32_bounds_check(value.values[0]);
+                self.emit_int32_bounds_check(value.values[0], None);
             }
             return Ok(value);
         }
@@ -2445,10 +2495,11 @@ impl<'a> FunctionCompiler<'a> {
                 let boxed = self.ensure_opaque(value)?;
                 let (target_ptr, target_len) =
                     self.string_constant(target_ty.to_string().as_bytes())?;
-                let inst = self
-                    .builder
-                    .ins()
-                    .call(self.cast_value, &[boxed.values[0], target_ptr, target_len]);
+                let (line, column) = self.span_values(None);
+                let inst = self.builder.ins().call(
+                    self.cast_value,
+                    &[boxed.values[0], target_ptr, target_len, line, column],
+                );
                 return Ok(ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
                     ty: target.clone(),
@@ -2505,7 +2556,7 @@ impl<'a> FunctionCompiler<'a> {
                 DirectType::Opaque(_) => unreachable!("opaque target handled earlier"),
             };
             if matches!(target.scalar_kind(), Some(ScalarKind::Int32)) {
-                self.emit_int32_bounds_check(result.values[0]);
+                self.emit_int32_bounds_check(result.values[0], None);
             }
             return Ok(result);
         }
@@ -2550,7 +2601,7 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn emit_int32_bounds_check(&mut self, value: Value) {
+    fn emit_int32_bounds_check(&mut self, value: Value, span: Option<Span>) {
         let min = self.builder.ins().iconst(types::I64, i32::MIN as i64);
         let max = self.builder.ins().iconst(types::I64, i32::MAX as i64);
         let below = self.builder.ins().icmp(IntCC::SignedLessThan, value, min);
@@ -2565,7 +2616,10 @@ impl<'a> FunctionCompiler<'a> {
             .ins()
             .brif(overflow, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
-        self.builder.ins().call(self.fail_int32_overflow, &[value]);
+        let (line, column) = self.span_values(span);
+        self.builder
+            .ins()
+            .call(self.fail_int32_overflow, &[value, line, column]);
         self.builder.ins().trap(TrapCode::INTEGER_OVERFLOW);
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
@@ -2770,26 +2824,7 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn string_constant(&mut self, bytes: &[u8]) -> std::result::Result<(Value, Value), String> {
-        let id = if let Some(id) = self.string_data.get(bytes) {
-            *id
-        } else {
-            let name = format!("aurora_data_{}", self.string_data.len());
-            let id = self
-                .object
-                .declare_data(&name, Linkage::Local, false, false)
-                .map_err(|error| format!("failed to declare string data: {}", error))?;
-            let mut data = DataDescription::new();
-            data.define(bytes.to_vec().into_boxed_slice());
-            self.object
-                .define_data(id, &data)
-                .map_err(|error| format!("failed to define string data: {}", error))?;
-            self.string_data.insert(bytes.to_vec(), id);
-            id
-        };
-        let global = self.object.declare_data_in_func(id, self.builder.func);
-        let ptr = self.builder.ins().symbol_value(types::I64, global);
-        let len = self.builder.ins().iconst(types::I64, bytes.len() as i64);
-        Ok((ptr, len))
+        declare_string_constant(self.object, self.string_data, &mut self.builder, bytes)
     }
 
     fn compile_enum_variant(
@@ -3530,6 +3565,9 @@ impl<'a> FunctionCompiler<'a> {
 
     fn compile_select(&mut self, arms: &[MirSelectArm]) -> std::result::Result<(), String> {
         let loop_block = self.builder.create_block();
+        let ignore_closed_recv = arms
+            .iter()
+            .any(|arm| matches!(arm.kind, MirSelectKind::After { .. }));
         let mut initial_deadlines = Vec::new();
         for arm in arms {
             if let MirSelectKind::After { duration } = &arm.kind {
@@ -3560,7 +3598,14 @@ impl<'a> FunctionCompiler<'a> {
                         .call(self.channel_try_recv, &[channel.values[0]]);
                     let result = self.builder.inst_results(inst)[0];
                     let zero = self.builder.ins().iconst(types::I64, 0);
-                    let ready = self.builder.ins().icmp(IntCC::NotEqual, result, zero);
+                    let one = self.builder.ins().iconst(types::I64, 1);
+                    let ready = if ignore_closed_recv {
+                        self.builder
+                            .ins()
+                            .icmp(IntCC::UnsignedGreaterThan, result, one)
+                    } else {
+                        self.builder.ins().icmp(IntCC::NotEqual, result, zero)
+                    };
                     let recv_block = self.builder.create_block();
                     let next_block = self.builder.create_block();
                     self.builder
@@ -3569,13 +3614,49 @@ impl<'a> FunctionCompiler<'a> {
                     self.builder.switch_to_block(recv_block);
                     if let Some(binding) = &arm.binding {
                         let binding_ty = self.type_of_place(binding)?;
-                        self.store_place(
-                            binding,
-                            ValueRef {
-                                values: vec![result],
-                                ty: binding_ty,
-                            },
-                        )?;
+                        if ignore_closed_recv {
+                            self.store_place(
+                                binding,
+                                ValueRef {
+                                    values: vec![result],
+                                    ty: binding_ty,
+                                },
+                            )?;
+                        } else {
+                            let closed_block = self.builder.create_block();
+                            let value_block = self.builder.create_block();
+                            let join_block = self.builder.create_block();
+                            let is_closed = self.builder.ins().icmp(IntCC::Equal, result, one);
+                            self.builder
+                                .ins()
+                                .brif(is_closed, closed_block, &[], value_block, &[]);
+
+                            self.builder.switch_to_block(closed_block);
+                            let none_value = self.compile_enum_variant("Option", "None", None)?;
+                            self.store_place(
+                                binding,
+                                ValueRef {
+                                    values: none_value.values,
+                                    ty: binding_ty.clone(),
+                                },
+                            )?;
+                            self.builder.ins().jump(join_block, &[]);
+                            self.builder.seal_block(closed_block);
+
+                            self.builder.switch_to_block(value_block);
+                            self.store_place(
+                                binding,
+                                ValueRef {
+                                    values: vec![result],
+                                    ty: binding_ty,
+                                },
+                            )?;
+                            self.builder.ins().jump(join_block, &[]);
+                            self.builder.seal_block(value_block);
+
+                            self.builder.switch_to_block(join_block);
+                            self.builder.seal_block(join_block);
+                        }
                     }
                     self.builder.ins().jump(self.blocks[&arm.label], &[]);
                     self.builder.seal_block(recv_block);
@@ -3679,6 +3760,16 @@ impl<'a> FunctionCompiler<'a> {
                 Ok(matched)
             }
         }
+    }
+
+    fn span_values(&mut self, span: Option<Span>) -> (Value, Value) {
+        let (line, column) = span
+            .map(|span| (span.line as i64, span.column as i64))
+            .unwrap_or((0, 0));
+        (
+            self.builder.ins().iconst(types::I64, line),
+            self.builder.ins().iconst(types::I64, column),
+        )
     }
 
     fn dynamic_method_candidates(&self, field: &str) -> Vec<(Type, MirMethod)> {
@@ -3810,6 +3901,33 @@ fn declare_runtime_function(
     module
         .declare_function(name, Linkage::Import, &sig)
         .map_err(|error| format!("failed to declare runtime function `{}`: {}", name, error))
+}
+
+fn declare_string_constant(
+    object: &mut ObjectModule,
+    string_data: &mut HashMap<Vec<u8>, DataId>,
+    builder: &mut FunctionBuilder<'_>,
+    bytes: &[u8],
+) -> std::result::Result<(Value, Value), String> {
+    let id = if let Some(id) = string_data.get(bytes) {
+        *id
+    } else {
+        let name = format!("aurora_data_{}", string_data.len());
+        let id = object
+            .declare_data(&name, Linkage::Local, false, false)
+            .map_err(|error| format!("failed to declare string data: {}", error))?;
+        let mut data = DataDescription::new();
+        data.define(bytes.to_vec().into_boxed_slice());
+        object
+            .define_data(id, &data)
+            .map_err(|error| format!("failed to define string data: {}", error))?;
+        string_data.insert(bytes.to_vec(), id);
+        id
+    };
+    let global = object.declare_data_in_func(id, builder.func);
+    let ptr = builder.ins().symbol_value(types::I64, global);
+    let len = builder.ins().iconst(types::I64, bytes.len() as i64);
+    Ok((ptr, len))
 }
 
 fn signature_for(

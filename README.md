@@ -92,7 +92,7 @@ Current bootstrap compiler workflow:
   - print machine-readable completion items at a source position
   - `--line` and `--character` are zero-based
   - member completion expects the cursor positioned just after `.`
-  - the CLI tolerates the common incomplete-editor state where the current buffer contains a dangling member access such as `counter.`, including when it appears at EOF
+  - the CLI tolerates the common incomplete-editor state where the current buffer contains one or more dangling member accesses such as `counter.` or `helpers.math.`, including when they appear at EOF
   - stdin-backed completion now also resolves local imported modules relative to the supplied file path, including imported trait methods
 - `cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au`
   - execute an editor-style buffer while still resolving local imports relative to the supplied path
@@ -117,6 +117,7 @@ Current `build` status:
 - `direct` now performs true low-level native code generation for the full currently implemented Aurora language surface
 - the built binary no longer reparses source or compiles a generated Rust runner at build time
 - the built binary no longer depends on the original `.au` source files at runtime
+- built binaries now render arithmetic runtime failures with file, line, and caret context from embedded source
 - the current build path still requires Cargo/Rust plus a host C compiler when producing artifacts
 
 Current `run-mir` status:

@@ -229,3 +229,48 @@ test("compiler bridge recovers completions and symbols for dangling-dot EOF buff
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("compiler bridge recovers imported completions and symbols when a buffer contains multiple dangling dots", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-multi-dangling-"));
+  try {
+    fs.mkdirSync(path.join(tempRoot, "helpers"));
+    fs.writeFileSync(
+      path.join(tempRoot, "helpers/math.au"),
+      "public def double(value: int32) -> int32:\n    return value * 2\n"
+    );
+    fs.writeFileSync(
+      path.join(tempRoot, "helpers/counter.au"),
+      "public class Counter:\n    public value: int32\n"
+    );
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source = [
+      "import helpers.math",
+      "from helpers.counter import Counter",
+      "",
+      "def main() -> int32:",
+      "    counter = Counter(value=1)",
+      "    print(helpers.math.",
+      "    print(counter.",
+      "    return 0"
+    ].join("\n");
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.ok(Array.isArray(analysis.symbols));
+    assert.ok(analysis.symbols.length > 0);
+    assert.ok(Array.isArray(analysis.occurrences));
+    assert.ok(analysis.occurrences.length > 0);
+
+    const lineIndex = source.split("\n").findIndex((line) => line.includes("helpers.math."));
+    const lineText = source.split("\n")[lineIndex];
+    const character = lineText.lastIndexOf(".") + 1;
+    const completions = await completeWithCompiler(mainUri, source, lineIndex, character, ".");
+
+    assert.ok(completions);
+    assert.ok(completions.some((item) => item.name === "double"));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});

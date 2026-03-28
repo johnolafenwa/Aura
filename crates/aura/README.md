@@ -100,8 +100,9 @@ aura run examples/classes/point_distance.au
   - print machine-readable completion items as JSON
   - `--line` and `--character` are zero-based
   - member completion expects the cursor to be positioned just after `.`
-  - the CLI now tolerates the common incomplete-editor state where the buffer currently contains a dangling member access such as `counter.`, including at EOF
+  - the CLI now tolerates the common incomplete-editor state where the buffer currently contains one or more dangling member accesses such as `counter.` or `helpers.math.`, including at EOF
   - local imported modules now participate in compiler-backed completions for both file-backed and stdin-backed buffers, including imported trait methods
+- built binaries now preserve file, line, and caret context for arithmetic runtime failures such as division by zero
 
 ## Stdin Mode
 

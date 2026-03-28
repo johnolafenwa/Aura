@@ -2299,17 +2299,39 @@ where
     F: FnMut(&str) -> Result<Program>,
 {
     let sanitized = sanitize_member_completion_source(source, line, character);
-    if let Some(program) = parser::parse(&sanitized)
-        .ok()
-        .and_then(|_| check_program(&sanitized).ok())
-    {
+    if let Some(program) = recover_checked_program_after_member_errors(&sanitized, check_program) {
         return Some(program);
     }
 
     let fallback = replace_dangling_member_stmt_with_recovery_stmt(source, line);
-    parser::parse(&fallback)
-        .ok()
-        .and_then(|_| check_program(&fallback).ok())
+    recover_checked_program_after_member_errors(&fallback, check_program)
+}
+
+fn recover_checked_program_after_member_errors<F>(
+    source: &str,
+    check_program: &mut F,
+) -> Option<Program>
+where
+    F: FnMut(&str) -> Result<Program>,
+{
+    let mut candidate = source.to_string();
+    for _ in 0..8 {
+        match parser::parse(&candidate) {
+            Ok(_) => return check_program(&candidate).ok(),
+            Err(error) if error.message.starts_with("expected member name") => {
+                let Some(line) = error.span.map(|span| span.line.saturating_sub(1)) else {
+                    return None;
+                };
+                let next = replace_dangling_member_stmt_with_recovery_stmt(&candidate, line);
+                if next == candidate {
+                    return None;
+                }
+                candidate = next;
+            }
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 fn sanitize_member_completion_source(source: &str, line: usize, character: usize) -> String {
@@ -2692,6 +2714,30 @@ mod tests {
     }
 
     #[test]
+    fn compiler_member_completion_tolerates_multiple_dangling_dot_buffers() {
+        let source = [
+            "class Counter:",
+            "    value: int32",
+            "",
+            "def main() -> int32:",
+            "    counter = Counter(value=1)",
+            "    print(counter.",
+            "    print(counter.",
+            "    return 0",
+        ]
+        .join("\n");
+
+        let completions =
+            complete_source(&source, 5, 18, Some('.')).expect("completion should work");
+        let names = completions
+            .into_iter()
+            .map(|item| item.name)
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"value".to_string()));
+    }
+
+    #[test]
     fn machine_readable_analysis_recovers_symbols_for_dangling_dot_buffers() {
         let source = [
             "class Counter:",
@@ -2723,6 +2769,30 @@ mod tests {
             "def main() -> int32:",
             "    counter = Counter(value=1)",
             "    counter.",
+        ]
+        .join("\n");
+
+        let analysis = analyze_source(&source);
+
+        assert!(!analysis.symbols.is_empty());
+        assert!(analysis
+            .symbols
+            .iter()
+            .any(|symbol| symbol.kind == "class" && symbol.name == "Counter"));
+        assert!(!analysis.occurrences.is_empty());
+    }
+
+    #[test]
+    fn machine_readable_analysis_recovers_symbols_for_multiple_dangling_dot_buffers() {
+        let source = [
+            "class Counter:",
+            "    value: int32",
+            "",
+            "def main() -> int32:",
+            "    counter = Counter(value=1)",
+            "    print(counter.",
+            "    print(counter.",
+            "    return 0",
         ]
         .join("\n");
 

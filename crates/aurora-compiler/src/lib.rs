@@ -24,7 +24,10 @@ pub use diag::{Diagnostic, Result, Span};
 pub use interpreter::{run, RunOutput, Value};
 pub use mir::{lower as lower_to_mir, MirModule};
 pub use mir_runtime::{run as run_mir, run_serialized_mir};
-pub use native_codegen::emit_host_object as emit_host_native_object;
+pub use native_codegen::{
+    emit_host_object as emit_host_native_object,
+    emit_host_object_with_metadata as emit_host_native_object_with_metadata,
+};
 pub use sema::{ImportedBinding, ModuleContext, ModuleNamespace, Program};
 
 use ast::{ImportKind, Item};

@@ -1383,6 +1383,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower_expr(&mut self, expr: &Expr) -> Operand {
         match &expr.kind {
+            ExprKind::Name(name) if name == "None" => Operand::Unit,
             ExprKind::Name(name) => Operand::Place(self.render_local_name(name)),
             ExprKind::Int(value) => Operand::Int(*value),
             ExprKind::DurationMillis(value) => Operand::Duration(*value),
@@ -2019,6 +2020,7 @@ impl<'a> Lowerer<'a> {
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
         match &expr.kind {
+            ExprKind::Name(name) if name == "None" => Some(Type::Unit),
             ExprKind::Name(name) => {
                 if let Some(mapped) = self.scoped_local_name(name) {
                     return self.local_types.get(mapped).cloned();

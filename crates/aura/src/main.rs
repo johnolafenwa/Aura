@@ -6,9 +6,9 @@ use std::process::{self, Command};
 
 use aurora_compiler::{
     analyze_path_source, check_path, check_path_with_source, complete_path_source,
-    emit_host_native_object, lower_path_to_mir, lower_path_with_source_to_mir, parse_source,
-    run_path, run_path_via_mir, run_path_with_source, run_path_with_source_via_mir, Diagnostic,
-    MirModule, Value,
+    emit_host_native_object_with_metadata, lower_path_to_mir, lower_path_with_source_to_mir,
+    parse_source, run_path, run_path_via_mir, run_path_with_source, run_path_with_source_via_mir,
+    Diagnostic, MirModule, Value,
 };
 
 struct Input {
@@ -338,19 +338,21 @@ fn render_error(path: &str, source: &str, error: &Diagnostic) -> String {
 }
 
 fn build_binary_with_backend(
-    _path: &str,
-    _source: &str,
+    path: &str,
+    source: &str,
     mir: &MirModule,
     output_path: &Path,
     backend: BuildBackend,
 ) -> std::result::Result<(), String> {
     match backend {
-        BuildBackend::Direct => build_direct_native_binary(mir, output_path),
-        BuildBackend::Auto => build_direct_native_binary(mir, output_path),
+        BuildBackend::Direct => build_direct_native_binary(path, source, mir, output_path),
+        BuildBackend::Auto => build_direct_native_binary(path, source, mir, output_path),
     }
 }
 
 fn build_direct_native_binary(
+    path: &str,
+    source: &str,
     mir: &MirModule,
     output_path: &Path,
 ) -> std::result::Result<(), String> {
@@ -365,7 +367,7 @@ fn build_direct_native_binary(
     }
 
     let native_runtime = ensure_native_runtime_artifacts()?;
-    let object_bytes = emit_host_native_object(mir)?;
+    let object_bytes = emit_host_native_object_with_metadata(mir, path, source)?;
     let temp_object = temporary_direct_object_path(output_path);
     let temp_staticlib = temporary_direct_staticlib_path(output_path);
     fs::write(&temp_object, object_bytes).map_err(|error| {
