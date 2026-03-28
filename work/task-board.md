@@ -13,13 +13,16 @@ Last updated: 2026-03-27
 
 - Raise the Aurora compiler library toward enforced 100% coverage now that Rust coverage is measurable.
 - Raise the Aurora language-server analysis package to enforced 100% coverage before expanding its semantic surface further.
-- Extend the trait system toward the remaining proposal surface, including generic traits, generic impl headers, and operator traits.
+- Extend the trait system toward the remaining proposal surface, including generic trait bounds and operator traits.
 - Extend compiler-backed `analyze` / `complete` and the LSP from local-module diagnostics/hover/completions to fully correct cross-file definitions for imported items.
 - Narrow the JS fallback further now that completions, diagnostics, symbols, hover, and definition all have compiler-backed paths.
 
 ## Done
 
 - Fixed module-crossing trait impl resolution across checking, interpreter/MIR execution, direct builds, compiler-backed completions, and the LSP bridge.
+- Added generic trait declarations plus generic impl headers across the parser, checker, interpreter, MIR/runtime, direct builds, fixtures, examples, tutorials, and CLI smoke coverage.
+- Fixed module-qualified `spawn` targets so `check`, `run`, `run-mir`, and `build` now report a user diagnostic instead of letting MIR lowering panic.
+- Fixed compiler-backed definitions for namespace-imported symbols and enum variants used in `match` patterns, with matching LSP bridge coverage.
 - Added module-qualified type annotations to the maintained module surface and updated the examples/tutorials to use them directly.
 - Extended compiler-backed dangling-member recovery so `aura analyze` / `aura complete` still recover symbols and completions when `counter.` is the final buffer line.
 - Fixed direct-backend native builds for recursive match payloads and `Task.join()` values that carry plain classes, including spawned functions that return plain-class values.

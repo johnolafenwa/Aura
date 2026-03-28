@@ -1,0 +1,4 @@
+def main() -> int32:
+    value: uint128 = 340282366920938463463374607431768211455
+    print(value + 1)
+    return 0

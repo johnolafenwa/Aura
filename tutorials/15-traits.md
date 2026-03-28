@@ -1,6 +1,6 @@
 # Traits
 
-Aurora now supports trait declarations, explicit `impl Trait for Type` conformance blocks, and bounded generic calls.
+Aurora now supports trait declarations, generic trait declarations, explicit `impl Trait for Type` conformance blocks, generic impl headers, and bounded generic calls.
 
 ## Declaring A Trait
 
@@ -14,6 +14,13 @@ trait Greeter:
 ```python
 trait Marker:
     pass
+```
+
+Generic traits use the same `Name[T]` header syntax as classes and enums:
+
+```python
+trait Mapper[T]:
+    def map(borrow self, value: T) -> T
 ```
 
 ## Implementing A Trait
@@ -38,6 +45,25 @@ class Box[T]:
 impl Greeter for Box[String]:
     def greet(borrow self) -> String:
         return self.value.clone()
+```
+
+Open generic impl headers now work too:
+
+```python
+impl[T] Showable for Box[T]:
+    def show(borrow self) -> String:
+        return "box"
+```
+
+Generic traits can also be implemented for generic classes:
+
+```python
+trait Mapper[T]:
+    def map(borrow self, value: T) -> T
+
+impl Mapper[T] for Box[T]:
+    def map(borrow self, value: T) -> T:
+        return value
 ```
 
 ## Calling Through A Trait Bound
@@ -80,6 +106,9 @@ The implemented trait surface currently supports:
 - method signatures inside trait bodies
 - `impl Trait for Type:` blocks
 - `impl Trait for GenericType[ConcreteType]:` specialized impls
+- generic trait declarations like `trait Mapper[T]:`
+- generic impl headers such as `impl[T] Trait for Box[T]:`
+- generic trait impl headers such as `impl Mapper[T] for Box[T]:`
 - bounded generic functions and methods with `T: Trait`
 - bounded generic classes and enums with `T: Trait`
 - multiple bounds with `T: A + B`
@@ -87,6 +116,5 @@ The implemented trait surface currently supports:
 
 Still outside the current bootstrap compiler:
 
-- generic trait declarations like `trait Add[T]:`
-- generic impl headers
+- generic trait bounds such as `T: Mapper[int32]`
 - operator overloading traits

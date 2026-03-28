@@ -1,0 +1,7 @@
+import helpers.producer
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    task = spawn helpers.producer.produce(ch.clone())
+    task.join()
+    return 0

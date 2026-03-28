@@ -3001,6 +3001,9 @@ impl<'a> FunctionCompiler<'a> {
                     .is_some()
                     || self
                         .find_trait_method(&Type::named(&class_ty.class_name), "close")
+                        .is_some()
+                    || self
+                        .find_trait_method_for_class_name(&class_ty.class_name, "close")
                         .is_some();
                 if has_close {
                     let operand = Operand::Place(place.to_string());
@@ -3052,6 +3055,10 @@ impl<'a> FunctionCompiler<'a> {
             })
             .or_else(|| {
                 self.find_trait_method(&Type::named(class_name), field)
+                    .cloned()
+            })
+            .or_else(|| {
+                self.find_trait_method_for_class_name(class_name, field)
                     .cloned()
             })
             .ok_or_else(|| {
@@ -3642,7 +3649,15 @@ impl<'a> FunctionCompiler<'a> {
 
     fn find_trait_method(&self, ty: &Type, field: &str) -> Option<&MirMethod> {
         self.trait_impls.iter().find_map(|trait_impl| {
-            if &trait_impl.for_type != ty {
+            let mut type_params = BTreeSet::new();
+            collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
+            let mut substitutions = HashMap::new();
+            if !crate::sema::type_pattern_matches(
+                &trait_impl.for_type,
+                ty,
+                &type_params,
+                &mut substitutions,
+            ) {
                 return None;
             }
             trait_impl
@@ -3650,6 +3665,28 @@ impl<'a> FunctionCompiler<'a> {
                 .iter()
                 .find(|method| method.name == field)
         })
+    }
+
+    fn find_trait_method_for_class_name(
+        &self,
+        class_name: &str,
+        field: &str,
+    ) -> Option<&MirMethod> {
+        let mut matches =
+            self.trait_impls
+                .iter()
+                .filter_map(|trait_impl| match &trait_impl.for_type {
+                    Type::Named(name, _) if name == class_name => trait_impl
+                        .methods
+                        .iter()
+                        .find(|method| method.name == field),
+                    _ => None,
+                });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(first)
     }
 
     fn declare_temporary_result_storage(
@@ -4042,6 +4079,20 @@ fn direct_type_inner(
         Type::Named(name, args) => {
             Some(DirectType::Opaque(Type::Named(name.clone(), args.clone())))
         }
+    }
+}
+
+fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
+    match ty {
+        Type::TypeParam(name) => {
+            collected.insert(name.clone());
+        }
+        Type::Named(_, args) => {
+            for arg in args {
+                collect_type_params_from_type(arg, collected);
+            }
+        }
+        Type::Unit | Type::Module(_) => {}
     }
 }
 

@@ -1,0 +1,4 @@
+def main() -> int32:
+    value: int32 = 7
+    print("value=" + value)
+    return 0

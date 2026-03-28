@@ -1,0 +1,17 @@
+from helpers.producer import produce
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    task = spawn produce(ch.clone())
+
+    mut total: int32 = 0
+    while true:
+        match ch.recv():
+            case Option.Some(value):
+                total += value
+            case Option.None:
+                break
+
+    task.join()
+    print(total)
+    return 0

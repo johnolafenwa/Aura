@@ -1058,11 +1058,14 @@ impl Interpreter {
                             ));
                         }
                     }
-                    if let Some(method) = self.find_trait_impl_method(
+                    if let Some((method, substitutions)) = self.find_trait_impl_method(
                         &Type::Named(class_name.clone(), class_args.clone()),
                         field,
                     ) {
-                        return Some(method.signature.return_type.clone());
+                        return Some(crate::sema::substitute_type(
+                            &method.signature.return_type,
+                            &substitutions,
+                        ));
                     }
                 }
                 None
@@ -1115,17 +1118,58 @@ impl Interpreter {
         }
     }
 
+    fn trait_impl_substitutions(
+        &self,
+        trait_impl: &crate::sema::TraitImplInfo,
+        actual: &Type,
+    ) -> Option<HashMap<String, Type>> {
+        let type_params = trait_impl
+            .type_params
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut substitutions = HashMap::new();
+        if !crate::sema::type_pattern_matches(
+            &trait_impl.for_type,
+            actual,
+            &type_params,
+            &mut substitutions,
+        ) {
+            return None;
+        }
+        for (type_param, bounds) in &trait_impl.type_param_bounds {
+            let actual_ty = substitutions.get(type_param)?;
+            for bound in bounds {
+                if !self.trait_impls_in_scope().any(|candidate| {
+                    candidate.trait_name == *bound
+                        && self
+                            .trait_impl_substitutions(candidate, actual_ty)
+                            .is_some()
+                }) {
+                    return None;
+                }
+            }
+        }
+        Some(substitutions)
+    }
+
     fn find_trait_impl_method(
         &self,
         receiver_ty: &Type,
         field: &str,
-    ) -> Option<&crate::sema::TraitImplMethodInfo> {
-        self.trait_impls_in_scope().find_map(|trait_impl| {
-            if &trait_impl.for_type != receiver_ty {
-                return None;
-            }
-            trait_impl.methods.get(field)
-        })
+    ) -> Option<(crate::sema::TraitImplMethodInfo, HashMap<String, Type>)> {
+        self.trait_impls_in_scope()
+            .filter_map(|trait_impl| {
+                self.trait_impl_substitutions(trait_impl, receiver_ty)
+                    .map(|substitutions| (trait_impl, substitutions))
+            })
+            .find_map(|(trait_impl, substitutions)| {
+                trait_impl
+                    .methods
+                    .get(field)
+                    .cloned()
+                    .map(|method| (method, substitutions))
+            })
     }
 
     fn find_trait_impl_method_for_class_name(
@@ -2676,15 +2720,16 @@ impl Interpreter {
                             .infer_expr_type(object, env)
                             .filter(|ty| !matches!(ty, Type::TypeParam(_)))
                             .unwrap_or_else(|| Type::named(&instance.class_name));
-                        if let Some(method) = self
+                        if let Some((method, _substitutions)) = self
                             .find_trait_impl_method(&resolved_receiver_ty, field)
                             .or_else(|| {
                                 self.find_trait_impl_method_for_class_name(
                                     &instance.class_name,
                                     field,
                                 )
+                                .cloned()
+                                .map(|method| (method, HashMap::new()))
                             })
-                            .cloned()
                         {
                             let module_name = self.current_module_name().to_string();
                             let mut values = vec![Value::Instance(instance)];
@@ -2736,9 +2781,8 @@ impl Interpreter {
                             .and_then(|ty| (!matches!(ty, Type::TypeParam(_))).then_some(ty))
                             .or_else(|| Self::infer_value_type(&other));
                         if let Some(resolved_receiver_ty) = resolved_receiver_ty {
-                            if let Some(method) = self
-                                .find_trait_impl_method(&resolved_receiver_ty, field)
-                                .cloned()
+                            if let Some((method, _substitutions)) =
+                                self.find_trait_impl_method(&resolved_receiver_ty, field)
                             {
                                 let module_name = self.current_module_name().to_string();
                                 let mut values = vec![other];

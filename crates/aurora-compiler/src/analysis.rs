@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::Serialize;
 
 use crate::ast::{
-    AssignStmt, AssignTarget, BinaryOp, Expr, ExprKind, FunctionDecl, Item, MatchArm, Module,
-    Pattern, SelectArm, Stmt, TypeRef,
+    AssignStmt, AssignTarget, BinaryOp, Expr, ExprKind, FunctionDecl, ImportKind, Item, MatchArm,
+    Module, Pattern, SelectArm, Stmt, TypeRef, VariantPattern,
 };
 use crate::call::{BuiltinFunction, BuiltinMember, ALL_BUILTIN_FUNCTIONS};
 use crate::diag::{Diagnostic, Result, Span};
@@ -641,7 +641,10 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         for trait_impl in self.trait_impls_in_scope() {
-            if &trait_impl.for_type == receiver_type {
+            if self
+                .trait_impl_substitutions(trait_impl, receiver_type)
+                .is_some()
+            {
                 for (name, method) in &trait_impl.methods {
                     if completions.iter().any(|existing| existing.name == *name) {
                         continue;
@@ -687,6 +690,64 @@ impl<'a> AnalysisBuilder<'a> {
         )
     }
 
+    fn trait_impl_substitutions(
+        &self,
+        trait_impl: &crate::sema::TraitImplInfo,
+        actual: &Type,
+    ) -> Option<std::collections::HashMap<String, Type>> {
+        let type_params = trait_impl
+            .type_params
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut substitutions = std::collections::HashMap::new();
+        if !crate::sema::type_pattern_matches(
+            &trait_impl.for_type,
+            actual,
+            &type_params,
+            &mut substitutions,
+        ) {
+            return None;
+        }
+        for (type_param, bounds) in &trait_impl.type_param_bounds {
+            let actual_ty = substitutions.get(type_param)?;
+            for bound in bounds {
+                if !self.type_implements_trait(actual_ty, bound) {
+                    return None;
+                }
+            }
+        }
+        Some(substitutions)
+    }
+
+    fn type_implements_trait(&self, ty: &Type, trait_name: &str) -> bool {
+        self.trait_impls_in_scope().any(|trait_impl| {
+            trait_impl.trait_name == trait_name
+                && self.trait_impl_substitutions(trait_impl, ty).is_some()
+        })
+    }
+
+    fn trait_method_for_receiver(
+        &self,
+        receiver_type: &Type,
+        field: &str,
+    ) -> Option<(
+        &crate::sema::TraitImplMethodInfo,
+        std::collections::HashMap<String, Type>,
+    )> {
+        self.trait_impls_in_scope()
+            .filter_map(|trait_impl| {
+                self.trait_impl_substitutions(trait_impl, receiver_type)
+                    .map(|substitutions| (trait_impl, substitutions))
+            })
+            .find_map(|(trait_impl, substitutions)| {
+                trait_impl
+                    .methods
+                    .get(field)
+                    .map(|method| (method, substitutions))
+            })
+    }
+
     fn module_namespace(&self, path: &str) -> Option<&crate::sema::ModuleNamespace> {
         let mut segments = path.split('.');
         let first = segments.next()?;
@@ -695,6 +756,145 @@ impl<'a> AnalysisBuilder<'a> {
             namespace = namespace.modules.get(segment)?;
         }
         Some(namespace)
+    }
+
+    fn find_imported_module_range(&self, target_path: &str) -> Option<AnalysisRange> {
+        let target_segments = target_path.split('.').collect::<Vec<_>>();
+        for import in &self.program.module.imports {
+            let ImportKind::Module { path } = &import.kind else {
+                continue;
+            };
+            if path.len() < target_segments.len() {
+                continue;
+            }
+            if !path
+                .iter()
+                .take(target_segments.len())
+                .map(String::as_str)
+                .eq(target_segments.iter().copied())
+            {
+                continue;
+            }
+            let line_index = import.span.line.checked_sub(1)?;
+            let line = *self.source_lines.get(line_index)?;
+            let token = target_segments.join(".");
+            if let Some((start, end)) = line.find(&token).map(|start| (start, start + token.len()))
+            {
+                return Some(AnalysisRange {
+                    line: line_index,
+                    start_character: start,
+                    end_character: end,
+                });
+            }
+        }
+        None
+    }
+
+    fn resolve_named_enum_info(&self, name: &str) -> Option<&EnumInfo> {
+        if let Some((module_path, item_name)) = name.rsplit_once('.') {
+            return self.module_namespace(module_path)?.enums.get(item_name);
+        }
+        self.program.enums.get(name)
+    }
+
+    fn resolve_match_variant_enum(&self, enum_name: &str) -> Option<ResolvedSymbol> {
+        match enum_name {
+            "Option" => Some(ResolvedSymbol {
+                hover: builtin_enum_hover(
+                    "Option[T]",
+                    "Optional values with `Some(T)` and `None`.",
+                ),
+                definition: None,
+            }),
+            "Result" => Some(ResolvedSymbol {
+                hover: builtin_enum_hover(
+                    "Result[T, E]",
+                    "Success-or-error values with `Ok(T)` and `Err(E)`.",
+                ),
+                definition: None,
+            }),
+            "SendError" => Some(ResolvedSymbol {
+                hover: builtin_enum_hover(
+                    "SendError[T]",
+                    "Channel send failures that preserve the unsent value.",
+                ),
+                definition: None,
+            }),
+            _ => self
+                .resolve_named_enum_info(enum_name)
+                .map(|enum_info| ResolvedSymbol {
+                    hover: format_enum_hover(enum_info),
+                    definition: Some(range_from_span(
+                        enum_info.decl.span,
+                        enum_info.decl.name.len(),
+                    )),
+                }),
+        }
+    }
+
+    fn resolve_match_variant(
+        &self,
+        scrutinee_type: Option<&Type>,
+        variant: &VariantPattern,
+    ) -> Option<ResolvedSymbol> {
+        if let Some(ty) = scrutinee_type {
+            match (base_type_name(ty), variant.variant_name.as_str()) {
+                ("Option", "Some") => {
+                    return Some(ResolvedSymbol {
+                        hover: format_variant_hover("Option", "Some", ty.type_arguments().first()),
+                        definition: None,
+                    })
+                }
+                ("Option", "None") => {
+                    return Some(ResolvedSymbol {
+                        hover: format_variant_hover("Option", "None", None),
+                        definition: None,
+                    })
+                }
+                ("Result", "Ok") => {
+                    return Some(ResolvedSymbol {
+                        hover: format_variant_hover("Result", "Ok", ty.type_arguments().first()),
+                        definition: None,
+                    })
+                }
+                ("Result", "Err") => {
+                    return Some(ResolvedSymbol {
+                        hover: format_variant_hover("Result", "Err", ty.type_arguments().get(1)),
+                        definition: None,
+                    })
+                }
+                ("SendError", "Closed") => {
+                    return Some(ResolvedSymbol {
+                        hover: format_variant_hover(
+                            "SendError",
+                            "Closed",
+                            ty.type_arguments().first(),
+                        ),
+                        definition: None,
+                    })
+                }
+                _ => {}
+            }
+        }
+
+        let enum_name = variant
+            .enum_name
+            .as_deref()
+            .or_else(|| scrutinee_type.map(base_type_name))?;
+        let enum_info = self.resolve_named_enum_info(enum_name)?;
+        let variant_decl = enum_info
+            .decl
+            .variants
+            .iter()
+            .find(|decl| decl.name == variant.variant_name)?;
+        let payload = enum_info
+            .variants
+            .get(&variant.variant_name)
+            .and_then(|variant_info| variant_info.payload.as_ref());
+        Some(ResolvedSymbol {
+            hover: format_variant_hover(&enum_info.decl.name, &variant.variant_name, payload),
+            definition: Some(range_from_span(variant_decl.span, variant_decl.name.len())),
+        })
     }
 
     fn trait_bound_member_completions(&self, bounds: &[String]) -> Vec<AnalysisCompletion> {
@@ -750,6 +950,7 @@ impl<'a> AnalysisBuilder<'a> {
                 let scrutinee_type = self.infer_expr_type(&match_stmt.scrutinee, scope);
                 for arm in &match_stmt.arms {
                     let mut arm_scope = scope.clone();
+                    self.visit_match_arm_pattern(arm, scrutinee_type.as_ref());
                     self.bind_match_arm(arm, scrutinee_type.as_ref(), &mut arm_scope);
                     self.visit_stmts(&arm.body, &mut arm_scope);
                 }
@@ -887,6 +1088,24 @@ impl<'a> AnalysisBuilder<'a> {
         self.insert_scope_binding(binding_name, binding_ty, arm.span.line, "local", scope);
     }
 
+    fn visit_match_arm_pattern(&mut self, arm: &MatchArm, scrutinee_type: Option<&Type>) {
+        let Pattern::Variant(variant) = &arm.pattern else {
+            return;
+        };
+        if let Some(resolved) = self.resolve_match_variant(scrutinee_type, variant) {
+            if let Some(range) = self.find_match_variant_range(arm.span.line, variant) {
+                self.push_occurrence(range, resolved.hover, resolved.definition);
+            }
+        }
+        if let Some(enum_name) = &variant.enum_name {
+            if let Some(resolved_enum) = self.resolve_match_variant_enum(enum_name) {
+                if let Some(range) = self.find_match_enum_range(arm.span.line, enum_name) {
+                    self.push_occurrence(range, resolved_enum.hover, resolved_enum.definition);
+                }
+            }
+        }
+    }
+
     fn bind_named_value(
         &mut self,
         name: &str,
@@ -1018,7 +1237,7 @@ impl<'a> AnalysisBuilder<'a> {
         if let Some(namespace) = self.program.imported_modules.get(name) {
             return Some(ResolvedSymbol {
                 hover: format!("```aurora\nmodule {}\n```", namespace.path),
-                definition: None,
+                definition: self.find_imported_module_range(&namespace.path),
             });
         }
 
@@ -1064,35 +1283,47 @@ impl<'a> AnalysisBuilder<'a> {
             if let Some(child) = namespace.modules.get(field) {
                 return Some(ResolvedMember {
                     hover: format!("```aurora\nmodule {}\n```", child.path),
-                    definition: None,
+                    definition: self.find_imported_module_range(&child.path),
                     ty: Some(Type::Module(child.path.clone())),
                 });
             }
             if let Some(function) = namespace.functions.get(field) {
                 return Some(ResolvedMember {
                     hover: format_function_hover(&function.decl),
-                    definition: None,
+                    definition: Some(range_from_span(
+                        function.decl.span,
+                        function.decl.name.len(),
+                    )),
                     ty: Some(function.signature.return_type.clone()),
                 });
             }
             if let Some(class_info) = namespace.classes.get(field) {
                 return Some(ResolvedMember {
                     hover: format_class_hover(class_info),
-                    definition: None,
+                    definition: Some(range_from_span(
+                        class_info.decl.span,
+                        class_info.decl.name.len(),
+                    )),
                     ty: Some(Type::named(&class_info.decl.name)),
                 });
             }
             if let Some(enum_info) = namespace.enums.get(field) {
                 return Some(ResolvedMember {
                     hover: format_enum_hover(enum_info),
-                    definition: None,
+                    definition: Some(range_from_span(
+                        enum_info.decl.span,
+                        enum_info.decl.name.len(),
+                    )),
                     ty: Some(Type::named(&enum_info.decl.name)),
                 });
             }
             if let Some(trait_info) = namespace.traits.get(field) {
                 return Some(ResolvedMember {
                     hover: format!("```aurora\ntrait {}\n```", trait_info.decl.name),
-                    definition: None,
+                    definition: Some(range_from_span(
+                        trait_info.decl.span,
+                        trait_info.decl.name.len(),
+                    )),
                     ty: None,
                 });
             }
@@ -1127,10 +1358,8 @@ impl<'a> AnalysisBuilder<'a> {
             }
         }
 
-        if let Some(trait_method) = self
-            .trait_impls_in_scope()
-            .find(|trait_impl| &trait_impl.for_type == receiver_type)
-            .and_then(|trait_impl| trait_impl.methods.get(field))
+        if let Some((trait_method, substitutions)) =
+            self.trait_method_for_receiver(receiver_type, field)
         {
             return Some(ResolvedMember {
                 hover: format_method_hover(&trait_method.decl),
@@ -1138,7 +1367,10 @@ impl<'a> AnalysisBuilder<'a> {
                     trait_method.decl.span,
                     trait_method.decl.name.len(),
                 )),
-                ty: Some(trait_method.signature.return_type.clone()),
+                ty: Some(crate::sema::substitute_type(
+                    &trait_method.signature.return_type,
+                    &substitutions,
+                )),
             });
         }
 
@@ -1388,9 +1620,7 @@ impl<'a> AnalysisBuilder<'a> {
             }
         }
 
-        self.program
-            .enums
-            .get(enum_name?)
+        self.resolve_named_enum_info(enum_name?)
             .and_then(|info| info.variants.get(variant_name))
             .and_then(|variant| variant.payload.clone())
     }
@@ -1444,6 +1674,37 @@ impl<'a> AnalysisBuilder<'a> {
             line: line_index,
             start_character: start,
             end_character: end,
+        })
+    }
+
+    fn find_match_enum_range(&self, line_number: usize, enum_name: &str) -> Option<AnalysisRange> {
+        let line_index = line_number.checked_sub(1)?;
+        let text = *self.source_lines.get(line_index)?;
+        text.find(enum_name).map(|start| AnalysisRange {
+            line: line_index,
+            start_character: start,
+            end_character: start + enum_name.len(),
+        })
+    }
+
+    fn find_match_variant_range(
+        &self,
+        line_number: usize,
+        variant: &VariantPattern,
+    ) -> Option<AnalysisRange> {
+        let line_index = line_number.checked_sub(1)?;
+        let text = *self.source_lines.get(line_index)?;
+        let token = variant
+            .enum_name
+            .as_ref()
+            .map(|enum_name| format!("{}.{}", enum_name, variant.variant_name))
+            .unwrap_or_else(|| variant.variant_name.clone());
+        let start = text.find(&token)?;
+        let variant_start = start + token.len().saturating_sub(variant.variant_name.len());
+        Some(AnalysisRange {
+            line: line_index,
+            start_character: variant_start,
+            end_character: variant_start + variant.variant_name.len(),
         })
     }
 }
@@ -2234,7 +2495,16 @@ fn is_identifier_char(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{analyze_source, complete_source};
+    use super::{analyze_path_source, analyze_source, complete_source};
+    use std::path::PathBuf;
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|path| path.parent())
+            .unwrap()
+            .to_path_buf()
+    }
 
     #[test]
     fn machine_readable_analysis_covers_symbols_and_occurrences() {
@@ -2464,5 +2734,54 @@ mod tests {
             .iter()
             .any(|symbol| symbol.kind == "class" && symbol.name == "Counter"));
         assert!(!analysis.occurrences.is_empty());
+    }
+
+    #[test]
+    fn path_aware_analysis_tracks_definitions_for_namespace_imported_symbols() {
+        let path = repo_root().join("examples/modules/namespace_import_types.au");
+        let source = std::fs::read_to_string(&path).expect("example should exist");
+        let analysis = analyze_path_source(&path, &source);
+
+        assert!(analysis.diagnostics.is_empty());
+        assert!(analysis.occurrences.iter().any(|occurrence| {
+            occurrence.hover.contains("module pkg.types") && occurrence.definition.is_some()
+        }));
+        assert!(analysis.occurrences.iter().any(|occurrence| {
+            occurrence.hover.contains("class Counter") && occurrence.definition.is_some()
+        }));
+        assert!(analysis.occurrences.iter().any(|occurrence| {
+            occurrence.hover.contains("enum Status") && occurrence.definition.is_some()
+        }));
+    }
+
+    #[test]
+    fn analysis_records_variant_occurrences_inside_match_patterns() {
+        let source = [
+            "enum Status:",
+            "    Ready",
+            "    Busy",
+            "",
+            "def render(status: Status) -> int32:",
+            "    match status:",
+            "        case Status.Ready:",
+            "            return 1",
+            "        case Status.Busy:",
+            "            return 0",
+        ]
+        .join("\n");
+
+        let analysis = analyze_source(&source);
+
+        assert!(analysis.diagnostics.is_empty());
+        assert!(analysis.occurrences.iter().any(|occurrence| {
+            occurrence.line == 6
+                && occurrence.hover.contains("variant Ready")
+                && occurrence.definition.is_some()
+        }));
+        assert!(analysis.occurrences.iter().any(|occurrence| {
+            occurrence.line == 8
+                && occurrence.hover.contains("variant Busy")
+                && occurrence.definition.is_some()
+        }));
     }
 }

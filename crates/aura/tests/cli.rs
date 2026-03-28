@@ -886,6 +886,15 @@ fn build_with_direct_backend_supports_trait_dispatch_example() {
 }
 
 #[test]
+fn build_with_direct_backend_supports_generic_trait_impl_example() {
+    assert_direct_backend_example_runs(
+        "examples/traits/generic_trait_impl.au",
+        "generic-trait-impl-direct",
+        "11\n",
+    );
+}
+
+#[test]
 fn build_with_direct_backend_supports_generic_data_example() {
     assert_direct_backend_example_runs(
         "examples/generics/box_and_wrapper.au",
@@ -990,6 +999,15 @@ fn default_build_supports_namespace_import_types_example() {
         "examples/modules/namespace_import_types.au",
         "namespace-import-types-auto",
         "4\ntrue\n1\n",
+    );
+}
+
+#[test]
+fn default_build_supports_generic_trait_impl_example() {
+    assert_default_backend_example_runs(
+        "examples/traits/generic_trait_impl.au",
+        "generic-trait-impl-auto",
+        "11\n",
     );
 }
 
@@ -1368,6 +1386,23 @@ fn run_mir_executes_generic_constructor_specialization_example() {
 }
 
 #[test]
+fn run_mir_executes_generic_trait_impl_example() {
+    let fixture = repo_root().join("examples/traits/generic_trait_impl.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir on generic trait impl example");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for generic trait impl example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "11\n");
+}
+
+#[test]
 fn run_mir_executes_try_example() {
     let fixture = repo_root().join("examples/error_handling/try_result.au");
     let output = Command::new(aura_bin())
@@ -1434,6 +1469,75 @@ fn run_executes_programs_with_local_modules() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
+}
+
+#[test]
+fn module_qualified_spawn_target_reports_a_user_error_across_commands() {
+    let temp = TempDir::new("aurora-cli-qualified-spawn");
+    fs::create_dir_all(temp.path().join("pkg")).expect("failed to create module dir");
+    fs::write(
+        temp.path().join("pkg/helpers.au"),
+        "public def work() -> int32:\n    return 1\n",
+    )
+    .expect("failed to write helper module");
+    let source_path = temp.path().join("main.au");
+    fs::write(
+        &source_path,
+        "import pkg.helpers\n\ndef main() -> int32:\n    task = spawn pkg.helpers.work()\n    return task.join()\n",
+    )
+    .expect("failed to write main module");
+
+    for command in ["check", "run", "run-mir"] {
+        let output = Command::new(aura_bin())
+            .arg(command)
+            .arg(&source_path)
+            .output()
+            .expect("failed to run aura command");
+
+        assert!(
+            !output.status.success(),
+            "{} should reject module-qualified spawn targets",
+            command
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("`spawn` currently supports named function calls only"),
+            "{} should report the spawn target diagnostic, stderr was:\n{}",
+            command,
+            stderr
+        );
+        assert!(
+            !stderr.contains("panicked at"),
+            "{} should not panic, stderr was:\n{}",
+            command,
+            stderr
+        );
+    }
+
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build");
+
+    assert!(
+        !build.status.success(),
+        "build should reject module-qualified spawn targets"
+    );
+    let stderr = String::from_utf8_lossy(&build.stderr);
+    assert!(
+        stderr.contains("`spawn` currently supports named function calls only"),
+        "build should report the spawn target diagnostic, stderr was:\n{}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("panicked at"),
+        "build should not panic, stderr was:\n{}",
+        stderr
+    );
 }
 
 #[test]

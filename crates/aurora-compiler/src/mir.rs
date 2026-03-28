@@ -337,8 +337,10 @@ pub fn lower(program: &Program) -> MirModule {
     let mut seen_trait_impls = BTreeSet::new();
     for trait_impl in &program.trait_impls {
         seen_trait_impls.insert(format!(
-            "{} for {}",
-            trait_impl.trait_name, trait_impl.for_type
+            "{}{} for {}",
+            trait_impl.trait_name,
+            format_trait_args(&trait_impl.trait_args),
+            trait_impl.for_type
         ));
         trait_impls.push(lower_trait_impl(
             program,
@@ -485,7 +487,12 @@ fn push_imported_module_trait_impls(
 ) {
     for namespace in program.module_registry.values() {
         for trait_impl in &namespace.trait_impls {
-            let impl_key = format!("{} for {}", trait_impl.trait_name, trait_impl.for_type);
+            let impl_key = format!(
+                "{}{} for {}",
+                trait_impl.trait_name,
+                format_trait_args(&trait_impl.trait_args),
+                trait_impl.for_type
+            );
             if !seen_trait_impls.insert(impl_key) {
                 continue;
             }
@@ -510,8 +517,11 @@ fn lower_trait_impl(
     let mut methods = Vec::new();
     for method in trait_impl.methods.values() {
         let qualified_name = format!(
-            "{} for {}.{}",
-            trait_impl.trait_name, trait_impl.for_type, method.decl.name
+            "{}{} for {}.{}",
+            trait_impl.trait_name,
+            format_trait_args(&trait_impl.trait_args),
+            trait_impl.for_type,
+            method.decl.name
         );
         if seen_function_names.insert(qualified_name.clone()) {
             functions.push(lower_function(
@@ -535,6 +545,20 @@ fn lower_trait_impl(
         trait_name: trait_impl.trait_name.clone(),
         for_type: trait_impl.for_type.clone(),
         methods,
+    }
+}
+
+fn format_trait_args(args: &[Type]) -> String {
+    if args.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "[{}]",
+            args.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }
 
@@ -1830,21 +1854,9 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        let trait_method_params = {
-            let mut found = None;
-            for trait_impl in self.trait_impls_in_scope() {
-                if trait_impl.for_type == receiver_type {
-                    found = trait_impl
-                        .methods
-                        .get(field)
-                        .map(|method| method.decl.params.clone());
-                    if found.is_some() {
-                        break;
-                    }
-                }
-            }
-            found
-        };
+        let trait_method_params = self
+            .trait_method_for_receiver(&receiver_type, field)
+            .map(|(method, _)| method.decl.params.clone());
 
         if let Some(params) = trait_method_params {
             return self.lower_user_args(&format!("method `{}`", field), &params, args, span);
@@ -2036,16 +2048,11 @@ impl<'a> Lowerer<'a> {
                         {
                             return Some(runtime_ty);
                         }
-                        self.trait_impls_in_scope().find_map(|trait_impl| {
-                            if trait_impl.for_type == receiver_type {
-                                trait_impl
-                                    .methods
-                                    .get(field)
-                                    .map(|method| method.signature.return_type.clone())
-                            } else {
-                                None
-                            }
-                        })
+                        self.trait_method_for_receiver(&receiver_type, field).map(
+                            |(method, substitutions)| {
+                                substitute_type(&method.signature.return_type, &substitutions)
+                            },
+                        )
                     }
                     _ => None,
                 }
@@ -2101,6 +2108,49 @@ impl<'a> Lowerer<'a> {
                 .values()
                 .flat_map(|namespace| namespace.trait_impls.iter()),
         )
+    }
+
+    fn trait_impl_substitutions(
+        &self,
+        trait_impl: &crate::sema::TraitImplInfo,
+        actual: &Type,
+    ) -> Option<std::collections::HashMap<String, Type>> {
+        let type_params = trait_impl
+            .type_params
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut substitutions = std::collections::HashMap::new();
+        if !crate::sema::type_pattern_matches(
+            &trait_impl.for_type,
+            actual,
+            &type_params,
+            &mut substitutions,
+        ) {
+            return None;
+        }
+        Some(substitutions)
+    }
+
+    fn trait_method_for_receiver(
+        &self,
+        receiver_type: &Type,
+        field: &str,
+    ) -> Option<(
+        &crate::sema::TraitImplMethodInfo,
+        std::collections::HashMap<String, Type>,
+    )> {
+        self.trait_impls_in_scope()
+            .filter_map(|trait_impl| {
+                self.trait_impl_substitutions(trait_impl, receiver_type)
+                    .map(|substitutions| (trait_impl, substitutions))
+            })
+            .find_map(|(trait_impl, substitutions)| {
+                trait_impl
+                    .methods
+                    .get(field)
+                    .map(|method| (method, substitutions))
+            })
     }
 
     fn variant_payload_type(&self, enum_ty: &Type, variant_name: &str) -> Option<Type> {

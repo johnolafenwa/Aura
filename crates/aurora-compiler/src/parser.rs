@@ -305,7 +305,18 @@ impl Parser {
 
     fn parse_impl(&mut self) -> Result<ImplDecl> {
         let span = self.expect_keyword(TokenKind::KwImpl)?.span;
+        let (type_params, type_param_bounds) = self.parse_optional_type_params(true)?;
         let trait_name = self.expect_identifier()?;
+        let mut trait_args = Vec::new();
+        if self.eat_simple(&TokenKind::LBracket).is_some() {
+            loop {
+                trait_args.push(self.parse_type()?);
+                if self.eat_simple(&TokenKind::Comma).is_none() {
+                    break;
+                }
+            }
+            self.expect_simple(TokenKind::RBracket)?;
+        }
         self.expect_keyword(TokenKind::KwFor)?;
         let for_type = self.parse_type()?;
         self.expect_simple(TokenKind::Colon)?;
@@ -327,7 +338,10 @@ impl Parser {
 
         self.expect_simple(TokenKind::Dedent)?;
         Ok(ImplDecl {
+            type_params,
+            type_param_bounds,
             trait_name,
+            trait_args,
             for_type,
             methods,
             span,

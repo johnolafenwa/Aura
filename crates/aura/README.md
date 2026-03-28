@@ -29,6 +29,7 @@ After the release build completes, run the binary directly:
 ./target/release/aura run examples/basics/pass_keyword.au
 ./target/release/aura run examples/modules/simple_import.au
 ./target/release/aura run examples/traits/greeter.au
+./target/release/aura run examples/traits/generic_trait_impl.au
 ./target/release/aura run examples/numbers/numeric_casts.au
 ./target/release/aura run examples/concurrency/sleep_builtin.au
 ./target/release/aura build -o ./target/aurora-point examples/point.au

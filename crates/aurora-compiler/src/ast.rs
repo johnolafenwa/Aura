@@ -109,7 +109,10 @@ pub struct TraitDecl {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ImplDecl {
+    pub type_params: Vec<String>,
+    pub type_param_bounds: BTreeMap<String, Vec<TypeRef>>,
     pub trait_name: String,
+    pub trait_args: Vec<TypeRef>,
     pub for_type: TypeRef,
     pub methods: Vec<FunctionDecl>,
     pub span: Span,

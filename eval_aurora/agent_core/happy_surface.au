@@ -1,0 +1,27 @@
+class Accumulator:
+    value: int32 = 1
+
+    def bump(borrow mut self, amount: int32) -> int32:
+        self.value += amount
+        return self.value
+
+    def read(borrow self) -> int32:
+        return self.value
+
+def main() -> int32:
+    mut acc = Accumulator()
+    mut total: int32 = 0
+
+    for step in range(4):
+        if step == 1:
+            continue
+
+        if step == 3:
+            break
+
+        total += acc.bump(amount=step)
+
+    print(total)
+    print(acc.read())
+    print(f"value={acc.value}")
+    return 0

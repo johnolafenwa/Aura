@@ -22,6 +22,9 @@ const traitSource = fs.readFileSync(traitPath, "utf8");
 const modulesPath = path.join(repoRoot, "examples/modules/simple_import.au");
 const modulesUri = `file://${modulesPath}`;
 const modulesSource = fs.readFileSync(modulesPath, "utf8");
+const namespaceTypesPath = path.join(repoRoot, "examples/modules/namespace_import_types.au");
+const namespaceTypesUri = `file://${namespaceTypesPath}`;
+const namespaceTypesSource = fs.readFileSync(namespaceTypesPath, "utf8");
 
 test("compiler bridge returns machine-readable analysis for a real example", async () => {
   setWorkspaceRoots([repoRoot]);
@@ -96,6 +99,74 @@ test("compiler bridge resolves local module imports for analysis and completions
 
   assert.ok(completions);
   assert.ok(completions.some((item) => item.name === "double"));
+});
+
+test("compiler bridge preserves definitions for namespace-imported symbols", async () => {
+  setWorkspaceRoots([repoRoot]);
+  const analysis = await analyzeWithCompiler(namespaceTypesUri, namespaceTypesSource);
+
+  assert.ok(analysis);
+  assert.equal(analysis.diagnostics.length, 0);
+  assert.ok(
+    analysis.occurrences.some(
+      (occurrence) =>
+        occurrence.hover.includes("module pkg.types") && occurrence.definition !== null
+    )
+  );
+  assert.ok(
+    analysis.occurrences.some(
+      (occurrence) =>
+        occurrence.hover.includes("class Counter") && occurrence.definition !== null
+    )
+  );
+  assert.ok(
+    analysis.occurrences.some(
+      (occurrence) => occurrence.hover.includes("enum Status") && occurrence.definition !== null
+    )
+  );
+});
+
+test("compiler bridge records enum variant occurrences in match patterns", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-match-patterns-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source = [
+      "enum Status:",
+      "    Ready",
+      "    Busy",
+      "",
+      "def render(status: Status) -> int32:",
+      "    match status:",
+      "        case Status.Ready:",
+      "            return 1",
+      "        case Status.Busy:",
+      "            return 0"
+    ].join("\n");
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 0);
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.line === 6 &&
+          occurrence.hover.includes("variant Ready") &&
+          occurrence.definition !== null
+      )
+    );
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.line === 8 &&
+          occurrence.hover.includes("variant Busy") &&
+          occurrence.definition !== null
+      )
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("compiler bridge includes imported trait methods in completions", async () => {

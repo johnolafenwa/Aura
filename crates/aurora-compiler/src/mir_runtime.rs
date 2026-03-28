@@ -290,7 +290,15 @@ impl MirRuntime {
 
     fn find_trait_impl_method(&self, receiver_ty: &Type, field: &str) -> Option<&MirMethod> {
         self.trait_impls.iter().find_map(|trait_impl| {
-            if &trait_impl.for_type != receiver_ty {
+            let mut type_params = std::collections::BTreeSet::new();
+            collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
+            let mut substitutions = HashMap::new();
+            if !crate::sema::type_pattern_matches(
+                &trait_impl.for_type,
+                receiver_ty,
+                &type_params,
+                &mut substitutions,
+            ) {
                 return None;
             }
             trait_impl
@@ -1786,6 +1794,20 @@ fn collect_runtime_type_substitutions(
             }
             for (pattern_arg, actual_arg) in pattern_args.iter().zip(actual_args.iter()) {
                 collect_runtime_type_substitutions(pattern_arg, actual_arg, substitutions);
+            }
+        }
+        Type::Unit | Type::Module(_) => {}
+    }
+}
+
+fn collect_type_params_from_type(ty: &Type, collected: &mut std::collections::BTreeSet<String>) {
+    match ty {
+        Type::TypeParam(name) => {
+            collected.insert(name.clone());
+        }
+        Type::Named(_, args) => {
+            for arg in args {
+                collect_type_params_from_type(arg, collected);
             }
         }
         Type::Unit | Type::Module(_) => {}

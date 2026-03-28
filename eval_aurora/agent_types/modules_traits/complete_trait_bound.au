@@ -1,0 +1,4 @@
+from pkg.named import Named
+
+def render[T: Named](value: T) -> String:
+    return value.

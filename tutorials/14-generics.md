@@ -100,6 +100,7 @@ def extract[T](box: Box[T]) -> T:
 The implemented generic surface currently supports:
 
 - generic `class`, `enum`, and `def` declarations
+- generic `trait` declarations
 - trait bounds on class and enum type parameters
 - generic type arguments in type positions such as `Box[int32]`
 - explicit type arguments on class constructor calls such as `Box[int32](...)`
@@ -107,9 +108,10 @@ The implemented generic surface currently supports:
 - inference for generic class constructors and enum payload constructors
 - method calls on generic class instances inside generic functions
 - generic enum unit variants with instantiated types
+- generic trait impl headers such as `impl Mapper[T] for Box[T]:`
 
 It does not yet support:
 
-- generic trait declarations
+- generic trait bounds such as `T: Mapper[int32]`
 
 See [examples/generics/box_and_wrapper.au](../examples/generics/box_and_wrapper.au), [examples/generics/generic_method_calls.au](../examples/generics/generic_method_calls.au), [examples/generics/generic_constructor_specialization.au](../examples/generics/generic_constructor_specialization.au), and [examples/generics/bounded_types.au](../examples/generics/bounded_types.au).

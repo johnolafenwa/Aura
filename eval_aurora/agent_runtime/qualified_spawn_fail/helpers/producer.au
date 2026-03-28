@@ -1,0 +1,3 @@
+public def produce(out: Channel[int32]):
+    out.send(1)
+    out.close()
