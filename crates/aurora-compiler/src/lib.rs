@@ -290,6 +290,316 @@ fn local_item_exists(program: &Program, name: &str) -> bool {
     program.module.items.iter().any(|item| item.name() == name)
 }
 
+fn is_builtin_export_type(name: &str) -> bool {
+    matches!(
+        name,
+        "bool"
+            | "int8"
+            | "int16"
+            | "int32"
+            | "int64"
+            | "int128"
+            | "intsize"
+            | "uint8"
+            | "uint16"
+            | "uint32"
+            | "uint64"
+            | "uint128"
+            | "uintsize"
+            | "float32"
+            | "float64"
+            | "String"
+            | "Range"
+            | "Option"
+            | "Result"
+            | "Channel"
+            | "Task"
+            | "SendError"
+            | "TaskGroup"
+            | "Duration"
+    )
+}
+
+fn find_type_namespace_path(
+    modules: &BTreeMap<String, ModuleNamespace>,
+    name: &str,
+    found: &mut Option<String>,
+    ambiguous: &mut bool,
+) {
+    for namespace in modules.values() {
+        if namespace.classes.contains_key(name)
+            || namespace.all_classes.contains_key(name)
+            || namespace.enums.contains_key(name)
+            || namespace.all_enums.contains_key(name)
+            || namespace.traits.contains_key(name)
+            || namespace.all_traits.contains_key(name)
+        {
+            if let Some(existing) = found {
+                if existing != &namespace.path {
+                    *ambiguous = true;
+                }
+            } else {
+                *found = Some(namespace.path.clone());
+            }
+        }
+        find_type_namespace_path(&namespace.modules, name, found, ambiguous);
+    }
+}
+
+fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
+    match ty {
+        sema::Type::Named(name, args) => {
+            let qualified_args = args
+                .iter()
+                .map(|arg| qualify_export_type(program, arg))
+                .collect::<Vec<_>>();
+            if name.contains('.') || is_builtin_export_type(name) {
+                return sema::Type::Named(name.clone(), qualified_args);
+            }
+            if program.classes.contains_key(name)
+                || program.enums.contains_key(name)
+                || program.traits.contains_key(name)
+            {
+                return sema::Type::Named(
+                    format!("{}.{}", program.module_name, name),
+                    qualified_args,
+                );
+            }
+            let mut found = None;
+            let mut ambiguous = false;
+            find_type_namespace_path(&program.imported_modules, name, &mut found, &mut ambiguous);
+            if let (Some(path), false) = (found, ambiguous) {
+                return sema::Type::Named(format!("{}.{}", path, name), qualified_args);
+            }
+            sema::Type::Named(name.clone(), qualified_args)
+        }
+        sema::Type::TypeParam(name) => sema::Type::TypeParam(name.clone()),
+        sema::Type::Module(path) => sema::Type::Module(path.clone()),
+        sema::Type::Unit => sema::Type::Unit,
+    }
+}
+
+fn qualify_export_type_ref(program: &Program, type_ref: &ast::TypeRef) -> ast::TypeRef {
+    let mut qualified = type_ref.clone();
+    qualified.args = qualified
+        .args
+        .iter()
+        .map(|arg| qualify_export_type_ref(program, arg))
+        .collect();
+    if qualified.name.contains('.')
+        || qualified.name == "str"
+        || is_builtin_export_type(&qualified.name)
+    {
+        return qualified;
+    }
+    if program.classes.contains_key(&qualified.name)
+        || program.enums.contains_key(&qualified.name)
+        || program.traits.contains_key(&qualified.name)
+    {
+        qualified.name = format!("{}.{}", program.module_name, qualified.name);
+        return qualified;
+    }
+    let mut found = None;
+    let mut ambiguous = false;
+    find_type_namespace_path(
+        &program.imported_modules,
+        &qualified.name,
+        &mut found,
+        &mut ambiguous,
+    );
+    if let (Some(path), false) = (found, ambiguous) {
+        qualified.name = format!("{}.{}", path, qualified.name);
+    }
+    qualified
+}
+
+fn qualify_export_bounds(
+    program: &Program,
+    bounds: &BTreeMap<String, Vec<ast::TypeRef>>,
+) -> BTreeMap<String, Vec<ast::TypeRef>> {
+    bounds
+        .iter()
+        .map(|(name, refs)| {
+            (
+                name.clone(),
+                refs.iter()
+                    .map(|type_ref| qualify_export_type_ref(program, type_ref))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn qualify_function_decl_for_export(
+    program: &Program,
+    decl: &ast::FunctionDecl,
+) -> ast::FunctionDecl {
+    let mut qualified = decl.clone();
+    qualified.type_param_bounds = qualify_export_bounds(program, &qualified.type_param_bounds);
+    qualified.params = qualified
+        .params
+        .iter()
+        .map(|param| {
+            let mut qualified_param = param.clone();
+            qualified_param.ty = qualify_export_type_ref(program, &qualified_param.ty);
+            qualified_param
+        })
+        .collect();
+    qualified.return_type = qualify_export_type_ref(program, &qualified.return_type);
+    qualified
+}
+
+fn qualify_class_decl_for_export(program: &Program, decl: &ast::ClassDecl) -> ast::ClassDecl {
+    let mut qualified = decl.clone();
+    qualified.type_param_bounds = qualify_export_bounds(program, &qualified.type_param_bounds);
+    qualified.fields = qualified
+        .fields
+        .iter()
+        .map(|field| {
+            let mut qualified_field = field.clone();
+            qualified_field.ty = qualify_export_type_ref(program, &qualified_field.ty);
+            qualified_field
+        })
+        .collect();
+    qualified.methods = qualified
+        .methods
+        .iter()
+        .map(|method| qualify_function_decl_for_export(program, method))
+        .collect();
+    qualified
+}
+
+fn qualify_enum_decl_for_export(program: &Program, decl: &ast::EnumDecl) -> ast::EnumDecl {
+    let mut qualified = decl.clone();
+    qualified.type_param_bounds = qualify_export_bounds(program, &qualified.type_param_bounds);
+    qualified.variants = qualified
+        .variants
+        .iter()
+        .map(|variant| {
+            let mut qualified_variant = variant.clone();
+            qualified_variant.payload = qualified_variant
+                .payload
+                .as_ref()
+                .map(|payload| qualify_export_type_ref(program, payload));
+            qualified_variant
+        })
+        .collect();
+    qualified
+}
+
+fn qualify_trait_decl_for_export(program: &Program, decl: &ast::TraitDecl) -> ast::TraitDecl {
+    let mut qualified = decl.clone();
+    qualified.methods = qualified
+        .methods
+        .iter()
+        .map(|method| qualify_function_decl_for_export(program, method))
+        .collect();
+    qualified
+}
+
+fn qualify_impl_decl_for_export(program: &Program, decl: &ast::ImplDecl) -> ast::ImplDecl {
+    let mut qualified = decl.clone();
+    qualified.type_param_bounds = qualify_export_bounds(program, &qualified.type_param_bounds);
+    qualified.trait_args = qualified
+        .trait_args
+        .iter()
+        .map(|arg| qualify_export_type_ref(program, arg))
+        .collect();
+    qualified.methods = qualified
+        .methods
+        .iter()
+        .map(|method| qualify_function_decl_for_export(program, method))
+        .collect();
+    qualified
+}
+
+fn qualify_function_info_for_export(
+    program: &Program,
+    info: &sema::FunctionInfo,
+) -> sema::FunctionInfo {
+    let mut qualified = info.clone();
+    qualified.decl = qualify_function_decl_for_export(program, &qualified.decl);
+    qualified.signature.params = qualified
+        .signature
+        .params
+        .iter()
+        .map(|ty| qualify_export_type(program, ty))
+        .collect();
+    qualified.signature.return_type =
+        qualify_export_type(program, &qualified.signature.return_type);
+    qualified
+}
+
+fn qualify_class_info_for_export(program: &Program, info: &sema::ClassInfo) -> sema::ClassInfo {
+    let mut qualified = info.clone();
+    qualified.decl = qualify_class_decl_for_export(program, &qualified.decl);
+    for field in qualified.fields.values_mut() {
+        field.ty = qualify_export_type(program, &field.ty);
+    }
+    for method in qualified.methods.values_mut() {
+        method.decl = qualify_function_decl_for_export(program, &method.decl);
+        method.signature.params = method
+            .signature
+            .params
+            .iter()
+            .map(|ty| qualify_export_type(program, ty))
+            .collect();
+        method.signature.return_type = qualify_export_type(program, &method.signature.return_type);
+    }
+    qualified
+}
+
+fn qualify_enum_info_for_export(program: &Program, info: &sema::EnumInfo) -> sema::EnumInfo {
+    let mut qualified = info.clone();
+    qualified.decl = qualify_enum_decl_for_export(program, &qualified.decl);
+    for variant in qualified.variants.values_mut() {
+        if let Some(payload) = &variant.payload {
+            variant.payload = Some(qualify_export_type(program, payload));
+        }
+    }
+    qualified
+}
+
+fn qualify_trait_info_for_export(program: &Program, info: &sema::TraitInfo) -> sema::TraitInfo {
+    let mut qualified = info.clone();
+    qualified.decl = qualify_trait_decl_for_export(program, &qualified.decl);
+    for method in qualified.methods.values_mut() {
+        method.decl = qualify_function_decl_for_export(program, &method.decl);
+        method.signature.params = method
+            .signature
+            .params
+            .iter()
+            .map(|ty| qualify_export_type(program, ty))
+            .collect();
+        method.signature.return_type = qualify_export_type(program, &method.signature.return_type);
+    }
+    qualified
+}
+
+fn qualify_trait_impl_info_for_export(
+    program: &Program,
+    info: &sema::TraitImplInfo,
+) -> sema::TraitImplInfo {
+    let mut qualified = info.clone();
+    qualified.decl = qualify_impl_decl_for_export(program, &qualified.decl);
+    qualified.trait_args = qualified
+        .trait_args
+        .iter()
+        .map(|ty| qualify_export_type(program, ty))
+        .collect();
+    for method in qualified.methods.values_mut() {
+        method.decl = qualify_function_decl_for_export(program, &method.decl);
+        method.signature.params = method
+            .signature
+            .params
+            .iter()
+            .map(|ty| qualify_export_type(program, ty))
+            .collect();
+        method.signature.return_type = qualify_export_type(program, &method.signature.return_type);
+    }
+    qualified
+}
+
 fn exported_binding(program: &Program, name: &str) -> Option<ImportedBinding> {
     for item in &program.module.items {
         match item {
@@ -297,24 +607,28 @@ fn exported_binding(program: &Program, name: &str) -> Option<ImportedBinding> {
                 return program
                     .functions
                     .get(name)
-                    .cloned()
+                    .map(|info| qualify_function_info_for_export(program, info))
                     .map(ImportedBinding::Function);
             }
             Item::Class(decl) if decl.name == name && decl.public => {
                 return program
                     .classes
                     .get(name)
-                    .cloned()
+                    .map(|info| qualify_class_info_for_export(program, info))
                     .map(ImportedBinding::Class);
             }
             Item::Enum(decl) if decl.name == name && decl.public => {
-                return program.enums.get(name).cloned().map(ImportedBinding::Enum);
+                return program
+                    .enums
+                    .get(name)
+                    .map(|info| qualify_enum_info_for_export(program, info))
+                    .map(ImportedBinding::Enum);
             }
             Item::Trait(decl) if decl.name == name && decl.public => {
                 return program
                     .traits
                     .get(name)
-                    .cloned()
+                    .map(|info| qualify_trait_info_for_export(program, info))
                     .map(ImportedBinding::Trait);
             }
             _ => {}
@@ -336,11 +650,36 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
         classes: BTreeMap::new(),
         enums: BTreeMap::new(),
         traits: BTreeMap::new(),
-        trait_impls: program.trait_impls.clone(),
-        all_functions: program.functions.clone(),
-        all_classes: program.classes.clone(),
-        all_enums: program.enums.clone(),
-        all_traits: program.traits.clone(),
+        trait_impls: program
+            .trait_impls
+            .iter()
+            .map(|info| qualify_trait_impl_info_for_export(program, info))
+            .collect(),
+        all_functions: program
+            .functions
+            .iter()
+            .map(|(name, info)| {
+                (
+                    name.clone(),
+                    qualify_function_info_for_export(program, info),
+                )
+            })
+            .collect(),
+        all_classes: program
+            .classes
+            .iter()
+            .map(|(name, info)| (name.clone(), qualify_class_info_for_export(program, info)))
+            .collect(),
+        all_enums: program
+            .enums
+            .iter()
+            .map(|(name, info)| (name.clone(), qualify_enum_info_for_export(program, info)))
+            .collect(),
+        all_traits: program
+            .traits
+            .iter()
+            .map(|(name, info)| (name.clone(), qualify_trait_info_for_export(program, info)))
+            .collect(),
         imported_modules: program.imported_modules.clone(),
     };
 
@@ -348,22 +687,34 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
         match item {
             Item::Function(decl) if decl.public => {
                 if let Some(info) = program.functions.get(&decl.name) {
-                    namespace.functions.insert(decl.name.clone(), info.clone());
+                    namespace.functions.insert(
+                        decl.name.clone(),
+                        qualify_function_info_for_export(program, info),
+                    );
                 }
             }
             Item::Class(decl) if decl.public => {
                 if let Some(info) = program.classes.get(&decl.name) {
-                    namespace.classes.insert(decl.name.clone(), info.clone());
+                    namespace.classes.insert(
+                        decl.name.clone(),
+                        qualify_class_info_for_export(program, info),
+                    );
                 }
             }
             Item::Enum(decl) if decl.public => {
                 if let Some(info) = program.enums.get(&decl.name) {
-                    namespace.enums.insert(decl.name.clone(), info.clone());
+                    namespace.enums.insert(
+                        decl.name.clone(),
+                        qualify_enum_info_for_export(program, info),
+                    );
                 }
             }
             Item::Trait(decl) if decl.public => {
                 if let Some(info) = program.traits.get(&decl.name) {
-                    namespace.traits.insert(decl.name.clone(), info.clone());
+                    namespace.traits.insert(
+                        decl.name.clone(),
+                        qualify_trait_info_for_export(program, info),
+                    );
                 }
             }
             _ => {}
@@ -445,8 +796,9 @@ fn insert_namespace_import(
 #[cfg(test)]
 mod tests {
     use super::{
-        check_source, lower_path_with_source_to_mir, lower_source_to_mir, parse_source, run_mir,
-        run_path, run_path_via_mir, run_serialized_mir, run_source, run_source_via_mir, Value,
+        check_path, check_source, lower_path_with_source_to_mir, lower_source_to_mir, parse_source,
+        run_mir, run_path, run_path_via_mir, run_serialized_mir, run_source, run_source_via_mir,
+        Value,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -508,6 +860,10 @@ mod tests {
         (
             "examples/enums/result_option.au",
             include_str!("../../../examples/enums/result_option.au"),
+        ),
+        (
+            "examples/enums/explicit_type_args.au",
+            include_str!("../../../examples/enums/explicit_type_args.au"),
         ),
         (
             "examples/generics/box_and_wrapper.au",
@@ -588,6 +944,10 @@ mod tests {
         (
             "examples/concurrency/minute_duration.au",
             include_str!("../../../examples/concurrency/minute_duration.au"),
+        ),
+        (
+            "examples/traits/generic_dispatch_multiple_types.au",
+            include_str!("../../../examples/traits/generic_dispatch_multiple_types.au"),
         ),
     ];
 
@@ -843,6 +1203,55 @@ mod tests {
     }
 
     #[test]
+    fn imported_function_return_types_keep_members_visible_across_modules() {
+        let temp = TempDir::new("aurora-compiler-imported-return-members");
+        fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
+        fs::write(
+            temp.path().join("helpers/counter.au"),
+            [
+                "public class Counter:",
+                "    public value: int32",
+                "",
+                "public def make_counter() -> Counter:",
+                "    return Counter(value=41)",
+                "",
+            ]
+            .join("\n"),
+        )
+        .expect("failed to write helper module");
+        let main_path = temp.path().join("main.au");
+        fs::write(
+            &main_path,
+            [
+                "from helpers.counter import make_counter",
+                "",
+                "def main() -> int32:",
+                "    counter = make_counter()",
+                "    print(counter.value)",
+                "    return 0",
+                "",
+            ]
+            .join("\n"),
+        )
+        .expect("failed to write main module");
+
+        let checked = check_path(&main_path)
+            .expect("return type members from imported functions should stay visible");
+        assert!(
+            checked.functions.get("main").is_some(),
+            "main should still type-check"
+        );
+
+        let output = run_path(&main_path).expect("module program should run");
+        assert_eq!(output.stdout, "41\n");
+        assert_eq!(output.value, zero_exit_value());
+
+        let mir_output = run_path_via_mir(&main_path).expect("module program should run via MIR");
+        assert_eq!(mir_output.stdout, "41\n");
+        assert_eq!(mir_output.value, zero_exit_value());
+    }
+
+    #[test]
     fn backend_path_runs_channels_example_natively() {
         let source = include_str!("../../../examples/concurrency/channels_spawn.au");
         let output =
@@ -943,104 +1352,114 @@ mod tests {
                 "4\ndivision by zero\n7\n",
             ),
             (
-                "examples/generics/box_and_wrapper.au",
+                "examples/enums/explicit_type_args.au",
                 EXAMPLE_CASES[13].1,
+                "7\nbad\n",
+            ),
+            (
+                "examples/generics/box_and_wrapper.au",
+                EXAMPLE_CASES[14].1,
                 "7\nok\n",
             ),
             (
                 "examples/traits/greeter.au",
-                EXAMPLE_CASES[14].1,
+                EXAMPLE_CASES[15].1,
                 "hello aurora\nhello aurora\n",
             ),
             (
                 "examples/traits/multiple_bounds.au",
-                EXAMPLE_CASES[15].1,
+                EXAMPLE_CASES[16].1,
                 "9\n",
             ),
             (
                 "examples/numbers/float_sqrt.au",
-                EXAMPLE_CASES[16].1,
+                EXAMPLE_CASES[17].1,
                 "9.0\n",
             ),
             (
                 "examples/numbers/float32_values.au",
-                EXAMPLE_CASES[17].1,
+                EXAMPLE_CASES[18].1,
                 "3.25\n2.0\n5.0\n",
             ),
             (
                 "examples/numbers/numeric_casts.au",
-                EXAMPLE_CASES[18].1,
+                EXAMPLE_CASES[19].1,
                 "7\n3.0\n1.25\n2.0\n",
             ),
             (
                 "examples/strings/greeting.au",
-                EXAMPLE_CASES[19].1,
+                EXAMPLE_CASES[20].1,
                 "hello, aurora\n",
             ),
             (
                 "examples/concurrency/task_group_select.au",
-                EXAMPLE_CASES[20].1,
+                EXAMPLE_CASES[21].1,
                 "3\n",
             ),
             (
                 "examples/concurrency/task_group_cancel.au",
-                EXAMPLE_CASES[21].1,
+                EXAMPLE_CASES[22].1,
                 "0\n1\n",
             ),
             (
                 "examples/concurrency/select_timeout.au",
-                EXAMPLE_CASES[22].1,
+                EXAMPLE_CASES[23].1,
                 "timeout\n",
             ),
             (
                 "examples/concurrency/sleep_builtin.au",
-                EXAMPLE_CASES[23].1,
+                EXAMPLE_CASES[24].1,
                 "start\nend\n",
             ),
             (
                 "examples/concurrency/send_result.au",
-                EXAMPLE_CASES[24].1,
+                EXAMPLE_CASES[25].1,
                 "7\n",
             ),
             (
                 "examples/concurrency/spawn_detached.au",
-                EXAMPLE_CASES[25].1,
+                EXAMPLE_CASES[26].1,
                 "9\n",
             ),
             (
                 "examples/concurrency/select_send.au",
-                EXAMPLE_CASES[26].1,
+                EXAMPLE_CASES[27].1,
                 "sent\n4\n",
             ),
             (
                 "examples/enums/wildcard_match.au",
-                EXAMPLE_CASES[27].1,
+                EXAMPLE_CASES[28].1,
                 "2\n",
             ),
             (
                 "examples/generics/generic_method_calls.au",
-                EXAMPLE_CASES[28].1,
+                EXAMPLE_CASES[29].1,
                 "7\n",
             ),
             (
                 "examples/generics/bounded_types.au",
-                EXAMPLE_CASES[29].1,
+                EXAMPLE_CASES[30].1,
                 "aurora\nempty\n",
             ),
             (
                 "examples/traits/marker_trait.au",
-                EXAMPLE_CASES[30].1,
+                EXAMPLE_CASES[31].1,
                 "1\n",
             ),
             (
                 "examples/traits/specialized_generic_impl.au",
-                EXAMPLE_CASES[31].1,
+                EXAMPLE_CASES[32].1,
                 "hello\n",
             ),
             (
                 "examples/concurrency/minute_duration.au",
-                EXAMPLE_CASES[32].1,
+                EXAMPLE_CASES[33].1,
                 "120000ms\n",
+            ),
+            (
+                "examples/traits/generic_dispatch_multiple_types.au",
+                EXAMPLE_CASES[34].1,
+                "dog\ncat\n",
             ),
         ];
 
@@ -1121,104 +1540,114 @@ mod tests {
                 "4\ndivision by zero\n7\n",
             ),
             (
-                "examples/generics/box_and_wrapper.au",
+                "examples/enums/explicit_type_args.au",
                 EXAMPLE_CASES[13].1,
+                "7\nbad\n",
+            ),
+            (
+                "examples/generics/box_and_wrapper.au",
+                EXAMPLE_CASES[14].1,
                 "7\nok\n",
             ),
             (
                 "examples/traits/greeter.au",
-                EXAMPLE_CASES[14].1,
+                EXAMPLE_CASES[15].1,
                 "hello aurora\nhello aurora\n",
             ),
             (
                 "examples/traits/multiple_bounds.au",
-                EXAMPLE_CASES[15].1,
+                EXAMPLE_CASES[16].1,
                 "9\n",
             ),
             (
                 "examples/numbers/float_sqrt.au",
-                EXAMPLE_CASES[16].1,
+                EXAMPLE_CASES[17].1,
                 "9.0\n",
             ),
             (
                 "examples/numbers/float32_values.au",
-                EXAMPLE_CASES[17].1,
+                EXAMPLE_CASES[18].1,
                 "3.25\n2.0\n5.0\n",
             ),
             (
                 "examples/numbers/numeric_casts.au",
-                EXAMPLE_CASES[18].1,
+                EXAMPLE_CASES[19].1,
                 "7\n3.0\n1.25\n2.0\n",
             ),
             (
                 "examples/strings/greeting.au",
-                EXAMPLE_CASES[19].1,
+                EXAMPLE_CASES[20].1,
                 "hello, aurora\n",
             ),
             (
                 "examples/concurrency/task_group_select.au",
-                EXAMPLE_CASES[20].1,
+                EXAMPLE_CASES[21].1,
                 "3\n",
             ),
             (
                 "examples/concurrency/task_group_cancel.au",
-                EXAMPLE_CASES[21].1,
+                EXAMPLE_CASES[22].1,
                 "0\n1\n",
             ),
             (
                 "examples/concurrency/select_timeout.au",
-                EXAMPLE_CASES[22].1,
+                EXAMPLE_CASES[23].1,
                 "timeout\n",
             ),
             (
                 "examples/concurrency/sleep_builtin.au",
-                EXAMPLE_CASES[23].1,
+                EXAMPLE_CASES[24].1,
                 "start\nend\n",
             ),
             (
                 "examples/concurrency/send_result.au",
-                EXAMPLE_CASES[24].1,
+                EXAMPLE_CASES[25].1,
                 "7\n",
             ),
             (
                 "examples/concurrency/spawn_detached.au",
-                EXAMPLE_CASES[25].1,
+                EXAMPLE_CASES[26].1,
                 "9\n",
             ),
             (
                 "examples/concurrency/select_send.au",
-                EXAMPLE_CASES[26].1,
+                EXAMPLE_CASES[27].1,
                 "sent\n4\n",
             ),
             (
                 "examples/enums/wildcard_match.au",
-                EXAMPLE_CASES[27].1,
+                EXAMPLE_CASES[28].1,
                 "2\n",
             ),
             (
                 "examples/generics/generic_method_calls.au",
-                EXAMPLE_CASES[28].1,
+                EXAMPLE_CASES[29].1,
                 "7\n",
             ),
             (
                 "examples/generics/bounded_types.au",
-                EXAMPLE_CASES[29].1,
+                EXAMPLE_CASES[30].1,
                 "aurora\nempty\n",
             ),
             (
                 "examples/traits/marker_trait.au",
-                EXAMPLE_CASES[30].1,
+                EXAMPLE_CASES[31].1,
                 "1\n",
             ),
             (
                 "examples/traits/specialized_generic_impl.au",
-                EXAMPLE_CASES[31].1,
+                EXAMPLE_CASES[32].1,
                 "hello\n",
             ),
             (
                 "examples/concurrency/minute_duration.au",
-                EXAMPLE_CASES[32].1,
+                EXAMPLE_CASES[33].1,
                 "120000ms\n",
+            ),
+            (
+                "examples/traits/generic_dispatch_multiple_types.au",
+                EXAMPLE_CASES[34].1,
+                "dog\ncat\n",
             ),
         ];
 

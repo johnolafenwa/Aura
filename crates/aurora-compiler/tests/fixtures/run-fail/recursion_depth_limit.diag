@@ -1,0 +1,5 @@
+error: maximum call depth of 1024 exceeded while calling `loop`
+ --> crates/aurora-compiler/tests/fixtures/run-fail/recursion_depth_limit.au:1:1
+  |
+1 | def loop(n: int32) -> int32:
+  | ^

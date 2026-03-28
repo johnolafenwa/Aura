@@ -1,0 +1,7 @@
+class Task:
+    value: int32
+
+def main() -> int32:
+    task: Task = Task(value=1)
+    print(task.value)
+    return 0

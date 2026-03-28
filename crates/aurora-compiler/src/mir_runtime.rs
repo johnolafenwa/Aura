@@ -21,18 +21,29 @@ use crate::mir::{
 use crate::sema::{substitute_type, Type};
 
 pub fn run(module: &MirModule) -> Result<RunOutput> {
-    let stdout = Arc::new(Mutex::new(String::new()));
-    let mut runtime = MirRuntime::new(
-        module.clone(),
-        stdout.clone(),
-        CancellationContext::default(),
-    );
-    let value = runtime.run_main()?;
-    let rendered_stdout = stdout.lock().unwrap().clone();
-    Ok(RunOutput {
-        value,
-        stdout: rendered_stdout,
-    })
+    let module = module.clone();
+    thread::Builder::new()
+        .name("aurora-mir-runtime".to_string())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            let stdout = Arc::new(Mutex::new(String::new()));
+            let mut runtime =
+                MirRuntime::new(module, stdout.clone(), CancellationContext::default());
+            let value = runtime.run_main()?;
+            let rendered_stdout = stdout.lock().unwrap().clone();
+            Ok(RunOutput {
+                value,
+                stdout: rendered_stdout,
+            })
+        })
+        .map_err(|error| {
+            Diagnostic::new(format!(
+                "failed to start Aurora MIR runtime thread: {}",
+                error
+            ))
+        })?
+        .join()
+        .map_err(|_| Diagnostic::new("Aurora MIR runtime panicked while executing the program"))?
 }
 
 pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> Result<RunOutput> {
@@ -43,6 +54,8 @@ pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> R
     let _ = source;
     run(&module)
 }
+
+const MAX_CALL_DEPTH: usize = 1024;
 
 fn render_runtime_error(path: &str, source: &str, error: &Diagnostic) -> String {
     error.render_with_source(path, source)
@@ -142,6 +155,7 @@ struct MirRuntime {
     trait_impls: Vec<MirTraitImpl>,
     stdout: Arc<Mutex<String>>,
     cancellation: CancellationContext,
+    call_depth: usize,
 }
 
 struct CallOutcome {
@@ -285,6 +299,7 @@ impl MirRuntime {
             trait_impls,
             stdout,
             cancellation,
+            call_depth: 0,
         }
     }
 
@@ -439,53 +454,67 @@ impl MirRuntime {
         receiver: Option<Value>,
         args: Vec<EvaluatedMirArg>,
     ) -> Result<CallOutcome> {
-        let bound_args = bind_args(&function.params, args)?;
-        let mut substitutions = HashMap::new();
-        for (param, argument) in function.params.iter().zip(bound_args.iter()) {
-            if let Some(actual_ty) = Self::infer_value_type(&argument.value) {
-                collect_runtime_type_substitutions(&param.ty, &actual_ty, &mut substitutions);
+        if self.call_depth >= MAX_CALL_DEPTH {
+            return Err(Diagnostic::at(
+                function.span,
+                format!(
+                    "maximum call depth of {} exceeded while calling `{}`",
+                    MAX_CALL_DEPTH, function.name
+                ),
+            ));
+        }
+        self.call_depth += 1;
+        let outcome = (|| {
+            let bound_args = bind_args(&function.params, args)?;
+            let mut substitutions = HashMap::new();
+            for (param, argument) in function.params.iter().zip(bound_args.iter()) {
+                if let Some(actual_ty) = Self::infer_value_type(&argument.value) {
+                    collect_runtime_type_substitutions(&param.ty, &actual_ty, &mut substitutions);
+                }
             }
-        }
 
-        let mut env = Env::default();
-        for local in &function.local_types {
-            env.set_place_type(&local.name, substitute_type(&local.ty, &substitutions));
-        }
-        if function.receiver.is_some() {
-            let Some(receiver) = receiver else {
-                return Err(Diagnostic::new(format!(
-                    "MIR function `{}` is missing its receiver",
-                    function.name
-                )));
+            let mut env = Env::default();
+            for local in &function.local_types {
+                env.set_place_type(&local.name, substitute_type(&local.ty, &substitutions));
+            }
+            if function.receiver.is_some() {
+                let Some(receiver) = receiver else {
+                    return Err(Diagnostic::new(format!(
+                        "MIR function `{}` is missing its receiver",
+                        function.name
+                    )));
+                };
+                let receiver_ty =
+                    Self::infer_value_type(&receiver).unwrap_or_else(|| Type::named("Unknown"));
+                env.define_typed("self", receiver_ty, receiver);
+            }
+
+            for (param, argument) in function.params.iter().zip(bound_args.iter()) {
+                let ty = substitute_type(&param.ty, &substitutions);
+                let value = self.coerce_value_to_type(argument.value.clone(), &ty, None)?;
+                env.define_typed(&param.name, ty, value);
+            }
+
+            let value = self.execute_function(function, &mut env)?;
+            let updated_receiver = if function.receiver == Some(MirReceiverKind::BorrowMut) {
+                Some(env.read_place("self")?)
+            } else {
+                None
             };
-            let receiver_ty =
-                Self::infer_value_type(&receiver).unwrap_or_else(|| Type::named("Unknown"));
-            env.define_typed("self", receiver_ty, receiver);
-        }
-
-        for (param, argument) in function.params.iter().zip(bound_args.iter()) {
-            let ty = substitute_type(&param.ty, &substitutions);
-            let value = self.coerce_value_to_type(argument.value.clone(), &ty, None)?;
-            env.define_typed(&param.name, ty, value);
-        }
-
-        let value = self.execute_function(function, &mut env)?;
-        let updated_receiver = if function.receiver == Some(MirReceiverKind::BorrowMut) {
-            Some(env.read_place("self")?)
-        } else {
-            None
-        };
-        let mut updated_params = Vec::new();
-        for (index, param) in function.params.iter().enumerate() {
-            if param.passing == MirReceiverKind::BorrowMut {
-                updated_params.push((index, env.read_place(&param.name)?));
+            let mut updated_params = Vec::new();
+            for (index, param) in function.params.iter().enumerate() {
+                if param.passing == MirReceiverKind::BorrowMut {
+                    updated_params.push((index, env.read_place(&param.name)?));
+                }
             }
-        }
-        Ok(CallOutcome {
-            value,
-            updated_receiver,
-            updated_params,
-        })
+            Ok(CallOutcome {
+                value,
+                updated_receiver,
+                updated_params,
+            })
+        })();
+        self.call_depth -= 1;
+        outcome
     }
 
     fn execute_function(&mut self, function: &MirFunction, env: &mut Env) -> Result<Value> {

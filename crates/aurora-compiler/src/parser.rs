@@ -1464,19 +1464,23 @@ impl Parser {
             let Some(expr_end) = expr_end else {
                 return Err(Diagnostic::at(span, "unterminated f-string interpolation"));
             };
-            let expr_text = value[expr_start..expr_end].trim();
+            let raw_expr_text = &value[expr_start..expr_end];
+            let leading_ws = raw_expr_text.len() - raw_expr_text.trim_start().len();
+            let expr_text = raw_expr_text.trim();
             if expr_text.is_empty() {
                 return Err(Diagnostic::at(
                     span,
                     "f-string interpolation cannot be empty",
                 ));
             }
-            let expr = parse_expression(expr_text).map_err(|error| {
+            let mut expr = parse_expression(expr_text).map_err(|error| {
                 Diagnostic::at(
                     span,
                     format!("invalid f-string interpolation `{}`: {}", expr_text, error),
                 )
             })?;
+            let column_offset = span.column + expr_start + leading_ws + 1;
+            offset_expr_span(&mut expr, span.line, column_offset);
             parts.push(FormatPart::Expr(expr));
             index += 1;
             literal_start = expr_end + 1;
@@ -1619,5 +1623,62 @@ fn assign_target_to_expr(target: AssignTarget, span: Span) -> Expr {
             kind: ExprKind::Member { object, field },
             span,
         },
+    }
+}
+
+fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
+    expr.span.line = line;
+    expr.span.column += column_offset;
+
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Try(inner) | ExprKind::Group(inner) => {
+            offset_expr_span(inner, line, column_offset)
+        }
+        ExprKind::Cast { expr: inner, .. } => offset_expr_span(inner, line, column_offset),
+        ExprKind::Binary { left, right, .. } => {
+            offset_expr_span(left, line, column_offset);
+            offset_expr_span(right, line, column_offset);
+        }
+        ExprKind::Call { callee, args } => {
+            offset_expr_span(callee, line, column_offset);
+            for argument in args {
+                argument.span.line = line;
+                argument.span.column += column_offset;
+                offset_expr_span(&mut argument.value, line, column_offset);
+            }
+        }
+        ExprKind::Specialize {
+            expr: inner,
+            type_args,
+        } => {
+            offset_expr_span(inner, line, column_offset);
+            for type_arg in type_args {
+                offset_type_ref_span(type_arg, line, column_offset);
+            }
+        }
+        ExprKind::Member { object, .. } | ExprKind::Spawn { value: object, .. } => {
+            offset_expr_span(object, line, column_offset);
+        }
+        ExprKind::Name(_)
+        | ExprKind::Int(_)
+        | ExprKind::DurationMillis(_)
+        | ExprKind::Float(_)
+        | ExprKind::Bool(_)
+        | ExprKind::String(_) => {}
+        ExprKind::FString(parts) => {
+            for part in parts {
+                if let FormatPart::Expr(inner) = part {
+                    offset_expr_span(inner, line, column_offset);
+                }
+            }
+        }
+    }
+}
+
+fn offset_type_ref_span(type_ref: &mut TypeRef, line: usize, column_offset: usize) {
+    type_ref.span.line = line;
+    type_ref.span.column += column_offset;
+    for arg in &mut type_ref.args {
+        offset_type_ref_span(arg, line, column_offset);
     }
 }

@@ -58,6 +58,8 @@ Builtin generic or runtime-facing types currently accepted:
 - `Task[T]`
 - `TaskGroup`
 
+These built-in type names are reserved and cannot be reused for user-defined classes, enums, or traits.
+
 ## Statements
 
 The current compiler supports these statement forms:
@@ -227,5 +229,6 @@ Current module/import limitations:
 
 - imports resolve local `.au` files relative to the current package root
 - `import a.b` exposes module namespaces for calls like `a.b.func(...)`, `a.b.Type(...)`, and `a.b.Enum.Variant`
-- type annotations still expect imported types to come through `from ... import Type`
+- type annotations may use namespace-imported types such as `a.b.Type`
+- the current runtimes stop with a friendly recursion-depth diagnostic after 1024 nested Aurora calls
 - package manifests and external dependencies are still proposal-only

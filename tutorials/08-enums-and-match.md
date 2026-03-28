@@ -45,6 +45,8 @@ Generic enum constructors may also use explicit type arguments on the enum name 
 wrapped = Result[int32, String].Ok(7)
 ```
 
+See [examples/enums/explicit_type_args.au](../examples/enums/explicit_type_args.au).
+
 ## Matching Exhaustively
 
 Aurora's current `match` support requires coverage of every enum variant, either explicitly or through a final wildcard arm:

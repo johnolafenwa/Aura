@@ -25,6 +25,7 @@ pub struct MirModule {
 pub struct MirFunction {
     pub name: String,
     pub module_name: String,
+    pub span: crate::diag::Span,
     pub receiver: Option<MirReceiverKind>,
     pub params: Vec<MirParam>,
     pub local_types: Vec<MirLocalType>,
@@ -633,6 +634,7 @@ fn lower_function(
     lowerer.lower_stmts(&function.body);
     lowerer.finish(MirFunctionSpec {
         name: name.to_string(),
+        span: function.span,
         receiver: receiver.map(lower_receiver_kind),
         params,
         return_type: return_type.clone(),
@@ -645,6 +647,7 @@ fn lower_top_level(program: &Program) -> MirFunction {
     lowerer.lower_stmts(&program.top_level_stmts);
     lowerer.finish(MirFunctionSpec {
         name: "__script".to_string(),
+        span: crate::diag::Span::new(1, 1),
         receiver: None,
         params: Vec::new(),
         return_type: Type::named("int32"),
@@ -654,6 +657,7 @@ fn lower_top_level(program: &Program) -> MirFunction {
 
 struct MirFunctionSpec {
     name: String,
+    span: Span,
     receiver: Option<MirReceiverKind>,
     params: Vec<MirParam>,
     return_type: Type,
@@ -880,6 +884,7 @@ impl<'a> Lowerer<'a> {
         MirFunction {
             name: spec.name,
             module_name: self.module_name.to_string(),
+            span: spec.span,
             receiver: spec.receiver,
             params: spec.params,
             local_types: self
@@ -1437,7 +1442,11 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                 }
-                if let ExprKind::Name(enum_name) = &object.kind {
+                let base_object = match &object.kind {
+                    ExprKind::Specialize { expr, .. } => &**expr,
+                    _ => object,
+                };
+                if let ExprKind::Name(enum_name) = &base_object.kind {
                     if is_known_enum_name(self.program, enum_name) {
                         let temp = self.new_temp_for_expr(expr);
                         self.emit(Instruction::Assign {
@@ -1592,6 +1601,10 @@ impl<'a> Lowerer<'a> {
                 });
             }
             ExprKind::Member { object, field } => {
+                let base_object = match &object.kind {
+                    ExprKind::Specialize { expr, .. } => &**expr,
+                    _ => object,
+                };
                 if let Some((module_path, item_name)) = self.qualified_module_item(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(class) = namespace.classes.get(&item_name).cloned() {
@@ -1720,7 +1733,7 @@ impl<'a> Lowerer<'a> {
                     return Operand::Place(temp);
                 }
 
-                if let ExprKind::Name(class_name) = &object.kind {
+                if let ExprKind::Name(class_name) = &base_object.kind {
                     if let Some(class) = self.resolve_class_info(class_name).cloned() {
                         if class
                             .methods
@@ -1746,7 +1759,7 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
-                if let ExprKind::Name(enum_name) = &object.kind {
+                if let ExprKind::Name(enum_name) = &base_object.kind {
                     if is_known_enum_name(self.program, enum_name)
                         || self.resolve_enum_info(enum_name).is_some()
                     {
@@ -1940,7 +1953,17 @@ impl<'a> Lowerer<'a> {
             ExprKind::Bool(_) => Some(Type::named("bool")),
             ExprKind::String(_) => Some(Type::named("String")),
             ExprKind::FString(_) => Some(Type::named("String")),
-            ExprKind::Specialize { expr, .. } => self.infer_expr_type(expr),
+            ExprKind::Specialize { expr, type_args } => match &expr.kind {
+                ExprKind::Name(name)
+                    if matches!(name.as_str(), "Option" | "Result" | "SendError" | "Channel") =>
+                {
+                    Some(Type::Named(
+                        name.clone(),
+                        type_args.iter().map(lower_type_ref).collect(),
+                    ))
+                }
+                _ => self.infer_expr_type(expr),
+            },
             ExprKind::DurationMillis(_) => Some(Type::named("Duration")),
             ExprKind::Unary { op, expr } => match op {
                 UnaryOp::Not => Some(Type::named("bool")),

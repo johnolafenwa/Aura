@@ -506,21 +506,38 @@ fn send_error_closed(value: Value) -> Value {
     })
 }
 
+const MAX_CALL_DEPTH: usize = 1024;
+
 pub fn run(program: &Program) -> Result<RunOutput> {
-    let stdout = Arc::new(Mutex::new(String::new()));
-    let mut interpreter = Interpreter {
-        program: Arc::new(program.clone()),
-        stdout: stdout.clone(),
-        cancellation: CancellationContext::default(),
-        module_stack: Vec::new(),
-        expr_type_cache: RefCell::new(HashMap::new()),
-    };
-    let value = interpreter.run_main()?;
-    let rendered_stdout = stdout.lock().unwrap().clone();
-    Ok(RunOutput {
-        value,
-        stdout: rendered_stdout,
-    })
+    let program = program.clone();
+    std::thread::Builder::new()
+        .name("aurora-interpreter".to_string())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(move || {
+            let stdout = Arc::new(Mutex::new(String::new()));
+            let mut interpreter = Interpreter {
+                program: Arc::new(program),
+                stdout: stdout.clone(),
+                cancellation: CancellationContext::default(),
+                module_stack: Vec::new(),
+                call_depth: 0,
+                expr_type_cache: RefCell::new(HashMap::new()),
+            };
+            let value = interpreter.run_main()?;
+            let rendered_stdout = stdout.lock().unwrap().clone();
+            Ok(RunOutput {
+                value,
+                stdout: rendered_stdout,
+            })
+        })
+        .map_err(|error| {
+            Diagnostic::new(format!(
+                "failed to start Aurora interpreter thread: {}",
+                error
+            ))
+        })?
+        .join()
+        .map_err(|_| Diagnostic::new("Aurora interpreter panicked while executing the program"))?
 }
 
 struct Interpreter {
@@ -528,6 +545,7 @@ struct Interpreter {
     stdout: Arc<Mutex<String>>,
     cancellation: CancellationContext,
     module_stack: Vec<String>,
+    call_depth: usize,
     expr_type_cache: RefCell<HashMap<(usize, usize), Type>>,
 }
 
@@ -947,7 +965,17 @@ impl Interpreter {
             ExprKind::Bool(_) => Some(Type::named("bool")),
             ExprKind::String(_) => Some(Type::named("String")),
             ExprKind::FString(_) => Some(Type::named("String")),
-            ExprKind::Specialize { expr, .. } => self.infer_expr_type(expr, env),
+            ExprKind::Specialize { expr, type_args } => match &expr.kind {
+                ExprKind::Name(name)
+                    if matches!(name.as_str(), "Option" | "Result" | "SendError" | "Channel") =>
+                {
+                    Some(Type::Named(
+                        name.clone(),
+                        type_args.iter().map(Self::lower_runtime_type).collect(),
+                    ))
+                }
+                _ => self.infer_expr_type(expr, env),
+            },
             ExprKind::Group(inner) => self.infer_expr_type(inner, env),
             ExprKind::Cast { ty, .. } => Some(Self::lower_runtime_type(ty)),
             ExprKind::Unary { op, expr } => match op {
@@ -1268,7 +1296,18 @@ impl Interpreter {
         module_name: &str,
         args: Vec<Value>,
     ) -> Result<CallOutcome> {
+        if self.call_depth >= MAX_CALL_DEPTH {
+            return Err(Diagnostic::at(
+                function.span,
+                format!(
+                    "maximum call depth of {} exceeded while calling `{}`",
+                    MAX_CALL_DEPTH, function.name
+                ),
+            ));
+        }
+        self.call_depth += 1;
         self.module_stack.push(module_name.to_string());
+        let previous_cache = self.expr_type_cache.replace(HashMap::new());
         let result = (|| {
             let mut env = Env::with_root();
             if module_name == self.program.module_name {
@@ -1354,7 +1393,9 @@ impl Interpreter {
                 updated_params,
             })
         })();
+        self.expr_type_cache.replace(previous_cache);
         self.module_stack.pop();
+        self.call_depth -= 1;
         result
     }
 
@@ -2021,7 +2062,11 @@ impl Interpreter {
                         }
                     }
                 }
-                if let ExprKind::Name(enum_name) = &object.kind {
+                let base_object = match &object.kind {
+                    ExprKind::Specialize { expr, .. } => &**expr,
+                    _ => object,
+                };
+                if let ExprKind::Name(enum_name) = &base_object.kind {
                     if matches!((enum_name.as_str(), field.as_str()), ("Option", "None")) {
                         return Ok(EvalOutcome::Value(Value::EnumVariant(EnumVariantValue {
                             enum_name: enum_name.clone(),
@@ -2347,6 +2392,10 @@ impl Interpreter {
                 })))
             }
             ExprKind::Member { object, field } => {
+                let base_object = match &object.kind {
+                    ExprKind::Specialize { expr, .. } => &**expr,
+                    _ => object,
+                };
                 if let Some((module_path, item_name)) = self.qualified_module_item(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(class_info) = namespace.classes.get(&item_name).cloned() {
@@ -2421,7 +2470,7 @@ impl Interpreter {
                         }
                     }
                 }
-                if let ExprKind::Name(class_name) = &object.kind {
+                if let ExprKind::Name(class_name) = &base_object.kind {
                     if let Some(method) = self
                         .resolve_class_info(class_name)
                         .and_then(|class_info| class_info.methods.get(field))
@@ -2455,7 +2504,7 @@ impl Interpreter {
                     }
                 }
 
-                if let ExprKind::Name(enum_name) = &object.kind {
+                if let ExprKind::Name(enum_name) = &base_object.kind {
                     if matches!(
                         (enum_name.as_str(), field.as_str()),
                         ("Option", "Some")
@@ -3027,6 +3076,7 @@ impl Interpreter {
                 stdout,
                 cancellation,
                 module_stack: Vec::new(),
+                call_depth: 0,
                 expr_type_cache: RefCell::new(HashMap::new()),
             };
             interpreter
@@ -3182,6 +3232,7 @@ impl Interpreter {
                         stdout,
                         cancellation,
                         module_stack: Vec::new(),
+                        call_depth: 0,
                         expr_type_cache: RefCell::new(HashMap::new()),
                     };
                     interpreter

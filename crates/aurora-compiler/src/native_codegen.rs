@@ -1107,6 +1107,14 @@ impl<'a> NativeCodegen<'a> {
 
         compiler.builder.seal_all_blocks();
         compiler.builder.finalize();
+        ctx.verify(self.object.isa()).map_err(|error| {
+            format!(
+                "failed to define direct function `{}`: {}\n{}",
+                function.name,
+                error,
+                ctx.func.display()
+            )
+        })?;
         self.object
             .define_function(func_id, &mut ctx)
             .map_err(|error| {
@@ -3363,16 +3371,11 @@ impl<'a> FunctionCompiler<'a> {
         let join_block = self.builder.create_block();
         let mut current_fallthrough = None;
         let result_vars = self.declare_temporary_result_storage(&result_ty)?;
-        for (index, (candidate_ty, _method)) in candidates.iter().enumerate() {
-            let check_block = if index == 0 {
-                self.builder
-                    .current_block()
-                    .expect("current block should exist")
-            } else {
-                let block = self.builder.create_block();
-                self.builder.switch_to_block(block);
-                block
-            };
+        for (candidate_ty, _method) in candidates.iter() {
+            let check_block = self
+                .builder
+                .current_block()
+                .expect("current block should exist");
             let matched = self.value_matches_type(object.values[0], candidate_ty)?;
             let then_block = self.builder.create_block();
             let else_block = self.builder.create_block();
@@ -3397,10 +3400,8 @@ impl<'a> FunctionCompiler<'a> {
         }
         if let Some(else_block) = current_fallthrough {
             self.builder.switch_to_block(else_block);
-            return Err(format!(
-                "direct backend could not resolve dynamic method `.{}`",
-                field
-            ));
+            self.builder.ins().trap(TrapCode::unwrap_user(1));
+            self.builder.seal_block(else_block);
         }
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
@@ -4856,6 +4857,7 @@ mod tests {
         let function = MirFunction {
             name: "demo".to_string(),
             module_name: "<test>".to_string(),
+            span: crate::diag::Span::new(1, 1),
             receiver: Some(MirReceiverKind::Borrow),
             params: vec![crate::mir::MirParam {
                 name: "other".to_string(),

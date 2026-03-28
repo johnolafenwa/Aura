@@ -6,9 +6,9 @@ use std::process::{self, Command};
 
 use aurora_compiler::{
     analyze_path_source, check_path, check_path_with_source, complete_path_source,
-    emit_host_native_object, lower_path_to_mir, lower_path_with_source_to_mir, lower_source_to_mir,
-    parse_source, run_path, run_path_via_mir, run_path_with_source, run_path_with_source_via_mir,
-    Diagnostic, MirModule, Value,
+    emit_host_native_object, lower_path_to_mir, lower_path_with_source_to_mir, parse_source,
+    run_path, run_path_via_mir, run_path_with_source, run_path_with_source_via_mir, Diagnostic,
+    MirModule, Value,
 };
 
 struct Input {
@@ -146,7 +146,7 @@ fn main() {
         "mir" => {
             let input = read_input(&mut args);
             let result = if input.from_stdin {
-                lower_source_to_mir(&input.source)
+                lower_path_with_source_to_mir(Path::new(&input.path), &input.source)
             } else {
                 lower_path_to_mir(Path::new(&input.path))
             };

@@ -1,0 +1,5 @@
+class A:
+    b: B?
+
+class B:
+    a: A?

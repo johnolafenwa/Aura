@@ -498,6 +498,51 @@ fn run_mir_stdin_resolves_local_module_imports() {
 }
 
 #[test]
+fn mir_stdin_resolves_local_module_imports() {
+    let temp = TempDir::new("aurora-cli-mir-modules-stdin");
+    fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
+    fs::write(
+        temp.path().join("helpers/math.au"),
+        "public def double(value: int32) -> int32:\n    return value * 2\n",
+    )
+    .expect("failed to write helper module");
+    let main_path = temp.path().join("main.au");
+    let source =
+        "import helpers.math\n\ndef main() -> int32:\n    print(helpers.math.double(value=5))\n    return 0\n";
+
+    let mut child = Command::new(aura_bin())
+        .arg("mir")
+        .arg("--stdin")
+        .arg(&main_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura mir");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(source.as_bytes())
+        .expect("failed to write source");
+
+    let output = child
+        .wait_with_output()
+        .expect("failed to collect aura mir output");
+
+    assert!(
+        output.status.success(),
+        "mir should succeed for module-aware stdin buffers, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("double"),
+        "MIR dump should include imported module calls"
+    );
+}
+
+#[test]
 fn complete_stdin_resolves_local_module_member_completions() {
     let temp = TempDir::new("aurora-cli-complete-modules");
     fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
@@ -886,6 +931,15 @@ fn build_with_direct_backend_supports_trait_dispatch_example() {
 }
 
 #[test]
+fn build_with_direct_backend_supports_multi_type_trait_dispatch_example() {
+    assert_direct_backend_example_runs(
+        "examples/traits/generic_dispatch_multiple_types.au",
+        "multi-trait-dispatch-direct",
+        "dog\ncat\n",
+    );
+}
+
+#[test]
 fn build_with_direct_backend_supports_generic_trait_impl_example() {
     assert_direct_backend_example_runs(
         "examples/traits/generic_trait_impl.au",
@@ -949,6 +1003,15 @@ fn build_with_direct_backend_supports_generic_constructor_specialization_example
 }
 
 #[test]
+fn build_with_direct_backend_supports_explicit_builtin_enum_type_args_example() {
+    assert_direct_backend_example_runs(
+        "examples/enums/explicit_type_args.au",
+        "explicit-enum-type-args-direct",
+        "7\nbad\n",
+    );
+}
+
+#[test]
 fn build_with_direct_backend_supports_namespace_import_types_example() {
     assert_direct_backend_example_runs(
         "examples/modules/namespace_import_types.au",
@@ -990,6 +1053,15 @@ fn default_build_supports_generic_constructor_specialization_example() {
         "examples/generics/generic_constructor_specialization.au",
         "generic-specialization-auto",
         "42\n",
+    );
+}
+
+#[test]
+fn default_build_supports_explicit_builtin_enum_type_args_example() {
+    assert_default_backend_example_runs(
+        "examples/enums/explicit_type_args.au",
+        "explicit-enum-type-args-auto",
+        "7\nbad\n",
     );
 }
 

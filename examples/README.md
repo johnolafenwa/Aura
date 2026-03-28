@@ -104,6 +104,11 @@ The examples are organized by topic so they can serve both as quick references a
     - `4`
     - `division by zero`
     - `7`
+- `explicit_type_args.au`
+  - explicit type arguments on built-in enum constructors like `Result[int32, String].Ok(...)`
+  - prints:
+    - `7`
+    - `bad`
 - `match_borrow.au`
   - `match borrow ...:` plus unqualified built-in enum variants like `case Ok(value):`
   - prints `ok`
@@ -137,6 +142,11 @@ The examples are organized by topic so they can serve both as quick references a
   - prints:
     - `hello aurora`
     - `hello aurora`
+- `generic_dispatch_multiple_types.au`
+  - bounded generic trait dispatch across multiple concrete implementors
+  - prints:
+    - `dog`
+    - `cat`
 - `multiple_bounds.au`
   - bounded generic calls with `T: A + B`
   - prints `9`

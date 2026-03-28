@@ -1,0 +1,5 @@
+def loop(n: int32) -> int32:
+    return loop(n=n + 1)
+
+def main() -> int32:
+    return loop(n=0)

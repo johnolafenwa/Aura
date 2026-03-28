@@ -1,0 +1,5 @@
+error: integer literal `2147483648` does not fit in `int32`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/fstring_literal_overflow_reports_inner_span.au:2:16
+  |
+2 |     value = f"{2147483648}"
+  |                ^

@@ -277,24 +277,36 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             ImportedBinding::Function(function) => {
                 function_names.insert(name.clone(), function.decl.span);
                 item_names.insert(name.clone(), ("function", function.decl.span));
+                if let Some(namespace) = context.module_registry.get(&function.module_name) {
+                    register_module_namespace_types(namespace, &mut type_names, &mut type_arities);
+                }
                 imported_functions.insert(name.clone(), function.clone());
             }
             ImportedBinding::Class(class_info) => {
                 type_names.insert(name.clone(), class_info.decl.span);
                 type_arities.insert(name.clone(), class_info.decl.type_params.len());
                 item_names.insert(name.clone(), ("class", class_info.decl.span));
+                if let Some(namespace) = context.module_registry.get(&class_info.module_name) {
+                    register_module_namespace_types(namespace, &mut type_names, &mut type_arities);
+                }
                 imported_classes.insert(name.clone(), class_info.clone());
             }
             ImportedBinding::Enum(enum_info) => {
                 type_names.insert(name.clone(), enum_info.decl.span);
                 type_arities.insert(name.clone(), enum_info.decl.type_params.len());
                 item_names.insert(name.clone(), ("enum", enum_info.decl.span));
+                if let Some(namespace) = context.module_registry.get(&enum_info.module_name) {
+                    register_module_namespace_types(namespace, &mut type_names, &mut type_arities);
+                }
                 imported_enums.insert(name.clone(), enum_info.clone());
             }
             ImportedBinding::Trait(trait_info) => {
                 type_names.insert(name.clone(), trait_info.decl.span);
                 type_arities.insert(name.clone(), trait_info.decl.type_params.len());
                 item_names.insert(name.clone(), ("trait", trait_info.decl.span));
+                if let Some(namespace) = context.module_registry.get(&trait_info.module_name) {
+                    register_module_namespace_types(namespace, &mut type_names, &mut type_arities);
+                }
                 imported_traits.insert(name.clone(), trait_info.clone());
             }
             ImportedBinding::Module(namespace) => {
@@ -308,6 +320,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
     for item in &module.items {
         match item {
             Item::Class(class_decl) => {
+                reject_reserved_type_name(&class_decl.name, class_decl.span)?;
                 if let Some((kind, existing)) =
                     item_names.insert(class_decl.name.clone(), ("class", class_decl.span))
                 {
@@ -323,6 +336,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 type_arities.insert(class_decl.name.clone(), class_decl.type_params.len());
             }
             Item::Enum(enum_decl) => {
+                reject_reserved_type_name(&enum_decl.name, enum_decl.span)?;
                 if let Some((kind, existing)) =
                     item_names.insert(enum_decl.name.clone(), ("enum", enum_decl.span))
                 {
@@ -362,6 +376,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 }
             }
             Item::Trait(trait_decl) => {
+                reject_reserved_type_name(&trait_decl.name, trait_decl.span)?;
                 if let Some((kind, existing)) =
                     item_names.insert(trait_decl.name.clone(), ("trait", trait_decl.span))
                 {
@@ -590,6 +605,39 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 methods,
             },
         );
+    }
+
+    for item in &module.items {
+        let Item::Class(class_decl) = item else {
+            continue;
+        };
+        let class_info = classes
+            .get(&class_decl.name)
+            .expect("class should exist after collection");
+        for field_decl in &class_decl.fields {
+            if field_decl.ty.indirect {
+                continue;
+            }
+            let field_ty = &class_info
+                .fields
+                .get(&field_decl.name)
+                .expect("class field should have lowered type")
+                .ty;
+            if type_reaches_class_through_non_indirect_fields(
+                field_ty,
+                &class_decl.name,
+                &classes,
+                &mut BTreeSet::new(),
+            ) {
+                return Err(Diagnostic::at(
+                    field_decl.span,
+                    format!(
+                        "recursive field `{}` on class `{}` requires `indirect`",
+                        field_decl.name, class_decl.name
+                    ),
+                ));
+            }
+        }
     }
 
     for class in classes.values() {
@@ -1075,6 +1123,16 @@ fn lower_type(
     }
 }
 
+fn reject_reserved_type_name(name: &str, span: crate::diag::Span) -> Result<()> {
+    if is_builtin_type(name) {
+        return Err(Diagnostic::at(
+            span,
+            format!("`{}` is a reserved built-in type name", name),
+        ));
+    }
+    Ok(())
+}
+
 fn register_module_namespace_types(
     namespace: &ModuleNamespace,
     type_names: &mut BTreeMap<String, crate::diag::Span>,
@@ -1240,6 +1298,46 @@ fn type_contains_named(ty: &Type, target: &str) -> bool {
     match ty {
         Type::Named(name, args) => {
             name == target || args.iter().any(|arg| type_contains_named(arg, target))
+        }
+        Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+    }
+}
+
+fn type_reaches_class_through_non_indirect_fields(
+    ty: &Type,
+    target: &str,
+    classes: &BTreeMap<String, ClassInfo>,
+    visiting: &mut BTreeSet<String>,
+) -> bool {
+    match ty {
+        Type::Named(name, args) => {
+            if name == target {
+                return true;
+            }
+            if args.iter().any(|arg| {
+                type_reaches_class_through_non_indirect_fields(arg, target, classes, visiting)
+            }) {
+                return true;
+            }
+            let Some(class_info) = classes.get(name) else {
+                return false;
+            };
+            if !visiting.insert(name.clone()) {
+                return false;
+            }
+            let reaches_target = class_info.decl.fields.iter().any(|field_decl| {
+                if field_decl.ty.indirect {
+                    return false;
+                }
+                let field_ty = &class_info
+                    .fields
+                    .get(&field_decl.name)
+                    .expect("class field should have lowered type")
+                    .ty;
+                type_reaches_class_through_non_indirect_fields(field_ty, target, classes, visiting)
+            });
+            visiting.remove(name);
+            reaches_target
         }
         Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
     }
@@ -2782,6 +2880,11 @@ impl<'a> FunctionChecker<'a> {
             } => {
                 let lowered = self.lower_explicit_type_args(type_args)?;
                 match &base.kind {
+                    ExprKind::Name(name)
+                        if matches!(name.as_str(), "Option" | "Result" | "SendError") =>
+                    {
+                        self.explicit_builtin_type(name, &lowered, expr.span)
+                    }
                     ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
                         let class = self.resolve_class_info(name).unwrap();
                         if lowered.len() != class.decl.type_params.len() {
@@ -2984,8 +3087,26 @@ impl<'a> FunctionChecker<'a> {
                 } = &object.kind
                 {
                     if let ExprKind::Name(enum_name) = &inner.kind {
+                        let explicit_args = self.lower_explicit_type_args(type_args)?;
+                        if let Ok(explicit_ty) =
+                            self.explicit_builtin_type(enum_name, &explicit_args, expr.span)
+                        {
+                            if let Some(payload_ty) =
+                                self.builtin_enum_variant_payload(&explicit_ty, enum_name, field)
+                            {
+                                if payload_ty.is_some() {
+                                    return Err(Diagnostic::at(
+                                        expr.span,
+                                        format!(
+                                            "variant `{}` of enum `{}` requires a payload",
+                                            field, enum_name
+                                        ),
+                                    ));
+                                }
+                                return Ok(explicit_ty);
+                            }
+                        }
                         if let Some(enum_info) = self.resolve_enum_info(enum_name) {
-                            let explicit_args = self.lower_explicit_type_args(type_args)?;
                             if explicit_args.len() != enum_info.decl.type_params.len() {
                                 return Err(Diagnostic::at(
                                     expr.span,
@@ -3560,6 +3681,27 @@ impl<'a> FunctionChecker<'a> {
                 }
 
                 if let ExprKind::Name(enum_name) = &base_object.kind {
+                    if let Some(type_args) = object_type_args {
+                        let explicit_args = self.lower_explicit_type_args(type_args)?;
+                        if let Ok(explicit_ty) =
+                            self.explicit_builtin_type(enum_name, &explicit_args, span)
+                        {
+                            if args.iter().any(|argument| argument.name.is_some()) {
+                                return Err(Diagnostic::at(
+                                    span,
+                                    "enum variant constructors do not take keyword arguments",
+                                ));
+                            }
+                            return self.type_check_builtin_enum_variant_constructor(
+                                enum_name,
+                                field,
+                                &explicit_ty,
+                                args,
+                                span,
+                                locals,
+                            );
+                        }
+                    }
                     if let Some(expected_ty) = expected {
                         if let Some(variant_payload) =
                             self.builtin_enum_variant_payload(expected_ty, enum_name, field)
@@ -5029,6 +5171,88 @@ impl<'a> FunctionChecker<'a> {
             ("SendError", "Closed", [value]) => Some(Some(value.clone())),
             _ => None,
         }
+    }
+
+    fn explicit_builtin_type(
+        &self,
+        name: &str,
+        explicit_args: &[Type],
+        span: crate::diag::Span,
+    ) -> Result<Type> {
+        let expected_len = match name {
+            "Option" => 1,
+            "Result" => 2,
+            "SendError" => 1,
+            _ => return Err(Diagnostic::at(span, format!("unknown name `{}`", name))),
+        };
+        if explicit_args.len() != expected_len {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "enum `{}` expects {} type argument{}, found {}",
+                    name,
+                    expected_len,
+                    if expected_len == 1 { "" } else { "s" },
+                    explicit_args.len()
+                ),
+            ));
+        }
+        Ok(Type::Named(name.to_string(), explicit_args.to_vec()))
+    }
+
+    fn type_check_builtin_enum_variant_constructor(
+        &self,
+        enum_name: &str,
+        variant_name: &str,
+        enum_ty: &Type,
+        args: &[Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Type> {
+        let Some(variant_payload) =
+            self.builtin_enum_variant_payload(enum_ty, enum_name, variant_name)
+        else {
+            return Err(Diagnostic::at(
+                span,
+                format!("enum `{}` has no variant `{}`", enum_name, variant_name),
+            ));
+        };
+        match variant_payload {
+            Some(payload_ty) => {
+                if args.len() != 1 {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "variant `{}` of enum `{}` expects exactly one payload argument",
+                            variant_name, enum_name
+                        ),
+                    ));
+                }
+                let actual = self.type_of_expr_hint(&args[0].value, locals, Some(&payload_ty))?;
+                if actual != payload_ty {
+                    return Err(Diagnostic::at(
+                        args[0].span,
+                        format!(
+                            "variant `{}` of enum `{}` expects `{}`, found `{}`",
+                            variant_name, enum_name, payload_ty, actual
+                        ),
+                    ));
+                }
+                if !self.is_copy_type(&payload_ty) {
+                    self.consume_value_expr(&args[0].value, locals)?;
+                }
+            }
+            None => {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "variant `{}` of enum `{}` does not take a payload",
+                        variant_name, enum_name
+                    ),
+                ));
+            }
+        }
+        Ok(enum_ty.clone())
     }
 
     fn require_with_resource(&self, value_ty: &Type, span: crate::diag::Span) -> Result<()> {

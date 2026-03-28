@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-03-27
+Last updated: 2026-03-28
 
 ## In Progress
 
@@ -19,6 +19,8 @@ Last updated: 2026-03-27
 
 ## Done
 
+- Fixed direct-backend multi-implementor trait dispatch so bounded generic calls like `animal.describe()` now build natively across multiple concrete receiver types, with maintained example and CLI coverage.
+- Reserved built-in type names such as `Task`, `Channel`, and `Result` for the language/runtime surface so user-defined classes, enums, and traits now fail early with a clear diagnostic instead of later type-arity confusion.
 - Fixed module-crossing trait impl resolution across checking, interpreter/MIR execution, direct builds, compiler-backed completions, and the LSP bridge.
 - Added generic trait declarations plus generic impl headers across the parser, checker, interpreter, MIR/runtime, direct builds, fixtures, examples, tutorials, and CLI smoke coverage.
 - Fixed module-qualified `spawn` targets so `check`, `run`, `run-mir`, and `build` now report a user diagnostic instead of letting MIR lowering panic.
@@ -142,6 +144,12 @@ Last updated: 2026-03-27
 - Removed `--backend mir-runtime` from the CLI and docs now that the maintained Aurora surface has full native direct coverage.
 - Fixed direct-backend parity bugs for float comparisons, float modulo, normal-scope `with` cleanup, scalar return values through `with`, boolean printing, narrow integer overflow checks, and trait method dispatch on builtin types.
 - Fixed interpreter `float32` display so round-tripped `float32` values render without leaking binary noise like `3.140000104904175`.
+- Fixed generic trait dispatch contamination in the tree-walk interpreter so repeated trait-bounded generic calls no longer reuse the first concrete type across later calls.
+- Fixed `mir --stdin` so it now resolves local module imports using the provided path, matching `run-mir --stdin`.
+- Fixed explicit built-in enum constructor specialization such as `Result[int32, String].Ok(...)` across checking, interpreter execution, MIR lowering/runtime, examples, and tutorials.
+- Fixed imported functions that return module-local classes so the caller can use the returned value's fields and methods without importing the class separately.
+- Fixed f-string interpolation diagnostics so inner expression errors point at the interpolation site instead of the start of the enclosing function.
+- Rejected mutual recursive class fields without `indirect` and replaced raw recursion stack overflows with a friendly runtime call-depth diagnostic.
 
 ## Blocked
 

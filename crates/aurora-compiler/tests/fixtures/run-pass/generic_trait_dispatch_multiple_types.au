@@ -1,0 +1,24 @@
+trait Describe:
+    def describe(borrow self) -> String
+
+class Dog:
+    name: String
+
+class Cat:
+    name: String
+
+impl Describe for Dog:
+    def describe(borrow self) -> String:
+        return "dog:" + self.name
+
+impl Describe for Cat:
+    def describe(borrow self) -> String:
+        return "cat:" + self.name
+
+def show[T: Describe](animal: T):
+    print(animal.describe())
+
+def main() -> int32:
+    show(animal=Dog(name="Rex"))
+    show(animal=Cat(name="Milo"))
+    return 0

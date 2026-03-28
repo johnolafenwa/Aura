@@ -97,6 +97,32 @@ def main() -> int32:
     return 0
 ```
 
+That bounded dispatch also works across multiple different implementing types in the same program:
+
+```python
+trait Describe:
+    def describe(borrow self) -> String
+
+class Dog:
+    name: String
+
+class Cat:
+    label: String
+
+impl Describe for Dog:
+    def describe(borrow self) -> String:
+        return "dog"
+
+impl Describe for Cat:
+    def describe(borrow self) -> String:
+        return "cat"
+
+def show[T: Describe](animal: T) -> None:
+    print(animal.describe())
+```
+
+See [examples/traits/generic_dispatch_multiple_types.au](/Users/johnolafenwa/source2/Aurora/examples/traits/generic_dispatch_multiple_types.au) for a runnable maintained example.
+
 ## Current Limits
 
 The implemented trait surface currently supports:
