@@ -1,0 +1,5 @@
+error: argument for parameter `other` in method `merge` overlaps mutable borrow for parameter `self`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/method_receiver_overlapping_borrow_mut_argument.au:9:15
+  |
+9 |     acc.merge(other=acc)
+  |               ^

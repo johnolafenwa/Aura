@@ -68,6 +68,11 @@ mut counter = Counter(value=41)
 bump(counter)
 ```
 
+When a call uses borrowed parameters, Aurora also rejects overlapping arguments whenever a
+`borrow mut` parameter is involved. That rule also applies to method receivers like
+`borrow mut self`: the receiver cannot alias another borrowed argument in the same call. A
+mutable borrow must stay exclusive for the duration of the call.
+
 See [examples/basics/borrow_parameters.au](../examples/basics/borrow_parameters.au).
 
 For now, borrowed parameters are only supported on ordinary calls. `spawn` and `task_group().spawn(...)` still require by-value parameters because task capture does not yet model borrowed argument lifetimes.

@@ -1,0 +1,5 @@
+error: argument for parameter `source` in method `add_from` overlaps mutable borrow for parameter `self`; mutable borrows must be exclusive
+ --> crates/aurora-compiler/tests/fixtures/check-fail/method_receiver_overlapping_borrow_argument.au:9:18
+  |
+9 |     acc.add_from(source=acc)
+  |                  ^

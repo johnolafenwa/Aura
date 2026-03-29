@@ -1542,6 +1542,20 @@ fn is_numeric_type(ty: &Type) -> bool {
     is_integer_type(ty) || is_float_type(ty)
 }
 
+fn borrow_places_overlap(left: &str, right: &str) -> bool {
+    let left_segments = left.split('.').collect::<Vec<_>>();
+    let right_segments = right.split('.').collect::<Vec<_>>();
+    if left_segments.first() != right_segments.first() {
+        return false;
+    }
+    let shared = left_segments
+        .iter()
+        .zip(right_segments.iter())
+        .take_while(|(lhs, rhs)| lhs == rhs)
+        .count();
+    shared == left_segments.len() || shared == right_segments.len()
+}
+
 #[derive(Clone)]
 struct LocalBinding {
     ty: Type,
@@ -1550,6 +1564,13 @@ struct LocalBinding {
     passing: ReceiverKind,
     moved: bool,
     moved_fields: BTreeSet<String>,
+}
+
+#[derive(Clone)]
+struct BorrowedCallPlace {
+    path: String,
+    passing: ReceiverKind,
+    param_name: String,
 }
 
 struct FunctionChecker<'a> {
@@ -4256,18 +4277,14 @@ impl<'a> FunctionChecker<'a> {
                                     ),
                                 ));
                             }
-                            if method.decl.receiver == Some(ReceiverKind::BorrowMut)
-                                && !self.is_mutable_place(object, locals)?
-                            {
-                                return Err(Diagnostic::at(
-                                    span,
-                                    format!("method `{}` requires a mutable receiver", field),
-                                ));
-                            }
-                            if method.decl.receiver == Some(ReceiverKind::Value) {
-                                self.consume_value_expr(object, locals)?;
-                            }
-                            return self.type_check_callable_args(
+                            let receiver_borrows = self.prepare_method_receiver_borrows(
+                                field,
+                                method.decl.receiver,
+                                object,
+                                span,
+                                locals,
+                            )?;
+                            return self.type_check_callable_args_seeded(
                                 &format!("method `{}`", field),
                                 &method.decl.type_params,
                                 &method.decl.params,
@@ -4282,13 +4299,21 @@ impl<'a> FunctionChecker<'a> {
                                     &class_info.decl.type_params,
                                     type_args,
                                 ),
+                                receiver_borrows,
                             );
                         }
                     }
                 }
                 if let Type::TypeParam(type_param_name) = &receiver_ty {
                     if let Ok(method) = self.trait_method_from_type_param(type_param_name, field) {
-                        return self.type_check_callable_args(
+                        let receiver_borrows = self.prepare_method_receiver_borrows(
+                            field,
+                            method.decl.receiver,
+                            object,
+                            span,
+                            locals,
+                        )?;
+                        return self.type_check_callable_args_seeded(
                             &format!("method `{}`", field),
                             &method.decl.type_params,
                             &method.decl.params,
@@ -4300,6 +4325,7 @@ impl<'a> FunctionChecker<'a> {
                             locals,
                             expected,
                             HashMap::new(),
+                            receiver_borrows,
                         );
                     }
                 }
@@ -4314,7 +4340,14 @@ impl<'a> FunctionChecker<'a> {
                         .collect::<Vec<_>>();
                     let substituted_return_type =
                         substitute_type(&method.signature.return_type, &impl_substitutions);
-                    return self.type_check_callable_args(
+                    let receiver_borrows = self.prepare_method_receiver_borrows(
+                        field,
+                        method.decl.receiver,
+                        object,
+                        span,
+                        locals,
+                    )?;
+                    return self.type_check_callable_args_seeded(
                         &format!("method `{}`", field),
                         &method.decl.type_params,
                         &method.decl.params,
@@ -4326,6 +4359,7 @@ impl<'a> FunctionChecker<'a> {
                         locals,
                         expected,
                         HashMap::new(),
+                        receiver_borrows,
                     );
                 }
                 match (&receiver_ty, field.as_str()) {
@@ -4751,6 +4785,101 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn borrow_call_place(&self, expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Name(name) => Some(name.clone()),
+            ExprKind::Group(inner) => self.borrow_call_place(inner),
+            ExprKind::Member { object, field } => {
+                let parent = self.borrow_call_place(object)?;
+                Some(format!("{}.{}", parent, field))
+            }
+            _ => None,
+        }
+    }
+
+    fn prepare_method_receiver_borrows(
+        &self,
+        method_name: &str,
+        receiver_kind: Option<ReceiverKind>,
+        object: &Expr,
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Vec<BorrowedCallPlace>> {
+        let Some(receiver_kind) = receiver_kind else {
+            return Ok(Vec::new());
+        };
+
+        if receiver_kind == ReceiverKind::BorrowMut && !self.is_mutable_place(object, locals)? {
+            return Err(Diagnostic::at(
+                span,
+                format!("method `{}` requires a mutable receiver", method_name),
+            ));
+        }
+
+        if receiver_kind == ReceiverKind::Value {
+            self.consume_value_expr(object, locals)?;
+            return Ok(Vec::new());
+        }
+
+        let mut borrowed_places = Vec::new();
+        if let Some(place) = self.borrow_call_place(object) {
+            borrowed_places.push(BorrowedCallPlace {
+                path: place,
+                passing: receiver_kind,
+                param_name: "self".to_string(),
+            });
+        }
+        Ok(borrowed_places)
+    }
+
+    fn reject_overlapping_borrow(
+        &self,
+        borrowed_places: &[BorrowedCallPlace],
+        current_path: &str,
+        current_passing: ReceiverKind,
+        current_param_name: &str,
+        callee_name: &str,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        for prior in borrowed_places {
+            if !borrow_places_overlap(&prior.path, current_path) {
+                continue;
+            }
+            match (prior.passing, current_passing) {
+                (ReceiverKind::Borrow, ReceiverKind::Borrow) => continue,
+                (ReceiverKind::BorrowMut, ReceiverKind::BorrowMut) => {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "argument for parameter `{}` in {} overlaps mutable borrow for parameter `{}`",
+                            current_param_name, callee_name, prior.param_name
+                        ),
+                    ));
+                }
+                (ReceiverKind::Borrow, ReceiverKind::BorrowMut) => {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "argument for parameter `{}` in {} overlaps borrow for parameter `{}`; mutable borrows must be exclusive",
+                            current_param_name, callee_name, prior.param_name
+                        ),
+                    ));
+                }
+                (ReceiverKind::BorrowMut, ReceiverKind::Borrow) => {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "argument for parameter `{}` in {} overlaps mutable borrow for parameter `{}`; mutable borrows must be exclusive",
+                            current_param_name, callee_name, prior.param_name
+                        ),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn render_member_target(&self, object: &Expr, field: &str) -> String {
         format!("{}.{}", self.render_place_expr(object), field)
     }
@@ -5167,6 +5296,37 @@ impl<'a> FunctionChecker<'a> {
         expected_return: Option<&Type>,
         seed_substitutions: HashMap<String, Type>,
     ) -> Result<Type> {
+        self.type_check_callable_args_seeded(
+            callee_name,
+            callee_type_params,
+            param_decls,
+            param_types,
+            return_type,
+            callee_type_param_bounds,
+            args,
+            span,
+            locals,
+            expected_return,
+            seed_substitutions,
+            Vec::new(),
+        )
+    }
+
+    fn type_check_callable_args_seeded(
+        &self,
+        callee_name: &str,
+        callee_type_params: &[String],
+        param_decls: &[Param],
+        param_types: &[Type],
+        return_type: &Type,
+        callee_type_param_bounds: &BTreeMap<String, Vec<String>>,
+        args: &[Argument],
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected_return: Option<&Type>,
+        seed_substitutions: HashMap<String, Type>,
+        seeded_borrowed_places: Vec<BorrowedCallPlace>,
+    ) -> Result<Type> {
         let ordered_args = bind_call_arguments(
             callee_name,
             &callable_params_from_decl(param_decls),
@@ -5270,6 +5430,7 @@ impl<'a> FunctionChecker<'a> {
             self.assert_type_satisfies_bounds(resolved_ty, bounds, span)?;
         }
 
+        let mut borrowed_places = seeded_borrowed_places;
         for (((argument, actual), expected), param_decl) in resolved_args
             .into_iter()
             .zip(param_types.iter())
@@ -5295,7 +5456,23 @@ impl<'a> FunctionChecker<'a> {
                             self.consume_value_expr(&argument.value, locals)?;
                         }
                     }
-                    ReceiverKind::Borrow => {}
+                    ReceiverKind::Borrow => {
+                        if let Some(place) = self.borrow_call_place(&argument.value) {
+                            self.reject_overlapping_borrow(
+                                &borrowed_places,
+                                &place,
+                                ReceiverKind::Borrow,
+                                &param_decl.name,
+                                callee_name,
+                                argument.span,
+                            )?;
+                            borrowed_places.push(BorrowedCallPlace {
+                                path: place,
+                                passing: ReceiverKind::Borrow,
+                                param_name: param_decl.name.clone(),
+                            });
+                        }
+                    }
                     ReceiverKind::BorrowMut => {
                         if !self.is_mutable_place(&argument.value, locals)? {
                             return Err(Diagnostic::at(
@@ -5305,6 +5482,21 @@ impl<'a> FunctionChecker<'a> {
                                     param_decl.name, callee_name
                                 ),
                             ));
+                        }
+                        if let Some(place) = self.borrow_call_place(&argument.value) {
+                            self.reject_overlapping_borrow(
+                                &borrowed_places,
+                                &place,
+                                ReceiverKind::BorrowMut,
+                                &param_decl.name,
+                                callee_name,
+                                argument.span,
+                            )?;
+                            borrowed_places.push(BorrowedCallPlace {
+                                path: place,
+                                passing: ReceiverKind::BorrowMut,
+                                param_name: param_decl.name.clone(),
+                            });
                         }
                     }
                 }

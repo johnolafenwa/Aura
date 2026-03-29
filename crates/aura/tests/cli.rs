@@ -1229,6 +1229,21 @@ fn build_with_direct_backend_supports_explicit_builtin_enum_type_args_example() 
 }
 
 #[test]
+fn build_with_direct_backend_supports_float_return_from_enum_match() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-enum-float-match",
+        "enum Value:\n    IntVal(int32)\n    FloatVal(float64)\n\ndef to_float(v: Value) -> float64:\n    match v:\n        case Value.IntVal(i):\n            return 0.0\n        case Value.FloatVal(f):\n            return f\n\ndef main() -> int32:\n    value = Value.FloatVal(2.5)\n    print(to_float(value))\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "2.5\n");
+}
+
+#[test]
 fn build_with_direct_backend_supports_namespace_import_types_example() {
     assert_direct_backend_example_runs(
         "examples/modules/namespace_import_types.au",
@@ -1352,6 +1367,21 @@ fn default_build_supports_explicit_builtin_enum_type_args_example() {
         "explicit-enum-type-args-auto",
         "7\nbad\n",
     );
+}
+
+#[test]
+fn default_build_supports_float_return_from_enum_match() {
+    let (_, run) = build_and_run_default_source(
+        "aurora-build-auto-enum-float-match",
+        "enum Value:\n    IntVal(int32)\n    FloatVal(float64)\n\ndef to_float(v: Value) -> float64:\n    match v:\n        case Value.IntVal(i):\n            return 0.0\n        case Value.FloatVal(f):\n            return f\n\ndef main() -> int32:\n    value = Value.FloatVal(2.5)\n    print(to_float(value))\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "default-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "2.5\n");
 }
 
 #[test]

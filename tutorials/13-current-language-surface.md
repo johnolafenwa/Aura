@@ -115,6 +115,7 @@ Ordinary functions, instance methods, and associated methods support:
 - builtin named arguments for `print(value=...)`, `range(...)`, and `after(duration=...)`
 
 Borrowed ordinary parameters currently work for normal calls, but `spawn` and `TaskGroup.spawn(...)` still require by-value parameters.
+Calls also reject overlapping borrowed arguments whenever a `borrow mut` parameter participates, including a `borrow mut self` receiver overlapping another borrowed argument in the same method call.
 
 Top-level declarations may also be generic:
 

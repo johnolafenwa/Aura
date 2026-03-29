@@ -19,6 +19,8 @@ Last updated: 2026-03-29
 
 ## Done
 
+- Fixed overlapping borrowed call arguments so free functions and method receivers can no longer alias the same place across `borrow mut` / `borrow mut` or `borrow` / `borrow mut` combinations.
+- Fixed direct/default native builds for `float64` returns from enum `match` arms that destructure payloads, keeping build parity with `run` and `run-mir`.
 - Removed the duplicate prefix spelling for ordinary borrowed parameters so free-function borrows are now written only as `name: borrow Type` / `name: borrow mut Type`, with parser regression coverage and aligned examples/tutorials.
 - Fixed direct `check` / `analyze` package-root inference for nested package modules, so opening files like `examples/modules/pkg/user.au` no longer resolves imports through a duplicated path segment.
 - Added normal `aura help` / `aura --help` / `aura version` / `aura --version` success paths and documented them in the maintained CLI/tutorial surface.

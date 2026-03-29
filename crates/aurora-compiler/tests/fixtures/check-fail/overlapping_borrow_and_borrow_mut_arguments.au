@@ -1,0 +1,10 @@
+class Data:
+    value: int32
+
+def read_and_write(r: borrow Data, w: borrow mut Data):
+    w.value += r.value
+
+def main() -> int32:
+    mut data = Data(value=5)
+    read_and_write(data, data)
+    return 0

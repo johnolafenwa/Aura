@@ -1,0 +1,11 @@
+class Data:
+    value: int32
+
+def add_both(a: borrow mut Data, b: borrow mut Data):
+    a.value += 10
+    b.value += 100
+
+def main() -> int32:
+    mut data = Data(value=0)
+    add_both(data, data)
+    return 0

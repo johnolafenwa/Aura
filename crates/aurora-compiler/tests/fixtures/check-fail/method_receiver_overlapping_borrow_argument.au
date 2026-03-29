@@ -1,0 +1,10 @@
+class Acc:
+    value: int32
+
+    def add_from(borrow mut self, source: borrow Acc):
+        self.value += source.value
+
+def main() -> int32:
+    mut acc = Acc(value=10)
+    acc.add_from(source=acc)
+    return 0

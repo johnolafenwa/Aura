@@ -1,0 +1,10 @@
+class Acc:
+    value: int32
+
+    def merge(borrow mut self, other: borrow mut Acc):
+        self.value += other.value
+
+def main() -> int32:
+    mut acc = Acc(value=10)
+    acc.merge(other=acc)
+    return 0

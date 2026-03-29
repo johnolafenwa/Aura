@@ -13,6 +13,38 @@ fn is_known_enum_name(program: &Program, name: &str) -> bool {
     program.enums.contains_key(name) || matches!(name, "Result" | "Option" | "SendError")
 }
 
+fn default_return_operand(ty: &Type) -> Operand {
+    match ty {
+        Type::Unit => Operand::Unit,
+        Type::Named(name, args) if args.is_empty() => match name.as_str() {
+            "bool" => Operand::Bool(false),
+            "float32" | "float64" => Operand::Float(0.0),
+            "String" => Operand::String(String::new()),
+            "Duration" => Operand::Duration(0),
+            _ if matches!(
+                name.as_str(),
+                "int8"
+                    | "int16"
+                    | "int32"
+                    | "int64"
+                    | "int128"
+                    | "intsize"
+                    | "uint8"
+                    | "uint16"
+                    | "uint32"
+                    | "uint64"
+                    | "uint128"
+                    | "uintsize"
+            ) =>
+            {
+                Operand::Int(0)
+            }
+            _ => Operand::Unit,
+        },
+        _ => Operand::Unit,
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirModule {
     pub functions: Vec<MirFunction>,
@@ -641,7 +673,7 @@ fn lower_function(
         receiver: receiver.map(lower_receiver_kind),
         params,
         return_type: return_type.clone(),
-        default_return: Operand::Unit,
+        default_return: default_return_operand(return_type),
     })
 }
 

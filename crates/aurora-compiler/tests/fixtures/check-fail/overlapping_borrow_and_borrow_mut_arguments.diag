@@ -1,0 +1,5 @@
+error: argument for parameter `w` in function `read_and_write` overlaps borrow for parameter `r`; mutable borrows must be exclusive
+ --> crates/aurora-compiler/tests/fixtures/check-fail/overlapping_borrow_and_borrow_mut_arguments.au:9:26
+  |
+9 |     read_and_write(data, data)
+  |                          ^
