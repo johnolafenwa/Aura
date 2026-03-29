@@ -77,7 +77,7 @@ pub fn check_path(path: &Path) -> Result<Program> {
 }
 
 pub fn check_path_with_source(path: &Path, source: &str) -> Result<Program> {
-    ModuleLoader::new(path)?.load_program_with_source(path, source)
+    ModuleLoader::new_with_source(path, Some(source))?.load_program_with_source(path, source)
 }
 
 pub fn run_path(path: &Path) -> Result<RunOutput> {
@@ -109,16 +109,12 @@ struct ModuleLoader {
 
 impl ModuleLoader {
     fn new(entry_path: &Path) -> Result<Self> {
+        Self::new_with_source(entry_path, None)
+    }
+
+    fn new_with_source(entry_path: &Path, source_override: Option<&str>) -> Result<Self> {
         let absolute_entry = absolutize(entry_path);
-        let package_root = absolute_entry
-            .parent()
-            .ok_or_else(|| {
-                Diagnostic::new(format!(
-                    "cannot determine package root for `{}`",
-                    entry_path.display()
-                ))
-            })?
-            .to_path_buf();
+        let package_root = infer_package_root(&absolute_entry, source_override)?;
         Ok(Self {
             package_root,
             cache: HashMap::new(),
@@ -276,6 +272,53 @@ fn absolutize(path: &Path) -> PathBuf {
             .expect("current directory should be available")
             .join(path)
     }
+}
+
+fn infer_package_root(entry_path: &Path, source_override: Option<&str>) -> Result<PathBuf> {
+    let entry_dir = entry_path.parent().ok_or_else(|| {
+        Diagnostic::new(format!(
+            "cannot determine package root for `{}`",
+            entry_path.display()
+        ))
+    })?;
+
+    let parsed_entry = source_override
+        .map(str::to_string)
+        .or_else(|| fs::read_to_string(entry_path).ok())
+        .and_then(|source| parse_source(&source).ok());
+
+    if let Some(module) = parsed_entry {
+        let import_paths = module
+            .imports
+            .iter()
+            .map(|import| match &import.kind {
+                ImportKind::From { module_path, .. } => module_path.clone(),
+                ImportKind::Module { path } => path.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        if !import_paths.is_empty() {
+            for candidate in entry_dir.ancestors() {
+                if import_paths
+                    .iter()
+                    .all(|import_path| import_exists_from_root(candidate, import_path))
+                {
+                    return Ok(candidate.to_path_buf());
+                }
+            }
+        }
+    }
+
+    Ok(entry_dir.to_path_buf())
+}
+
+fn import_exists_from_root(root: &Path, module_path: &[String]) -> bool {
+    let mut path = root.to_path_buf();
+    for segment in module_path {
+        path.push(segment);
+    }
+    path.set_extension("au");
+    path.exists()
 }
 
 fn logical_module_name(package_root: &Path, path: &Path) -> String {

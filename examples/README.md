@@ -184,6 +184,13 @@ The examples are organized by topic so they can serve both as quick references a
     - `4`
     - `true`
     - `1`
+- `trait_impl_imports.au`
+  - trait impls imported across package modules, including bounded generic calls and direct trait-method use
+  - prints:
+    - `Ada`
+    - `Ada`
+
+Helper modules under `modules/pkg/` support the maintained module examples above and are not standalone entrypoints.
 
 ### `error_handling/`
 

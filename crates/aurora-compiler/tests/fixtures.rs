@@ -13,6 +13,25 @@ fn parse_pass_fixtures_parse() {
 }
 
 #[test]
+fn parse_fail_fixtures_match_expected_diagnostics() {
+    for fixture in fixture_files("parse-fail") {
+        let source = read(&fixture);
+        let error = match parse_source(&source) {
+            Ok(_) => panic!("{} should fail to parse", fixture.display()),
+            Err(error) => error,
+        };
+        let expected = read_expected(&fixture, "diag");
+        let rendered = error.render_with_source(&display_path(&fixture), &source);
+        assert_eq!(
+            normalize_newlines(&rendered),
+            normalize_newlines(&expected),
+            "unexpected diagnostic for {}",
+            fixture.display()
+        );
+    }
+}
+
+#[test]
 fn check_pass_fixtures_type_check() {
     for fixture in fixture_files("check-pass") {
         let source = read(&fixture);

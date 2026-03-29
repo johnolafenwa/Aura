@@ -458,17 +458,14 @@ impl Parser {
             }
 
             let span = self.current_span();
+            if self.at_simple(&TokenKind::KwBorrow) {
+                return Err(Diagnostic::at(
+                    self.current_span(),
+                    "ordinary borrowed parameters must be written as `name: borrow Type` or `name: borrow mut Type`",
+                ));
+            }
             let mut passing = ReceiverKind::Value;
-            let name = if self.eat_simple(&TokenKind::KwBorrow).is_some() {
-                passing = if self.eat_simple(&TokenKind::KwMut).is_some() {
-                    ReceiverKind::BorrowMut
-                } else {
-                    ReceiverKind::Borrow
-                };
-                self.expect_identifier()?
-            } else {
-                self.expect_identifier()?
-            };
+            let name = self.expect_identifier()?;
             self.expect_simple(TokenKind::Colon)?;
             if passing == ReceiverKind::Value && self.eat_simple(&TokenKind::KwBorrow).is_some() {
                 passing = if self.eat_simple(&TokenKind::KwMut).is_some() {
@@ -476,11 +473,6 @@ impl Parser {
                 } else {
                     ReceiverKind::Borrow
                 };
-            } else if passing != ReceiverKind::Value && self.at_simple(&TokenKind::KwBorrow) {
-                return Err(Diagnostic::at(
-                    self.current_span(),
-                    "parameter borrow mode may be written either before the name or after the colon, not both",
-                ));
             }
             let ty = self.parse_type()?;
             let default = if self.eat_simple(&TokenKind::Equal).is_some() {

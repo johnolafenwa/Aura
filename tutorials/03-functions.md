@@ -61,11 +61,6 @@ The preferred style matches the proposal and writes the borrow in the type posit
 - `counter: borrow Counter`
 - `counter: borrow mut Counter`
 
-The current compiler also accepts the equivalent prefix spelling:
-
-- `borrow counter: Counter`
-- `borrow mut counter: Counter`
-
 `borrow mut` parameters must receive a mutable place at the call site:
 
 ```python

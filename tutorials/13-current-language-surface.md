@@ -230,7 +230,16 @@ Not yet implemented:
 Current module/import limitations:
 
 - imports resolve local `.au` files relative to the current package root
+- directly checking or analyzing a nested package file now infers the nearest package root that satisfies its imports
 - `import a.b` exposes module namespaces for calls like `a.b.func(...)`, `a.b.Type(...)`, and `a.b.Enum.Variant`
 - type annotations may use namespace-imported types such as `a.b.Type`
 - the current runtimes stop with a friendly recursion-depth diagnostic after 1024 nested Aurora calls
 - package manifests and external dependencies are still proposal-only
+
+Current expression/ergonomics limitations:
+
+- list literals such as `[1, 2, 3]` are not implemented yet
+- strings use quoted literals; `String(...)` is not a constructor
+- enum variants are not callable by bare name; use `Result.Ok(...)`, `Result.Err(...)`, `Option.Some(...)`, or `Option.None`
+- `channel()` still requires an expected `Channel[T]` type annotation in the bootstrap compiler
+- `spawn` and `TaskGroup.spawn(...)` currently support named function calls only

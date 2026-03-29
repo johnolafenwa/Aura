@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-03-28
+Last updated: 2026-03-29
 
 ## In Progress
 
@@ -19,6 +19,11 @@ Last updated: 2026-03-28
 
 ## Done
 
+- Removed the duplicate prefix spelling for ordinary borrowed parameters so free-function borrows are now written only as `name: borrow Type` / `name: borrow mut Type`, with parser regression coverage and aligned examples/tutorials.
+- Fixed direct `check` / `analyze` package-root inference for nested package modules, so opening files like `examples/modules/pkg/user.au` no longer resolves imports through a duplicated path segment.
+- Added normal `aura help` / `aura --help` / `aura version` / `aura --version` success paths and documented them in the maintained CLI/tutorial surface.
+- Replaced machine-local absolute repo paths in the maintained READMEs/tutorials with portable relative links or `$(pwd)`-style command examples, and refreshed `examples/README.md` to include `examples/modules/trait_impl_imports.au`.
+- Documented the current first-user limitations that are still real surface constraints, including missing list literals, no `String(...)` constructor, no bare `Ok(...)` / `Err(...)` constructors, required `Channel[T]` context for `channel()`, and named-function-only `spawn` targets.
 - Fixed bare `None` parity across `run`, `run-mir`, and native builds, recovered compiler-backed analysis/completions for buffers with multiple dangling member accesses, and restored source-aware arithmetic runtime diagnostics for built binaries.
 - Fixed f-string lexing/parsing so interpolations can contain inner string literals and nested braces, with maintained compiler fixture coverage for both checking and execution.
 - Added maintained regression coverage for `Option.None` inference, namespace-qualified imports inside imported module bodies, and closed-channel `select` timers.

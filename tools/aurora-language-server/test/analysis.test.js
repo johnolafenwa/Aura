@@ -219,7 +219,7 @@ test("hover resolves self inside method bodies", () => {
   assert.match(hover.value, /param self: Counter/);
 });
 
-test("analysis tracks free-function borrowed parameters in both supported spellings", () => {
+test("analysis tracks canonical free-function borrowed parameters", () => {
   const moduleInfo = analyzeDocument(borrowParametersSource);
   const readFunction = moduleInfo.functions.get("read");
   const showFunction = moduleInfo.functions.get("show");

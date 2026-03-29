@@ -630,7 +630,7 @@ function parseCallableParams(rawLine, rawParams, line, selfType) {
       endCharacter: paramsOffset + receiverMatch[0].indexOf("self") + 4
     });
   }
-  const pattern = /(?:borrow\s+(?:mut\s+)?)?([a-zA-Z_][A-Za-z0-9_]*)\s*:\s*((?:borrow\s+(?:mut\s+)?)?[^=,\)]+(?:\[[^\]]+\])?)/g;
+  const pattern = /([a-zA-Z_][A-Za-z0-9_]*)\s*:\s*((?:borrow\s+(?:mut\s+)?)?[^=,\)]+(?:\[[^\]]+\])?)/g;
   let match = pattern.exec(rawParams);
   while (match) {
     if (match[1] === "self" && selfType) {

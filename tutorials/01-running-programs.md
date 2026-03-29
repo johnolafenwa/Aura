@@ -17,6 +17,8 @@ cargo run -p aura -- ast-json examples/classes/point_distance.au
 cargo run -p aura -- mir examples/control_flow/while_break_continue.au
 cargo run -p aura -- analyze examples/classes/point_distance.au
 cargo run -p aura -- complete --line 5 --character 11 --trigger . examples/point.au
+cargo run -p aura -- help
+cargo run -p aura -- --version
 ```
 
 - `check`
@@ -46,6 +48,10 @@ cargo run -p aura -- complete --line 5 --character 11 --trigger . examples/point
   - `--line` and `--character` use zero-based positions
   - member completion expects the cursor to be positioned just after `.`
   - the current compiler also tolerates the common incomplete-editor state where the buffer contains one or more dangling member accesses like `counter.` or `helpers.math.`, including at EOF
+- `help`
+  - print CLI usage and exit successfully
+- `--version`
+  - print the current CLI version and exit successfully
 
 The machine-readable commands support stdin for editor integration, and the ordinary `check`, `run`, `run-mir`, and `build` commands can also resolve local imports from stdin when you provide a real workspace path:
 
@@ -53,7 +59,7 @@ The machine-readable commands support stdin for editor integration, and the ordi
 cat examples/point.au | cargo run -p aura -- analyze --stdin /virtual/point.au
 cat examples/point.au | cargo run -p aura -- complete --line 5 --character 11 --trigger . --stdin /virtual/point.au
 cat examples/point.au | cargo run -p aura -- build -o ./target/aurora-point --stdin /virtual/point.au
-cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au
+cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin "$(pwd)/examples/modules/simple_import.au"
 ```
 
 ## Scripts And `main`

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aurora_compiler::{check_path, run_path, run_path_via_mir};
+use aurora_compiler::{analyze_path_source, check_path, run_path, run_path_via_mir};
 
 struct TempDir {
     path: PathBuf,
@@ -151,6 +151,40 @@ def main() -> int32:
     let mir_output =
         run_path_via_mir(&main_path).expect("qualified type annotations should run via MIR");
     assert_eq!(mir_output.stdout, "9\n");
+}
+
+#[test]
+fn nested_package_module_can_be_checked_and_analyzed_directly() {
+    let temp = TempDir::new("aurora-modules-nested-direct");
+    temp.write(
+        "pkg/named.au",
+        r#"public trait Named:
+    def name(borrow self) -> String
+"#,
+    );
+    let user_path = temp.write(
+        "pkg/user.au",
+        r#"from pkg.named import Named
+
+public class User:
+    public label: String
+
+impl Named for User:
+    def name(borrow self) -> String:
+        return self.label
+"#,
+    );
+
+    let program = check_path(&user_path).expect("nested package module should type-check");
+    assert_eq!(program.module_name, "pkg.user");
+
+    let source = fs::read_to_string(&user_path).expect("user module source should be readable");
+    let analysis = analyze_path_source(&user_path, &source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "analysis should not report false import errors: {:?}",
+        analysis.diagnostics
+    );
 }
 
 #[test]

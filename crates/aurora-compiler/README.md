@@ -19,6 +19,7 @@ The intended layers are:
 Fixture tests live under:
 
 - `tests/fixtures/parse-pass`
+- `tests/fixtures/parse-fail`
 - `tests/fixtures/check-pass`
 - `tests/fixtures/check-fail`
 - `tests/fixtures/run-pass`

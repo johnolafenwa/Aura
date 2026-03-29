@@ -7,7 +7,7 @@ def read(counter: borrow Counter) -> int32:
 def bump(counter: borrow mut Counter):
     counter.value += 1
 
-def show(borrow counter: Counter) -> int32:
+def show(counter: borrow Counter) -> int32:
     return counter.value
 
 def main() -> int32:

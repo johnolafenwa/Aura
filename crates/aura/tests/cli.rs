@@ -229,6 +229,93 @@ fn mir_exits_cleanly_when_stdout_pipe_closes() {
 }
 
 #[test]
+fn help_flags_exit_successfully() {
+    for args in [["help"], ["--help"], ["-h"]] {
+        let output = Command::new(aura_bin())
+            .args(args)
+            .output()
+            .expect("failed to run aura help");
+
+        assert!(
+            output.status.success(),
+            "help path {:?} should succeed, stderr was:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("usage: aura"),
+            "help path {:?} should print usage",
+            args
+        );
+    }
+}
+
+#[test]
+fn version_flags_exit_successfully() {
+    for args in [["version"], ["--version"], ["-V"]] {
+        let output = Command::new(aura_bin())
+            .args(args)
+            .output()
+            .expect("failed to run aura version");
+
+        assert!(
+            output.status.success(),
+            "version path {:?} should succeed, stderr was:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("aura {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
+}
+
+#[test]
+fn nested_package_module_can_be_checked_directly() {
+    let fixture = repo_root().join("examples/modules/pkg/user.au");
+    let output = Command::new(aura_bin())
+        .arg("check")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura check");
+
+    assert!(
+        output.status.success(),
+        "direct check of nested package module should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n");
+}
+
+#[test]
+fn nested_package_module_can_be_analyzed_directly() {
+    let fixture = repo_root().join("examples/modules/pkg/user.au");
+    let output = Command::new(aura_bin())
+        .arg("analyze")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura analyze");
+
+    assert!(
+        output.status.success(),
+        "direct analyze of nested package module should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"diagnostics\":[]"),
+        "analysis should not report false import diagnostics, stdout was:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("\"name\":\"User\""),
+        "analysis should still include symbols, stdout was:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn analyze_recovers_symbols_for_dangling_dot_stdin_buffers() {
     let source = [
         "class Counter:",

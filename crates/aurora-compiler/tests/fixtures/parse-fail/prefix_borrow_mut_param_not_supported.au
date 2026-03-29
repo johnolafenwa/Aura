@@ -1,0 +1,2 @@
+def bump(borrow mut counter: Counter):
+    counter.value += 1

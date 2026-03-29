@@ -26,9 +26,11 @@ enum BuildBackend {
 fn main() {
     let mut args = std::env::args().skip(1);
     let Some(command) = args.next() else {
-        print_usage_and_exit();
+        print_usage_and_exit(2);
     };
     match command.as_str() {
+        "help" | "--help" | "-h" => print_usage_and_exit(0),
+        "version" | "--version" | "-V" => print_version_and_exit(),
         "check" => {
             let input = read_input(&mut args);
             let result = if input.from_stdin {
@@ -194,7 +196,7 @@ fn main() {
                 }
             }
         }
-        _ => print_usage_and_exit(),
+        _ => print_usage_and_exit(2),
     }
 }
 
@@ -211,7 +213,7 @@ fn parse_complete_args(args: Vec<String>) -> (usize, usize, Option<char>, Vec<St
                 line = Some(
                     args.get(index)
                         .and_then(|value| value.parse::<usize>().ok())
-                        .unwrap_or_else(|| print_usage_and_exit()),
+                        .unwrap_or_else(|| print_usage_and_exit(2)),
                 );
                 index += 1;
             }
@@ -220,7 +222,7 @@ fn parse_complete_args(args: Vec<String>) -> (usize, usize, Option<char>, Vec<St
                 character = Some(
                     args.get(index)
                         .and_then(|value| value.parse::<usize>().ok())
-                        .unwrap_or_else(|| print_usage_and_exit()),
+                        .unwrap_or_else(|| print_usage_and_exit(2)),
                 );
                 index += 1;
             }
@@ -229,7 +231,7 @@ fn parse_complete_args(args: Vec<String>) -> (usize, usize, Option<char>, Vec<St
                 trigger = Some(
                     args.get(index)
                         .and_then(|value| value.chars().next())
-                        .unwrap_or_else(|| print_usage_and_exit()),
+                        .unwrap_or_else(|| print_usage_and_exit(2)),
                 );
                 index += 1;
             }
@@ -238,8 +240,8 @@ fn parse_complete_args(args: Vec<String>) -> (usize, usize, Option<char>, Vec<St
     }
 
     (
-        line.unwrap_or_else(|| print_usage_and_exit()),
-        character.unwrap_or_else(|| print_usage_and_exit()),
+        line.unwrap_or_else(|| print_usage_and_exit(2)),
+        character.unwrap_or_else(|| print_usage_and_exit(2)),
         trigger,
         args[index..].to_vec(),
     )
@@ -258,7 +260,7 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, BuildBackend, Vec<String>) {
                 output = Some(PathBuf::from(
                     args.get(index)
                         .cloned()
-                        .unwrap_or_else(|| print_usage_and_exit()),
+                        .unwrap_or_else(|| print_usage_and_exit(2)),
                 ));
                 index += 1;
             }
@@ -267,11 +269,11 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, BuildBackend, Vec<String>) {
                 let value = args
                     .get(index)
                     .cloned()
-                    .unwrap_or_else(|| print_usage_and_exit());
+                    .unwrap_or_else(|| print_usage_and_exit(2));
                 backend = match value.as_str() {
                     "auto" => BuildBackend::Auto,
                     "direct" => BuildBackend::Direct,
-                    _ => print_usage_and_exit(),
+                    _ => print_usage_and_exit(2),
                 };
                 index += 1;
             }
@@ -282,9 +284,9 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, BuildBackend, Vec<String>) {
         }
     }
 
-    let output = output.unwrap_or_else(|| print_usage_and_exit());
+    let output = output.unwrap_or_else(|| print_usage_and_exit(2));
     if input_args.is_empty() {
-        print_usage_and_exit();
+        print_usage_and_exit(2);
     }
 
     (output, backend, input_args)
@@ -292,15 +294,15 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, BuildBackend, Vec<String>) {
 
 fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
     let Some(first) = args.next() else {
-        print_usage_and_exit();
+        print_usage_and_exit(2);
     };
 
     if first == "--stdin" {
         let Some(virtual_path) = args.next() else {
-            print_usage_and_exit();
+            print_usage_and_exit(2);
         };
         if args.next().is_some() {
-            print_usage_and_exit();
+            print_usage_and_exit(2);
         }
         let mut source = String::new();
         io::stdin()
@@ -314,7 +316,7 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
     }
 
     if args.next().is_some() {
-        print_usage_and_exit();
+        print_usage_and_exit(2);
     }
 
     let path = first;
@@ -587,18 +589,29 @@ fn write_stdout(text: &str) {
     }
 }
 
-fn print_usage_and_exit() -> ! {
-    eprintln!("usage: aura <check|run|run-mir|build|ast|ast-json|mir|analyze> <file.au>");
-    eprintln!(
-        "   or: aura <check|run|run-mir|build|ast|ast-json|mir|analyze> --stdin <virtual-path>"
-    );
-    eprintln!("   or: aura build [-o <output>] [--backend auto|direct] <file.au>");
-    eprintln!("   or: aura build [-o <output>] [--backend auto|direct] --stdin <virtual-path>");
-    eprintln!("   or: aura complete --line <n> --character <n> [--trigger .] <file.au>");
-    eprintln!(
-        "   or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>"
-    );
-    process::exit(2);
+fn usage_text() -> &'static str {
+    "usage: aura <check|run|run-mir|build|ast|ast-json|mir|analyze> <file.au>\n\
+       or: aura <check|run|run-mir|build|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
+       or: aura build [-o <output>] [--backend auto|direct] <file.au>\n\
+       or: aura build [-o <output>] [--backend auto|direct] --stdin <virtual-path>\n\
+       or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
+       or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
+       or: aura help\n\
+       or: aura version"
+}
+
+fn print_usage_and_exit(exit_code: i32) -> ! {
+    if exit_code == 0 {
+        write_stdout(&format!("{}\n", usage_text()));
+    } else {
+        eprintln!("{}", usage_text());
+    }
+    process::exit(exit_code);
+}
+
+fn print_version_and_exit() -> ! {
+    write_stdout(&format!("aura {}\n", env!("CARGO_PKG_VERSION")));
+    process::exit(0);
 }
 
 #[cfg(test)]

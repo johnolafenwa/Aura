@@ -1,0 +1,5 @@
+error: ordinary borrowed parameters must be written as `name: borrow Type` or `name: borrow mut Type`
+ --> crates/aurora-compiler/tests/fixtures/parse-fail/prefix_borrow_param_not_supported.au:1:10
+  |
+1 | def read(borrow counter: Counter) -> int32:
+  |          ^

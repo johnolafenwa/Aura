@@ -67,12 +67,19 @@ Then run:
 
 ```bash
 aura run examples/classes/point_distance.au
+aura help
+aura --version
 ```
 
 ## Command Summary
 
+- `aura help`
+  - print CLI usage and exit successfully
+- `aura --version`
+  - print the current CLI version and exit successfully
 - `aura check <file.au>`
   - parse and type check a program
+  - nested package modules can now be checked directly, with the CLI inferring the nearest package root that satisfies their imports
 - `aura run <file.au>`
   - run a program
   - this now includes the maintained `pass` statement and `sleep(duration)` builtin
@@ -96,6 +103,7 @@ aura run examples/classes/point_distance.au
 - `aura analyze <file.au>`
   - print machine-readable compiler analysis as JSON
   - file-backed and stdin-backed analysis now resolve local imports relative to the supplied path
+  - nested package modules can now be analyzed directly without false import diagnostics
 - `aura complete --line <n> --character <n> [--trigger .] <file.au>`
   - print machine-readable completion items as JSON
   - `--line` and `--character` are zero-based
@@ -115,10 +123,10 @@ cat examples/classes/point_distance.au | ./target/release/aura analyze --stdin /
 cat examples/classes/point_distance.au | ./target/release/aura ast-json --stdin /virtual/point.au
 cat examples/point.au | ./target/release/aura complete --line 5 --character 11 --trigger . --stdin /virtual/point.au
 cat examples/point.au | ./target/release/aura build -o ./target/aurora-point --stdin /virtual/point.au
-cat examples/modules/simple_import.au | ./target/release/aura analyze --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au
-cat examples/modules/simple_import.au | ./target/release/aura check --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au
-cat examples/modules/simple_import.au | ./target/release/aura run --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au
-cat examples/modules/simple_import.au | ./target/release/aura run-mir --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au
+cat examples/modules/simple_import.au | ./target/release/aura analyze --stdin "$(pwd)/examples/modules/simple_import.au"
+cat examples/modules/simple_import.au | ./target/release/aura check --stdin "$(pwd)/examples/modules/simple_import.au"
+cat examples/modules/simple_import.au | ./target/release/aura run --stdin "$(pwd)/examples/modules/simple_import.au"
+cat examples/modules/simple_import.au | ./target/release/aura run-mir --stdin "$(pwd)/examples/modules/simple_import.au"
 ```
 
 ## Diagnostics

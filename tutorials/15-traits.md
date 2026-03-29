@@ -151,9 +151,9 @@ def show[T: Describe](animal: T) -> None:
     print(animal.describe())
 ```
 
-See [examples/traits/generic_dispatch_multiple_types.au](/Users/johnolafenwa/source2/Aurora/examples/traits/generic_dispatch_multiple_types.au) for a runnable maintained example.
+See [examples/traits/generic_dispatch_multiple_types.au](../examples/traits/generic_dispatch_multiple_types.au) for a runnable maintained example.
 
-See [examples/traits/specialized_trait_dispatch.au](/Users/johnolafenwa/source2/Aurora/examples/traits/specialized_trait_dispatch.au) for bounded dispatch across specialized generic impls, and [examples/traits/trait_associated_factory.au](/Users/johnolafenwa/source2/Aurora/examples/traits/trait_associated_factory.au) for trait-associated methods through the type name.
+See [examples/traits/specialized_trait_dispatch.au](../examples/traits/specialized_trait_dispatch.au) for bounded dispatch across specialized generic impls, and [examples/traits/trait_associated_factory.au](../examples/traits/trait_associated_factory.au) for trait-associated methods through the type name.
 
 ## Current Limits
 

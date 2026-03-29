@@ -23,11 +23,11 @@ This repository is intended to evolve as a monorepo for the Aurora language and 
 - `work/`
   - persistent task board and implementation notes
 
-Compiler build and direct binary usage are documented in [crates/aura/README.md](/Users/johnolafenwa/source2/Aurora/crates/aura/README.md).
-Compiler library testing notes live in [crates/aurora-compiler/README.md](/Users/johnolafenwa/source2/Aurora/crates/aurora-compiler/README.md).
-The categorized example library is documented in [examples/README.md](/Users/johnolafenwa/source2/Aurora/examples/README.md).
-The tutorial track lives in [tutorials/README.md](/Users/johnolafenwa/source2/Aurora/tutorials/README.md).
-The repo testing strategy is documented in [docs/testing_strategy.md](/Users/johnolafenwa/source2/Aurora/docs/testing_strategy.md).
+Compiler build and direct binary usage are documented in [crates/aura/README.md](crates/aura/README.md).
+Compiler library testing notes live in [crates/aurora-compiler/README.md](crates/aurora-compiler/README.md).
+The categorized example library is documented in [examples/README.md](examples/README.md).
+The tutorial track lives in [tutorials/README.md](tutorials/README.md).
+The repo testing strategy is documented in [docs/testing_strategy.md](docs/testing_strategy.md).
 
 Current editor tooling:
 
@@ -86,7 +86,11 @@ Current bootstrap compiler workflow:
   - print the lowered MIR for the checked program
 - `cargo run -p aura -- analyze examples/classes/point_distance.au`
   - print machine-readable compiler analysis for diagnostics, symbols, hover, and definition
-- `cat examples/modules/simple_import.au | cargo run -p aura -- analyze --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au`
+- `cargo run -p aura -- help`
+  - print CLI usage and exit successfully
+- `cargo run -p aura -- --version`
+  - print the current CLI version and exit successfully
+- `cat examples/modules/simple_import.au | cargo run -p aura -- analyze --stdin "$(pwd)/examples/modules/simple_import.au"`
   - analyze an editor-style buffer while still resolving local imports relative to the supplied path
 - `cargo run -p aura -- complete --line 5 --character 11 --trigger . examples/point.au`
   - print machine-readable completion items at a source position
@@ -94,11 +98,11 @@ Current bootstrap compiler workflow:
   - member completion expects the cursor positioned just after `.`
   - the CLI tolerates the common incomplete-editor state where the current buffer contains one or more dangling member accesses such as `counter.` or `helpers.math.`, including when they appear at EOF
   - stdin-backed completion now also resolves local imported modules relative to the supplied file path, including imported trait methods
-- `cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au`
+- `cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin "$(pwd)/examples/modules/simple_import.au"`
   - execute an editor-style buffer while still resolving local imports relative to the supplied path
-- `cat examples/modules/simple_import.au | cargo run -p aura -- run-mir --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au`
+- `cat examples/modules/simple_import.au | cargo run -p aura -- run-mir --stdin "$(pwd)/examples/modules/simple_import.au"`
   - run the MIR path against stdin-backed source while still resolving local imports relative to the supplied path
-- `cat examples/modules/simple_import.au | cargo run -p aura -- check --stdin /Users/johnolafenwa/source2/Aurora/examples/modules/simple_import.au`
+- `cat examples/modules/simple_import.au | cargo run -p aura -- check --stdin "$(pwd)/examples/modules/simple_import.au"`
   - type-check an editor-style buffer while still resolving local imports relative to the supplied path
 - `npm run coverage:compiler`
   - measure current Rust compiler-library coverage with `cargo-llvm-cov`
@@ -146,4 +150,4 @@ Packaged install:
 2. Run `npm run package:extension`.
 3. In VS Code, use `Install from VSIX...` and select `tools/vscode-aurora/aurora-language.vsix`.
 
-Full extension install and packaging steps are documented in [tools/vscode-aurora/INSTALL.md](/Users/johnolafenwa/source2/Aurora/tools/vscode-aurora/INSTALL.md).
+Full extension install and packaging steps are documented in [tools/vscode-aurora/INSTALL.md](tools/vscode-aurora/INSTALL.md).
