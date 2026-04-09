@@ -1,0 +1,35 @@
+## Vec deduplication (unsorted): remove duplicates using contains.
+## Uses: contains, push, borrow iteration, len()
+
+def deduplicate(input: borrow Vec[int32]) -> Vec[int32]:
+    mut unique: Vec[int32] = []
+    for val in borrow input:
+        if not unique.contains(val):
+            unique.push(val)
+    return unique
+
+def print_vec(arr: borrow Vec[int32]):
+    mut first = true
+    mut buf = "["
+    for val in borrow arr:
+        if first:
+            first = false
+        else:
+            buf = buf + ", "
+        buf = buf + f"{val}"
+    buf = buf + "]"
+    print(buf)
+
+def main() -> int32:
+    data = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5]
+
+    print("Original:")
+    print_vec(data)
+
+    result = deduplicate(data)
+    print("Deduplicated:")
+    print_vec(result)
+    print(f"Original size: {data.len()}")
+    print(f"Unique size: {result.len()}")
+
+    return 0

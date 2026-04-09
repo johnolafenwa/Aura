@@ -1,0 +1,6 @@
+def main() -> int32:
+    s = "one,two,three,four"
+    count = s.split(",").len()
+    print(count)
+    print(count + 1)
+    return 0

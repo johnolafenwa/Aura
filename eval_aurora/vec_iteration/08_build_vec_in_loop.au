@@ -1,0 +1,9 @@
+# Test 08: Build vec in a loop
+def main() -> int32:
+    mut result: Vec[int32] = []
+    for i in range(5):
+        result.push(i * 10)
+    print(result.len())
+    for val in result:
+        print(val)
+    return 0

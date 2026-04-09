@@ -1,0 +1,3 @@
+def main() -> None:
+    ch = channel()
+    ch.send(1)

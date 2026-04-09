@@ -995,6 +995,26 @@ mod tests {
             "examples/traits/generic_dispatch_multiple_types.au",
             include_str!("../../../examples/traits/generic_dispatch_multiple_types.au"),
         ),
+        (
+            "examples/strings/string_methods.au",
+            include_str!("../../../examples/strings/string_methods.au"),
+        ),
+        (
+            "examples/numbers/numeric_builtins.au",
+            include_str!("../../../examples/numbers/numeric_builtins.au"),
+        ),
+        (
+            "examples/collections/map_basics.au",
+            include_str!("../../../examples/collections/map_basics.au"),
+        ),
+        (
+            "examples/collections/set_basics.au",
+            include_str!("../../../examples/collections/set_basics.au"),
+        ),
+        (
+            "examples/strings/string_parsing_and_formatting.au",
+            include_str!("../../../examples/strings/string_parsing_and_formatting.au"),
+        ),
     ];
 
     struct TempDir {
@@ -1507,6 +1527,31 @@ mod tests {
                 EXAMPLE_CASES[34].1,
                 "dog\ncat\n",
             ),
+            (
+                "examples/strings/string_methods.au",
+                EXAMPLE_CASES[35].1,
+                "15\ntrue\ntrue\ntrue\naurora repo\n2\naurora\nrepo\naurora lang\naurora repo\nAURORA REPO\nrepo\nnone\naurora\nnone\n11\n",
+            ),
+            (
+                "examples/numbers/numeric_builtins.au",
+                EXAMPLE_CASES[36].1,
+                "7\n3.5\n2\n12\n9.0\n9.0\n",
+            ),
+            (
+                "examples/collections/map_basics.au",
+                EXAMPLE_CASES[37].1,
+                "3\ntrue\n1\n1\n5\naurora\n3\n3\n3\n3\ntrue\n",
+            ),
+            (
+                "examples/collections/set_basics.au",
+                EXAMPLE_CASES[38].1,
+                "3\ntrue\nfalse\ntrue\ntrue\n9\ntrue\ntrue\n1\n",
+            ),
+            (
+                "examples/strings/string_parsing_and_formatting.au",
+                EXAMPLE_CASES[39].1,
+                "42\n-9000000000\n3.5\ntrue\naurora-lang-tests\ntrue\n12\n4\n9\n3.0\n",
+            ),
         ];
 
         for (path, source, expected_stdout) in cases {
@@ -1694,6 +1739,31 @@ mod tests {
                 "examples/traits/generic_dispatch_multiple_types.au",
                 EXAMPLE_CASES[34].1,
                 "dog\ncat\n",
+            ),
+            (
+                "examples/strings/string_methods.au",
+                EXAMPLE_CASES[35].1,
+                "15\ntrue\ntrue\ntrue\naurora repo\n2\naurora\nrepo\naurora lang\naurora repo\nAURORA REPO\nrepo\nnone\naurora\nnone\n11\n",
+            ),
+            (
+                "examples/numbers/numeric_builtins.au",
+                EXAMPLE_CASES[36].1,
+                "7\n3.5\n2\n12\n9.0\n9.0\n",
+            ),
+            (
+                "examples/collections/map_basics.au",
+                EXAMPLE_CASES[37].1,
+                "3\ntrue\n1\n1\n5\naurora\n3\n3\n3\n3\ntrue\n",
+            ),
+            (
+                "examples/collections/set_basics.au",
+                EXAMPLE_CASES[38].1,
+                "3\ntrue\nfalse\ntrue\ntrue\n9\ntrue\ntrue\n1\n",
+            ),
+            (
+                "examples/strings/string_parsing_and_formatting.au",
+                EXAMPLE_CASES[39].1,
+                "42\n-9000000000\n3.5\ntrue\naurora-lang-tests\ntrue\n12\n4\n9\n3.0\n",
             ),
         ];
 

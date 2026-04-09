@@ -1,0 +1,11 @@
+# Test 10: Sleep with different durations
+def main() -> int32:
+    print("start")
+    sleep(1ms)
+    print("after 1ms")
+    sleep(10ms)
+    print("after 10ms")
+    sleep(1s)
+    print("after 1s")
+    print("done")
+    return 0

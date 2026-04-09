@@ -1,0 +1,57 @@
+## Program 6: Text Normalizer
+## Full pipeline: trim -> to_lower -> replace punctuation -> split into words
+
+def normalize(text: String) -> Vec[String]:
+    ## Step 1: Trim whitespace
+    trimmed = text.trim()
+
+    ## Step 2: Convert to lowercase
+    lowered = trimmed.to_lower()
+
+    ## Step 3: Replace common punctuation with spaces
+    no_commas = lowered.replace(",", " ")
+    no_periods = no_commas.replace(".", " ")
+    no_bangs = no_periods.replace("!", " ")
+    no_questions = no_bangs.replace("?", " ")
+    no_semicolons = no_questions.replace(";", " ")
+    no_colons = no_semicolons.replace(":", " ")
+    cleaned = no_colons.replace("-", " ")
+
+    ## Step 4: Split into words
+    raw_words = cleaned.split(" ")
+
+    ## Step 5: Filter out empty strings (from double spaces)
+    mut words: Vec[String] = []
+    for w in raw_words:
+        if w.len() > 0:
+            words.push(w)
+
+    return words
+
+def main() -> int32:
+    text1 = "  Hello, World! This is Aurora.  "
+    print(f"Input: [{text1}]")
+    words1 = normalize(text1)
+    print(f"Words: {words1.len()}")
+    for w in words1:
+        print(f"  {w}")
+
+    print("")
+
+    text2 = "  THE QUICK-BROWN FOX; JUMPS: OVER!  "
+    print(f"Input: [{text2}]")
+    words2 = normalize(text2)
+    print(f"Words: {words2.len()}")
+    for w in words2:
+        print(f"  {w}")
+
+    print("")
+
+    text3 = "   already   clean   text   "
+    print(f"Input: [{text3}]")
+    words3 = normalize(text3)
+    print(f"Words: {words3.len()}")
+    for w in words3:
+        print(f"  {w}")
+
+    return 0

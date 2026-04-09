@@ -1,0 +1,6 @@
+def main() -> int32:
+    original = "hello world"
+    parts = original.split(" ")
+    rejoined = " ".join(parts)
+    print(rejoined)
+    return 0

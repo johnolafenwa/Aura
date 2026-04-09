@@ -1,0 +1,35 @@
+# Test 14c: Detailed operator precedence verification
+
+# Unary minus has highest precedence
+a = -2 * 3
+print(a)
+
+# Multiplication before addition
+b = 2 + 3 * 4
+print(b)
+
+# Division before subtraction
+c = 20 - 12 / 4
+print(c)
+
+# Modulo same precedence as multiplication
+d = 10 + 7 % 3
+print(d)
+
+# Comparison lower than arithmetic
+e = 2 + 3 > 4
+print(e)
+
+# Boolean operators lowest
+f = 2 > 1 and 3 > 2
+print(f)
+
+g = 2 > 1 or 3 < 2
+print(g)
+
+# Not has higher precedence than and/or
+h = not false and true
+print(h)
+
+i = not (false and true)
+print(i)

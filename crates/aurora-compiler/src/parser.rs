@@ -1,11 +1,12 @@
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, BreakStmt, ClassDecl, ContinueStmt, EnumDecl,
     EnumVariantDecl, Expr, ExprKind, ExprStmt, FieldDecl, ForStmt, FormatPart, FunctionDecl,
-    IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, Item, MatchArm, MatchStmt, Module, Param,
-    Pattern, ReceiverKind, ReturnStmt, SelectArm, SelectStmt, Stmt, TraitDecl, TypeRef, UnaryOp,
-    VariantPattern, WhileStmt, WithStmt,
+    IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, Item, LiteralPattern, LiteralPatternKind,
+    MapEntryExpr, MatchArm, MatchStmt, Module, Param, Pattern, ReceiverKind, ReturnStmt, SelectArm,
+    SelectStmt, Stmt, TraitDecl, TypeRef, UnaryOp, VariantPattern, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
+use crate::integer::IntegerValue;
 use crate::lexer::{lex, Token, TokenKind};
 
 pub fn parse(source: &str) -> Result<Module> {
@@ -756,6 +757,59 @@ impl Parser {
             self.bump();
             return Ok(Pattern::Wildcard(span));
         }
+        match self.current_kind().clone() {
+            TokenKind::BoolLiteral(value) => {
+                self.bump();
+                return Ok(Pattern::Literal(LiteralPattern {
+                    kind: LiteralPatternKind::Bool(value),
+                    span,
+                }));
+            }
+            TokenKind::StringLiteral(value) => {
+                self.bump();
+                return Ok(Pattern::Literal(LiteralPattern {
+                    kind: LiteralPatternKind::String(value),
+                    span,
+                }));
+            }
+            TokenKind::IntLiteral(value) => {
+                self.bump();
+                return Ok(Pattern::Literal(LiteralPattern {
+                    kind: LiteralPatternKind::Int(IntegerValue::from_literal(value)),
+                    span,
+                }));
+            }
+            TokenKind::Minus => {
+                let minus = self.bump();
+                let TokenKind::IntLiteral(value) = self.current_kind().clone() else {
+                    return Err(Diagnostic::at(
+                        minus.span,
+                        "match patterns currently support enum variants, `_`, and boolean/string/integer literals",
+                    ));
+                };
+                self.bump();
+                let negative =
+                    IntegerValue::from_literal(value)
+                        .checked_neg()
+                        .ok_or_else(|| {
+                            Diagnostic::at(
+                            minus.span,
+                            "negative integer literal in pattern is outside the supported range",
+                        )
+                        })?;
+                return Ok(Pattern::Literal(LiteralPattern {
+                    kind: LiteralPatternKind::Int(negative),
+                    span: minus.span,
+                }));
+            }
+            _ => {}
+        }
+        if !matches!(self.current_kind(), TokenKind::Identifier(_)) {
+            return Err(Diagnostic::at(
+                span,
+                "match patterns currently support enum variants, `_`, and boolean/string/integer literals",
+            ));
+        }
         let mut segments = vec![self.expect_identifier()?];
         while self.eat_simple(&TokenKind::Dot).is_some() {
             segments.push(self.expect_identifier()?);
@@ -1093,7 +1147,8 @@ impl Parser {
         let mut expr = self.parse_primary()?;
 
         loop {
-            if self.eat_simple(&TokenKind::LBracket).is_some() {
+            if self.at_simple(&TokenKind::LBracket) && self.starts_specialization_suffix(&expr) {
+                self.bump();
                 let mut type_args = Vec::new();
                 loop {
                     type_args.push(self.parse_type()?);
@@ -1107,6 +1162,20 @@ impl Parser {
                     kind: ExprKind::Specialize {
                         expr: Box::new(expr),
                         type_args,
+                    },
+                    span,
+                };
+                continue;
+            }
+
+            if self.eat_simple(&TokenKind::LBracket).is_some() {
+                let index = self.parse_expr()?;
+                self.expect_simple(TokenKind::RBracket)?;
+                let span = expr.span;
+                expr = Expr {
+                    kind: ExprKind::Index {
+                        object: Box::new(expr),
+                        index: Box::new(index),
                     },
                     span,
                 };
@@ -1188,10 +1257,29 @@ impl Parser {
         let token = self.bump();
 
         match token.kind {
-            TokenKind::Identifier(name) => Ok(Expr {
-                kind: ExprKind::Name(name),
-                span: token.span,
-            }),
+            TokenKind::Identifier(name) => {
+                if name == "Set" && self.eat_simple(&TokenKind::LBrace).is_some() {
+                    let mut elements = Vec::new();
+                    if !self.at_simple(&TokenKind::RBrace) {
+                        loop {
+                            elements.push(self.parse_expr()?);
+                            if self.eat_simple(&TokenKind::Comma).is_none() {
+                                break;
+                            }
+                        }
+                    }
+                    self.expect_simple(TokenKind::RBrace)?;
+                    Ok(Expr {
+                        kind: ExprKind::Set(elements),
+                        span: token.span,
+                    })
+                } else {
+                    Ok(Expr {
+                        kind: ExprKind::Name(name),
+                        span: token.span,
+                    })
+                }
+            }
             TokenKind::IntLiteral(value) => Ok(Expr {
                 kind: ExprKind::Int(value),
                 span: token.span,
@@ -1224,13 +1312,44 @@ impl Parser {
                     span: token.span,
                 })
             }
+            TokenKind::LBracket => {
+                let mut elements = Vec::new();
+                if !self.at_simple(&TokenKind::RBracket) {
+                    loop {
+                        elements.push(self.parse_expr()?);
+                        if self.eat_simple(&TokenKind::Comma).is_none() {
+                            break;
+                        }
+                    }
+                }
+                self.expect_simple(TokenKind::RBracket)?;
+                Ok(Expr {
+                    kind: ExprKind::List(elements),
+                    span: token.span,
+                })
+            }
+            TokenKind::LBrace => {
+                let mut entries = Vec::new();
+                if !self.at_simple(&TokenKind::RBrace) {
+                    loop {
+                        let key = self.parse_expr()?;
+                        self.expect_simple(TokenKind::Colon)?;
+                        let value = self.parse_expr()?;
+                        entries.push(MapEntryExpr { key, value });
+                        if self.eat_simple(&TokenKind::Comma).is_none() {
+                            break;
+                        }
+                    }
+                }
+                self.expect_simple(TokenKind::RBrace)?;
+                Ok(Expr {
+                    kind: ExprKind::Map(entries),
+                    span: token.span,
+                })
+            }
             TokenKind::KwBorrow => Err(Diagnostic::at(
                 token.span,
                 "call arguments cannot start with `borrow`; pass the value directly",
-            )),
-            TokenKind::LBracket => Err(Diagnostic::at(
-                token.span,
-                "list literals are not implemented yet",
             )),
             other => Err(Diagnostic::at(
                 token.span,
@@ -1294,20 +1413,34 @@ impl Parser {
             return false;
         }
         idx += 1;
-        let mut saw_member = false;
+        let mut saw_suffix = false;
 
-        while matches!(self.peek_kind_at(idx), Some(TokenKind::Dot))
-            && matches!(self.peek_kind_at(idx + 1), Some(TokenKind::Identifier(_)))
-        {
-            saw_member = true;
-            idx += 2;
+        loop {
+            if matches!(self.peek_kind_at(idx), Some(TokenKind::Dot))
+                && matches!(self.peek_kind_at(idx + 1), Some(TokenKind::Identifier(_)))
+            {
+                saw_suffix = true;
+                idx += 2;
+                continue;
+            }
+
+            if matches!(self.peek_kind_at(idx), Some(TokenKind::LBracket)) {
+                let Some(next_idx) = self.skip_bracketed_tokens(idx) else {
+                    return false;
+                };
+                saw_suffix = true;
+                idx = next_idx;
+                continue;
+            }
+
+            break;
         }
 
         if self.is_assignment_operator_kind(self.peek_kind_at(idx)) {
             return true;
         }
 
-        if !saw_member && matches!(self.peek_kind_at(idx), Some(TokenKind::Colon)) {
+        if !saw_suffix && matches!(self.peek_kind_at(idx), Some(TokenKind::Colon)) {
             idx += 1;
             idx = self.skip_type_tokens(idx);
             return self.is_assignment_operator_kind(self.peek_kind_at(idx));
@@ -1321,13 +1454,29 @@ impl Parser {
         let name = self.expect_identifier()?;
         let mut target = AssignTarget::Name(name);
 
-        while self.eat_simple(&TokenKind::Dot).is_some() {
-            let field = self.expect_member_name()?;
-            let object = assign_target_to_expr(target, span);
-            target = AssignTarget::Member {
-                object: Box::new(object),
-                field,
-            };
+        loop {
+            if self.eat_simple(&TokenKind::Dot).is_some() {
+                let field = self.expect_member_name()?;
+                let object = assign_target_to_expr(target, span);
+                target = AssignTarget::Member {
+                    object: Box::new(object),
+                    field,
+                };
+                continue;
+            }
+
+            if self.eat_simple(&TokenKind::LBracket).is_some() {
+                let index = self.parse_expr()?;
+                self.expect_simple(TokenKind::RBracket)?;
+                let object = assign_target_to_expr(target, span);
+                target = AssignTarget::Index {
+                    object: Box::new(object),
+                    index: Box::new(index),
+                };
+                continue;
+            }
+
+            break;
         }
 
         Ok(target)
@@ -1412,6 +1561,57 @@ impl Parser {
             Some(ReceiverKind::BorrowMut)
         } else {
             Some(ReceiverKind::Borrow)
+        }
+    }
+
+    fn starts_specialization_suffix(&self, expr: &Expr) -> bool {
+        let mut idx = self.index + 1;
+        loop {
+            let next = self.skip_type_tokens(idx);
+            if next == idx {
+                return false;
+            }
+            idx = next;
+            if matches!(self.peek_kind_at(idx), Some(TokenKind::Comma)) {
+                idx += 1;
+                continue;
+            }
+            break;
+        }
+
+        if !matches!(self.peek_kind_at(idx), Some(TokenKind::RBracket)) {
+            return false;
+        }
+
+        match self.peek_kind_at(idx + 1) {
+            Some(TokenKind::LParen) => {
+                matches!(expr.kind, ExprKind::Name(_) | ExprKind::Member { .. })
+            }
+            Some(TokenKind::Dot) => specialization_target_name(expr)
+                .map(is_static_specialization_target_name)
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
+    fn skip_bracketed_tokens(&self, start_idx: usize) -> Option<usize> {
+        let mut idx = start_idx;
+        let mut depth = 0usize;
+        loop {
+            match self.peek_kind_at(idx) {
+                Some(TokenKind::LBracket) => depth += 1,
+                Some(TokenKind::RBracket) => {
+                    depth = depth.saturating_sub(1);
+                    idx += 1;
+                    if depth == 0 {
+                        return Some(idx);
+                    }
+                    continue;
+                }
+                Some(_) => {}
+                None => return None,
+            }
+            idx += 1;
         }
     }
 
@@ -1625,6 +1825,21 @@ impl Parser {
     }
 }
 
+fn specialization_target_name(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Name(name) => Some(name.as_str()),
+        ExprKind::Member { field, .. } => Some(field.as_str()),
+        _ => None,
+    }
+}
+
+fn is_static_specialization_target_name(name: &str) -> bool {
+    name.chars()
+        .next()
+        .map(|ch| ch.is_ascii_uppercase())
+        .unwrap_or(false)
+}
+
 fn assign_target_to_expr(target: AssignTarget, span: Span) -> Expr {
     match target {
         AssignTarget::Name(name) => Expr {
@@ -1633,6 +1848,10 @@ fn assign_target_to_expr(target: AssignTarget, span: Span) -> Expr {
         },
         AssignTarget::Member { object, field } => Expr {
             kind: ExprKind::Member { object, field },
+            span,
+        },
+        AssignTarget::Index { object, index } => Expr {
+            kind: ExprKind::Index { object, index },
             span,
         },
     }
@@ -1650,6 +1869,22 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
         ExprKind::Binary { left, right, .. } => {
             offset_expr_span(left, line, column_offset);
             offset_expr_span(right, line, column_offset);
+        }
+        ExprKind::List(elements) => {
+            for element in elements {
+                offset_expr_span(element, line, column_offset);
+            }
+        }
+        ExprKind::Set(elements) => {
+            for element in elements {
+                offset_expr_span(element, line, column_offset);
+            }
+        }
+        ExprKind::Map(entries) => {
+            for entry in entries {
+                offset_expr_span(&mut entry.key, line, column_offset);
+                offset_expr_span(&mut entry.value, line, column_offset);
+            }
         }
         ExprKind::Call { callee, args } => {
             offset_expr_span(callee, line, column_offset);
@@ -1670,6 +1905,10 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
         }
         ExprKind::Member { object, .. } | ExprKind::Spawn { value: object, .. } => {
             offset_expr_span(object, line, column_offset);
+        }
+        ExprKind::Index { object, index } => {
+            offset_expr_span(object, line, column_offset);
+            offset_expr_span(index, line, column_offset);
         }
         ExprKind::Name(_)
         | ExprKind::Int(_)

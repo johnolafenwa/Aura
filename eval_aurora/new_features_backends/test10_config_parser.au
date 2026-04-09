@@ -1,0 +1,66 @@
+def parse_config(raw: String) -> Map[String, String]:
+    mut config: Map[String, String] = {}
+    lines = raw.split("\n")
+    for line in lines:
+        if line.len() > 0:
+            parts = line.split("=")
+            if parts.len() == 2:
+                config[parts[0]] = parts[1]
+    return config
+
+def main() -> int32:
+    raw = "host=localhost\nport=8080\ndebug=true\nname=aurora\nversion=1"
+
+    # Parse into map
+    config = parse_config(raw)
+    print(config.len().to_string())
+
+    # Verify access
+    print(config["host"])
+    print(config["port"])
+    print(config["debug"])
+    print(config["name"])
+    print(config["version"])
+
+    # Get entries and collect keys
+    entries = config.entries()
+    mut keys: Vec[String] = []
+    for e in entries:
+        keys.push(e.key)
+
+    # Use a Set to verify uniqueness
+    mut key_set: Set[String] = Set[String]()
+    for k in borrow keys:
+        key_set.insert(k.clone())
+    print(key_set.len().to_string())
+
+    # Build a sorted-ish output using the known keys
+    # (We don't have sort, so we'll manually order known keys)
+    sorted_keys = ["debug", "host", "name", "port", "version"]
+    mut output_lines: Vec[String] = []
+    for k in sorted_keys:
+        match config.get(k):
+            case Some(v):
+                output_lines.push(f"{k}={v}")
+            case None:
+                pass
+
+    formatted = "\n".join(output_lines)
+    print(formatted)
+
+    # Parse a numeric value from config
+    match parse_int32(config["port"]):
+        case Result.Ok(port_num):
+            print(port_num.to_string())
+            print((port_num == 8080).to_string())
+        case Result.Err(_):
+            print("FAIL-parse-port")
+
+    # Use to_string round-trip
+    match parse_int32(config["version"]):
+        case Result.Ok(ver):
+            print((ver.to_string() == config["version"]).to_string())
+        case Result.Err(_):
+            print("FAIL-parse-version")
+
+    return 0

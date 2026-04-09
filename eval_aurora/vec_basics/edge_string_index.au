@@ -1,0 +1,6 @@
+def main() -> int32:
+    # Test: can we index a Vec[String] at all? (Single access)
+    v = ["hello", "world"]
+    s = v[0]
+    print(s)
+    return 0

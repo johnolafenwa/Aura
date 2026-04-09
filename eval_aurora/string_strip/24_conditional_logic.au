@@ -1,0 +1,16 @@
+def classify_url(url: String) -> String:
+    match url.strip_prefix("https://"):
+        case Some(rest):
+            return "secure: " + rest
+        case None:
+            match url.strip_prefix("http://"):
+                case Some(rest):
+                    return "insecure: " + rest
+                case None:
+                    return "unknown protocol"
+
+def main() -> int32:
+    print(classify_url("https://secure.com"))
+    print(classify_url("http://old.com"))
+    print(classify_url("ftp://files.com"))
+    return 0

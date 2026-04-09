@@ -1,0 +1,9 @@
+def main() -> int32:
+    m = {"a": 10, "b": 20, "c": 30}
+    mut values = Vec[int32]()
+    for e in m.entries():
+        values.push(e.value)
+    print(values.len())
+    for v in borrow values:
+        print(v)
+    return 0

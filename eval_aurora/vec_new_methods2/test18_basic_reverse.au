@@ -1,0 +1,10 @@
+# Test 18: Basic reverse
+def main() -> int32:
+    mut v = [1, 2, 3, 4, 5]
+    v.reverse()
+    print(v[0])
+    print(v[1])
+    print(v[2])
+    print(v[3])
+    print(v[4])
+    return 0

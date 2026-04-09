@@ -1,0 +1,9 @@
+import helpers.math
+
+class Point:
+    x: int32
+
+def main() -> int32:
+    p = Point(x=1)
+    print(p.
+    return 0

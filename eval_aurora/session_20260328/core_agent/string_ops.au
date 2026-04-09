@@ -1,0 +1,10 @@
+def main() -> int32:
+    name = "aurora"
+    greeting = "hello, " + name
+    decorated = f"{greeting}!"
+    print(greeting)
+
+    if greeting == "hello, aurora":
+        print(decorated)
+
+    return 0

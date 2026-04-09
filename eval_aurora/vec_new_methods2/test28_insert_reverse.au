@@ -1,0 +1,15 @@
+# Test 28: Insert + reverse combined
+def main() -> int32:
+    mut v = Vec[int32]()
+    v.insert(index=0, value=1)
+    v.insert(index=1, value=2)
+    v.insert(index=2, value=3)
+    v.insert(index=3, value=4)
+    v.insert(index=4, value=5)
+    v.reverse()
+    # Should be [5, 4, 3, 2, 1]
+    mut i = 0
+    while i < v.len():
+        print(v[i])
+        i += 1
+    return 0

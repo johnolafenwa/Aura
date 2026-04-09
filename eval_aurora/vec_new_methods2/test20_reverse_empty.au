@@ -1,0 +1,6 @@
+# Test 20: Reverse empty vec
+def main() -> int32:
+    mut v = Vec[int32]()
+    v.reverse()
+    print(v.len())
+    return 0

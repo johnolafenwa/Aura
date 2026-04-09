@@ -1,0 +1,31 @@
+# Test 17: Send result through channel - check send() return value
+def main() -> int32:
+    ch: Channel[int32] = channel()
+
+    # Send should succeed on open channel
+    match ch.send(42):
+        case Result.Ok(value):
+            print("send ok")
+        case Result.Err(error):
+            print("send failed")
+
+    # Receive the value back
+    match ch.recv():
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    # Close the channel
+    ch.close()
+
+    # Send to closed channel should fail
+    match ch.send(99):
+        case Result.Ok(value):
+            print("unexpected ok")
+        case Result.Err(error):
+            match error:
+                case SendError.Closed(v):
+                    print(v)
+
+    return 0

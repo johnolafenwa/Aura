@@ -1,0 +1,9 @@
+# Test 4: Clone a String, test what happens with both original and clone
+def main() -> int32:
+    original: String = "hello world"
+    cloned = original.clone()
+    # After clone, original should be consumed (moved into clone)
+    # Let's see if we can still use original
+    print(cloned)
+    print(original)
+    return 0

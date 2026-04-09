@@ -1,0 +1,6 @@
+def render(code: int32) -> String:
+    match code:
+        case 0:
+            return "zero"
+        case 1:
+            return "one"

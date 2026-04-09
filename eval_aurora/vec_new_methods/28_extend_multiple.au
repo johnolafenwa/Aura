@@ -1,0 +1,10 @@
+# Test 28: Multiple extends in sequence
+def main() -> int32:
+    mut v = [1]
+    v.extend([2, 3])
+    v.extend([4, 5, 6])
+    v.extend([7])
+    for x in borrow v:
+        print(x)
+    print(v.len())
+    return 0

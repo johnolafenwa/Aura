@@ -1,0 +1,4 @@
+def main() -> int32:
+    s = "hello world"
+    print(s.contains("xyz"))
+    return 0

@@ -1,0 +1,23 @@
+def main() -> int32:
+    # .get() on Vec[String] - does it return Option[String]?
+    v = ["hello", "world", "aurora"]
+
+    match v.get(0):
+        case Some(s):
+            print(s)
+        case None:
+            print("None")
+
+    match v.get(1):
+        case Some(s):
+            print(s)
+        case None:
+            print("None")
+
+    match v.get(5):
+        case Some(s):
+            print(s)
+        case None:
+            print("None")
+
+    return 0

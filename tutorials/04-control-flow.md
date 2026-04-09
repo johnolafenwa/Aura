@@ -66,9 +66,9 @@ def noop():
 
 See [examples/basics/pass_keyword.au](../examples/basics/pass_keyword.au).
 
-## `for` and `range`
+## `for`, `range`, `Vec[T]`, And `Set[T]`
 
-Aurora now supports `for` loops over `range(...)`.
+Aurora now supports `for` loops over `range(...)`, `Vec[T]`, and `Set[T]` values.
 
 ```python
 mut total: int32 = 0
@@ -83,6 +83,35 @@ for value in range(6):
 
 See [examples/control_flow/for_range.au](../examples/control_flow/for_range.au).
 
+Vectors can be iterated by value, through an explicit shared borrow, or through an explicit mutable borrow:
+
+```python
+mut total = 0
+for value in values:
+    total += value
+
+for name in borrow names:
+    print(name)
+
+mut scores = [1, 2, 3]
+for item in borrow mut scores:
+    item += 1
+```
+
+See [examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au) and [examples/collections/vec_polish.au](../examples/collections/vec_polish.au).
+
+As with `push(...)`, `set(...)`, and other mutating vector operations, `borrow mut` iteration requires the vector place itself to be mutable.
+
+Sets support by-value and shared-borrow iteration:
+
+```python
+seen = Set{1, 2, 3}
+for value in borrow seen:
+    print(value)
+```
+
+See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
+
 ## Current Limits
 
 The current compiler supports `for` over:
@@ -90,11 +119,16 @@ The current compiler supports `for` over:
 - `range(stop)`
 - `range(start, stop)`
 - the corresponding named-argument forms
+- `Vec[T]`
+- `borrow Vec[T]`
+- `borrow mut Vec[T]`
+- `Set[T]`
+- `borrow Set[T]`
+- `Channel[T]`
 
 It does not yet support:
 
 - user-defined iterable protocols
-- borrowed iteration syntax
-- `for` over arbitrary collections
+- `borrow mut Set[T]`
 - custom step values for `range`
 - `range(...)` bounds outside the current signed index space

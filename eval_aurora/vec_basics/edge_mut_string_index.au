@@ -1,0 +1,6 @@
+def main() -> int32:
+    # Does mut help with String indexing?
+    mut v = ["hello", "world"]
+    s = v[0]
+    print(s)
+    return 0

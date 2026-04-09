@@ -1,0 +1,4 @@
+def main() -> int32:
+    s = "\t hello \n"
+    print(s.trim())
+    return 0

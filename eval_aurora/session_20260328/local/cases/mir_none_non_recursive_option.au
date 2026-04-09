@@ -1,0 +1,7 @@
+class Box:
+    value: Option[int32]
+
+def main() -> None:
+    b = Box(value=None)
+    if b.value == None:
+        print(1)

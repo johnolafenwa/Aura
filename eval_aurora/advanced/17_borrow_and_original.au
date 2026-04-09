@@ -1,0 +1,24 @@
+# Test 17: Use borrow while original exists
+class Config:
+    name: String
+    version: int32
+
+def read_config(c: borrow Config) -> String:
+    return f"{c.name} v{c.version}"
+
+def main() -> int32:
+    config = Config(name="Aurora", version=1)
+
+    # Borrow and then use original
+    desc = read_config(config)
+    print(desc)
+
+    # Original should still be usable after borrow
+    print(config.name)
+    print(config.version)
+
+    # Multiple borrows in sequence
+    desc2 = read_config(config)
+    print(desc2)
+
+    return 0

@@ -1,0 +1,38 @@
+# Test 10: Match with wildcard _ as catch-all
+
+enum Direction:
+    North
+    South
+    East
+    West
+
+def is_north(d: Direction) -> String:
+    match d:
+        case Direction.North:
+            return "yes, north"
+        case _:
+            return "not north"
+
+enum Shape:
+    Circle(int32)
+    Square(int32)
+    Triangle(int32)
+
+def area_or_default(s: Shape) -> int32:
+    match s:
+        case Shape.Circle(r):
+            return r * r * 3
+        case _:
+            return 0
+
+def main() -> int32:
+    print(is_north(d=Direction.North))
+    print(is_north(d=Direction.South))
+    print(is_north(d=Direction.East))
+    print(is_north(d=Direction.West))
+
+    print(area_or_default(s=Shape.Circle(5)))
+    print(area_or_default(s=Shape.Square(4)))
+    print(area_or_default(s=Shape.Triangle(3)))
+
+    return 0

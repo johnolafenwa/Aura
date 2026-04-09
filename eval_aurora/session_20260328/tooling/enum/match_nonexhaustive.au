@@ -1,0 +1,11 @@
+enum ParseResult:
+    Success(int32)
+    Failure(String)
+
+def value_or_zero(result: ParseResult) -> int32:
+    match result:
+        case ParseResult.Success(value):
+            return value
+
+def main() -> int32:
+    return value_or_zero(ParseResult.Failure("bad"))

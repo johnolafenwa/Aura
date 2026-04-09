@@ -1,0 +1,8 @@
+copy class Bad:
+    name: String
+    value: int32
+
+def main() -> int32:
+    b = Bad(name="test", value=1)
+    print(b.name)
+    return 0

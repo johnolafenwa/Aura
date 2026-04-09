@@ -1,0 +1,42 @@
+def main() -> int32:
+    # join + split round-trip
+    original = "hello world foo"
+    parts = original.split(" ")
+    rejoined = " ".join(parts)
+    print(rejoined)
+    print((rejoined == original).to_string())
+
+    # join with comma separator
+    words = ["aurora", "is", "great"]
+    print(", ".join(words))
+
+    # join with empty separator
+    letters = ["a", "b", "c"]
+    print("".join(letters))
+
+    # split then count
+    csv = "one,two,three,four"
+    items = csv.split(",")
+    print(items.len().to_string())
+    print(items[0])
+    print(items[3])
+
+    # join single element
+    single = ["only"]
+    print("-".join(single))
+
+    # split on multichar
+    data = "a::b::c"
+    pieces = data.split("::")
+    print(pieces.len().to_string())
+    print(pieces[1])
+
+    # join-split round-trip with different separator
+    names = ["alice", "bob", "charlie"]
+    joined = "|".join(names)
+    print(joined)
+    resplit = joined.split("|")
+    print(resplit[0])
+    print(resplit[2])
+
+    return 0

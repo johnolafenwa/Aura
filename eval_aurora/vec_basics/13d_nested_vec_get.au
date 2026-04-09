@@ -1,0 +1,13 @@
+def main() -> int32:
+    # Test nested vec access via .get()
+    mut matrix: Vec[Vec[int32]] = []
+    matrix.push([1, 2, 3])
+    matrix.push([4, 5, 6])
+
+    match matrix.get(0):
+        case Some(row):
+            print(row[0])
+        case None:
+            print("None")
+
+    return 0

@@ -1,0 +1,13 @@
+class Point:
+    x: int32
+    y: int32
+
+def main() -> int32:
+    # Test: bracket indexing on Vec of class instances
+    mut points: Vec[Point] = []
+    points.push(Point(x=1, y=2))
+    points.push(Point(x=3, y=4))
+
+    p = points[0]
+    print(p.x)
+    return 0

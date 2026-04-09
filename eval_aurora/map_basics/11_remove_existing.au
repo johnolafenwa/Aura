@@ -1,0 +1,15 @@
+def main() -> int32:
+    mut m = Map[String, int32]()
+    m.set("a", 1)
+    m.set("b", 2)
+    m.set("c", 3)
+    print(m.len())
+    result = m.remove("b")
+    match result:
+        case Some(v):
+            print(v)
+        case None:
+            print("None")
+    print(m.len())
+    print(m.contains_key("b"))
+    return 0

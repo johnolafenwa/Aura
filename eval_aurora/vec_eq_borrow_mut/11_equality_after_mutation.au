@@ -1,0 +1,19 @@
+def print_bool(value: bool):
+    match value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def main() -> int32:
+    mut a = [1, 2, 3]
+    mut b = [1, 2, 3]
+    # Initially equal
+    print_bool(a == b)
+    # Push to a, now unequal
+    a.push(4)
+    print_bool(a == b)
+    # Push same to b, equal again
+    b.push(4)
+    print_bool(a == b)
+    return 0

@@ -1,0 +1,18 @@
+def main() -> int32:
+    # Clone a vec of strings
+    mut original: Vec[String] = ["hello", "world"]
+    mut cloned = original.clone()
+
+    cloned.push("new")
+
+    # Verify original unchanged
+    for s in borrow original:
+        print(s)
+    print(original.len())
+
+    # Verify clone has changes
+    for s in borrow cloned:
+        print(s)
+    print(cloned.len())
+
+    return 0

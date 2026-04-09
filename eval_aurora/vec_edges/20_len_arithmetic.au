@@ -1,0 +1,26 @@
+# Test 20: Len type compatibility with arithmetic
+def main() -> int32:
+    v = [10, 20, 30]
+
+    # len() + 1
+    total = v.len() + 1
+    print(total)
+
+    # len() == 0
+    empty: Vec[int32] = []
+    if empty.len() == 0:
+        print("empty is zero length")
+
+    # len() == 3
+    if v.len() == 3:
+        print("v has 3 elements")
+
+    # len() > 0
+    if v.len() > 0:
+        print("v is not empty")
+
+    # len() - 1
+    last_index = v.len() - 1
+    print(last_index)
+
+    return 0

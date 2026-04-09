@@ -1,0 +1,17 @@
+def main() -> int32:
+    mut xs = [1, 2]
+    xs.push(3)
+    print(xs.len())
+    print(xs[0])
+    print(xs[2])
+
+    match xs.pop():
+        case Some(value):
+            print(value)
+        case None:
+            print(0)
+
+    for value in xs:
+        print(value)
+
+    return 0

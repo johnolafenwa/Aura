@@ -1,0 +1,8 @@
+def main() -> int32:
+    result = "Hello".strip_prefix("")
+    match result:
+        case Some(inner):
+            print(inner)
+        case None:
+            print("None")
+    return 0

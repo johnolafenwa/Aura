@@ -1,0 +1,22 @@
+enum Direction:
+    North
+    South
+    East
+    West
+
+def describe(d: Direction) -> String:
+    match d:
+        case Direction.North:
+            return "north"
+        case Direction.South:
+            return "south"
+        case Direction.East:
+            return "east"
+        case Direction.West:
+            return "west"
+
+def main() -> int32:
+    d = Direction.North
+    print(describe(d))
+    print(describe(Direction.East))
+    return 0

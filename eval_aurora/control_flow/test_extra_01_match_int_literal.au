@@ -1,0 +1,15 @@
+# Extra test: Attempt to match on integer literal
+# Expected: compiler error (match only supports enum variants and _)
+
+def classify(n: int32) -> String:
+    match n:
+        case 0:
+            return "zero"
+        case 1:
+            return "one"
+        case _:
+            return "other"
+
+def main() -> int32:
+    print(classify(n=0))
+    return 0

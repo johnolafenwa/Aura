@@ -1,0 +1,9 @@
+def show(s: borrow str):
+    print(s)
+
+def main() -> int32:
+    names = ["Alice", "Bob", "Charlie"]
+    show(s=names[0])
+    show(s=names[1])
+    show(s=names[2])
+    return 0

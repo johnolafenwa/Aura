@@ -1,0 +1,5 @@
+def main() -> int32:
+    mut m = Map[String, int32]()
+    m["x"] = 10
+    print(m["z"])
+    return 0

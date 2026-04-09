@@ -1,0 +1,10 @@
+# Test 12b: Break during borrow iteration - is vec usable after?
+def main() -> int32:
+    xs = [1, 2, 3, 4, 5]
+    for x in borrow xs:
+        if x == 3:
+            break
+        print(x)
+    # Should still be usable since we borrowed
+    print(xs.len())
+    return 0

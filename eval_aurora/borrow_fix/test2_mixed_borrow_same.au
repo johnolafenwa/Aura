@@ -1,0 +1,11 @@
+class Data:
+    value: int32
+
+def mixed(reader: borrow Data, writer: borrow mut Data):
+    print(reader.value)
+    writer.value += 1
+
+def main():
+    mut d = Data(value=10)
+    mixed(reader=d, writer=d)
+    print(d.value)

@@ -1,0 +1,9 @@
+def main() -> int32:
+    mut names: Vec[String] = ["  Alice  ", "Bob", "  Charlie  "]
+    print(names[0].len())
+    print(names[0].trim())
+    print(names[0].contains("Ali"))
+    print(names[1].starts_with("Bo"))
+    print(names[2].ends_with("  "))
+    print(names[2].trim().len())
+    return 0

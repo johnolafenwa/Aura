@@ -1,0 +1,25 @@
+def main() -> int32:
+    mut v = Vec[int32]()
+    print(v.len())
+
+    v.push(10)
+    print(v.len())
+
+    v.push(20)
+    print(v.len())
+
+    v.push(30)
+    print(v.len())
+
+    v.push(40)
+    v.push(50)
+    print(v.len())
+
+    # Verify elements are correct
+    print(v[0])
+    print(v[1])
+    print(v[2])
+    print(v[3])
+    print(v[4])
+
+    return 0

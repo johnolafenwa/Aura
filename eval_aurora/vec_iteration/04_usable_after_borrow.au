@@ -1,0 +1,21 @@
+# Test 04: Vec usable after borrow iteration
+# After borrow iteration, vec is preserved.
+# len() works. Single index access works.
+# For move types (String), multiple index accesses fail (each index moves the element).
+# For copy types (int32), multiple index accesses work fine.
+def main() -> int32:
+    # Copy type: multiple accesses fine
+    mut nums = [10, 20, 30]
+    for n in borrow nums:
+        print(n)
+    print(nums.len())
+    print(nums[0])
+    print(nums[2])
+
+    # Move type: len and single access work
+    mut words: Vec[String] = ["alpha", "beta"]
+    for w in borrow words:
+        print(w)
+    print(words.len())
+    print(words[0])
+    return 0

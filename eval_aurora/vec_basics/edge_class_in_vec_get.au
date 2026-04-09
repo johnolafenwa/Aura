@@ -1,0 +1,32 @@
+class Point:
+    x: int32
+    y: int32
+
+    def describe(borrow self) -> String:
+        return f"({self.x}, {self.y})"
+
+def main() -> int32:
+    # Test .get() on Vec of class instances
+    mut points: Vec[Point] = []
+    points.push(Point(x=1, y=2))
+    points.push(Point(x=3, y=4))
+
+    match points.get(0):
+        case Some(p):
+            print(p.describe())
+        case None:
+            print("None")
+
+    match points.get(1):
+        case Some(p):
+            print(p.describe())
+        case None:
+            print("None")
+
+    match points.get(5):
+        case Some(p):
+            print(p.describe())
+        case None:
+            print("None")
+
+    return 0

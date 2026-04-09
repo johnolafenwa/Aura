@@ -1,0 +1,6 @@
+def main() -> int32:
+    m = {"name": "Alice", "city": "NYC"}
+    name = m["name"]
+    city = m["city"]
+    print(f"Name: {name}, City: {city}")
+    return 0

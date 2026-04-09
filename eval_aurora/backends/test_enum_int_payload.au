@@ -1,0 +1,17 @@
+enum MaybeInt:
+    Some(int32)
+    None
+
+def describe(m: MaybeInt) -> String:
+    match m:
+        case MaybeInt.Some(v):
+            return f"got {v}"
+        case MaybeInt.None:
+            return "nothing"
+
+def main() -> int32:
+    a = MaybeInt.Some(42)
+    b = MaybeInt.None
+    print(describe(a))
+    print(describe(b))
+    return 0

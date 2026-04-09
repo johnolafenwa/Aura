@@ -1,0 +1,9 @@
+# Test 25b: Assign vec to new variable - just verify the new binding works
+def main() -> int32:
+    a = [1, 2, 3]
+    b = a
+    # Only use b
+    print(b.len())
+    for x in b:
+        print(x)
+    return 0

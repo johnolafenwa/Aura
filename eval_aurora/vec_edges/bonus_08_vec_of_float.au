@@ -1,0 +1,8 @@
+# Bonus: Vec of float64
+def main() -> int32:
+    mut v = [1.5, 2.7, 3.14]
+    v.push(0.0)
+    print(v.len())
+    for f in v:
+        print(f)
+    return 0

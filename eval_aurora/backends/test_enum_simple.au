@@ -1,0 +1,19 @@
+enum Color:
+    Red
+    Green
+    Blue
+
+def name(c: Color) -> String:
+    match c:
+        case Color.Red:
+            return "red"
+        case Color.Green:
+            return "green"
+        case Color.Blue:
+            return "blue"
+
+def main() -> int32:
+    print(name(Color.Red))
+    print(name(Color.Green))
+    print(name(Color.Blue))
+    return 0

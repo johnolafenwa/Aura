@@ -1,0 +1,5 @@
+def main() -> int32:
+    s = "hello world"
+    pattern = "world"
+    print(s.contains(pattern))
+    return 0

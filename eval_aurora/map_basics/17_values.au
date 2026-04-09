@@ -1,0 +1,10 @@
+def main() -> int32:
+    mut m = Map[String, int32]()
+    m.set("a", 1)
+    m.set("b", 2)
+    m.set("c", 3)
+    values = m.values()
+    print(values.len())
+    for v in borrow values:
+        print(v)
+    return 0

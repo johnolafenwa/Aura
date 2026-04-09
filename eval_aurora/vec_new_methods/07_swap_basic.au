@@ -1,0 +1,9 @@
+# Test 07: Basic swap - swap first and last element
+def main() -> int32:
+    mut v = [10, 20, 30]
+    result = v.swap(0, 2)
+    print(result)
+    print(v[0])
+    print(v[1])
+    print(v[2])
+    return 0

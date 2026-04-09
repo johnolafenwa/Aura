@@ -1,0 +1,3 @@
+def main() -> int32:
+    print(true.to_string())
+    return 0

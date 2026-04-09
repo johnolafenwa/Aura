@@ -1,0 +1,5 @@
+def main() -> int32:
+    m = {true: "yes", false: "no"}
+    print(m[true])
+    print(m[false])
+    return 0

@@ -1,0 +1,5 @@
+def main() -> int32:
+    left: int32 = 1
+    right: int64 = 2
+    print(left + right)
+    return 0

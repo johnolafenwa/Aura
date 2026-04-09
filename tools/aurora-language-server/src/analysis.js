@@ -68,6 +68,78 @@ const BUILTIN_MEMBERS = {
   ],
   String: [
     {
+      name: "len",
+      kind: "method",
+      detail: "len() -> int32",
+      documentation: "Returns the number of bytes in the string."
+    },
+    {
+      name: "contains",
+      kind: "method",
+      detail: "contains(text: String) -> bool",
+      documentation: "Returns true when the string contains `text`."
+    },
+    {
+      name: "starts_with",
+      kind: "method",
+      detail: "starts_with(text: String) -> bool",
+      documentation: "Returns true when the string starts with `text`."
+    },
+    {
+      name: "ends_with",
+      kind: "method",
+      detail: "ends_with(text: String) -> bool",
+      documentation: "Returns true when the string ends with `text`."
+    },
+    {
+      name: "split",
+      kind: "method",
+      detail: "split(text: String) -> Vec[String]",
+      documentation: "Splits the string on each occurrence of `text` and returns the pieces as `Vec[String]`."
+    },
+    {
+      name: "replace",
+      kind: "method",
+      detail: "replace(from: String, to: String) -> String",
+      documentation: "Returns a new `String` with each occurrence of `from` replaced by `to`."
+    },
+    {
+      name: "to_lower",
+      kind: "method",
+      detail: "to_lower() -> String",
+      documentation: "Returns a new `String` with Unicode lowercase conversion applied."
+    },
+    {
+      name: "to_upper",
+      kind: "method",
+      detail: "to_upper() -> String",
+      documentation: "Returns a new `String` with Unicode uppercase conversion applied."
+    },
+    {
+      name: "strip_prefix",
+      kind: "method",
+      detail: "strip_prefix(text: String) -> Option[String]",
+      documentation: "Removes `text` from the front of the string and returns the remaining `String`, or `Option.None` when it does not match."
+    },
+    {
+      name: "strip_suffix",
+      kind: "method",
+      detail: "strip_suffix(text: String) -> Option[String]",
+      documentation: "Removes `text` from the end of the string and returns the remaining `String`, or `Option.None` when it does not match."
+    },
+    {
+      name: "trim",
+      kind: "method",
+      detail: "trim() -> String",
+      documentation: "Creates a new `String` with leading and trailing whitespace removed."
+    },
+    {
+      name: "join",
+      kind: "method",
+      detail: "join(parts: Vec[String]) -> String",
+      documentation: "Joins `parts` with this string as the separator."
+    },
+    {
       name: "clone",
       kind: "method",
       detail: "clone() -> String",
@@ -78,14 +150,220 @@ const BUILTIN_MEMBERS = {
     {
       name: "len",
       kind: "method",
-      detail: "len() -> uintsize",
+      detail: "len() -> int32",
       documentation: "Returns the number of items in the vector."
+    },
+    {
+      name: "is_empty",
+      kind: "method",
+      detail: "is_empty() -> bool",
+      documentation: "Returns true when the vector contains no elements."
     },
     {
       name: "clone",
       kind: "method",
       detail: "clone() -> Vec[T]",
       documentation: "Creates a new vector with cloned contents."
+    },
+    {
+      name: "push",
+      kind: "method",
+      detail: "push(value) -> None",
+      documentation: "Appends a value to the end of the vector."
+    },
+    {
+      name: "pop",
+      kind: "method",
+      detail: "pop() -> Option[T]",
+      documentation: "Removes and returns the final element, or `Option.None` when empty."
+    },
+    {
+      name: "get",
+      kind: "method",
+      detail: "get(index: int32) -> Option[T]",
+      documentation: "Returns the element at `index`, or `Option.None` when the index is out of bounds."
+    },
+    {
+      name: "set",
+      kind: "method",
+      detail: "set(index: int32, value: T) -> Option[T]",
+      documentation: "Replaces the element at `index` and returns the previous element, or `Option.None` when the index is out of bounds."
+    },
+    {
+      name: "remove",
+      kind: "method",
+      detail: "remove(index: int32) -> Option[T]",
+      documentation: "Removes the element at `index` and returns it, or `Option.None` when the index is out of bounds."
+    },
+    {
+      name: "swap",
+      kind: "method",
+      detail: "swap(first: int32, second: int32) -> bool",
+      documentation: "Swaps the elements at `first` and `second`, returning `false` when either index is out of bounds."
+    },
+    {
+      name: "contains",
+      kind: "method",
+      detail: "contains(value: T) -> bool",
+      documentation: "Returns true when the vector contains `value`."
+    },
+    {
+      name: "insert",
+      kind: "method",
+      detail: "insert(index: int32, value: T) -> bool",
+      documentation: "Inserts `value` at `index`, returning false when the index is beyond the current length."
+    },
+    {
+      name: "clear",
+      kind: "method",
+      detail: "clear() -> None",
+      documentation: "Removes all elements from the vector."
+    },
+    {
+      name: "reverse",
+      kind: "method",
+      detail: "reverse() -> None",
+      documentation: "Reverses the vector in place."
+    },
+    {
+      name: "extend",
+      kind: "method",
+      detail: "extend(other: Vec[T]) -> None",
+      documentation: "Appends the elements of `other` to the end of the vector."
+    }
+  ],
+  Map: [
+    {
+      name: "len",
+      kind: "method",
+      detail: "len() -> int32",
+      documentation: "Returns the number of entries in the map."
+    },
+    {
+      name: "is_empty",
+      kind: "method",
+      detail: "is_empty() -> bool",
+      documentation: "Returns true when the map contains no entries."
+    },
+    {
+      name: "clone",
+      kind: "method",
+      detail: "clone() -> Map[K, V]",
+      documentation: "Creates a new owned `Map[K, V]` with cloned keys and values."
+    },
+    {
+      name: "get",
+      kind: "method",
+      detail: "get(key: K) -> Option[V]",
+      documentation: "Returns the value for `key`, or `Option.None` when the key is missing."
+    },
+    {
+      name: "set",
+      kind: "method",
+      detail: "set(key: K, value: V) -> Option[V]",
+      documentation: "Inserts or replaces the value for `key`, returning the previous value when one existed."
+    },
+    {
+      name: "remove",
+      kind: "method",
+      detail: "remove(key: K) -> Option[V]",
+      documentation: "Removes `key` from the map and returns its previous value, or `Option.None` when absent."
+    },
+    {
+      name: "contains_key",
+      kind: "method",
+      detail: "contains_key(key: K) -> bool",
+      documentation: "Returns true when `key` is present in the map."
+    },
+    {
+      name: "keys",
+      kind: "method",
+      detail: "keys() -> Vec[K]",
+      documentation: "Returns the current keys as a `Vec[K]`."
+    },
+    {
+      name: "values",
+      kind: "method",
+      detail: "values() -> Vec[V]",
+      documentation: "Returns the current values as a `Vec[V]`."
+    },
+    {
+      name: "items",
+      kind: "method",
+      detail: "items() -> Vec[MapEntry[K, V]]",
+      documentation: "Returns the current entries as `Vec[MapEntry[K, V]]` in insertion order."
+    },
+    {
+      name: "entries",
+      kind: "method",
+      detail: "entries() -> Vec[MapEntry[K, V]]",
+      documentation: "Returns the current entries as `Vec[MapEntry[K, V]]` in insertion order."
+    },
+    {
+      name: "clear",
+      kind: "method",
+      detail: "clear() -> None",
+      documentation: "Removes all entries from the map."
+    },
+    {
+      name: "extend",
+      kind: "method",
+      detail: "extend(other: Map[K, V]) -> None",
+      documentation: "Merges entries from `other` into the map, overwriting existing keys."
+    }
+  ],
+  Set: [
+    {
+      name: "len",
+      kind: "method",
+      detail: "len() -> int32",
+      documentation: "Returns the number of elements in the set."
+    },
+    {
+      name: "is_empty",
+      kind: "method",
+      detail: "is_empty() -> bool",
+      documentation: "Returns true when the set contains no elements."
+    },
+    {
+      name: "clone",
+      kind: "method",
+      detail: "clone() -> Set[T]",
+      documentation: "Creates a new owned `Set[T]` with cloned elements."
+    },
+    {
+      name: "contains",
+      kind: "method",
+      detail: "contains(value: T) -> bool",
+      documentation: "Returns true when the set contains `value`."
+    },
+    {
+      name: "insert",
+      kind: "method",
+      detail: "insert(value: T) -> bool",
+      documentation: "Inserts `value` into the set and returns true when it was newly added."
+    },
+    {
+      name: "remove",
+      kind: "method",
+      detail: "remove(value: T) -> bool",
+      documentation: "Removes `value` from the set and returns true when it was present."
+    }
+  ],
+  MapEntry: [
+    {
+      name: "key",
+      kind: "field",
+      detail: "key: K",
+      type: "K",
+      documentation: "The key component of a `MapEntry[K, V]`."
+    },
+    {
+      name: "value",
+      kind: "field",
+      detail: "value: V",
+      type: "V",
+      documentation: "The value component of a `MapEntry[K, V]`."
     }
   ],
   Channel: [
@@ -187,6 +465,48 @@ const BUILTIN_FUNCTIONS = [
     kind: "function",
     detail: "sleep(duration: Duration) -> None",
     documentation: "Blocks the current task for the requested duration."
+  },
+  {
+    name: "abs",
+    kind: "function",
+    detail: "abs(value: Number) -> Number",
+    documentation: "Returns the absolute value of an integer or floating-point number."
+  },
+  {
+    name: "min",
+    kind: "function",
+    detail: "min(left: Number, right: Number) -> Number",
+    documentation: "Returns the smaller of two numeric values with the same type."
+  },
+  {
+    name: "max",
+    kind: "function",
+    detail: "max(left: Number, right: Number) -> Number",
+    documentation: "Returns the larger of two numeric values with the same type."
+  },
+  {
+    name: "sqrt",
+    kind: "function",
+    detail: "sqrt(value: float32|float64) -> float64",
+    documentation: "Returns the square root of a floating-point value."
+  },
+  {
+    name: "parse_int32",
+    kind: "function",
+    detail: "parse_int32(text: String) -> Result[int32, String]",
+    documentation: "Parses a `String` into an `int32`, returning `Result.Err(String)` on failure."
+  },
+  {
+    name: "parse_int64",
+    kind: "function",
+    detail: "parse_int64(text: String) -> Result[int64, String]",
+    documentation: "Parses a `String` into an `int64`, returning `Result.Err(String)` on failure."
+  },
+  {
+    name: "parse_float64",
+    kind: "function",
+    detail: "parse_float64(text: String) -> Result[float64, String]",
+    documentation: "Parses a `String` into a `float64`, returning `Result.Err(String)` on failure."
   }
 ];
 
@@ -1595,6 +1915,10 @@ function resolveTypeMember(moduleInfo, typeName, memberName) {
 
 function inferExpressionType(expression, moduleInfo, functionInfo) {
   const expr = stripOuterParens(expression.trim());
+  const borrowMatch = expr.match(/^borrow(?:\s+mut)?\s+(.+)$/);
+  if (borrowMatch) {
+    return inferExpressionType(borrowMatch[1], moduleInfo, functionInfo);
+  }
 
   const castMatch = expr.match(/^(.+)\s+as\s+([A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]+\])?)$/);
   if (castMatch) {
@@ -1641,6 +1965,63 @@ function inferExpressionType(expression, moduleInfo, functionInfo) {
     return "bool";
   }
 
+  const listMatch = expr.match(/^\[(.*)\]$/);
+  if (listMatch) {
+    const elements = splitTopLevelCommaSeparated(listMatch[1]);
+    if (elements.length === 0) {
+      return null;
+    }
+    const elementType = inferExpressionType(elements[0], moduleInfo, functionInfo);
+    return elementType ? `Vec[${elementType}]` : null;
+  }
+
+  const setMatch = expr.match(/^Set\{(.*)\}$/);
+  if (setMatch) {
+    const elements = splitTopLevelCommaSeparated(setMatch[1]);
+    if (elements.length === 0) {
+      return null;
+    }
+    const elementType = inferExpressionType(elements[0], moduleInfo, functionInfo);
+    return elementType ? `Set[${elementType}]` : null;
+  }
+
+  const mapLiteralMatch = expr.match(/^\{(.*)\}$/);
+  if (mapLiteralMatch && mapLiteralMatch[1].includes(":")) {
+    const entries = splitTopLevelCommaSeparated(mapLiteralMatch[1]);
+    if (entries.length === 0) {
+      return null;
+    }
+    const [firstKey, firstValue] = splitTopLevelColon(entries[0]);
+    if (!firstKey || !firstValue) {
+      return null;
+    }
+    const keyType = inferExpressionType(firstKey, moduleInfo, functionInfo);
+    const valueType = inferExpressionType(firstValue, moduleInfo, functionInfo);
+    return keyType && valueType ? `Map[${keyType}, ${valueType}]` : null;
+  }
+
+  const indexMatch = expr.match(/^(.+)\[(.+)\]$/);
+  if (indexMatch) {
+    const receiverType = inferExpressionType(indexMatch[1], moduleInfo, functionInfo);
+    if (receiverType) {
+      const vecMatch = receiverType.match(/^Vec\[(.+)\]$/);
+      if (vecMatch) {
+        return normalizeType(vecMatch[1]);
+      }
+      const mapMatch = receiverType.match(/^Map\[(.+),\s*(.+)\]$/);
+      if (mapMatch) {
+        return normalizeType(mapMatch[2]);
+      }
+    }
+  }
+
+  const specializedConstructorMatch = expr.match(
+    /^([A-Z][A-Za-z0-9_]*)\s*(\[[^\]]+\])\s*\(/
+  );
+  if (specializedConstructorMatch) {
+    return normalizeType(`${specializedConstructorMatch[1]}${specializedConstructorMatch[2]}`);
+  }
+
   const constructorMatch = expr.match(/^([A-Z][A-Za-z0-9_]*)\s*\(/);
   if (constructorMatch) {
     return constructorMatch[1];
@@ -1660,6 +2041,20 @@ function inferExpressionType(expression, moduleInfo, functionInfo) {
       return moduleInfo.functions.get(functionMatch[1]).returnType;
     }
     if (BUILTIN_FUNCTION_MAP.has(functionMatch[1])) {
+      const argsMatch = expr.match(/^[a-zA-Z_][A-Za-z0-9_]*\((.*)\)$/);
+      const args = argsMatch ? splitTopLevelCommaSeparated(argsMatch[1]) : [];
+      if (["abs", "min", "max"].includes(functionMatch[1])) {
+        return args.length > 0
+          ? inferExpressionType(args[0], moduleInfo, functionInfo)
+          : null;
+      }
+      if (functionMatch[1] === "sqrt") {
+        if (args.length === 0) {
+          return null;
+        }
+        const argType = inferExpressionType(args[0], moduleInfo, functionInfo);
+        return argType === "float32" ? "float32" : "float64";
+      }
       return parseBuiltinDetailReturnType(BUILTIN_FUNCTION_MAP.get(functionMatch[1]).detail);
     }
   }
@@ -1898,6 +2293,74 @@ function parseBuiltinDetailReturnType(detail) {
 
 function specializeMemberReturnType(receiverType, member) {
   const base = baseTypeName(receiverType);
+  if (base === "Vec") {
+    const match = receiverType.match(/^Vec\[(.+)\]$/);
+    if (!match) {
+      return parseBuiltinDetailReturnType(member.detail);
+    }
+    const inner = normalizeType(match[1]);
+    if (member.name === "clone") {
+      return receiverType;
+    }
+    if (["pop", "get", "set", "remove"].includes(member.name)) {
+      return `Option[${inner}]`;
+    }
+    return parseBuiltinDetailReturnType(member.detail);
+  }
+
+  if (base === "Map") {
+    const match = receiverType.match(/^Map\[(.+),\s*(.+)\]$/);
+    if (!match) {
+      return parseBuiltinDetailReturnType(member.detail);
+    }
+    const keyType = normalizeType(match[1]);
+    const valueType = normalizeType(match[2]);
+    if (member.name === "clone") {
+      return receiverType;
+    }
+    if (["get", "set", "remove"].includes(member.name)) {
+      return `Option[${valueType}]`;
+    }
+    if (member.name === "keys") {
+      return `Vec[${keyType}]`;
+    }
+    if (member.name === "values") {
+      return `Vec[${valueType}]`;
+    }
+    if (member.name === "items" || member.name === "entries") {
+      return `Vec[MapEntry[${keyType}, ${valueType}]]`;
+    }
+    return parseBuiltinDetailReturnType(member.detail);
+  }
+
+  if (base === "Set") {
+    const match = receiverType.match(/^Set\[(.+)\]$/);
+    if (!match) {
+      return parseBuiltinDetailReturnType(member.detail);
+    }
+    const inner = normalizeType(match[1]);
+    if (member.name === "clone") {
+      return receiverType;
+    }
+    if (["contains", "insert", "remove"].includes(member.name)) {
+      return "bool";
+    }
+    return member.name === "len" ? "int32" : parseBuiltinDetailReturnType(member.detail) || inner;
+  }
+
+  if (base === "MapEntry") {
+    const match = receiverType.match(/^MapEntry\[(.+),\s*(.+)\]$/);
+    if (!match) {
+      return member.type || parseBuiltinDetailReturnType(member.detail);
+    }
+    if (member.name === "key") {
+      return normalizeType(match[1]);
+    }
+    if (member.name === "value") {
+      return normalizeType(match[2]);
+    }
+  }
+
   if (base === "Channel") {
     const match = receiverType.match(/^Channel\[(.+)\]$/);
     if (!match) {
@@ -1999,6 +2462,18 @@ function inferForBindingType(iterableExpression, moduleInfo, functionInfo) {
   if (iterableType === "Range") {
     return "int32";
   }
+  const vecMatch = iterableType ? iterableType.match(/^Vec\[(.+)\]$/) : null;
+  if (vecMatch) {
+    return normalizeType(vecMatch[1]);
+  }
+  const channelMatch = iterableType ? iterableType.match(/^Channel\[(.+)\]$/) : null;
+  if (channelMatch) {
+    return normalizeType(channelMatch[1]);
+  }
+  const setMatch = iterableType ? iterableType.match(/^Set\[(.+)\]$/) : null;
+  if (setMatch) {
+    return normalizeType(setMatch[1]);
+  }
   return null;
 }
 
@@ -2007,6 +2482,128 @@ function stripOuterParens(expression) {
     return expression.slice(1, -1).trim();
   }
   return expression;
+}
+
+function splitTopLevelCommaSeparated(text) {
+  const parts = [];
+  let current = "";
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let inString = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index];
+    if (inString) {
+      current += ch;
+      if (ch === "\\") {
+        index += 1;
+        if (index < text.length) {
+          current += text[index];
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      current += ch;
+      continue;
+    }
+    if (ch === "(") {
+      parenDepth += 1;
+      current += ch;
+      continue;
+    }
+    if (ch === ")") {
+      parenDepth = Math.max(0, parenDepth - 1);
+      current += ch;
+      continue;
+    }
+    if (ch === "[") {
+      bracketDepth += 1;
+      current += ch;
+      continue;
+    }
+    if (ch === "]") {
+      bracketDepth = Math.max(0, bracketDepth - 1);
+      current += ch;
+      continue;
+    }
+    if (ch === "," && parenDepth === 0 && bracketDepth === 0) {
+      const trimmed = current.trim();
+      if (trimmed) {
+        parts.push(trimmed);
+      }
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+
+  const trimmed = current.trim();
+  if (trimmed) {
+    parts.push(trimmed);
+  }
+  return parts;
+}
+
+function splitTopLevelColon(text) {
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let inString = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index];
+    if (inString) {
+      if (ch === "\\") {
+        index += 1;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "(") {
+      parenDepth += 1;
+      continue;
+    }
+    if (ch === ")") {
+      parenDepth = Math.max(0, parenDepth - 1);
+      continue;
+    }
+    if (ch === "[") {
+      bracketDepth += 1;
+      continue;
+    }
+    if (ch === "]") {
+      bracketDepth = Math.max(0, bracketDepth - 1);
+      continue;
+    }
+    if (ch === "{") {
+      braceDepth += 1;
+      continue;
+    }
+    if (ch === "}") {
+      braceDepth = Math.max(0, braceDepth - 1);
+      continue;
+    }
+    if (ch === ":" && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
+      return [text.slice(0, index).trim(), text.slice(index + 1).trim()];
+    }
+  }
+
+  return [null, null];
 }
 
 function countIndent(line) {

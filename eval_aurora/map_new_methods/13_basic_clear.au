@@ -1,0 +1,7 @@
+def main() -> int32:
+    mut m = {"a": 1, "b": 2, "c": 3}
+    print(m.len())
+    m.clear()
+    print(m.len())
+    print(m.is_empty())
+    return 0

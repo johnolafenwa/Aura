@@ -1,0 +1,5 @@
+# Test 6: Index write on immutable vec - should fail
+def main() -> int32:
+    v = [1, 2, 3]
+    v[0] = 10
+    return 0

@@ -1,0 +1,8 @@
+public class FileHandle:
+    public name: String
+
+    public def read(borrow self) -> String:
+        return self.name
+
+    public def close(borrow mut self):
+        print("closed " + self.name)

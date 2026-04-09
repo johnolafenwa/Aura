@@ -1,0 +1,18 @@
+def worker(out: Channel[int32]):
+    out.send(11)
+    out.close()
+
+def main() -> int32:
+    out: Channel[int32] = channel()
+    with task_group() as group:
+        group.spawn(worker, out.clone())
+        select:
+            case value = out.recv():
+                match value:
+                    case Option.Some(v):
+                        print(v)
+                    case Option.None:
+                        print(0)
+            case after(100ms):
+                print(99)
+    return 0

@@ -1,0 +1,6 @@
+def main() -> int32:
+    s = Set{42}
+    print(s.len())
+    print(s.contains(42))
+    print(s.contains(0))
+    return 0

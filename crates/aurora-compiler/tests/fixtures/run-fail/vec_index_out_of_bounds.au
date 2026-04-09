@@ -1,0 +1,4 @@
+def main() -> int32:
+    xs = [1, 2]
+    print(xs[5])
+    return 0

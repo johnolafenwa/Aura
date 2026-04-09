@@ -1,0 +1,39 @@
+def describe_number(value: int32) -> String:
+    match value:
+        case 0:
+            return "zero"
+        case 1:
+            return "one"
+        case _:
+            return "many"
+
+def describe_flag(flag: bool) -> String:
+    match flag:
+        case true:
+            return "yes"
+        case false:
+            return "no"
+
+def describe_name(name: String) -> String:
+    match borrow name:
+        case "aurora":
+            return "repo"
+        case _:
+            return "other"
+
+def describe_negative(value: int32) -> String:
+    match value:
+        case -1:
+            return "negative"
+        case _:
+            return "other"
+
+def main() -> int32:
+    print(describe_number(0))
+    print(describe_number(4))
+    print(describe_flag(true))
+    print(describe_flag(false))
+    print(describe_name("aurora"))
+    print(describe_name("codex"))
+    print(describe_negative(-1))
+    return 0

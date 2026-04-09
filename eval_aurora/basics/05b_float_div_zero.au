@@ -1,0 +1,13 @@
+# Test 5b: Float division by zero - should produce infinity
+x: float64 = 10.0
+y: float64 = 0.0
+z = x / y
+print(z)
+
+# Negative infinity
+w = -10.0 / 0.0
+print(w)
+
+# NaN: 0/0
+n = 0.0 / 0.0
+print(n)

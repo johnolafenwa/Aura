@@ -1,0 +1,18 @@
+class Counter:
+    value: int32
+
+    def read(borrow self) -> int32:
+        return self.value
+
+    def doubled(borrow self) -> int32:
+        return self.value + self.value
+
+    def zero() -> Counter:
+        return Counter(value=0)
+
+def main() -> int32:
+    counter = Counter(value=4)
+    print(counter.read())
+    print(counter.doubled())
+    print(Counter.zero().read())
+    return 0

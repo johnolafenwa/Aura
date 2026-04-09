@@ -1,0 +1,7 @@
+def main() -> int32:
+    mut v: Vec[String] = ["hello", "world"]
+    for s in borrow mut v:
+        s = "replaced"
+    for s in borrow v:
+        print(s)
+    return 0

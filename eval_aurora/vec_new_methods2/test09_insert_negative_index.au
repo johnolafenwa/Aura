@@ -1,0 +1,13 @@
+# Test 9: Insert at negative index — what happens?
+def print_bool(value: bool):
+    match value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def main() -> int32:
+    mut v = [1, 2, 3]
+    print_bool(v.insert(index=-1, value=99))
+    print(v.len())
+    return 0

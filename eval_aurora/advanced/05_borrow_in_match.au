@@ -1,0 +1,26 @@
+# Test 5: Borrow in match - match borrow to avoid consuming the value
+def main() -> int32:
+    result: Result[String, String] = Result.Ok("success")
+
+    # match borrow should not consume result
+    match borrow result:
+        case Ok(value):
+            print(value.clone())
+        case Err(message):
+            print(message)
+
+    # result should still be usable
+    match borrow result:
+        case Ok(value):
+            print(value.clone())
+        case Err(message):
+            print(message)
+
+    # Now consume with normal match
+    match result:
+        case Ok(value):
+            print(value)
+        case Err(message):
+            print(message)
+
+    return 0

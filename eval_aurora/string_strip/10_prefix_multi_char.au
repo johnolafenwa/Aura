@@ -1,0 +1,8 @@
+def main() -> int32:
+    result = "prefix_data".strip_prefix("prefix_")
+    match result:
+        case Some(inner):
+            print(inner)
+        case None:
+            print("FAIL: expected Some")
+    return 0

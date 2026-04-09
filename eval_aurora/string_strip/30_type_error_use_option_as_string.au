@@ -1,0 +1,4 @@
+def main() -> int32:
+    result = "HelloWorld".strip_prefix("Hello")
+    print(result + " tail")
+    return 0

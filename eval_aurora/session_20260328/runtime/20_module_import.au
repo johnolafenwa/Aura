@@ -1,0 +1,7 @@
+from helpers.math import add_pair
+import helpers.math
+
+def main() -> int32:
+    print(add_pair(2, 3))
+    print(helpers.math.triple(4))
+    return 0

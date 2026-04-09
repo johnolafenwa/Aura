@@ -1,0 +1,18 @@
+# Test 17c: Borrow iteration inside function receiving borrow vec
+def print_all(values: borrow Vec[int32]):
+    for v in borrow values:
+        print(v)
+
+def count(values: borrow Vec[int32]) -> int32:
+    mut c: int32 = 0
+    for v in borrow values:
+        c += 1
+    return c
+
+def main() -> int32:
+    xs = [10, 20, 30]
+    print_all(xs)
+    print(count(xs))
+    # xs still usable since we only borrowed
+    print_all(xs)
+    return 0

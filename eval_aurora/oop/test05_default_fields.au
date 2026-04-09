@@ -1,0 +1,17 @@
+class ServerConfig:
+    host: String = "localhost"
+    port: int32 = 8080
+    debug: bool = false
+
+def main() -> int32:
+    default_config = ServerConfig()
+    custom = ServerConfig(host="aurora.dev", port=9090)
+    partial = ServerConfig(debug=true)
+
+    print(default_config.host)
+    print(default_config.port)
+    print(custom.host)
+    print(custom.port)
+    print(partial.host)
+    print(partial.debug)
+    return 0

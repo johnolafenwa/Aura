@@ -1,0 +1,7 @@
+def main() -> int32:
+    s = "the quick brown fox"
+    parts = s.split(" ")
+    for word in borrow parts:
+        print(word)
+    print(parts.len())
+    return 0

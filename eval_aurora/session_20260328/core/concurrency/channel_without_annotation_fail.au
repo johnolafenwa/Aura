@@ -1,0 +1,4 @@
+def main() -> int32:
+    ch = channel()
+    print(ch)
+    return 0

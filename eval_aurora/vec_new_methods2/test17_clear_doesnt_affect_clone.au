@@ -1,0 +1,11 @@
+# Test 17: Clear does not affect a previously taken clone
+def main() -> int32:
+    mut original = [1, 2, 3]
+    mut cloned = original.clone()
+    original.clear()
+    print(original.len())
+    print(cloned.len())
+    print(cloned[0])
+    print(cloned[1])
+    print(cloned[2])
+    return 0

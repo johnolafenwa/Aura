@@ -1,0 +1,7 @@
+def main() -> int32:
+    mut s = Set{1, 2, 3}
+    print(s.len())
+    result = s.remove(99)
+    print(result)
+    print(s.len())
+    return 0

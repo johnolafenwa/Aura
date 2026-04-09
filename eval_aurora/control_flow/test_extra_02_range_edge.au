@@ -1,0 +1,23 @@
+# Extra test: Edge cases in range - start > stop, large range
+
+def main() -> int32:
+    # range(start=5, stop=2) - start > stop, should be empty
+    print("range(start=5, stop=2):")
+    mut count: int32 = 0
+    for i in range(start=5, stop=2):
+        count += 1
+    print(count)
+
+    # range(start=0, stop=1) - single element
+    print("range(start=0, stop=1):")
+    for i in range(start=0, stop=1):
+        print(i)
+
+    # Larger range to verify correctness
+    print("sum of range(100):")
+    mut sum: int32 = 0
+    for i in range(100):
+        sum += i
+    print(sum)
+
+    return 0

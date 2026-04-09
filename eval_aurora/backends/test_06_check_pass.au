@@ -1,0 +1,9 @@
+def add(a: int32, b: int32) -> int32:
+    return a + b
+
+def main() -> int32:
+    x: int32 = 10
+    y: int32 = 20
+    result = add(x, y)
+    print(result)
+    return 0

@@ -1,0 +1,11 @@
+class Message:
+    content: String
+
+def take_message(m: Message):
+    print(m.content)
+
+def main() -> int32:
+    msg = Message(content="hello")
+    take_message(msg)
+    take_message(msg)
+    return 0

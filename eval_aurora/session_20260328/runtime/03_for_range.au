@@ -1,0 +1,8 @@
+def main() -> int32:
+    mut total: int32 = 0
+    for value in range(4):
+        if value == 2:
+            continue
+        total += value
+    print(total)
+    return 0

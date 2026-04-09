@@ -1,0 +1,7 @@
+def main() -> int32:
+    s = Set{10, 20, 30}
+    mut v = Vec[int32]()
+    for x in borrow s:
+        v.push(x)
+    print(v.len())
+    return 0

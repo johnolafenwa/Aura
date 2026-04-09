@@ -55,6 +55,10 @@ Builtin generic or runtime-facing types currently accepted:
 - `Result[T, E]`
 - `SendError[T]`
 - `Channel[T]`
+- `Vec[T]`
+- `Map[K, V]`
+- `Set[T]`
+- `MapEntry[K, V]`
 - `Task[T]`
 - `TaskGroup`
 
@@ -87,7 +91,11 @@ The current compiler supports these expression forms:
 - arithmetic, comparison, and boolean operators
 - unary prefix operators `-` and `not`
 - explicit numeric casts with `expr as Type`
+- list literals such as `[1, 2, 3]`
+- map literals such as `{"aurora": 1}`
+- set literals such as `Set{1, 2, 3}`
 - member access with `.`
+- indexing with `expr[index]`
 - function and method calls
 - explicit type arguments on call targets such as `Box[int32](...)` and `Result[int32, String].Ok(...)`
 - enum and built-in enum variant construction
@@ -95,6 +103,8 @@ The current compiler supports these expression forms:
 - `spawn detached ...`
 - `try expr`
 - parenthesized expressions
+
+Indexed expressions remain ordinary values after parsing, so chains such as `keys[idx].clone()` and interpolations such as `f"{counts["key"]}"` are supported.
 
 ## Methods
 
@@ -116,6 +126,9 @@ Ordinary functions, instance methods, and associated methods support:
 
 Borrowed ordinary parameters currently work for normal calls, but `spawn` and `TaskGroup.spawn(...)` still require by-value parameters.
 Calls also reject overlapping borrowed arguments whenever a `borrow mut` parameter participates, including a `borrow mut self` receiver overlapping another borrowed argument in the same method call.
+Empty list literals currently require an expected `Vec[T]` type such as `values: Vec[int32] = []`, or you can use `Vec[int32]()` explicitly.
+Empty map literals currently require an expected `Map[K, V]` type such as `counts: Map[String, int32] = {}`.
+Empty set literals currently require an expected `Set[T]` type such as `seen: Set[int32] = Set{}`, or you can use `Set[int32]()` explicitly.
 
 Top-level declarations may also be generic:
 
@@ -141,6 +154,13 @@ Current builtin functions:
 - `cancelled`
 - `after`
 - `sleep`
+- `abs`
+- `min`
+- `max`
+- `sqrt`
+- `parse_int32`
+- `parse_int64`
+- `parse_float64`
 
 Current builtin `range(...)` notes:
 
@@ -151,7 +171,53 @@ Current builtin `range(...)` notes:
 Current builtin member methods include:
 
 - `float64.sqrt()`
+- scalar and boolean `.to_string()`
+- `String.len()`
+- `String.contains(...)`
+- `String.starts_with(...)`
+- `String.ends_with(...)`
+- `String.split(...)`
+- `String.join(...)`
+- `String.replace(...)`
+- `String.to_lower()`
+- `String.to_upper()`
+- `String.strip_prefix(...)`
+- `String.strip_suffix(...)`
+- `String.trim()`
 - `String.clone()`
+- `Vec.len()`
+- `Vec.is_empty()`
+- `Vec.clone()`
+- `Vec.push(...)`
+- `Vec.pop()`
+- `Vec.get(...)`
+- `Vec.insert(...)`
+- `Vec.set(...)`
+- `Vec.remove(...)`
+- `Vec.swap(...)`
+- `Vec.contains(...)`
+- `Vec.extend(...)`
+- `Vec.clear()`
+- `Vec.reverse()`
+- `Map.len()`
+- `Map.is_empty()`
+- `Map.clone()`
+- `Map.get(...)`
+- `Map.set(...)`
+- `Map.remove(...)`
+- `Map.contains_key(...)`
+- `Map.keys()`
+- `Map.values()`
+- `Map.items()`
+- `Map.entries()`
+- `Map.clear()`
+- `Map.extend(...)`
+- `Set.len()`
+- `Set.is_empty()`
+- `Set.clone()`
+- `Set.contains(...)`
+- `Set.insert(...)`
+- `Set.remove(...)`
 - `Channel.clone()`
 - `Channel.send(...)`
 - `Channel.recv()`
@@ -168,10 +234,13 @@ The current compiler supports:
 - `Enum.Variant`
 - `Enum.Variant(name)`
 - unqualified variants such as `Ok(value)` and `None` when the scrutinee type is known
+- literal patterns over `bool`, integer, and `String`
 - `match borrow value:`
 - `match borrow mut value:`
 - `case _:`
 - exhaustive statement-form `match`
+
+Boolean literal matches are exhaustive when they cover both `true` and `false`. Integer and `String` literal matches still require a final wildcard arm.
 
 It does not yet support expression-form `match`, but ordinary nested `match` statements are supported.
 
@@ -187,6 +256,20 @@ The current bootstrap concurrency surface includes:
 - cooperative cancellation
 - `select` over send, receive, and timer arms
 - duration literals with `ms`, `s`, and `m`
+
+Current collection notes:
+
+- `Vec.len()` returns `int32`, so `range(values.len())` works directly
+- `for value in vec:`, `for value in borrow vec:`, and `for value in borrow mut vec:` are supported for `Vec[T]`
+- `for value in borrow mut vec:` requires the iterable place itself to be mutable
+- indexed reads no longer consume `Vec[T]` values when the element type is non-copy
+- `Vec[T]` supports equality and inequality when both sides have the same `Vec[T]` type
+- empty map literals still need an expected `Map[K, V]` type, or you can use `Map[K, V]()` explicitly
+- `Map[K, V]` supports literal construction, indexed reads/writes, and the maintained method surface `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`
+- `Map.items()` and `Map.entries()` return `Vec[MapEntry[K, V]]`, where entry values expose `.key` and `.value`
+- `Set[T]` supports literal construction with `Set{...}` and the maintained method surface `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`
+- `for value in set:` and `for value in borrow set:` are supported for `Set[T]`
+- `for value in borrow mut set:` is not currently supported
 
 Timed `select` loops now treat closed receive arms as inactive when an `after(...)` arm is present, so timeout arms can still fire as an escape path.
 
@@ -239,7 +322,7 @@ Current module/import limitations:
 
 Current expression/ergonomics limitations:
 
-- list literals such as `[1, 2, 3]` are not implemented yet
+- empty list literals still require an expected `Vec[T]` type such as `values: Vec[int32] = []`
 - strings use quoted literals; `String(...)` is not a constructor
 - enum variants are not callable by bare name; use `Result.Ok(...)`, `Result.Err(...)`, `Option.Some(...)`, or `Option.None`
 - `channel()` still requires an expected `Channel[T]` type annotation in the bootstrap compiler

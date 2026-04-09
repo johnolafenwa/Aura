@@ -1,0 +1,5 @@
+error: vector index `5` is out of bounds for length `2`
+ --> crates/aurora-compiler/tests/fixtures/run-fail/vec_index_out_of_bounds.au:3:14
+  |
+3 |     print(xs[5])
+  |              ^

@@ -1,0 +1,7 @@
+def main() -> int32:
+    match parse_float64("-2.5"):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(e):
+            print("ERR: " + e)
+    return 0

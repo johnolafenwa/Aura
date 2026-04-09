@@ -1,0 +1,7 @@
+def main() -> int32:
+    s1 = Set{1, 2}
+    s2 = Set{1, 2, 3}
+    print(s1.is_subset(s2))
+    print(s2.is_superset(s1))
+    print(s2.is_subset(s1))
+    return 0

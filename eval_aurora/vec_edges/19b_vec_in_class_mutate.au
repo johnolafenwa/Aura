@@ -1,0 +1,12 @@
+# Test 19b: Vec in class field - try to mutate it
+class Container:
+    items: Vec[int32]
+    name: String
+
+def main() -> int32:
+    mut c = Container(items=[1, 2, 3], name="test")
+    c.items.push(4)
+    print(c.items.len())
+    for item in c.items:
+        print(item)
+    return 0

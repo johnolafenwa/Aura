@@ -1,0 +1,6 @@
+def main() -> int32:
+    v = [10, 20, 30, 40, 50]
+    for i in range(v.len()):
+        print(v[i])
+    print(v.len() + 100)
+    return 0

@@ -1,0 +1,4 @@
+def main() -> int32:
+    x = 42
+    print(x.len())
+    return 0

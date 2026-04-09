@@ -1,0 +1,50 @@
+def sum_set(values: borrow Set[int32]) -> int32:
+    mut total = 0
+    for value in borrow values:
+        total += value
+    return total
+
+def main() -> int32:
+    # Set literal with duplicates (deduped)
+    mut s = Set{1, 2, 2, 3, 3, 3}
+    print(s.len().to_string())
+
+    # contains
+    print(s.contains(1).to_string())
+    print(s.contains(2).to_string())
+    print(s.contains(99).to_string())
+
+    # insert returns false if already present
+    print(s.insert(2).to_string())
+    # insert returns true if new
+    print(s.insert(4).to_string())
+    print(s.len().to_string())
+
+    # remove returns true if was present
+    print(s.remove(1).to_string())
+    print(s.len().to_string())
+    # remove returns false if absent
+    print(s.remove(100).to_string())
+
+    # iteration via borrow
+    total = sum_set(s)
+    print(total.to_string())
+
+    # clone and consuming iteration
+    copy = s.clone()
+    mut moved_total = 0
+    for value in copy:
+        moved_total += value
+    print(moved_total.to_string())
+
+    # String set
+    mut names: Set[String] = Set[String]()
+    print(names.is_empty().to_string())
+    print(names.insert("aurora").to_string())
+    print(names.insert("aurora").to_string())
+    print(names.insert("lang").to_string())
+    print(names.len().to_string())
+    print(names.contains("aurora").to_string())
+    print(names.contains("missing").to_string())
+
+    return 0

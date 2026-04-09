@@ -1,0 +1,24 @@
+# Test 15: Empty blocks with pass
+
+class Marker:
+    pass
+
+def do_nothing():
+    pass
+
+def conditional_pass(x: int32) -> String:
+    if x > 0:
+        pass
+    else:
+        pass
+    return "done"
+
+def main() -> int32:
+    do_nothing()
+    print("after do_nothing")
+
+    print(conditional_pass(x=5))
+    print(conditional_pass(x=-5))
+
+    print("pass test ok")
+    return 0

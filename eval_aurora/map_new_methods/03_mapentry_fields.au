@@ -1,0 +1,7 @@
+def main() -> int32:
+    m = {"x": 10, "y": 20}
+    entries = m.entries()
+    first = entries[0]
+    print(first.key)
+    print(first.value)
+    return 0

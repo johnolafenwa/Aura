@@ -1,0 +1,23 @@
+# Test 2: Mutable borrow - pass by borrow mut, modify fields
+class Counter:
+    value: int32
+
+def increment(c: borrow mut Counter):
+    c.value += 1
+
+def add(c: borrow mut Counter, amount: int32):
+    c.value += amount
+
+def reset(c: borrow mut Counter):
+    c.value = 0
+
+def main() -> int32:
+    mut counter = Counter(value=0)
+    print(counter.value)
+    increment(counter)
+    print(counter.value)
+    add(counter, amount=10)
+    print(counter.value)
+    reset(counter)
+    print(counter.value)
+    return 0

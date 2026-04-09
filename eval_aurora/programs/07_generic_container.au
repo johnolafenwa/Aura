@@ -1,0 +1,48 @@
+## Generic container: Pair[A, B] class with swap, first, second methods.
+
+class Pair[A, B]:
+    left: A
+    right: B
+
+    def first(borrow self) -> A:
+        return self.left
+
+    def second(borrow self) -> B:
+        return self.right
+
+def swap[A, B](pair: Pair[A, B]) -> Pair[B, A]:
+    return Pair(left=pair.right, right=pair.left)
+
+## Generic identity function to test type inference
+def wrap_pair[A, B](a: A, b: B) -> Pair[A, B]:
+    return Pair(left=a, right=b)
+
+def main() -> int32:
+    ## Pair of int32 and String
+    p1: Pair[int32, String] = Pair(left=42, right="hello")
+    print(f"Pair 1: ({p1.first()}, {p1.second()})")
+
+    ## Swap it
+    p2: Pair[String, int32] = swap(pair=p1)
+    print(f"Swapped: ({p2.first()}, {p2.second()})")
+
+    ## Pair of two int32s
+    p3: Pair[int32, int32] = Pair(left=10, right=20)
+    print(f"Pair 3: ({p3.first()}, {p3.second()})")
+
+    ## Swap same-type pair
+    p4: Pair[int32, int32] = swap(pair=p3)
+    print(f"Swapped pair 3: ({p4.first()}, {p4.second()})")
+
+    ## Use wrap_pair helper
+    p5: Pair[float64, int32] = wrap_pair(3.14, 7)
+    print(f"Wrapped pair: ({p5.first()}, {p5.second()})")
+
+    ## Nested pair: Pair of Pair and int32
+    inner: Pair[int32, int32] = Pair(left=1, right=2)
+    outer: Pair[Pair[int32, int32], int32] = Pair(left=inner, right=3)
+    print(f"Nested outer.second: {outer.second()}")
+    print(f"Nested inner.first: {outer.first().first()}")
+    print(f"Nested inner.second: {outer.first().second()}")
+
+    return 0

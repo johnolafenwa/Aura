@@ -1,0 +1,9 @@
+def main() -> int32:
+    result = "".strip_prefix("")
+    match result:
+        case Some(inner):
+            print("Some: '" + inner + "'")
+            print(inner.len())
+        case None:
+            print("None")
+    return 0

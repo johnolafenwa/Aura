@@ -1,0 +1,11 @@
+def extract_domain(url: String) -> String:
+    match url.strip_prefix("http://"):
+        case Some(domain):
+            return domain
+        case None:
+            return "no http prefix"
+
+def main() -> int32:
+    print(extract_domain("http://example.com"))
+    print(extract_domain("https://example.com"))
+    return 0

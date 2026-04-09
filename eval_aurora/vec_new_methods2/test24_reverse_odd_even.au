@@ -1,0 +1,15 @@
+# Test 24: Reverse odd and even length vecs
+def main() -> int32:
+    mut odd = [1, 2, 3]
+    odd.reverse()
+    print(odd[0])
+    print(odd[1])
+    print(odd[2])
+
+    mut even = [1, 2, 3, 4]
+    even.reverse()
+    print(even[0])
+    print(even[1])
+    print(even[2])
+    print(even[3])
+    return 0

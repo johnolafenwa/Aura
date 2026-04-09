@@ -1,0 +1,73 @@
+## Trait-based polymorphism: Shape trait with area() method.
+## Implements for Circle and Rectangle, computes total area.
+
+trait Shape:
+    def area(borrow self) -> float64
+    def describe(borrow self) -> String
+
+copy class Circle:
+    radius: float64
+
+copy class Rectangle:
+    width: float64
+    height: float64
+
+copy class Triangle:
+    base: float64
+    height: float64
+
+impl Shape for Circle:
+    def area(borrow self) -> float64:
+        ## Approximate PI
+        return 3.14159265 * self.radius * self.radius
+
+    def describe(borrow self) -> String:
+        return f"Circle(radius={self.radius})"
+
+impl Shape for Rectangle:
+    def area(borrow self) -> float64:
+        return self.width * self.height
+
+    def describe(borrow self) -> String:
+        return f"Rectangle(width={self.width}, height={self.height})"
+
+impl Shape for Triangle:
+    def area(borrow self) -> float64:
+        return 0.5 * self.base * self.height
+
+    def describe(borrow self) -> String:
+        return f"Triangle(base={self.base}, height={self.height})"
+
+def print_shape_info[T: Shape](shape: T):
+    print(f"  {shape.describe()} -> area = {shape.area()}")
+
+def main() -> int32:
+    print("=== Shape Trait Polymorphism ===")
+
+    ## Create shapes
+    c1 = Circle(radius=5.0)
+    c2 = Circle(radius=1.0)
+    r1 = Rectangle(width=10.0, height=3.0)
+    r2 = Rectangle(width=4.0, height=4.0)
+    t1 = Triangle(base=6.0, height=8.0)
+
+    ## Print info using generic function
+    print("Shapes:")
+    print_shape_info(c1)
+    print_shape_info(c2)
+    print_shape_info(r1)
+    print_shape_info(r2)
+    print_shape_info(t1)
+
+    ## Compute total area manually (no heterogeneous collections without arrays)
+    total = c1.area() + c2.area() + r1.area() + r2.area() + t1.area()
+    print(f"Total area of all shapes: {total}")
+
+    ## Verify individual areas
+    print(f"Circle(5) area: {c1.area()}")
+    print(f"Circle(1) area: {c2.area()}")
+    print(f"Rect(10x3) area: {r1.area()}")
+    print(f"Rect(4x4) area: {r2.area()}")
+    print(f"Triangle(6,8) area: {t1.area()}")
+
+    return 0

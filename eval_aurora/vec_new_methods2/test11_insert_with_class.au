@@ -1,0 +1,15 @@
+# Test 11: Insert with user-defined class
+class Point:
+    x: int32
+    y: int32
+
+def main() -> int32:
+    mut points = Vec[Point]()
+    points.push(Point(x=1, y=2))
+    points.push(Point(x=5, y=6))
+    points.insert(index=1, value=Point(x=3, y=4))
+    print(points.len())
+    print(points[0].x)
+    print(points[1].x)
+    print(points[2].x)
+    return 0

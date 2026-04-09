@@ -1,0 +1,9 @@
+# Test 2d: Type-annotated mutable variable
+mut x: int32 = 10
+print(x)
+x = 20
+print(x)
+
+# Immutable type-annotated
+y: int32 = 100
+print(y)

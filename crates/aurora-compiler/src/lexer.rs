@@ -23,6 +23,8 @@ pub enum TokenKind {
     RParen,
     LBracket,
     RBracket,
+    LBrace,
+    RBrace,
     Colon,
     Comma,
     Dot,
@@ -180,6 +182,14 @@ fn tokenize_line(
             }
             ']' => {
                 tokens.push(simple(TokenKind::RBracket, line_no, column));
+                index += 1;
+            }
+            '{' => {
+                tokens.push(simple(TokenKind::LBrace, line_no, column));
+                index += 1;
+            }
+            '}' => {
+                tokens.push(simple(TokenKind::RBrace, line_no, column));
                 index += 1;
             }
             ':' => {

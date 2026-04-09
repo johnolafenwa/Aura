@@ -1,0 +1,7 @@
+=== examples/modules/pkg/user.au ===
+error: cannot resolve module `pkg.named` at `/Users/johnolafenwa/source2/Aurora/examples/modules/pkg/pkg/named.au`
+ --> examples/modules/pkg/user.au:1:1
+  |
+1 | from pkg.named import Named
+  | ^
+

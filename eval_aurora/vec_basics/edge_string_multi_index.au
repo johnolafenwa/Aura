@@ -1,0 +1,8 @@
+def main() -> int32:
+    # Test: multiple index accesses on Vec[String] (should fail)
+    v = ["hello", "world"]
+    s1 = v[0]
+    s2 = v[1]
+    print(s1)
+    print(s2)
+    return 0

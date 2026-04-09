@@ -1,0 +1,3 @@
+def main() -> int32:
+    values = [1, "hello"]
+    return 0

@@ -1,0 +1,18 @@
+def main() -> int32:
+    mut values = [10, 3, 7, 1, 9]
+    mut current_min = values[0]
+    mut current_max = values[0]
+    for v in borrow values:
+        current_min = min(current_min, v)
+        current_max = max(current_max, v)
+    print(current_min)
+    print(current_max)
+    print(abs(current_min - current_max))
+
+    mut floats = [4.0, 9.0, 16.0, 25.0]
+    for f in borrow floats:
+        print(sqrt(f))
+
+    dist = sqrt(3.0 * 3.0 + 4.0 * 4.0)
+    print(dist)
+    return 0

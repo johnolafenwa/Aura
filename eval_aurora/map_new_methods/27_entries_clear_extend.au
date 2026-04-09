@@ -1,0 +1,12 @@
+def main() -> int32:
+    mut m1 = {"a": 1, "b": 2}
+    entries = m1.entries()
+    print(entries.len())
+    m1.clear()
+    print(m1.len())
+    m2 = {"x": 10, "y": 20}
+    m1.extend(m2)
+    print(m1.len())
+    print(m1["x"])
+    print(m1["y"])
+    return 0

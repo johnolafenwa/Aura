@@ -1,0 +1,72 @@
+## Error handling chain: Multi-step computation where each step can fail.
+## Simulates a data processing pipeline: parse -> validate -> transform -> format.
+
+def parse_input(raw: int32) -> Result[int32, String]:
+    ## Simulate parsing: negative values are "invalid input"
+    if raw < 0:
+        return Result.Err("Parse error: negative input not allowed")
+    return Result.Ok(raw)
+
+def validate_range(value: int32) -> Result[int32, String]:
+    ## Validate: must be between 1 and 1000
+    if value == 0:
+        return Result.Err("Validation error: value cannot be zero")
+    if value > 1000:
+        return Result.Err("Validation error: value exceeds maximum of 1000")
+    return Result.Ok(value)
+
+def transform(value: int32) -> Result[int32, String]:
+    ## Transform: multiply by 3, but fail if result overflows our "limit" of 2000
+    result = value * 3
+    if result > 2000:
+        return Result.Err(f"Transform error: result {result} exceeds limit")
+    return Result.Ok(result)
+
+def format_output(value: int32) -> Result[String, String]:
+    ## Format the result
+    return Result.Ok(f"Result: {value}")
+
+## Chain all steps together using try
+def process(raw: int32) -> Result[String, String]:
+    parsed = try parse_input(raw)
+    validated = try validate_range(parsed)
+    transformed = try transform(validated)
+    formatted = try format_output(transformed)
+    return Result.Ok(formatted)
+
+def run_test(label: String, input: int32):
+    print(f"Test: {label} (input={input})")
+    match process(input):
+        case Result.Ok(output):
+            print(f"  Success: {output}")
+        case Result.Err(error):
+            print(f"  Failed: {error}")
+
+def main() -> int32:
+    print("=== Error Handling Chain ===")
+
+    ## Test 1: Valid input, passes all stages
+    run_test("valid small", 100)
+
+    ## Test 2: Valid input, different value
+    run_test("valid medium", 42)
+
+    ## Test 3: Fails at parse stage (negative)
+    run_test("negative input", -5)
+
+    ## Test 4: Fails at validation (zero)
+    run_test("zero input", 0)
+
+    ## Test 5: Fails at validation (too large)
+    run_test("too large", 1500)
+
+    ## Test 6: Fails at transform (result exceeds limit)
+    run_test("overflow transform", 700)
+
+    ## Test 7: Edge case - exactly at boundary
+    run_test("boundary value", 666)
+
+    ## Test 8: Minimum valid input
+    run_test("minimum valid", 1)
+
+    return 0

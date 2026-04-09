@@ -1,0 +1,15 @@
+def main() -> int32:
+    result = parse_int32("123")
+    match result:
+        case Result.Ok(value):
+            print("ok: " + value.to_string())
+        case Result.Err(e):
+            print("err: " + e)
+
+    result2 = parse_int32("xyz")
+    match result2:
+        case Result.Ok(value):
+            print("ok: " + value.to_string())
+        case Result.Err(e):
+            print("err: " + e)
+    return 0

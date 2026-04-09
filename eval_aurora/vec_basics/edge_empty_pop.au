@@ -1,0 +1,24 @@
+def main() -> int32:
+    # Pop from various empty vecs
+    mut v1 = Vec[int32]()
+    match v1.pop():
+        case Some(x):
+            print(x)
+        case None:
+            print("empty int pop: None")
+
+    mut v2: Vec[String] = []
+    match v2.pop():
+        case Some(x):
+            print(x)
+        case None:
+            print("empty string pop: None")
+
+    mut v3: Vec[bool] = []
+    match v3.pop():
+        case Some(x):
+            print(x)
+        case None:
+            print("empty bool pop: None")
+
+    return 0

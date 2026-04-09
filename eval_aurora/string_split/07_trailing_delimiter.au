@@ -1,0 +1,6 @@
+def main() -> int32:
+    result = "a,b,".split(",")
+    print(result.len())
+    for part in borrow result:
+        print(f"[{part}]")
+    return 0

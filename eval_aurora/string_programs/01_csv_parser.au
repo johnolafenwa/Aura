@@ -1,0 +1,25 @@
+## Program 1: CSV Parser
+## Split a CSV line by comma, trim each field, print fields with index
+
+def main() -> int32:
+    csv_line = "  Alice , 30 , Engineer ,  San Francisco  , active "
+    print(f"Raw: {csv_line}")
+
+    fields = csv_line.split(",")
+    print(f"Field count: {fields.len()}")
+
+    for i in range(fields.len()):
+        trimmed = fields[i].trim()
+        print(f"  [{i}] {trimmed}")
+
+    ## Demonstrate contains check on a field
+    raw_city = fields[3]
+    if raw_city.trim().contains("San"):
+        print("City contains San")
+
+    ## Check if last field starts/ends with something after trim
+    status = fields[4].trim()
+    if status.starts_with("act"):
+        print(f"Status starts with act: {status}")
+
+    return 0

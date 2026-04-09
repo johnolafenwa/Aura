@@ -1,0 +1,32 @@
+# Test 19: Recursive function - factorial and fibonacci
+
+def factorial(n: int32) -> int32:
+    if n <= 1:
+        return 1
+    return n * factorial(n=n - 1)
+
+def fib_recursive(n: int32) -> int32:
+    if n <= 0:
+        return 0
+    if n == 1:
+        return 1
+    return fib_recursive(n=n - 1) + fib_recursive(n=n - 2)
+
+def main() -> int32:
+    print("factorial(0):")
+    print(factorial(n=0))
+    print("factorial(1):")
+    print(factorial(n=1))
+    print("factorial(5):")
+    print(factorial(n=5))
+    print("factorial(10):")
+    print(factorial(n=10))
+
+    print("fib_recursive(0):")
+    print(fib_recursive(n=0))
+    print("fib_recursive(1):")
+    print(fib_recursive(n=1))
+    print("fib_recursive(10):")
+    print(fib_recursive(n=10))
+
+    return 0

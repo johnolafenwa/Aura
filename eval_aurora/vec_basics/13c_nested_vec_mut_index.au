@@ -1,0 +1,10 @@
+def main() -> int32:
+    # Test: can we index a mut nested vec?
+    mut matrix: Vec[Vec[int32]] = []
+    matrix.push([1, 2, 3])
+    matrix.push([4, 5, 6])
+
+    inner = matrix[0]
+    print(inner[0])
+
+    return 0

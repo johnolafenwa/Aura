@@ -1,0 +1,33 @@
+class Point:
+    x: int32
+    y: int32
+
+    def describe(borrow self) -> String:
+        return f"({self.x}, {self.y})"
+
+def main() -> int32:
+    mut points: Vec[Point] = []
+    points.push(Point(x=1, y=2))
+    points.push(Point(x=3, y=4))
+    points.push(Point(x=5, y=6))
+
+    print(points.len())
+
+    # Iterate with borrow
+    for p in borrow points:
+        print(p.describe())
+
+    # Push more
+    points.push(Point(x=7, y=8))
+    print(points.len())
+
+    # Pop the last point
+    match points.pop():
+        case Some(p):
+            print(p.describe())
+        case None:
+            print("None")
+
+    print(points.len())
+
+    return 0

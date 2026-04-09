@@ -1,0 +1,8 @@
+# Test 24: Extend String vec
+def main() -> int32:
+    mut a = ["hello", "world"]
+    b = ["aurora", "lang"]
+    a.extend(b)
+    for s in borrow a:
+        print(s)
+    return 0

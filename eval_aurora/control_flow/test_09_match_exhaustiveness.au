@@ -1,0 +1,18 @@
+# Test 09: Match exhaustiveness - what happens with non-exhaustive match?
+# This test intentionally omits a variant to see if the compiler catches it.
+
+enum Color:
+    Red
+    Green
+    Blue
+
+def describe(c: Color) -> String:
+    match c:
+        case Color.Red:
+            return "red"
+        case Color.Green:
+            return "green"
+
+def main() -> int32:
+    print(describe(c=Color.Red))
+    return 0

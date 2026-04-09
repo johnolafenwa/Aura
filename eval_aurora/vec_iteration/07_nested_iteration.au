@@ -1,0 +1,8 @@
+# Test 07: Nested iteration over two vecs
+def main() -> int32:
+    xs = [1, 2, 3]
+    ys = [10, 20]
+    for x in borrow xs:
+        for y in borrow ys:
+            print(x * y)
+    return 0

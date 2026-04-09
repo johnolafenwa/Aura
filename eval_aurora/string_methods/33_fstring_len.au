@@ -1,0 +1,5 @@
+def main() -> int32:
+    name = "world"
+    greeting = f"hello {name}"
+    print(greeting.len())
+    return 0

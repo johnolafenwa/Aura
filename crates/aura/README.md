@@ -23,15 +23,23 @@ After the release build completes, run the binary directly:
 ```bash
 ./target/release/aura check examples/classes/point_distance.au
 ./target/release/aura run examples/classes/point_distance.au
+./target/release/aura run examples/control_flow/match_literals.au
 ./target/release/aura run-mir examples/classes/methods.au
 ./target/release/aura run examples/generics/box_and_wrapper.au
 ./target/release/aura run examples/basics/default_arguments.au
+./target/release/aura run examples/collections/vec_basics.au
+./target/release/aura run examples/collections/vec_polish.au
+./target/release/aura run examples/collections/map_basics.au
+./target/release/aura run examples/collections/set_basics.au
 ./target/release/aura run examples/basics/pass_keyword.au
 ./target/release/aura run examples/modules/simple_import.au
 ./target/release/aura run examples/traits/greeter.au
 ./target/release/aura run examples/traits/generic_trait_impl.au
 ./target/release/aura run examples/traits/specialized_trait_dispatch.au
 ./target/release/aura run examples/numbers/numeric_casts.au
+./target/release/aura run examples/numbers/numeric_builtins.au
+./target/release/aura run examples/strings/string_methods.au
+./target/release/aura run examples/strings/string_parsing_and_formatting.au
 ./target/release/aura run examples/concurrency/sleep_builtin.au
 ./target/release/aura build -o ./target/aurora-point examples/point.au
 ./target/release/aura build --backend direct -o ./target/aurora-direct examples/basic_addition.au
@@ -47,9 +55,16 @@ You can do the same with the other current examples:
 ```bash
 ./target/release/aura run examples/basics/main_function.au
 ./target/release/aura run examples/basics/top_level_script.au
+./target/release/aura run-mir examples/control_flow/match_literals.au
+./target/release/aura run examples/collections/vec_iteration.au
+./target/release/aura run-mir examples/collections/vec_polish.au
+./target/release/aura run-mir examples/collections/map_basics.au
+./target/release/aura run-mir examples/collections/set_basics.au
 ./target/release/aura run-mir examples/generics/box_and_wrapper.au
 ./target/release/aura run-mir examples/traits/greeter.au
 ./target/release/aura run-mir examples/numbers/numeric_casts.au
+./target/release/aura run-mir examples/numbers/numeric_builtins.au
+./target/release/aura run-mir examples/strings/string_methods.au
 ```
 
 ## Install The Binary Somewhere On Your Path
@@ -83,10 +98,12 @@ aura --version
 - `aura run <file.au>`
   - run a program
   - this now includes the maintained `pass` statement and `sleep(duration)` builtin
+  - the maintained user-facing surface now also includes the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, and `Set[T]`
   - local file imports and `public` module boundaries now work for file-backed programs
 - `aura run-mir <file.au>`
   - run a program through the current native MIR runtime path
   - this now includes the current explicit numeric cast surface with `expr as Type`
+  - statement-form `match` now also supports literal `bool`, integer, and `String` cases through this path
 - `aura build -o <output> <file.au>`
   - compile a standalone native binary for a program
   - this accepts `--backend auto|direct`

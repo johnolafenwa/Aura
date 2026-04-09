@@ -1,0 +1,19 @@
+# Test 04e: Using .get() instead of index for String vec after borrow
+def main() -> int32:
+    mut items: Vec[String] = ["alpha", "beta", "gamma"]
+    for item in borrow items:
+        print(item)
+
+    # Try .get() instead of direct indexing
+    match items.get(0):
+        case Some(val):
+            print(val)
+        case None:
+            print("none")
+
+    match items.get(2):
+        case Some(val):
+            print(val)
+        case None:
+            print("none")
+    return 0

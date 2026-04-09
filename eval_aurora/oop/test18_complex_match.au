@@ -1,0 +1,26 @@
+enum Token:
+    Number(int32)
+    Word(String)
+    Empty
+
+def classify(t: Token) -> String:
+    match t:
+        case Token.Number(n):
+            if n > 0:
+                return "positive number"
+            return "non-positive number"
+        case Token.Word(w):
+            return "word: " + w
+        case Token.Empty:
+            return "empty"
+
+def main() -> int32:
+    t1 = Token.Number(42)
+    t2 = Token.Number(-3)
+    t3 = Token.Word("hello")
+    t4 = Token.Empty
+    print(classify(t1))
+    print(classify(t2))
+    print(classify(t3))
+    print(classify(t4))
+    return 0

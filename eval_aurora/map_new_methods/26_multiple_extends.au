@@ -1,0 +1,14 @@
+def main() -> int32:
+    mut m = {"a": 1}
+    m2 = {"b": 2}
+    m3 = {"c": 3}
+    m4 = {"d": 4}
+    m.extend(m2)
+    m.extend(m3)
+    m.extend(m4)
+    print(m.len())
+    print(m["a"])
+    print(m["b"])
+    print(m["c"])
+    print(m["d"])
+    return 0

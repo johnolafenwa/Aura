@@ -1,0 +1,25 @@
+def print_opt(value: Option[int32]):
+    match value:
+        case Some(inner):
+            print(inner)
+        case None:
+            print("None")
+
+def main() -> int32:
+    mut v = [1, 2, 3, 4, 5]
+
+    # Pop should return last element (LIFO)
+    print_opt(v.pop())
+    print_opt(v.pop())
+    print_opt(v.pop())
+    print_opt(v.pop())
+    print_opt(v.pop())
+
+    # Pop on empty vec should return None
+    print_opt(v.pop())
+    print_opt(v.pop())
+
+    print(v.is_empty())
+    print(v.len())
+
+    return 0

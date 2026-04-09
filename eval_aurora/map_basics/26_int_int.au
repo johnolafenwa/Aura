@@ -1,0 +1,9 @@
+def main() -> int32:
+    mut m = Map[int32, int32]()
+    m.set(1, 100)
+    m.set(2, 200)
+    m.set(3, 300)
+    print(m[1])
+    print(m[2])
+    print(m[3])
+    return 0

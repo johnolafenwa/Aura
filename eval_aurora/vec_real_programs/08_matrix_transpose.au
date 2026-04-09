@@ -1,0 +1,36 @@
+## Matrix transpose: transpose a 3x3 Vec[Vec[int32]].
+## Uses: nested indexing on non-copy inner vecs, borrow iteration, len()
+
+def print_matrix(m: borrow Vec[Vec[int32]]):
+    for row in borrow m:
+        a = row[0]
+        b = row[1]
+        c = row[2]
+        print(f"  [{a}, {b}, {c}]")
+
+def main() -> int32:
+    ## Build a 3x3 matrix
+    mut matrix: Vec[Vec[int32]] = []
+    matrix.push([1, 2, 3])
+    matrix.push([4, 5, 6])
+    matrix.push([7, 8, 9])
+
+    print("Original matrix:")
+    print_matrix(matrix)
+
+    ## Transpose: build new matrix where result[c][r] = matrix[r][c]
+    mut transposed: Vec[Vec[int32]] = []
+    mut c: int32 = 0
+    while c < 3:
+        mut new_row: Vec[int32] = []
+        mut r: int32 = 0
+        while r < 3:
+            new_row.push(matrix[r][c])
+            r += 1
+        transposed.push(new_row)
+        c += 1
+
+    print("Transposed matrix:")
+    print_matrix(transposed)
+
+    return 0

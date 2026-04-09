@@ -1,0 +1,22 @@
+## Test 05: Character frequency
+## Count each character using Vec[String] of single chars
+
+def main() -> int32:
+    chars: Vec[String] = ["h", "e", "l", "l", "o", " ", "w", "o", "r", "l", "d"]
+
+    mut freq = Map[String, int32]()
+
+    for ch in chars:
+        match freq.get(ch.clone()):
+            case Some(n):
+                freq[ch.clone()] = n + 1
+            case None:
+                freq[ch] = 1
+
+    print(f"unique chars: {freq.len()}")
+
+    keys = freq.keys()
+    for key in keys:
+        print(f"'{key}': {freq[key.clone()]}")
+
+    return 0

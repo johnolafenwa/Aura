@@ -1,0 +1,42 @@
+## Concurrent word counter.
+## Spawns multiple workers via task group, each "counting" words
+## (simulated with integers sent through channels), then aggregates results.
+
+def count_words(worker_id: int32, word_count: int32, out: Channel[int32]):
+    ## Simulate counting words in a "document"
+    ## Each worker counts a different number of words
+    print(f"Worker {worker_id} counting {word_count} words")
+    out.send(word_count)
+
+def main() -> int32:
+    results: Channel[int32] = channel()
+
+    mut total_words: int32 = 0
+
+    ## Spawn 5 workers, each counting a different number of words
+    with task_group() as group:
+        group.spawn(count_words, 1, 150, results.clone())
+        group.spawn(count_words, 2, 230, results.clone())
+        group.spawn(count_words, 3, 180, results.clone())
+        group.spawn(count_words, 4, 95, results.clone())
+        group.spawn(count_words, 5, 310, results.clone())
+
+        ## Collect results from all 5 workers
+        mut received: int32 = 0
+
+        while received < 5:
+            select:
+                case value = results.recv():
+                    match value:
+                        case Option.Some(count):
+                            total_words += count
+                            received += 1
+                        case Option.None:
+                            break
+
+        results.close()
+
+    print(f"Total words counted: {total_words}")
+    print(f"Expected: {150 + 230 + 180 + 95 + 310}")
+
+    return 0

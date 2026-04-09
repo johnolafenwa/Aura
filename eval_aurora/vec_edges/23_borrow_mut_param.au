@@ -1,0 +1,15 @@
+# Test 23: Borrow mut Vec param - function modifies, caller sees changes
+def add_element(v: borrow mut Vec[int32], val: int32):
+    v.push(val)
+
+def main() -> int32:
+    mut v = [1, 2]
+    print(v.len())
+    add_element(v, val=10)
+    print(v.len())
+    print(v[2])
+    add_element(v, val=20)
+    print(v.len())
+    for x in v:
+        print(x)
+    return 0

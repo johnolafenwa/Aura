@@ -1,0 +1,37 @@
+trait Displayable:
+    def name(borrow self) -> String
+    def is_primary(borrow self) -> bool
+
+enum Color:
+    Red
+    Green
+    Blue
+
+impl Displayable for Color:
+    def name(borrow self) -> String:
+        match self:
+            case Color.Red:
+                return "red"
+            case Color.Green:
+                return "green"
+            case Color.Blue:
+                return "blue"
+
+    def is_primary(borrow self) -> bool:
+        match self:
+            case Color.Green:
+                return false
+            case _:
+                return true
+
+def main() -> int32:
+    r = Color.Red
+    g = Color.Green
+    b = Color.Blue
+    print(r.name())
+    print(r.is_primary())
+    print(g.name())
+    print(g.is_primary())
+    print(b.name())
+    print(b.is_primary())
+    return 0

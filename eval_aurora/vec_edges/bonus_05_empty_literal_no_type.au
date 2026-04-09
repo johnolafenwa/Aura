@@ -1,0 +1,4 @@
+# Bonus: Empty literal without type annotation - should require context
+def main() -> int32:
+    v = []
+    return 0

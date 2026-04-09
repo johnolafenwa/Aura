@@ -1,0 +1,4 @@
+# Test 4c: Negative int to uint - should this error?
+neg: int32 = -5
+u: uint32 = neg as uint32
+print(u)

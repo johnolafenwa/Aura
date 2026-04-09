@@ -1,0 +1,7 @@
+def main() -> int32:
+    mut names = ["Alice", "Bob"]
+    print(names[0])
+    names.push("Charlie")
+    print(names.len())
+    print(names[2])
+    return 0

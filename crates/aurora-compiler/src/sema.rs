@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, EnumDecl, Expr, ExprKind,
-    FunctionDecl, ImplDecl, Item, MatchStmt, Module, Param, Pattern, ReceiverKind, SelectStmt,
-    Stmt, TraitDecl, TypeRef, UnaryOp, WithStmt,
+    FunctionDecl, ImplDecl, Item, LiteralPattern, LiteralPatternKind, MatchStmt, Module, Param,
+    Pattern, ReceiverKind, SelectStmt, Stmt, TraitDecl, TypeRef, UnaryOp, WithStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinFunction, BuiltinMember, CallConvention,
@@ -1067,11 +1067,36 @@ fn lower_type(
         return Ok(Type::Named(type_name.to_string(), args));
     }
 
-    if type_name == "Channel" || type_name == "Task" || type_name == "SendError" {
+    if type_name == "Channel"
+        || type_name == "Task"
+        || type_name == "SendError"
+        || type_name == "Vec"
+        || type_name == "Set"
+    {
         if args.len() != 1 {
             return Err(Diagnostic::at(
                 type_ref.span,
                 format!("`{}` expects exactly one type argument", type_name),
+            ));
+        }
+        return Ok(Type::Named(type_name.to_string(), args));
+    }
+
+    if type_name == "Map" {
+        if args.len() != 2 {
+            return Err(Diagnostic::at(
+                type_ref.span,
+                "`Map` expects exactly two type arguments",
+            ));
+        }
+        return Ok(Type::Named(type_name.to_string(), args));
+    }
+
+    if type_name == "MapEntry" {
+        if args.len() != 2 {
+            return Err(Diagnostic::at(
+                type_ref.span,
+                "`MapEntry` expects exactly two type arguments",
             ));
         }
         return Ok(Type::Named(type_name.to_string(), args));
@@ -1249,12 +1274,21 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
         ExprKind::Spawn { value, .. } => default_argument_references_param(value, param_names),
         ExprKind::Specialize { expr, .. } => default_argument_references_param(expr, param_names),
         ExprKind::Member { object, .. } => default_argument_references_param(object, param_names),
+        ExprKind::Index { object, index } => default_argument_references_param(object, param_names)
+            .or_else(|| default_argument_references_param(index, param_names)),
         ExprKind::Call { callee, args } => default_argument_references_param(callee, param_names)
             .or_else(|| {
                 args.iter().find_map(|argument| {
                     default_argument_references_param(&argument.value, param_names)
                 })
             }),
+        ExprKind::List(elements) | ExprKind::Set(elements) => elements
+            .iter()
+            .find_map(|element| default_argument_references_param(element, param_names)),
+        ExprKind::Map(entries) => entries.iter().find_map(|entry| {
+            default_argument_references_param(&entry.key, param_names)
+                .or_else(|| default_argument_references_param(&entry.value, param_names))
+        }),
         ExprKind::FString(parts) => parts.iter().find_map(|part| match part {
             crate::ast::FormatPart::Literal(_) => None,
             crate::ast::FormatPart::Expr(expr) => {
@@ -1517,6 +1551,10 @@ fn is_builtin_type(name: &str) -> bool {
             | "float32"
             | "float64"
             | "String"
+            | "Vec"
+            | "Set"
+            | "Map"
+            | "MapEntry"
             | "Range"
             | "Channel"
             | "Task"
@@ -1538,8 +1576,48 @@ fn is_float_type(ty: &Type) -> bool {
     matches!(ty, Type::Named(name, args) if args.is_empty() && matches!(name.as_str(), "float32" | "float64"))
 }
 
+fn is_string_type(ty: &Type) -> bool {
+    matches!(ty, Type::Named(name, args) if name == "String" && args.is_empty())
+}
+
 fn is_numeric_type(ty: &Type) -> bool {
     is_integer_type(ty) || is_float_type(ty)
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum LiteralPatternKey {
+    Int(IntegerValue),
+    Bool(bool),
+    String(String),
+}
+
+fn render_literal_pattern_key(key: &LiteralPatternKey) -> String {
+    match key {
+        LiteralPatternKey::Int(value) => value.to_string(),
+        LiteralPatternKey::Bool(value) => value.to_string(),
+        LiteralPatternKey::String(value) => format!("{:?}", value),
+    }
+}
+
+fn vec_element_type(ty: &Type) -> Option<&Type> {
+    match ty {
+        Type::Named(name, args) if name == "Vec" && args.len() == 1 => Some(&args[0]),
+        _ => None,
+    }
+}
+
+fn set_element_type(ty: &Type) -> Option<&Type> {
+    match ty {
+        Type::Named(name, args) if name == "Set" && args.len() == 1 => Some(&args[0]),
+        _ => None,
+    }
+}
+
+fn map_key_value_types(ty: &Type) -> Option<(&Type, &Type)> {
+    match ty {
+        Type::Named(name, args) if name == "Map" && args.len() == 2 => Some((&args[0], &args[1])),
+        _ => None,
+    }
 }
 
 fn borrow_places_overlap(left: &str, right: &str) -> bool {
@@ -1841,6 +1919,25 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Group(inner) => self.consume_value_expr(inner, locals),
             ExprKind::Cast { expr, .. } => self.consume_value_expr(expr, locals),
             ExprKind::Specialize { expr, .. } => self.consume_value_expr(expr, locals),
+            ExprKind::List(elements) => {
+                for element in elements {
+                    self.consume_value_expr(element, locals)?;
+                }
+                Ok(())
+            }
+            ExprKind::Set(elements) => {
+                for element in elements {
+                    self.consume_value_expr(element, locals)?;
+                }
+                Ok(())
+            }
+            ExprKind::Map(entries) => {
+                for entry in entries {
+                    self.consume_value_expr(&entry.key, locals)?;
+                    self.consume_value_expr(&entry.value, locals)?;
+                }
+                Ok(())
+            }
             ExprKind::Member { object, field } => {
                 let base_object = match &object.kind {
                     ExprKind::Specialize { expr, .. } => &**expr,
@@ -1892,6 +1989,7 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(())
             }
+            ExprKind::Index { .. } => self.type_of_expr(expr, locals).map(|_| ()),
             _ => Ok(()),
         }
     }
@@ -2366,9 +2464,10 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Stmt::For(for_stmt) => {
                     let iterable_ty = self.type_of_expr(&for_stmt.iterable, locals)?;
-                    let (binding_ty, binding_passing) = match (&iterable_ty, for_stmt.borrow_mode) {
+                    let (binding_ty, binding_passing, binding_mutable_place) =
+                        match (&iterable_ty, for_stmt.borrow_mode) {
                         (Type::Named(name, _), _) if name == "Range" => {
-                            (Type::named("int32"), ReceiverKind::Value)
+                            (Type::named("int32"), ReceiverKind::Value, false)
                         }
                         (Type::Named(name, args), borrow_mode)
                             if name == "Channel" && args.len() == 1 =>
@@ -2380,18 +2479,70 @@ impl<'a> FunctionChecker<'a> {
                                 } else {
                                     ReceiverKind::Value
                                 };
-                            (element_ty, passing)
+                            (element_ty, passing, false)
+                        }
+                        (Type::Named(name, args), borrow_mode) if name == "Vec" && args.len() == 1 => {
+                            if borrow_mode == Some(ReceiverKind::BorrowMut)
+                                && !self.is_mutable_place(&for_stmt.iterable, locals)?
+                            {
+                                return Err(Diagnostic::at(
+                                    for_stmt.iterable.span,
+                                    "`for value in borrow mut ...:` requires a mutable `Vec[T]` place",
+                                ));
+                            }
+                            let element_ty = args[0].clone();
+                            let passing = match borrow_mode {
+                                Some(ReceiverKind::BorrowMut) => ReceiverKind::BorrowMut,
+                                Some(ReceiverKind::Borrow) if !self.is_copy_type(&element_ty) => {
+                                    ReceiverKind::Borrow
+                                }
+                                _ => ReceiverKind::Value,
+                            };
+                            (
+                                element_ty,
+                                passing,
+                                passing == ReceiverKind::BorrowMut,
+                            )
+                        }
+                        (Type::Named(name, args), Some(ReceiverKind::BorrowMut))
+                            if name == "Set" && args.len() == 1 =>
+                        {
+                            return Err(Diagnostic::at(
+                                for_stmt.iterable.span,
+                                "`for value in borrow mut ...:` is not supported for `Set[T]`; use `insert`/`remove` on the set directly",
+                            ))
+                        }
+                        (Type::Named(name, args), borrow_mode) if name == "Set" && args.len() == 1 => {
+                            let element_ty = args[0].clone();
+                            let passing = match borrow_mode {
+                                Some(ReceiverKind::Borrow) if !self.is_copy_type(&element_ty) => {
+                                    ReceiverKind::Borrow
+                                }
+                                _ => ReceiverKind::Value,
+                            };
+                            (element_ty, passing, false)
                         }
                         _ => {
                             return Err(Diagnostic::at(
                                 for_stmt.span,
                                 format!(
-                                    "`for` currently requires a `Range` or `Channel[T]` iterable, found `{}`",
+                                    "`for` currently requires a `Range`, `Channel[T]`, `Vec[T]`, or `Set[T]` iterable, found `{}`",
                                     iterable_ty
                                 ),
                             ))
                         }
                     };
+                    if matches!(
+                        (&iterable_ty, for_stmt.borrow_mode),
+                        (Type::Named(name, args), Some(ReceiverKind::BorrowMut))
+                            if name == "Vec" && args.len() == 1
+                    ) && !self.is_mutable_place(&for_stmt.iterable, locals)?
+                    {
+                        return Err(Diagnostic::at(
+                            for_stmt.iterable.span,
+                            "`for` with `borrow mut` requires a mutable iterable place",
+                        ));
+                    }
                     if for_stmt.borrow_mode.is_none() && !self.is_copy_type(&iterable_ty) {
                         self.consume_value_expr(&for_stmt.iterable, locals)?;
                     }
@@ -2410,7 +2561,7 @@ impl<'a> FunctionChecker<'a> {
                         LocalBinding {
                             ty: binding_ty,
                             assignable: false,
-                            mutable_place: false,
+                            mutable_place: binding_mutable_place,
                             passing: binding_passing,
                             moved: false,
                             moved_fields: BTreeSet::new(),
@@ -2702,6 +2853,78 @@ impl<'a> FunctionChecker<'a> {
         assign: &AssignStmt,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        if let AssignTarget::Index { object, index } = &assign.target {
+            if assign.mutable {
+                return Err(Diagnostic::at(
+                    assign.span,
+                    "`mut` can only be used when introducing a new binding",
+                ));
+            }
+
+            if assign.annotation.is_some() {
+                return Err(Diagnostic::at(
+                    assign.span,
+                    "index assignment cannot include a type annotation",
+                ));
+            }
+
+            if !self.is_mutable_place(object, locals)? {
+                return Err(Diagnostic::at(
+                    assign.span,
+                    format!(
+                        "cannot assign through immutable place `{}`",
+                        self.render_index_target(object)
+                    ),
+                ));
+            }
+
+            let object_ty = self.type_of_expr(object, locals)?;
+            let target_ty = if let Some(target_ty) = vec_element_type(&object_ty).cloned() {
+                let index_ty = self.type_of_expr(index, locals)?;
+                if !is_integer_type(&index_ty) {
+                    return Err(Diagnostic::at(
+                        index.span,
+                        format!("vector indices must be integers, found `{}`", index_ty),
+                    ));
+                }
+                target_ty
+            } else if let Some((key_ty, value_ty)) = map_key_value_types(&object_ty) {
+                let index_ty = self.type_of_expr_hint(index, locals, Some(key_ty))?;
+                if index_ty != *key_ty {
+                    return Err(Diagnostic::at(
+                        index.span,
+                        format!("map keys must have type `{}`, found `{}`", key_ty, index_ty),
+                    ));
+                }
+                value_ty.clone()
+            } else {
+                return Err(Diagnostic::at(
+                    assign.span,
+                    format!("cannot index non-vector-or-map value `{}`", object_ty),
+                ));
+            };
+
+            let value_ty = self.type_of_expr_hint(&assign.value, locals, Some(&target_ty))?;
+            let final_value_ty = if let Some(op) = assign.op {
+                self.type_of_binary(assign.span, op, target_ty.clone(), value_ty.clone())?
+            } else {
+                value_ty
+            };
+
+            if final_value_ty != target_ty {
+                return Err(Diagnostic::at(
+                    assign.span,
+                    format!(
+                        "cannot assign value of type `{}` to indexed element of type `{}`",
+                        final_value_ty, target_ty
+                    ),
+                ));
+            }
+
+            self.consume_value_expr(&assign.value, locals)?;
+            return Ok(());
+        }
+
         if let AssignTarget::Member { object, field } = &assign.target {
             if assign.mutable {
                 return Err(Diagnostic::at(
@@ -2773,6 +2996,7 @@ impl<'a> FunctionChecker<'a> {
         let binding_name = match &assign.target {
             AssignTarget::Name(name) => name,
             AssignTarget::Member { .. } => unreachable!("handled above"),
+            AssignTarget::Index { .. } => unreachable!("handled above"),
         };
         let annotation_ty = assign
             .annotation
@@ -2814,7 +3038,7 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
 
-            if !existing.assignable {
+            if !existing.assignable && !existing.mutable_place {
                 return Err(Diagnostic::at(
                     assign.span,
                     format!("cannot assign to immutable binding `{}`", binding_name),
@@ -2980,6 +3204,138 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(Type::named("String"))
             }
+            ExprKind::List(elements) => {
+                let mut element_ty = expected.and_then(vec_element_type).cloned();
+                for element in elements {
+                    let actual = if let Some(expected_element_ty) = element_ty.as_ref() {
+                        self.type_of_expr_hint(element, locals, Some(expected_element_ty))?
+                    } else {
+                        self.type_of_expr(element, locals)?
+                    };
+                    if let Some(expected_element_ty) = element_ty.as_ref() {
+                        if actual != *expected_element_ty {
+                            return Err(Diagnostic::at(
+                                element.span,
+                                format!(
+                                    "list literal elements must all have type `{}`, found `{}`",
+                                    expected_element_ty, actual
+                                ),
+                            ));
+                        }
+                    } else {
+                        element_ty = Some(actual);
+                    }
+                }
+                let Some(element_ty) = element_ty else {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        "empty list literals require an expected `Vec[T]` type annotation in the bootstrap compiler",
+                    ));
+                };
+                for element in elements {
+                    if !self.is_copy_type(&element_ty) {
+                        self.consume_value_expr(element, locals)?;
+                    }
+                }
+                Ok(Type::Named("Vec".to_string(), vec![element_ty]))
+            }
+            ExprKind::Set(elements) => {
+                let mut element_ty = expected.and_then(set_element_type).cloned();
+                for element in elements {
+                    let actual = if let Some(expected_element_ty) = element_ty.as_ref() {
+                        self.type_of_expr_hint(element, locals, Some(expected_element_ty))?
+                    } else {
+                        self.type_of_expr(element, locals)?
+                    };
+                    if let Some(expected_element_ty) = element_ty.as_ref() {
+                        if actual != *expected_element_ty {
+                            return Err(Diagnostic::at(
+                                element.span,
+                                format!(
+                                    "set literal elements must all have type `{}`, found `{}`",
+                                    expected_element_ty, actual
+                                ),
+                            ));
+                        }
+                    } else {
+                        element_ty = Some(actual);
+                    }
+                }
+                let Some(element_ty) = element_ty else {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        "empty set literals require an expected `Set[T]` type annotation in the bootstrap compiler",
+                    ));
+                };
+                for element in elements {
+                    if !self.is_copy_type(&element_ty) {
+                        self.consume_value_expr(element, locals)?;
+                    }
+                }
+                Ok(Type::Named("Set".to_string(), vec![element_ty]))
+            }
+            ExprKind::Map(entries) => {
+                let mut key_ty = expected
+                    .and_then(map_key_value_types)
+                    .map(|(key_ty, _)| key_ty.clone());
+                let mut value_ty = expected
+                    .and_then(map_key_value_types)
+                    .map(|(_, value_ty)| value_ty.clone());
+                for entry in entries {
+                    let actual_key = if let Some(expected_key_ty) = key_ty.as_ref() {
+                        self.type_of_expr_hint(&entry.key, locals, Some(expected_key_ty))?
+                    } else {
+                        self.type_of_expr(&entry.key, locals)?
+                    };
+                    if let Some(expected_key_ty) = key_ty.as_ref() {
+                        if actual_key != *expected_key_ty {
+                            return Err(Diagnostic::at(
+                                entry.key.span,
+                                format!(
+                                    "map literal keys must all have type `{}`, found `{}`",
+                                    expected_key_ty, actual_key
+                                ),
+                            ));
+                        }
+                    } else {
+                        key_ty = Some(actual_key);
+                    }
+
+                    let actual_value = if let Some(expected_value_ty) = value_ty.as_ref() {
+                        self.type_of_expr_hint(&entry.value, locals, Some(expected_value_ty))?
+                    } else {
+                        self.type_of_expr(&entry.value, locals)?
+                    };
+                    if let Some(expected_value_ty) = value_ty.as_ref() {
+                        if actual_value != *expected_value_ty {
+                            return Err(Diagnostic::at(
+                                entry.value.span,
+                                format!(
+                                    "map literal values must all have type `{}`, found `{}`",
+                                    expected_value_ty, actual_value
+                                ),
+                            ));
+                        }
+                    } else {
+                        value_ty = Some(actual_value);
+                    }
+                }
+                let (Some(key_ty), Some(value_ty)) = (key_ty, value_ty) else {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        "empty map literals require an expected `Map[K, V]` type annotation in the bootstrap compiler",
+                    ));
+                };
+                for entry in entries {
+                    if !self.is_copy_type(&key_ty) {
+                        self.consume_value_expr(&entry.key, locals)?;
+                    }
+                    if !self.is_copy_type(&value_ty) {
+                        self.consume_value_expr(&entry.value, locals)?;
+                    }
+                }
+                Ok(Type::Named("Map".to_string(), vec![key_ty, value_ty]))
+            }
             ExprKind::Group(inner) => self.type_of_expr_hint(inner, locals, expected),
             ExprKind::Specialize {
                 expr: base,
@@ -2991,6 +3347,30 @@ impl<'a> FunctionChecker<'a> {
                         if matches!(name.as_str(), "Option" | "Result" | "SendError") =>
                     {
                         self.explicit_builtin_type(name, &lowered, expr.span)
+                    }
+                    ExprKind::Name(name) if name == "Set" => {
+                        if lowered.len() != 1 {
+                            return Err(Diagnostic::at(
+                                expr.span,
+                                format!(
+                                    "type `Set` expects exactly one type argument, found {}",
+                                    lowered.len()
+                                ),
+                            ));
+                        }
+                        Ok(Type::Named("Set".to_string(), lowered))
+                    }
+                    ExprKind::Name(name) if name == "Map" => {
+                        if lowered.len() != 2 {
+                            return Err(Diagnostic::at(
+                                expr.span,
+                                format!(
+                                    "type `Map` expects exactly two type arguments, found {}",
+                                    lowered.len()
+                                ),
+                            ));
+                        }
+                        Ok(Type::Named("Map".to_string(), lowered))
                     }
                     ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
                         let class = self.resolve_class_info(name).unwrap();
@@ -3341,6 +3721,33 @@ impl<'a> FunctionChecker<'a> {
                 let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
                 Ok(member_ty)
             }
+            ExprKind::Index { object, index } => {
+                let object_ty = self.type_of_expr(object, locals)?;
+                if let Some(element_ty) = vec_element_type(&object_ty).cloned() {
+                    let index_ty = self.type_of_expr(index, locals)?;
+                    if !is_integer_type(&index_ty) {
+                        return Err(Diagnostic::at(
+                            index.span,
+                            format!("vector indices must be integers, found `{}`", index_ty),
+                        ));
+                    }
+                    return Ok(element_ty);
+                }
+                if let Some((key_ty, value_ty)) = map_key_value_types(&object_ty) {
+                    let index_ty = self.type_of_expr_hint(index, locals, Some(key_ty))?;
+                    if index_ty != *key_ty {
+                        return Err(Diagnostic::at(
+                            index.span,
+                            format!("map keys must have type `{}`, found `{}`", key_ty, index_ty),
+                        ));
+                    }
+                    return Ok(value_ty.clone());
+                }
+                Err(Diagnostic::at(
+                    expr.span,
+                    format!("cannot index non-vector-or-map value `{}`", object_ty),
+                ))
+            }
             ExprKind::Call { callee, args } => {
                 self.type_of_call(callee, args, expr.span, locals, expected)
             }
@@ -3383,15 +3790,7 @@ impl<'a> FunctionChecker<'a> {
             {
                 Ok(left_ty)
             }
-            (BinaryOp::Eq | BinaryOp::NotEq, Type::Named(name, args))
-                if (args.is_empty()
-                    && (is_integer_type(&left_ty)
-                        || is_float_type(&left_ty)
-                        || matches!(name.as_str(), "bool" | "String")))
-                    || self.enum_variants_for_type(&left_ty).is_some() =>
-            {
-                Ok(Type::named("bool"))
-            }
+            (BinaryOp::Eq | BinaryOp::NotEq, _) => Ok(Type::named("bool")),
             (BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq, _)
                 if is_integer_type(&left_ty) || is_float_type(&left_ty) =>
             {
@@ -3449,6 +3848,66 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 return Ok(Type::Named("Channel".to_string(), explicit_args));
+            }
+            if name == "Vec" {
+                let explicit_args = self.lower_explicit_type_args(type_args)?;
+                if explicit_args.len() != 1 {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "class `{}` expects exactly one type argument, found {}",
+                            name,
+                            explicit_args.len()
+                        ),
+                    ));
+                }
+                if !args.is_empty() {
+                    return Err(Diagnostic::at(
+                        span,
+                        "class `Vec` does not take constructor arguments; use a list literal or `push(...)`",
+                    ));
+                }
+                return Ok(Type::Named("Vec".to_string(), explicit_args));
+            }
+            if name == "Set" {
+                let explicit_args = self.lower_explicit_type_args(type_args)?;
+                if explicit_args.len() != 1 {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "class `{}` expects exactly one type argument, found {}",
+                            name,
+                            explicit_args.len()
+                        ),
+                    ));
+                }
+                if !args.is_empty() {
+                    return Err(Diagnostic::at(
+                        span,
+                        "class `Set` does not take constructor arguments; use a set literal or `insert(...)`",
+                    ));
+                }
+                return Ok(Type::Named("Set".to_string(), explicit_args));
+            }
+            if name == "Map" {
+                let explicit_args = self.lower_explicit_type_args(type_args)?;
+                if explicit_args.len() != 2 {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "class `{}` expects exactly two type arguments, found {}",
+                            name,
+                            explicit_args.len()
+                        ),
+                    ));
+                }
+                if !args.is_empty() {
+                    return Err(Diagnostic::at(
+                        span,
+                        "class `Map` does not take constructor arguments; use a map literal or `set(...)`",
+                    ));
+                }
+                return Ok(Type::Named("Map".to_string(), explicit_args));
             }
         }
 
@@ -3533,6 +3992,142 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         Ok(Type::Unit)
+                    }
+                    BuiltinFunction::Abs => {
+                        let value_arg =
+                            ordered_args[0].expect("`abs` requires exactly one argument");
+                        let value_ty = self.type_of_expr(&value_arg.value, locals)?;
+                        if !is_numeric_type(&value_ty) {
+                            return Err(Diagnostic::at(
+                                value_arg.span,
+                                format!(
+                                    "`abs(...)` expects an integer or float value, found `{}`",
+                                    value_ty
+                                ),
+                            ));
+                        }
+                        Ok(value_ty)
+                    }
+                    BuiltinFunction::Min | BuiltinFunction::Max => {
+                        let left_arg =
+                            ordered_args[0].expect("`min`/`max` requires a left argument");
+                        let left_ty = self.type_of_expr(&left_arg.value, locals)?;
+                        if !is_numeric_type(&left_ty) {
+                            return Err(Diagnostic::at(
+                                left_arg.span,
+                                format!(
+                                    "`{}` expects numeric arguments, found `{}`",
+                                    builtin.name(),
+                                    left_ty
+                                ),
+                            ));
+                        }
+                        let right_arg =
+                            ordered_args[1].expect("`min`/`max` requires a right argument");
+                        let right_ty =
+                            self.type_of_expr_hint(&right_arg.value, locals, Some(&left_ty))?;
+                        if right_ty != left_ty {
+                            return Err(Diagnostic::at(
+                                right_arg.span,
+                                format!(
+                                    "`{}` arguments must match, found `{}` and `{}`",
+                                    builtin.name(),
+                                    left_ty,
+                                    right_ty
+                                ),
+                            ));
+                        }
+                        if !is_numeric_type(&right_ty) {
+                            return Err(Diagnostic::at(
+                                right_arg.span,
+                                format!(
+                                    "`{}` expects numeric arguments, found `{}`",
+                                    builtin.name(),
+                                    right_ty
+                                ),
+                            ));
+                        }
+                        Ok(left_ty)
+                    }
+                    BuiltinFunction::Sqrt => {
+                        let value_arg =
+                            ordered_args[0].expect("`sqrt` requires exactly one argument");
+                        let value_ty = self.type_of_expr(&value_arg.value, locals)?;
+                        if !matches!(
+                            value_ty,
+                            Type::Named(ref name, ref args)
+                                if args.is_empty()
+                                    && matches!(name.as_str(), "float32" | "float64")
+                        ) {
+                            return Err(Diagnostic::at(
+                                value_arg.span,
+                                format!(
+                                    "`sqrt(...)` expects `float32` or `float64`, found `{}`",
+                                    value_ty
+                                ),
+                            ));
+                        }
+                        Ok(value_ty)
+                    }
+                    BuiltinFunction::ParseInt32 => {
+                        let text_arg =
+                            ordered_args[0].expect("`parse_int32` requires exactly one argument");
+                        let text_ty = self.type_of_expr_hint(
+                            &text_arg.value,
+                            locals,
+                            Some(&Type::named("String")),
+                        )?;
+                        if text_ty != Type::named("String") {
+                            return Err(Diagnostic::at(
+                                text_arg.span,
+                                format!("`parse_int32(...)` expects `String`, found `{}`", text_ty),
+                            ));
+                        }
+                        Ok(Type::Named(
+                            "Result".to_string(),
+                            vec![Type::named("int32"), Type::named("String")],
+                        ))
+                    }
+                    BuiltinFunction::ParseInt64 => {
+                        let text_arg =
+                            ordered_args[0].expect("`parse_int64` requires exactly one argument");
+                        let text_ty = self.type_of_expr_hint(
+                            &text_arg.value,
+                            locals,
+                            Some(&Type::named("String")),
+                        )?;
+                        if text_ty != Type::named("String") {
+                            return Err(Diagnostic::at(
+                                text_arg.span,
+                                format!("`parse_int64(...)` expects `String`, found `{}`", text_ty),
+                            ));
+                        }
+                        Ok(Type::Named(
+                            "Result".to_string(),
+                            vec![Type::named("int64"), Type::named("String")],
+                        ))
+                    }
+                    BuiltinFunction::ParseFloat64 => {
+                        let text_arg =
+                            ordered_args[0].expect("`parse_float64` requires exactly one argument");
+                        let text_ty = self.type_of_expr_hint(
+                            &text_arg.value,
+                            locals,
+                            Some(&Type::named("String")),
+                        )?;
+                        if text_ty != Type::named("String") {
+                            return Err(Diagnostic::at(
+                                text_arg.span,
+                                format!(
+                                    "`parse_float64(...)` expects `String`, found `{}`",
+                                    text_ty
+                                ),
+                            ));
+                        }
+                        Ok(Type::Named(
+                            "Result".to_string(),
+                            vec![Type::named("float64"), Type::named("String")],
+                        ))
                     }
                 }
             }
@@ -4126,12 +4721,707 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
                 if let Type::Named(receiver_name, receiver_args) = &receiver_ty {
+                    if receiver_name == "Vec" && receiver_args.len() == 1 {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::VecLen => Ok(Type::named("int32")),
+                                BuiltinMember::VecIsEmpty => Ok(Type::named("bool")),
+                                BuiltinMember::VecClone => Ok(receiver_ty.clone()),
+                                BuiltinMember::VecPush => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    let push_arg = ordered_args[0]
+                                        .expect("`push` requires exactly one argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &push_arg.value,
+                                        locals,
+                                        Some(&receiver_args[0]),
+                                    )?;
+                                    if actual != receiver_args[0] {
+                                        return Err(Diagnostic::at(
+                                            push_arg.span,
+                                            format!(
+                                                "`push` expects `{}`, found `{}`",
+                                                receiver_args[0], actual
+                                            ),
+                                        ));
+                                    }
+                                    if !self.is_copy_type(&receiver_args[0]) {
+                                        self.consume_value_expr(&push_arg.value, locals)?;
+                                    }
+                                    Ok(Type::Unit)
+                                }
+                                BuiltinMember::VecPop => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::Named(
+                                        "Option".to_string(),
+                                        vec![receiver_args[0].clone()],
+                                    ))
+                                }
+                                BuiltinMember::VecGet => {
+                                    let index_arg = ordered_args[0]
+                                        .expect("`get` requires exactly one argument");
+                                    let index_ty = self.type_of_expr_hint(
+                                        &index_arg.value,
+                                        locals,
+                                        Some(&Type::named("int32")),
+                                    )?;
+                                    if !is_integer_type(&index_ty) {
+                                        return Err(Diagnostic::at(
+                                            index_arg.span,
+                                            format!(
+                                                "vector indices must be integers, found `{}`",
+                                                index_ty
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::Named(
+                                        "Option".to_string(),
+                                        vec![receiver_args[0].clone()],
+                                    ))
+                                }
+                                BuiltinMember::VecSet => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    let index_arg = ordered_args[0]
+                                        .expect("`set` requires an `index` argument");
+                                    let index_ty = self.type_of_expr_hint(
+                                        &index_arg.value,
+                                        locals,
+                                        Some(&Type::named("int32")),
+                                    )?;
+                                    if !is_integer_type(&index_ty) {
+                                        return Err(Diagnostic::at(
+                                            index_arg.span,
+                                            format!(
+                                                "vector indices must be integers, found `{}`",
+                                                index_ty
+                                            ),
+                                        ));
+                                    }
+                                    let value_arg =
+                                        ordered_args[1].expect("`set` requires a `value` argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &value_arg.value,
+                                        locals,
+                                        Some(&receiver_args[0]),
+                                    )?;
+                                    if actual != receiver_args[0] {
+                                        return Err(Diagnostic::at(
+                                            value_arg.span,
+                                            format!(
+                                                "`set` expects `{}`, found `{}`",
+                                                receiver_args[0], actual
+                                            ),
+                                        ));
+                                    }
+                                    if !self.is_copy_type(&receiver_args[0]) {
+                                        self.consume_value_expr(&value_arg.value, locals)?;
+                                    }
+                                    Ok(Type::Named(
+                                        "Option".to_string(),
+                                        vec![receiver_args[0].clone()],
+                                    ))
+                                }
+                                BuiltinMember::VecRemove => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    let index_arg = ordered_args[0]
+                                        .expect("`remove` requires exactly one argument");
+                                    let index_ty = self.type_of_expr_hint(
+                                        &index_arg.value,
+                                        locals,
+                                        Some(&Type::named("int32")),
+                                    )?;
+                                    if !is_integer_type(&index_ty) {
+                                        return Err(Diagnostic::at(
+                                            index_arg.span,
+                                            format!(
+                                                "vector indices must be integers, found `{}`",
+                                                index_ty
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::Named(
+                                        "Option".to_string(),
+                                        vec![receiver_args[0].clone()],
+                                    ))
+                                }
+                                BuiltinMember::VecSwap => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    let first_arg = ordered_args[0]
+                                        .expect("`swap` requires a `first` argument");
+                                    let first_ty = self.type_of_expr_hint(
+                                        &first_arg.value,
+                                        locals,
+                                        Some(&Type::named("int32")),
+                                    )?;
+                                    if !is_integer_type(&first_ty) {
+                                        return Err(Diagnostic::at(
+                                            first_arg.span,
+                                            format!(
+                                                "vector indices must be integers, found `{}`",
+                                                first_ty
+                                            ),
+                                        ));
+                                    }
+                                    let second_arg = ordered_args[1]
+                                        .expect("`swap` requires a `second` argument");
+                                    let second_ty = self.type_of_expr_hint(
+                                        &second_arg.value,
+                                        locals,
+                                        Some(&Type::named("int32")),
+                                    )?;
+                                    if !is_integer_type(&second_ty) {
+                                        return Err(Diagnostic::at(
+                                            second_arg.span,
+                                            format!(
+                                                "vector indices must be integers, found `{}`",
+                                                second_ty
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::named("bool"))
+                                }
+                                BuiltinMember::VecContains => {
+                                    let value_arg = ordered_args[0]
+                                        .expect("`contains` requires a `value` argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &value_arg.value,
+                                        locals,
+                                        Some(&receiver_args[0]),
+                                    )?;
+                                    if actual != receiver_args[0] {
+                                        return Err(Diagnostic::at(
+                                            value_arg.span,
+                                            format!(
+                                                "`contains` expects `{}`, found `{}`",
+                                                receiver_args[0], actual
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::named("bool"))
+                                }
+                                BuiltinMember::VecExtend => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    let other_arg = ordered_args[0]
+                                        .expect("`extend` requires an `other` argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &other_arg.value,
+                                        locals,
+                                        Some(&receiver_ty),
+                                    )?;
+                                    if actual != receiver_ty {
+                                        return Err(Diagnostic::at(
+                                            other_arg.span,
+                                            format!(
+                                                "`extend` expects `{}`, found `{}`",
+                                                receiver_ty, actual
+                                            ),
+                                        ));
+                                    }
+                                    self.consume_value_expr(&other_arg.value, locals)?;
+                                    Ok(Type::Unit)
+                                }
+                                BuiltinMember::VecInsert => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    let index_arg = ordered_args[0]
+                                        .expect("`insert` requires an `index` argument");
+                                    let index_ty = self.type_of_expr_hint(
+                                        &index_arg.value,
+                                        locals,
+                                        Some(&Type::named("int32")),
+                                    )?;
+                                    if !is_integer_type(&index_ty) {
+                                        return Err(Diagnostic::at(
+                                            index_arg.span,
+                                            format!(
+                                                "vector indices must be integers, found `{}`",
+                                                index_ty
+                                            ),
+                                        ));
+                                    }
+                                    let value_arg = ordered_args[1]
+                                        .expect("`insert` requires a `value` argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &value_arg.value,
+                                        locals,
+                                        Some(&receiver_args[0]),
+                                    )?;
+                                    if actual != receiver_args[0] {
+                                        return Err(Diagnostic::at(
+                                            value_arg.span,
+                                            format!(
+                                                "`insert` expects `{}`, found `{}`",
+                                                receiver_args[0], actual
+                                            ),
+                                        ));
+                                    }
+                                    if !self.is_copy_type(&receiver_args[0]) {
+                                        self.consume_value_expr(&value_arg.value, locals)?;
+                                    }
+                                    Ok(Type::named("bool"))
+                                }
+                                BuiltinMember::VecClear | BuiltinMember::VecReverse => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::Unit)
+                                }
+                                _ => unreachable!("unexpected vector builtin member"),
+                            };
+                        }
+                    }
+
                     if receiver_name == "String" && receiver_args.is_empty() {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
-                            builtin_member.bind_args(args, span)?;
+                            let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
-                                BuiltinMember::StringClone => Ok(Type::named("String")),
+                                BuiltinMember::StringLen => Ok(Type::named("int32")),
+                                BuiltinMember::StringContains
+                                | BuiltinMember::StringStartsWith
+                                | BuiltinMember::StringEndsWith => {
+                                    let text_arg = ordered_args[0]
+                                        .expect("string predicate methods require one argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &text_arg.value,
+                                        locals,
+                                        Some(&Type::named("String")),
+                                    )?;
+                                    if actual != Type::named("String") {
+                                        return Err(Diagnostic::at(
+                                            text_arg.span,
+                                            format!(
+                                                "`{}` expects `String`, found `{}`",
+                                                field, actual
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::named("bool"))
+                                }
+                                BuiltinMember::StringSplit => {
+                                    let text_arg = ordered_args[0]
+                                        .expect("`split` requires a `text` argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &text_arg.value,
+                                        locals,
+                                        Some(&Type::named("String")),
+                                    )?;
+                                    if actual != Type::named("String") {
+                                        return Err(Diagnostic::at(
+                                            text_arg.span,
+                                            format!("`split` expects `String`, found `{}`", actual),
+                                        ));
+                                    }
+                                    Ok(Type::Named("Vec".to_string(), vec![Type::named("String")]))
+                                }
+                                BuiltinMember::StringReplace => {
+                                    let from_arg = ordered_args[0]
+                                        .expect("`replace` requires a `from` argument");
+                                    let from_actual = self.type_of_expr_hint(
+                                        &from_arg.value,
+                                        locals,
+                                        Some(&Type::named("String")),
+                                    )?;
+                                    if from_actual != Type::named("String") {
+                                        return Err(Diagnostic::at(
+                                            from_arg.span,
+                                            format!(
+                                                "`replace` expects `String` for `from`, found `{}`",
+                                                from_actual
+                                            ),
+                                        ));
+                                    }
+                                    let to_arg = ordered_args[1]
+                                        .expect("`replace` requires a `to` argument");
+                                    let to_actual = self.type_of_expr_hint(
+                                        &to_arg.value,
+                                        locals,
+                                        Some(&Type::named("String")),
+                                    )?;
+                                    if to_actual != Type::named("String") {
+                                        return Err(Diagnostic::at(
+                                            to_arg.span,
+                                            format!(
+                                                "`replace` expects `String` for `to`, found `{}`",
+                                                to_actual
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::named("String"))
+                                }
+                                BuiltinMember::StringToLower
+                                | BuiltinMember::StringToUpper
+                                | BuiltinMember::StringTrim
+                                | BuiltinMember::StringClone => Ok(Type::named("String")),
+                                BuiltinMember::StringJoin => {
+                                    let parts_arg = ordered_args[0]
+                                        .expect("`join` requires a `parts` argument");
+                                    let expected_parts =
+                                        Type::Named("Vec".to_string(), vec![Type::named("String")]);
+                                    let actual = self.type_of_expr_hint(
+                                        &parts_arg.value,
+                                        locals,
+                                        Some(&expected_parts),
+                                    )?;
+                                    if actual != expected_parts {
+                                        return Err(Diagnostic::at(
+                                            parts_arg.span,
+                                            format!(
+                                                "`join` expects `Vec[String]`, found `{}`",
+                                                actual
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::named("String"))
+                                }
+                                BuiltinMember::StringStripPrefix
+                                | BuiltinMember::StringStripSuffix => {
+                                    let text_arg = ordered_args[0]
+                                        .expect("string strip methods require one `text` argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &text_arg.value,
+                                        locals,
+                                        Some(&Type::named("String")),
+                                    )?;
+                                    if actual != Type::named("String") {
+                                        return Err(Diagnostic::at(
+                                            text_arg.span,
+                                            format!(
+                                                "`{}` expects `String`, found `{}`",
+                                                field, actual
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::Named(
+                                        "Option".to_string(),
+                                        vec![Type::named("String")],
+                                    ))
+                                }
                                 _ => unreachable!("unexpected string builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "Map" && receiver_args.len() == 2 {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::MapLen => Ok(Type::named("int32")),
+                                BuiltinMember::MapIsEmpty => Ok(Type::named("bool")),
+                                BuiltinMember::MapClone => Ok(receiver_ty.clone()),
+                                BuiltinMember::MapGet => {
+                                    let key_arg = ordered_args[0]
+                                        .expect("`get` requires exactly one key argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &key_arg.value,
+                                        locals,
+                                        Some(&receiver_args[0]),
+                                    )?;
+                                    if actual != receiver_args[0] {
+                                        return Err(Diagnostic::at(
+                                            key_arg.span,
+                                            format!(
+                                                "`get` expects `{}`, found `{}`",
+                                                receiver_args[0], actual
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::Named(
+                                        "Option".to_string(),
+                                        vec![receiver_args[1].clone()],
+                                    ))
+                                }
+                                BuiltinMember::MapSet => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    let key_arg =
+                                        ordered_args[0].expect("`set` requires a `key` argument");
+                                    let key_actual = self.type_of_expr_hint(
+                                        &key_arg.value,
+                                        locals,
+                                        Some(&receiver_args[0]),
+                                    )?;
+                                    if key_actual != receiver_args[0] {
+                                        return Err(Diagnostic::at(
+                                            key_arg.span,
+                                            format!(
+                                                "`set` expects key type `{}`, found `{}`",
+                                                receiver_args[0], key_actual
+                                            ),
+                                        ));
+                                    }
+                                    let value_arg =
+                                        ordered_args[1].expect("`set` requires a `value` argument");
+                                    let value_actual = self.type_of_expr_hint(
+                                        &value_arg.value,
+                                        locals,
+                                        Some(&receiver_args[1]),
+                                    )?;
+                                    if value_actual != receiver_args[1] {
+                                        return Err(Diagnostic::at(
+                                            value_arg.span,
+                                            format!(
+                                                "`set` expects value type `{}`, found `{}`",
+                                                receiver_args[1], value_actual
+                                            ),
+                                        ));
+                                    }
+                                    if !self.is_copy_type(&receiver_args[0]) {
+                                        self.consume_value_expr(&key_arg.value, locals)?;
+                                    }
+                                    if !self.is_copy_type(&receiver_args[1]) {
+                                        self.consume_value_expr(&value_arg.value, locals)?;
+                                    }
+                                    Ok(Type::Named(
+                                        "Option".to_string(),
+                                        vec![receiver_args[1].clone()],
+                                    ))
+                                }
+                                BuiltinMember::MapRemove => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    let key_arg = ordered_args[0]
+                                        .expect("`remove` requires exactly one key argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &key_arg.value,
+                                        locals,
+                                        Some(&receiver_args[0]),
+                                    )?;
+                                    if actual != receiver_args[0] {
+                                        return Err(Diagnostic::at(
+                                            key_arg.span,
+                                            format!(
+                                                "`remove` expects `{}`, found `{}`",
+                                                receiver_args[0], actual
+                                            ),
+                                        ));
+                                    }
+                                    if !self.is_copy_type(&receiver_args[0]) {
+                                        self.consume_value_expr(&key_arg.value, locals)?;
+                                    }
+                                    Ok(Type::Named(
+                                        "Option".to_string(),
+                                        vec![receiver_args[1].clone()],
+                                    ))
+                                }
+                                BuiltinMember::MapContainsKey => {
+                                    let key_arg = ordered_args[0]
+                                        .expect("`contains_key` requires exactly one key argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &key_arg.value,
+                                        locals,
+                                        Some(&receiver_args[0]),
+                                    )?;
+                                    if actual != receiver_args[0] {
+                                        return Err(Diagnostic::at(
+                                            key_arg.span,
+                                            format!(
+                                                "`contains_key` expects `{}`, found `{}`",
+                                                receiver_args[0], actual
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::named("bool"))
+                                }
+                                BuiltinMember::MapKeys => Ok(Type::Named(
+                                    "Vec".to_string(),
+                                    vec![receiver_args[0].clone()],
+                                )),
+                                BuiltinMember::MapValues => Ok(Type::Named(
+                                    "Vec".to_string(),
+                                    vec![receiver_args[1].clone()],
+                                )),
+                                BuiltinMember::MapItems | BuiltinMember::MapEntries => {
+                                    Ok(Type::Named(
+                                        "Vec".to_string(),
+                                        vec![Type::Named(
+                                            "MapEntry".to_string(),
+                                            vec![
+                                                receiver_args[0].clone(),
+                                                receiver_args[1].clone(),
+                                            ],
+                                        )],
+                                    ))
+                                }
+                                BuiltinMember::MapClear => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::Unit)
+                                }
+                                BuiltinMember::MapExtend => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    let other_arg = ordered_args[0]
+                                        .expect("`extend` requires an `other` argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &other_arg.value,
+                                        locals,
+                                        Some(&receiver_ty),
+                                    )?;
+                                    if actual != receiver_ty {
+                                        return Err(Diagnostic::at(
+                                            other_arg.span,
+                                            format!(
+                                                "`extend` expects `{}`, found `{}`",
+                                                receiver_ty, actual
+                                            ),
+                                        ));
+                                    }
+                                    self.consume_value_expr(&other_arg.value, locals)?;
+                                    Ok(Type::Unit)
+                                }
+                                _ => unreachable!("unexpected map builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "Set" && receiver_args.len() == 1 {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::SetLen => Ok(Type::named("int32")),
+                                BuiltinMember::SetIsEmpty => Ok(Type::named("bool")),
+                                BuiltinMember::SetClone => Ok(receiver_ty.clone()),
+                                BuiltinMember::SetContains => {
+                                    let value_arg = ordered_args[0]
+                                        .expect("`contains` requires a `value` argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &value_arg.value,
+                                        locals,
+                                        Some(&receiver_args[0]),
+                                    )?;
+                                    if actual != receiver_args[0] {
+                                        return Err(Diagnostic::at(
+                                            value_arg.span,
+                                            format!(
+                                                "`contains` expects `{}`, found `{}`",
+                                                receiver_args[0], actual
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::named("bool"))
+                                }
+                                BuiltinMember::SetInsert | BuiltinMember::SetRemove => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    let value_arg = ordered_args[0]
+                                        .expect("set mutation requires a `value` argument");
+                                    let actual = self.type_of_expr_hint(
+                                        &value_arg.value,
+                                        locals,
+                                        Some(&receiver_args[0]),
+                                    )?;
+                                    if actual != receiver_args[0] {
+                                        return Err(Diagnostic::at(
+                                            value_arg.span,
+                                            format!(
+                                                "`{}` expects `{}`, found `{}`",
+                                                field, receiver_args[0], actual
+                                            ),
+                                        ));
+                                    }
+                                    if !self.is_copy_type(&receiver_args[0]) {
+                                        self.consume_value_expr(&value_arg.value, locals)?;
+                                    }
+                                    Ok(Type::named("bool"))
+                                }
+                                _ => unreachable!("unexpected set builtin member"),
                             };
                         }
                     }
@@ -4363,6 +5653,13 @@ impl<'a> FunctionChecker<'a> {
                     );
                 }
                 match (&receiver_ty, field.as_str()) {
+                    (Type::Named(name, type_args), "to_string")
+                        if type_args.is_empty()
+                            && (is_numeric_type(&receiver_ty) || name == "bool") =>
+                    {
+                        BuiltinMember::ScalarToString.bind_args(args, span)?;
+                        Ok(Type::named("String"))
+                    }
                     (Type::Named(name, type_args), "sqrt")
                         if type_args.is_empty() && name == "float64" =>
                     {
@@ -4433,25 +5730,6 @@ impl<'a> FunctionChecker<'a> {
         if match_stmt.borrow_mode.is_none() && !self.is_copy_type(&scrutinee_ty) {
             self.consume_value_expr(&match_stmt.scrutinee, locals)?;
         }
-        let Type::Named(enum_name, _type_args) = &scrutinee_ty else {
-            return Err(Diagnostic::at(
-                match_stmt.span,
-                format!(
-                    "`match` currently requires an enum scrutinee, found `{}`",
-                    scrutinee_ty
-                ),
-            ));
-        };
-
-        let Some(variants) = self.enum_variants_for_type(&scrutinee_ty) else {
-            return Err(Diagnostic::at(
-                match_stmt.span,
-                format!(
-                    "`match` currently requires an enum scrutinee, found `{}`",
-                    scrutinee_ty
-                ),
-            ));
-        };
 
         if match_stmt.arms.is_empty() {
             return Err(Diagnostic::at(
@@ -4460,9 +5738,210 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
 
-        let mut covered = BTreeMap::<String, crate::diag::Span>::new();
+        if let Some(variants) = self.enum_variants_for_type(&scrutinee_ty) {
+            let Type::Named(enum_name, _type_args) = &scrutinee_ty else {
+                unreachable!("enum scrutinee types should be named");
+            };
+            let mut covered = BTreeMap::<String, crate::diag::Span>::new();
+            let mut wildcard_span = None;
+            let mut all_return = true;
+
+            for (index, arm) in match_stmt.arms.iter().enumerate() {
+                let mut arm_locals = locals.clone();
+                match &arm.pattern {
+                    Pattern::Wildcard(span) => {
+                        if wildcard_span.is_some() {
+                            return Err(Diagnostic::at(*span, "duplicate wildcard match arm"));
+                        }
+                        if index + 1 != match_stmt.arms.len() {
+                            return Err(Diagnostic::at(
+                                *span,
+                                "wildcard match arm must be the final `case`",
+                            ));
+                        }
+                        wildcard_span = Some(*span);
+                    }
+                    Pattern::Literal(pattern) => {
+                        return Err(Diagnostic::at(
+                            pattern.span,
+                            format!(
+                                "match over `{}` expects enum variant patterns, not literal `{}`",
+                                enum_name,
+                                self.render_literal_pattern(pattern)
+                            ),
+                        ));
+                    }
+                    Pattern::Variant(pattern) => {
+                        let pattern_enum_name = if let Some(pattern_enum_name) = &pattern.enum_name
+                        {
+                            if pattern_enum_name == enum_name {
+                                pattern_enum_name.clone()
+                            } else if let Some(pattern_enum_info) =
+                                self.resolve_enum_info(pattern_enum_name)
+                            {
+                                pattern_enum_info.decl.name.clone()
+                            } else {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "unknown enum `{}` in match pattern",
+                                        pattern_enum_name
+                                    ),
+                                ));
+                            }
+                        } else {
+                            enum_name.clone()
+                        };
+                        if pattern_enum_name != *enum_name {
+                            return Err(Diagnostic::at(
+                                pattern.span,
+                                format!(
+                                    "match arm expects enum `{}`, found pattern for `{}`",
+                                    enum_name, pattern_enum_name
+                                ),
+                            ));
+                        }
+
+                        let Some(variant_payload) = variants
+                            .iter()
+                            .find(|(name, _)| name == &pattern.variant_name)
+                            .map(|(_, payload)| payload.clone())
+                        else {
+                            return Err(Diagnostic::at(
+                                pattern.span,
+                                format!(
+                                    "enum `{}` has no variant `{}`",
+                                    enum_name, pattern.variant_name
+                                ),
+                            ));
+                        };
+
+                        if let Some(previous) =
+                            covered.insert(pattern.variant_name.clone(), pattern.span)
+                        {
+                            return Err(Diagnostic::at(
+                                pattern.span,
+                                format!(
+                                    "duplicate match arm for `{}.{}` (previously matched at {})",
+                                    enum_name, pattern.variant_name, previous
+                                ),
+                            ));
+                        }
+
+                        match (&variant_payload, &pattern.binding) {
+                            (Some(_), None) => {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "variant `{}.{}` carries a payload and must bind it",
+                                        enum_name, pattern.variant_name
+                                    ),
+                                ));
+                            }
+                            (None, Some(_)) => {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "variant `{}.{}` does not carry a payload",
+                                        enum_name, pattern.variant_name
+                                    ),
+                                ));
+                            }
+                            _ => {}
+                        }
+
+                        if let (Some(payload_ty), Some(binding)) =
+                            (&variant_payload, &pattern.binding)
+                        {
+                            if arm_locals.contains_key(binding) {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "pattern binding `{}` would shadow an existing name",
+                                        binding
+                                    ),
+                                ));
+                            }
+                            arm_locals.insert(
+                                binding.clone(),
+                                LocalBinding {
+                                    ty: payload_ty.clone(),
+                                    assignable: false,
+                                    mutable_place: false,
+                                    passing: if let Some(borrow_mode) = match_stmt.borrow_mode {
+                                        if self.is_copy_type(payload_ty) {
+                                            ReceiverKind::Value
+                                        } else {
+                                            borrow_mode
+                                        }
+                                    } else {
+                                        ReceiverKind::Value
+                                    },
+                                    moved: false,
+                                    moved_fields: BTreeSet::new(),
+                                },
+                            );
+                        }
+                    }
+                }
+
+                let arm_flow = self.check_block(
+                    &arm.body,
+                    &mut arm_locals,
+                    return_type,
+                    loop_depth,
+                    allow_return,
+                )?;
+                if arm_flow != BlockFlow::AlwaysReturns {
+                    all_return = false;
+                }
+            }
+
+            let missing = variants
+                .iter()
+                .filter(|(name, _)| !covered.contains_key(name))
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>();
+            if wildcard_span.is_none() && !missing.is_empty() {
+                let rendered = missing
+                    .iter()
+                    .map(|name| format!("`{}`", name))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(Diagnostic::at(
+                    match_stmt.span,
+                    format!(
+                        "non-exhaustive match over `{}`: missing {}",
+                        enum_name, rendered
+                    ),
+                ));
+            }
+
+            return if all_return {
+                Ok(BlockFlow::AlwaysReturns)
+            } else {
+                Ok(BlockFlow::FallsThrough)
+            };
+        }
+
+        if !matches!(scrutinee_ty, Type::Named(_, _))
+            || !(is_integer_type(&scrutinee_ty)
+                || matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
+                || is_string_type(&scrutinee_ty))
+        {
+            return Err(Diagnostic::at(
+                match_stmt.span,
+                format!(
+                    "`match` currently requires an enum, bool, integer, or String scrutinee, found `{}`",
+                    scrutinee_ty
+                ),
+            ));
+        }
+
         let mut wildcard_span = None;
         let mut all_return = true;
+        let mut covered_literals = BTreeMap::<LiteralPatternKey, crate::diag::Span>::new();
+        let mut covered_bools = BTreeSet::<bool>::new();
 
         for (index, arm) in match_stmt.arms.iter().enumerate() {
             let mut arm_locals = locals.clone();
@@ -4479,112 +5958,30 @@ impl<'a> FunctionChecker<'a> {
                     }
                     wildcard_span = Some(*span);
                 }
+                Pattern::Literal(pattern) => {
+                    let key = self.literal_pattern_key(pattern, &scrutinee_ty)?;
+                    if let Some(previous) = covered_literals.insert(key.clone(), pattern.span) {
+                        return Err(Diagnostic::at(
+                            pattern.span,
+                            format!(
+                                "duplicate match arm for literal `{}` (previously matched at {})",
+                                render_literal_pattern_key(&key),
+                                previous
+                            ),
+                        ));
+                    }
+                    if let LiteralPatternKey::Bool(value) = key {
+                        covered_bools.insert(value);
+                    }
+                }
                 Pattern::Variant(pattern) => {
-                    let pattern_enum_name = if let Some(pattern_enum_name) = &pattern.enum_name {
-                        if pattern_enum_name == enum_name {
-                            pattern_enum_name.clone()
-                        } else if let Some(pattern_enum_info) =
-                            self.resolve_enum_info(pattern_enum_name)
-                        {
-                            pattern_enum_info.decl.name.clone()
-                        } else {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!("unknown enum `{}` in match pattern", pattern_enum_name),
-                            ));
-                        }
-                    } else {
-                        enum_name.clone()
-                    };
-                    if pattern_enum_name != *enum_name {
-                        return Err(Diagnostic::at(
-                            pattern.span,
-                            format!(
-                                "match arm expects enum `{}`, found pattern for `{}`",
-                                enum_name, pattern_enum_name
-                            ),
-                        ));
-                    }
-
-                    let Some(variant_payload) = variants
-                        .iter()
-                        .find(|(name, _)| name == &pattern.variant_name)
-                        .map(|(_, payload)| payload.clone())
-                    else {
-                        return Err(Diagnostic::at(
-                            pattern.span,
-                            format!(
-                                "enum `{}` has no variant `{}`",
-                                enum_name, pattern.variant_name
-                            ),
-                        ));
-                    };
-
-                    if let Some(previous) =
-                        covered.insert(pattern.variant_name.clone(), pattern.span)
-                    {
-                        return Err(Diagnostic::at(
-                            pattern.span,
-                            format!(
-                                "duplicate match arm for `{}.{}` (previously matched at {})",
-                                enum_name, pattern.variant_name, previous
-                            ),
-                        ));
-                    }
-
-                    match (&variant_payload, &pattern.binding) {
-                        (Some(_), None) => {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "variant `{}.{}` carries a payload and must bind it",
-                                    enum_name, pattern.variant_name
-                                ),
-                            ));
-                        }
-                        (None, Some(_)) => {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "variant `{}.{}` does not carry a payload",
-                                    enum_name, pattern.variant_name
-                                ),
-                            ));
-                        }
-                        _ => {}
-                    }
-
-                    if let (Some(payload_ty), Some(binding)) = (&variant_payload, &pattern.binding)
-                    {
-                        if arm_locals.contains_key(binding) {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "pattern binding `{}` would shadow an existing name",
-                                    binding
-                                ),
-                            ));
-                        }
-                        arm_locals.insert(
-                            binding.clone(),
-                            LocalBinding {
-                                ty: payload_ty.clone(),
-                                assignable: false,
-                                mutable_place: false,
-                                passing: if let Some(borrow_mode) = match_stmt.borrow_mode {
-                                    if self.is_copy_type(payload_ty) {
-                                        ReceiverKind::Value
-                                    } else {
-                                        borrow_mode
-                                    }
-                                } else {
-                                    ReceiverKind::Value
-                                },
-                                moved: false,
-                                moved_fields: BTreeSet::new(),
-                            },
-                        );
-                    }
+                    return Err(Diagnostic::at(
+                        pattern.span,
+                        format!(
+                            "match over `{}` only supports literal patterns and `_`",
+                            scrutinee_ty
+                        ),
+                    ));
                 }
             }
 
@@ -4600,30 +5997,101 @@ impl<'a> FunctionChecker<'a> {
             }
         }
 
-        let missing = variants
-            .iter()
-            .filter(|(name, _)| !covered.contains_key(name))
-            .map(|(name, _)| name.clone())
-            .collect::<Vec<_>>();
-        if wildcard_span.is_none() && !missing.is_empty() {
-            let rendered = missing
-                .iter()
-                .map(|name| format!("`{}`", name))
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(Diagnostic::at(
-                match_stmt.span,
-                format!(
-                    "non-exhaustive match over `{}`: missing {}",
-                    enum_name, rendered
-                ),
-            ));
+        if wildcard_span.is_none() {
+            if matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
+            {
+                let missing = [true, false]
+                    .into_iter()
+                    .filter(|value| !covered_bools.contains(value))
+                    .map(|value| format!("`{}`", value))
+                    .collect::<Vec<_>>();
+                if !missing.is_empty() {
+                    return Err(Diagnostic::at(
+                        match_stmt.span,
+                        format!(
+                            "non-exhaustive match over `bool`: missing {}",
+                            missing.join(", ")
+                        ),
+                    ));
+                }
+            } else {
+                return Err(Diagnostic::at(
+                    match_stmt.span,
+                    format!(
+                        "`match` over `{}` with literal patterns requires a final `case _:` arm",
+                        scrutinee_ty
+                    ),
+                ));
+            }
         }
 
         if all_return {
             Ok(BlockFlow::AlwaysReturns)
         } else {
             Ok(BlockFlow::FallsThrough)
+        }
+    }
+
+    fn render_literal_pattern(&self, pattern: &LiteralPattern) -> String {
+        match &pattern.kind {
+            LiteralPatternKind::Int(value) => value.to_string(),
+            LiteralPatternKind::Bool(value) => value.to_string(),
+            LiteralPatternKind::String(value) => format!("{:?}", value),
+        }
+    }
+
+    fn literal_pattern_key(
+        &self,
+        pattern: &LiteralPattern,
+        scrutinee_ty: &Type,
+    ) -> Result<LiteralPatternKey> {
+        match &pattern.kind {
+            LiteralPatternKind::Int(value) => {
+                let Some(bounds) = integer_type_bounds(scrutinee_ty) else {
+                    return Err(Diagnostic::at(
+                        pattern.span,
+                        format!(
+                            "literal pattern `{}` does not match scrutinee type `{}`",
+                            value, scrutinee_ty
+                        ),
+                    ));
+                };
+                if !value.fits_bounds(bounds) {
+                    return Err(Diagnostic::at(
+                        pattern.span,
+                        format!(
+                            "literal pattern `{}` does not fit scrutinee type `{}`",
+                            value, scrutinee_ty
+                        ),
+                    ));
+                }
+                Ok(LiteralPatternKey::Int(*value))
+            }
+            LiteralPatternKind::Bool(value) => {
+                if !matches!(scrutinee_ty, Type::Named(name, args) if name == "bool" && args.is_empty())
+                {
+                    return Err(Diagnostic::at(
+                        pattern.span,
+                        format!(
+                            "literal pattern `{}` does not match scrutinee type `{}`",
+                            value, scrutinee_ty
+                        ),
+                    ));
+                }
+                Ok(LiteralPatternKey::Bool(*value))
+            }
+            LiteralPatternKind::String(value) => {
+                if !is_string_type(scrutinee_ty) {
+                    return Err(Diagnostic::at(
+                        pattern.span,
+                        format!(
+                            "literal pattern {:?} does not match scrutinee type `{}`",
+                            value, scrutinee_ty
+                        ),
+                    ));
+                }
+                Ok(LiteralPatternKey::String(value.clone()))
+            }
         }
     }
 
@@ -4711,6 +6179,17 @@ impl<'a> FunctionChecker<'a> {
                     field, object_ty
                 ),
             ));
+        }
+
+        if name == "MapEntry" && args.len() == 2 {
+            return match field {
+                "key" => Ok(args[0].clone()),
+                "value" => Ok(args[1].clone()),
+                _ => Err(Diagnostic::at(
+                    span,
+                    format!("type `{}` has no field `{}`", name, field),
+                )),
+            };
         }
 
         let Some(class_info) = self.resolve_class_info(name) else {
@@ -4884,12 +6363,19 @@ impl<'a> FunctionChecker<'a> {
         format!("{}.{}", self.render_place_expr(object), field)
     }
 
+    fn render_index_target(&self, object: &Expr) -> String {
+        format!("{}[..]", self.render_place_expr(object))
+    }
+
     fn render_place_expr(&self, expr: &Expr) -> String {
         match &expr.kind {
             ExprKind::Name(name) => name.clone(),
             ExprKind::Group(inner) => self.render_place_expr(inner),
             ExprKind::Member { object, field } => {
                 format!("{}.{}", self.render_place_expr(object), field)
+            }
+            ExprKind::Index { object, .. } => {
+                format!("{}[..]", self.render_place_expr(object))
             }
             _ => "<place>".to_string(),
         }
@@ -4907,6 +6393,7 @@ impl<'a> FunctionChecker<'a> {
                 .map(|_| name.clone()),
             ExprKind::Group(inner) => self.borrowed_root_binding_name(inner, locals),
             ExprKind::Member { object, .. } => self.borrowed_root_binding_name(object, locals),
+            ExprKind::Index { object, .. } => self.borrowed_root_binding_name(object, locals),
             _ => None,
         }
     }
@@ -4981,6 +6468,7 @@ impl<'a> FunctionChecker<'a> {
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
                 self.resolve_member_type(&object_ty, field, expr.span)
             }
+            ExprKind::Index { .. } => self.type_of_expr(expr, locals),
             _ => self.type_of_expr(expr, locals),
         }
     }
@@ -5016,6 +6504,7 @@ impl<'a> FunctionChecker<'a> {
                 namespace.modules.get(field).map(|child| child.path.clone())
             }
             ExprKind::Group(inner) => self.infer_module_path(inner),
+            ExprKind::Index { object, .. } => self.infer_module_path(object),
             _ => None,
         }
     }
@@ -5027,6 +6516,7 @@ impl<'a> FunctionChecker<'a> {
                 .infer_module_path(object)
                 .map(|path| (path, field.clone())),
             ExprKind::Group(inner) => self.qualified_module_item(inner),
+            ExprKind::Index { object, .. } => self.qualified_module_item(object),
             _ => None,
         }
     }

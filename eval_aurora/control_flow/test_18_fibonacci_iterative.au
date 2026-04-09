@@ -1,0 +1,33 @@
+# Test 18: Fibonacci iterative - classic algorithm test
+
+def fibonacci(n: int32) -> int32:
+    if n <= 0:
+        return 0
+    if n == 1:
+        return 1
+
+    mut a: int32 = 0
+    mut b: int32 = 1
+    mut i: int32 = 2
+    while i <= n:
+        mut temp: int32 = a + b
+        a = b
+        b = temp
+        i += 1
+    return b
+
+def main() -> int32:
+    # Test several fibonacci values
+    print("fib(0):")
+    print(fibonacci(n=0))
+    print("fib(1):")
+    print(fibonacci(n=1))
+    print("fib(2):")
+    print(fibonacci(n=2))
+    print("fib(5):")
+    print(fibonacci(n=5))
+    print("fib(10):")
+    print(fibonacci(n=10))
+    print("fib(20):")
+    print(fibonacci(n=20))
+    return 0

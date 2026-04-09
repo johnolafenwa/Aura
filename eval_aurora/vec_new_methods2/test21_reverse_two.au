@@ -1,0 +1,7 @@
+# Test 21: Reverse two elements
+def main() -> int32:
+    mut v = [1, 2]
+    v.reverse()
+    print(v[0])
+    print(v[1])
+    return 0

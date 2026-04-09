@@ -1,0 +1,5 @@
+# Test 5a: Division by zero
+x: int32 = 10
+y: int32 = 0
+z = x / y
+print(z)

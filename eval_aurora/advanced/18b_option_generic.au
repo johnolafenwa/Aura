@@ -1,0 +1,30 @@
+# Test 18b: Use builtin Option with borrow match
+def safe_divide(a: int32, b: int32) -> Option[int32]:
+    if b == 0:
+        return Option.None
+    return Option.Some(a / b)
+
+def main() -> int32:
+    result1 = safe_divide(10, 2)
+    result2 = safe_divide(10, 0)
+
+    match borrow result1:
+        case Some(v):
+            print(v)
+        case None:
+            print("none")
+
+    match borrow result2:
+        case Some(v):
+            print(v)
+        case None:
+            print("none")
+
+    # Results should still be usable after borrow match
+    match result1:
+        case Some(v):
+            print(v)
+        case None:
+            print("none")
+
+    return 0

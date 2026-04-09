@@ -1,0 +1,14 @@
+def print_option(label: String, opt: Option[String]):
+    match opt:
+        case Some(inner):
+            print(label + ": Some(" + inner + ")")
+        case None:
+            print(label + ": None")
+
+def main() -> int32:
+    s = "HelloWorld"
+    print_option("prefix Hello", s.strip_prefix("Hello"))
+    print_option("prefix World", s.strip_prefix("World"))
+    print_option("suffix World", s.strip_suffix("World"))
+    print_option("suffix Hello", s.strip_suffix("Hello"))
+    return 0

@@ -1,0 +1,26 @@
+# Test 9b: Multiple trait bounds (A + B)
+trait Printable:
+    def to_string(borrow self) -> String
+
+trait Countable:
+    def count(borrow self) -> int32
+
+class Item:
+    name: String
+    size: int32
+
+impl Printable for Item:
+    def to_string(borrow self) -> String:
+        return self.name.clone()
+
+impl Countable for Item:
+    def count(borrow self) -> int32:
+        return self.size
+
+def describe[T: Printable + Countable](item: T):
+    print(item.to_string())
+    print(item.count())
+
+def main() -> int32:
+    describe(item=Item(name="widget", size=5))
+    return 0

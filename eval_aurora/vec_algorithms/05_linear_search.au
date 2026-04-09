@@ -1,0 +1,34 @@
+## Linear search: find the index of a target value in a Vec[int32]
+## Returns Option[int32]
+
+def linear_search(arr: borrow Vec[int32], target: int32) -> Option[int32]:
+    mut i: int32 = 0
+    n = arr.len() as int32
+    while i < n:
+        if arr[i] == target:
+            return Option.Some(i)
+        i += 1
+    return Option.None
+
+def print_search(arr: borrow Vec[int32], target: int32):
+    match linear_search(arr, target):
+        case Some(idx):
+            print(f"Found {target} at index {idx}")
+        case None:
+            print(f"{target} not found")
+
+def main() -> int32:
+    data = [10, 25, 3, 47, 8, 99, 42]
+
+    print_search(data, 47)
+    print_search(data, 10)
+    print_search(data, 42)
+    print_search(data, 99)
+    print_search(data, 100)
+    print_search(data, 0)
+
+    ## Search in empty vec
+    empty: Vec[int32] = []
+    print_search(empty, 5)
+
+    return 0

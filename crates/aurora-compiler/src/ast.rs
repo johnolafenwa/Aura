@@ -1,4 +1,5 @@
 use crate::diag::Span;
+use crate::integer::IntegerValue;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -169,6 +170,7 @@ pub struct AssignStmt {
 pub enum AssignTarget {
     Name(String),
     Member { object: Box<Expr>, field: String },
+    Index { object: Box<Expr>, index: Box<Expr> },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -209,6 +211,7 @@ pub struct MatchArm {
 #[derive(Clone, Debug, Serialize)]
 pub enum Pattern {
     Variant(VariantPattern),
+    Literal(LiteralPattern),
     Wildcard(Span),
 }
 
@@ -218,6 +221,19 @@ pub struct VariantPattern {
     pub variant_name: String,
     pub binding: Option<String>,
     pub span: Span,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct LiteralPattern {
+    pub kind: LiteralPatternKind,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub enum LiteralPatternKind {
+    Int(IntegerValue),
+    Bool(bool),
+    String(String),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -289,6 +305,9 @@ pub enum ExprKind {
     Bool(bool),
     String(String),
     FString(Vec<FormatPart>),
+    List(Vec<Expr>),
+    Set(Vec<Expr>),
+    Map(Vec<MapEntryExpr>),
     Unary {
         op: UnaryOp,
         expr: Box<Expr>,
@@ -314,12 +333,22 @@ pub enum ExprKind {
         object: Box<Expr>,
         field: String,
     },
+    Index {
+        object: Box<Expr>,
+        index: Box<Expr>,
+    },
     Spawn {
         detached: bool,
         value: Box<Expr>,
     },
     Try(Box<Expr>),
     Group(Box<Expr>),
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MapEntryExpr {
+    pub key: Expr,
+    pub value: Expr,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

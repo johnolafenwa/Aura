@@ -1,0 +1,6 @@
+# Test 5: Push on immutable vec - should fail
+# v is not declared mut
+def main() -> int32:
+    v = [1, 2, 3]
+    v.push(4)
+    return 0

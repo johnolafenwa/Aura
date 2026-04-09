@@ -1,0 +1,13 @@
+def print_bool(value: bool):
+    match value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def main() -> int32:
+    csv = "apple,banana,cherry,date"
+    fruits = csv.split(",")
+    print_bool(fruits.contains("banana"))
+    print_bool(fruits.contains("grape"))
+    return 0

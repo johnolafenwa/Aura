@@ -1,0 +1,4 @@
+def main() -> int32:
+    mut counts = {"key": 7}
+    print(f"val: {counts["key"]}")
+    return 0

@@ -1,0 +1,241 @@
+=== examples/basic_addition.au ===
+16
+
+=== examples/basics/borrow_parameters.au ===
+41
+42
+42
+
+=== examples/basics/default_arguments.au ===
+hello world
+hello aurora
+6
+12
+
+=== examples/basics/main_function.au ===
+16
+
+=== examples/basics/mutable_bindings.au ===
+5
+
+=== examples/basics/named_arguments.au ===
+hello, aurora
+7
+
+=== examples/basics/named_builtin_arguments.au ===
+10
+
+=== examples/basics/pass_keyword.au ===
+0
+
+=== examples/basics/simple_example.au ===
+Ayoola Olafenwa
+834.6
+
+=== examples/basics/top_level_script.au ===
+156
+
+=== examples/classes/copy_class.au ===
+1
+2
+
+=== examples/classes/default_fields.au ===
+localhost
+8080
+
+=== examples/classes/indirect_recursive.au ===
+2
+
+=== examples/classes/methods.au ===
+4
+8
+0
+
+=== examples/classes/mutating_methods.au ===
+6
+1
+
+=== examples/classes/point_distance.au ===
+5.0
+
+=== examples/concurrency/channel_iteration.au ===
+1
+2
+
+=== examples/concurrency/channels_spawn.au ===
+2
+4
+
+=== examples/concurrency/minute_duration.au ===
+120000ms
+
+=== examples/concurrency/select_send.au ===
+sent
+4
+
+=== examples/concurrency/select_timeout.au ===
+timeout
+
+=== examples/concurrency/select_timeout_named.au ===
+timeout
+
+=== examples/concurrency/send_result.au ===
+7
+
+=== examples/concurrency/sleep_builtin.au ===
+start
+end
+
+=== examples/concurrency/spawn_detached.au ===
+9
+
+=== examples/concurrency/task_group_cancel.au ===
+0
+1
+
+=== examples/concurrency/task_group_select.au ===
+3
+
+=== examples/control_flow.au ===
+ok
+
+=== examples/control_flow/boolean_logic.au ===
+ready
+true
+
+=== examples/control_flow/for_range.au ===
+7
+
+=== examples/control_flow/if_elif_else.au ===
+high
+
+=== examples/control_flow/while_break_continue.au ===
+ok
+
+=== examples/enums/explicit_type_args.au ===
+7
+bad
+
+=== examples/enums/match_borrow.au ===
+ok
+
+=== examples/enums/result_match.au ===
+42
+bad
+0
+
+=== examples/enums/result_option.au ===
+4
+division by zero
+7
+
+=== examples/enums/wildcard_match.au ===
+2
+
+=== examples/error_handling/try_result.au ===
+6
+division by zero
+
+=== examples/generics/bounded_types.au ===
+aurora
+empty
+
+=== examples/generics/box_and_wrapper.au ===
+7
+ok
+
+=== examples/generics/generic_constructor_specialization.au ===
+42
+
+=== examples/generics/generic_method_calls.au ===
+7
+
+=== examples/modules/namespace_import_types.au ===
+4
+true
+1
+
+=== examples/modules/simple_import.au ===
+10
+2
+
+=== examples/modules/trait_impl_imports.au ===
+Ada
+Ada
+
+=== examples/numbers/float32_values.au ===
+3.25
+2.0
+5.0
+
+=== examples/numbers/float_sqrt.au ===
+9.0
+
+=== examples/numbers/numeric_casts.au ===
+7
+3.0
+1.25
+2.0
+
+=== examples/numbers/uint128_values.au ===
+340282366920938463463374607431768211455
+340282366920938463463374607431768211455
+
+=== examples/numbers/unary_minus.au ===
+-5
+-3.5
+2
+
+=== examples/point.au ===
+5.0
+
+=== examples/resources/with_resource.au ===
+demo
+closed demo
+done
+
+=== examples/simple_addition.au ===
+156
+
+=== examples/strings/borrow_str.au ===
+Hello, Aurora
+
+=== examples/strings/f_strings.au ===
+Hello, Aurora 42
+
+=== examples/strings/greeting.au ===
+hello, aurora
+
+=== examples/strings/string_clone.au ===
+aurora
+
+=== examples/top_level_addition.au ===
+16
+
+=== examples/traits/generic_dispatch_multiple_types.au ===
+dog
+cat
+
+=== examples/traits/generic_trait_impl.au ===
+11
+
+=== examples/traits/greeter.au ===
+hello aurora
+hello aurora
+
+=== examples/traits/marker_trait.au ===
+1
+
+=== examples/traits/multiple_bounds.au ===
+9
+
+=== examples/traits/specialized_generic_impl.au ===
+hello
+
+=== examples/traits/specialized_trait_dispatch.au ===
+7
+hi
+
+=== examples/traits/trait_associated_factory.au ===
+7
+

@@ -1,0 +1,9 @@
+def main() -> int32:
+    s = Set[int64]()
+    mut ms = s
+    ms.insert(100)
+    ms.insert(200)
+    ms.insert(300)
+    print(ms.len())
+    print(ms.contains(100))
+    return 0

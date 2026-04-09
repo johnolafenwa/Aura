@@ -1,0 +1,4 @@
+def main() -> int32:
+    m = Map[String, int32]()
+    m["key"] = 42
+    return 0

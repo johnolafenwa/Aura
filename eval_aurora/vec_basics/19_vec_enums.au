@@ -1,0 +1,28 @@
+enum Shape:
+    Circle(int32)
+    Square(int32)
+    None
+
+def describe_shape(shape: Shape) -> String:
+    match shape:
+        case Shape.Circle(r):
+            return f"Circle r={r}"
+        case Shape.Square(s):
+            return f"Square s={s}"
+        case Shape.None:
+            return "None"
+
+def main() -> int32:
+    mut shapes: Vec[Shape] = []
+    shapes.push(Shape.Circle(5))
+    shapes.push(Shape.Square(10))
+    shapes.push(Shape.None)
+    shapes.push(Shape.Circle(7))
+
+    print(shapes.len())
+
+    # Iterate and match
+    for shape in shapes:
+        print(describe_shape(shape))
+
+    return 0

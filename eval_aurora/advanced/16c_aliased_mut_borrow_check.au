@@ -1,0 +1,15 @@
+# Test 16c: More explicit aliased mutable borrow test
+class Data:
+    value: int32
+
+def add_both(a: borrow mut Data, b: borrow mut Data):
+    a.value += 10
+    b.value += 100
+
+def main() -> int32:
+    mut data = Data(value=0)
+    # If a and b alias, final value tells us about order of effects
+    # If no aliasing detected, this is a soundness issue
+    add_both(data, data)
+    print(data.value)
+    return 0

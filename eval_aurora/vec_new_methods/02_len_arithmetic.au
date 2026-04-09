@@ -1,0 +1,17 @@
+# Test 02: Arithmetic with len() - should work with int32 arithmetic
+def main() -> int32:
+    v = [10, 20, 30]
+
+    a = v.len() + 1
+    print(a)
+
+    b = v.len() - 1
+    print(b)
+
+    c = v.len() * 2
+    print(c)
+
+    d = v.len() + v.len()
+    print(d)
+
+    return 0

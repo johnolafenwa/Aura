@@ -1,0 +1,9 @@
+def greet(name: borrow str) -> String:
+    return "Hello, " + name
+
+
+def main() -> int32:
+    text: String = "aurora"
+    print(greet(text))
+    print(text.clone())
+    return 0

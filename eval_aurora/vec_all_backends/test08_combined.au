@@ -1,0 +1,54 @@
+def print_bool(value: bool):
+    match value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def main() -> int32:
+    # 1. Borrow-safe String indexing
+    names = ["Alice", "Bob", "Charlie"]
+    print(names[0])
+    print(names[1])
+
+    # 2. len() as int32 with range
+    nums = [10, 20, 30]
+    for i in range(nums.len()):
+        print(nums[i])
+
+    # 3. swap
+    mut v = [1, 2, 3, 4, 5]
+    v.swap(0, 4)
+    print(v[0])
+    print(v[4])
+
+    # 4. contains
+    print_bool(v.contains(3))
+    print_bool(v.contains(99))
+
+    # 5. extend
+    mut a = [100, 200]
+    extra = [300, 400]
+    a.extend(extra)
+    print(a.len())
+    print(a[2])
+    print(a[3])
+
+    # 6. equality
+    x = [1, 2, 3]
+    y = [1, 2, 3]
+    z = [1, 2, 4]
+    print_bool(x == y)
+    print_bool(x != z)
+
+    # 7. borrow mut iteration
+    mut m = [1, 2, 3]
+    for val in borrow mut m:
+        val *= 2
+    for val in borrow m:
+        print(val)
+
+    # 8. len arithmetic
+    print(a.len() + m.len())
+
+    return 0

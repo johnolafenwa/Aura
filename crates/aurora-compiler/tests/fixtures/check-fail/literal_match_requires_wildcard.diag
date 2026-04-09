@@ -1,0 +1,5 @@
+error: `match` over `int32` with literal patterns requires a final `case _:` arm
+ --> crates/aurora-compiler/tests/fixtures/check-fail/literal_match_requires_wildcard.au:2:5
+  |
+2 |     match code:
+  |     ^

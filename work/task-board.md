@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-03-29
+Last updated: 2026-03-30
 
 ## In Progress
 
@@ -19,13 +19,23 @@ Last updated: 2026-03-29
 
 ## Done
 
+- Fixed compiler-backed `Vec.insert(...)` analysis/completion metadata so the compiler and LSP bridge now report the correct `-> bool` signature instead of the stale `-> None` detail.
+- Added practical parsing/formatting and collection-finisher support across the checker, interpreter, MIR/runtime, direct backend, compiler/LSP tooling, fixtures, examples, and tutorials: `parse_int32`, `parse_int64`, `parse_float64`, scalar and boolean `.to_string()`, `String.join(...)`, `Vec.insert(...)` / `clear()` / `reverse()`, `Map.items()` / `entries()` / `clear()` / `extend(...)`, builtin `MapEntry[K, V]`, and owned `Set[T]` collections with `Set{...}` literals, iteration, and the maintained set method surface.
+- Added literal `match` patterns over `bool`, integer, and `String` scrutinees across the parser, checker, interpreter, MIR lowering/runtime, maintained examples, CLI smoke tests, and tutorial track, while keeping wildcard exhaustiveness requirements for open-ended literal domains.
+- Added builtin owned `Vec[T]` collections across the checker, interpreter, MIR runtime, direct backend, CLI, compiler-backed tooling, fixtures, maintained examples, and tutorials, including list literals, borrow-safe indexing, indexed assignment, by-value/shared/mutable iteration, `len() -> int32`, equality, and the maintained method surface `len`, `is_empty`, `clone`, `push`, `pop`, `get`, `set`, `remove`, `swap`, `contains`, and `extend`.
+- Added builtin `String` utility methods, numeric helper builtins, and owned `Map[K, V]` collections across the checker, interpreter, MIR/runtime, direct backend, compiler-backed tooling, fallback LSP analysis, fixtures, maintained examples, tutorials, and CLI smoke coverage, including map literals, indexed map reads/writes, and the maintained `Map` method surface `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, and `values`.
+- Expanded the maintained `String` utility surface with `split`, `replace`, `to_lower`, `to_upper`, `strip_prefix`, and `strip_suffix` across the checker, interpreter, MIR runtime, direct backend, compiler/LSP tooling, fixtures, examples, tutorials, and CLI smoke coverage.
+- Fixed postfix parsing so indexed expressions can chain members and calls correctly again, and locked in compiler/LSP coverage for indexed expressions inside f-string interpolations such as `f"{counts["key"]}"`.
+- Fixed `for value in borrow mut vec:` so it now requires a mutable `Vec[T]` place during checking, instead of silently mutating immutable bindings.
+- Fixed interpreter and MIR `Vec[T]` equality for mixed-construction vectors, so empty-annotated-plus-push vectors now compare by element contents just like literal-built vectors.
+- Fixed the remaining Vec follow-up gaps by requiring mutable places for `borrow mut` vector iteration and teaching MIR/direct build inference that `Vec[T]()` constructor locals still carry `Vec[T]` types into later `for` lowering.
 - Fixed overlapping borrowed call arguments so free functions and method receivers can no longer alias the same place across `borrow mut` / `borrow mut` or `borrow` / `borrow mut` combinations.
 - Fixed direct/default native builds for `float64` returns from enum `match` arms that destructure payloads, keeping build parity with `run` and `run-mir`.
 - Removed the duplicate prefix spelling for ordinary borrowed parameters so free-function borrows are now written only as `name: borrow Type` / `name: borrow mut Type`, with parser regression coverage and aligned examples/tutorials.
 - Fixed direct `check` / `analyze` package-root inference for nested package modules, so opening files like `examples/modules/pkg/user.au` no longer resolves imports through a duplicated path segment.
 - Added normal `aura help` / `aura --help` / `aura version` / `aura --version` success paths and documented them in the maintained CLI/tutorial surface.
 - Replaced machine-local absolute repo paths in the maintained READMEs/tutorials with portable relative links or `$(pwd)`-style command examples, and refreshed `examples/README.md` to include `examples/modules/trait_impl_imports.au`.
-- Documented the current first-user limitations that are still real surface constraints, including missing list literals, no `String(...)` constructor, no bare `Ok(...)` / `Err(...)` constructors, required `Channel[T]` context for `channel()`, and named-function-only `spawn` targets.
+- Documented the current first-user limitations that are still real surface constraints, including no `String(...)` constructor, no bare `Ok(...)` / `Err(...)` constructors, required `Channel[T]` context for `channel()`, and named-function-only `spawn` targets.
 - Fixed bare `None` parity across `run`, `run-mir`, and native builds, recovered compiler-backed analysis/completions for buffers with multiple dangling member accesses, and restored source-aware arithmetic runtime diagnostics for built binaries.
 - Fixed f-string lexing/parsing so interpolations can contain inner string literals and nested braces, with maintained compiler fixture coverage for both checking and execution.
 - Added maintained regression coverage for `Option.None` inference, namespace-qualified imports inside imported module bodies, and closed-channel `select` timers.

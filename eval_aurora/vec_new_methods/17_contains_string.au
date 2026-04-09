@@ -1,0 +1,7 @@
+# Test 17: contains with String
+def main() -> int32:
+    v = ["hello", "world", "aurora"]
+    print(v.contains("hello"))
+    print(v.contains("aurora"))
+    print(v.contains("missing"))
+    return 0

@@ -1,0 +1,8 @@
+def main() -> int32:
+    s = "one:two:three"
+    delim = ":"
+    parts = s.split(delim)
+    print(parts.len())
+    for part in parts:
+        print(part)
+    return 0

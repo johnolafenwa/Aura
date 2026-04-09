@@ -1,0 +1,8 @@
+def print_words(words: Vec[String]):
+    for word in words:
+        print(word)
+
+def main() -> int32:
+    s = "alpha beta gamma"
+    print_words(s.split(" "))
+    return 0

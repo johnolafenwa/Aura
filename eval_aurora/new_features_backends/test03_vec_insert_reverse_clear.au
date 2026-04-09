@@ -1,0 +1,46 @@
+def main() -> int32:
+    # Build vec, insert at various positions
+    mut v = [10, 20, 30]
+    print(v.len().to_string())
+
+    # insert at beginning
+    result0 = v.insert(0, 5)
+    print(result0.to_string())
+    print(v[0].to_string())
+
+    # insert in middle
+    result2 = v.insert(2, 15)
+    print(result2.to_string())
+    print(v[2].to_string())
+
+    # insert at end
+    result5 = v.insert(5, 35)
+    print(result5.to_string())
+
+    # print all elements
+    print(v.len().to_string())
+    for val in borrow v:
+        print(val.to_string())
+
+    # reverse
+    v.reverse()
+    print("reversed")
+    for val in borrow v:
+        print(val.to_string())
+
+    # clear
+    v.clear()
+    print(v.len().to_string())
+    print(v.is_empty().to_string())
+
+    # push after clear to verify vec is usable
+    v.push(99)
+    print(v[0].to_string())
+
+    # insert out of bounds returns false
+    mut w = [1, 2]
+    oob = w.insert(7, 9)
+    print(oob.to_string())
+    print(w.len().to_string())
+
+    return 0

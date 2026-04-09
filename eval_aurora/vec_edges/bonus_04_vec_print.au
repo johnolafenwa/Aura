@@ -1,0 +1,5 @@
+# Bonus: Can we print a vec directly?
+def main() -> int32:
+    v = [1, 2, 3]
+    print(v)
+    return 0

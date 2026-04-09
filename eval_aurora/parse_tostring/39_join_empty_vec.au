@@ -1,0 +1,5 @@
+def main() -> int32:
+    parts: Vec[String] = Vec[String]()
+    result = ", ".join(parts)
+    print("'" + result + "'")
+    return 0

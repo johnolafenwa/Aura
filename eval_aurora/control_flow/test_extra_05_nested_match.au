@@ -1,0 +1,31 @@
+# Extra test: Nested match expressions
+
+enum Outer:
+    A(int32)
+    B
+
+enum Inner:
+    X
+    Y(int32)
+
+def classify(o: Outer, i: Inner) -> String:
+    match o:
+        case Outer.A(val):
+            match i:
+                case Inner.X:
+                    return "A-X"
+                case Inner.Y(n):
+                    return "A-Y"
+        case Outer.B:
+            match i:
+                case Inner.X:
+                    return "B-X"
+                case Inner.Y(n):
+                    return "B-Y"
+
+def main() -> int32:
+    print(classify(o=Outer.A(1), i=Inner.X))
+    print(classify(o=Outer.A(2), i=Inner.Y(10)))
+    print(classify(o=Outer.B, i=Inner.X))
+    print(classify(o=Outer.B, i=Inner.Y(20)))
+    return 0

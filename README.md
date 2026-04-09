@@ -44,6 +44,8 @@ Current bootstrap compiler workflow:
   - execute the interpreter-backed bootstrap runtime
 - `cargo run -p aura -- run examples/classes/methods.au`
   - execute user-defined instance and associated methods
+- `cargo run -p aura -- run examples/control_flow/match_literals.au`
+  - execute statement-form `match` over literal `bool`, integer, and `String` cases
 - `cargo run -p aura -- run examples/enums/result_match.au`
   - execute enum construction plus exhaustive `match`
 - `cargo run -p aura -- run examples/enums/result_option.au`
@@ -54,6 +56,14 @@ Current bootstrap compiler workflow:
   - execute user-defined generic classes, enums, and functions
 - `cargo run -p aura -- run examples/basics/default_arguments.au`
   - execute default parameter values on ordinary functions
+- `cargo run -p aura -- run examples/collections/vec_basics.au`
+  - execute list literals, `Vec[T]` methods, and indexed element access
+- `cargo run -p aura -- run examples/collections/vec_polish.au`
+  - execute non-copy Vec indexing, mutable Vec iteration, `insert(...)`, `reverse()`, `clear()`, richer Vec methods, and Vec equality
+- `cargo run -p aura -- run examples/collections/map_basics.au`
+  - execute `Map[K, V]` literals, `items()` / `entries()`, `extend(...)`, and the maintained map method surface
+- `cargo run -p aura -- run examples/collections/set_basics.au`
+  - execute `Set[T]` literals, shared-borrow set iteration, and the maintained set method surface
 - `cargo run -p aura -- run examples/basics/pass_keyword.au`
   - execute the `pass` no-op statement in intentionally empty blocks
 - `cargo run -p aura -- run examples/modules/simple_import.au`
@@ -66,6 +76,12 @@ Current bootstrap compiler workflow:
   - execute bounded dispatch across specialized generic trait impls
 - `cargo run -p aura -- run examples/numbers/numeric_casts.au`
   - execute explicit numeric casts with `expr as Type`
+- `cargo run -p aura -- run examples/numbers/numeric_builtins.au`
+  - execute the maintained builtin numeric helper surface `abs(...)`, `min(...)`, `max(...)`, `sqrt(...)`, and `float64.sqrt()`
+- `cargo run -p aura -- run examples/strings/string_methods.au`
+  - execute the maintained `String` method surface including `split`, `replace`, case conversion, and prefix/suffix stripping
+- `cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au`
+  - execute parsing builtins, scalar/boolean `.to_string()`, and `String.join(...)`
 - `cargo run -p aura -- run examples/resources/with_resource.au`
   - execute deterministic scoped cleanup with `with`
 - `cargo run -p aura -- run examples/concurrency/channels_spawn.au`
@@ -74,6 +90,8 @@ Current bootstrap compiler workflow:
   - execute `sleep(duration)` delays in the bootstrap runtime and MIR path
 - `cargo run -p aura -- run-mir examples/classes/methods.au`
   - execute the current MIR runtime path for the current implemented Aurora surface
+- `cargo run -p aura -- run-mir examples/collections/vec_polish.au`
+  - execute the finished maintained `Vec[T]` surface through the MIR path
 - `cargo run -p aura -- build -o ./target/aurora-point examples/point.au`
   - compile a standalone native binary through the default auto backend
 - `cargo run -p aura -- build --backend direct -o ./target/aurora-direct ./examples/basic_addition.au`

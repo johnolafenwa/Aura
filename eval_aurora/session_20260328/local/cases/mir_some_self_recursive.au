@@ -1,0 +1,10 @@
+class Node:
+    value: int32
+    next: indirect Option[Node]
+
+def make(v: int32) -> Node:
+    return Node(value=v, next=None)
+
+def main() -> None:
+    n = Node(value=7, next=Some(make(v=8)))
+    print(n.value)

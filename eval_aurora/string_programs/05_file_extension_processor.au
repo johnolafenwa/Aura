@@ -1,0 +1,60 @@
+## Program 5: File Extension Processor
+## Vec of filenames, use strip_suffix to categorize by extension, count each type
+
+def main() -> int32:
+    mut files: Vec[String] = ["main.au", "lib.rs", "notes.txt", "parser.au"]
+    files.extend(["README.txt", "build.rs", "hello.au", "config.txt"])
+    files.extend(["lexer.rs", "test.au", "data.txt", "server.rs"])
+
+    print(f"Total files: {files.len()}")
+
+    ## Count by extension using strip_suffix
+    mut au_count = 0
+    mut rs_count = 0
+    mut txt_count = 0
+    mut other_count = 0
+
+    mut au_files: Vec[String] = []
+    mut rs_files: Vec[String] = []
+    mut txt_files: Vec[String] = []
+
+    for file in borrow files:
+        match file.strip_suffix(".au"):
+            case Some(name):
+                au_count += 1
+                au_files.push(name)
+            case None:
+                match file.strip_suffix(".rs"):
+                    case Some(name):
+                        rs_count += 1
+                        rs_files.push(name)
+                    case None:
+                        match file.strip_suffix(".txt"):
+                            case Some(name):
+                                txt_count += 1
+                                txt_files.push(name)
+                            case None:
+                                other_count += 1
+
+    print(f"Aurora files (.au): {au_count}")
+    for f in au_files:
+        print(f"  {f}")
+
+    print(f"Rust files (.rs): {rs_count}")
+    for f in rs_files:
+        print(f"  {f}")
+
+    print(f"Text files (.txt): {txt_count}")
+    for f in txt_files:
+        print(f"  {f}")
+
+    print(f"Other files: {other_count}")
+
+    ## Also check which files end_with specific extensions
+    mut ends_au = 0
+    for file in borrow files:
+        if file.ends_with(".au"):
+            ends_au += 1
+    print(f"Verified .au count via ends_with: {ends_au}")
+
+    return 0

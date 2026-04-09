@@ -1,0 +1,20 @@
+# Real-world pattern: word frequency counting
+def main() -> int32:
+    mut counts = Map[String, int32]()
+
+    # Simulate counting words
+    words = ["hello", "world", "hello", "aurora", "world", "hello"]
+
+    for word in borrow words:
+        if counts.contains_key(word):
+            current = counts[word]
+            counts[word] = current + 1
+        else:
+            counts[word] = 1
+
+    # Print results
+    for key in borrow counts.keys():
+        print(f"{key}: {counts[key]}")
+
+    print(f"Unique words: {counts.len()}")
+    return 0

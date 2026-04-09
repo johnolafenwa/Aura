@@ -1,0 +1,44 @@
+## Reverse a vec in place using index swapping
+
+def reverse_vec(arr: borrow mut Vec[int32]):
+    n = arr.len() as int32
+    mut left: int32 = 0
+    mut right: int32 = n - 1
+    while left < right:
+        tmp = arr[left]
+        arr.set(index=left, value=arr[right])
+        arr.set(index=right, value=tmp)
+        left += 1
+        right -= 1
+
+def print_vec(arr: borrow Vec[int32]):
+    mut i: int32 = 0
+    n = arr.len() as int32
+    while i < n:
+        print(arr[i])
+        i += 1
+
+def main() -> int32:
+    ## Test with odd-length vec
+    mut v1 = [1, 2, 3, 4, 5]
+    print("Before reverse (odd):")
+    print_vec(v1)
+    reverse_vec(v1)
+    print("After reverse:")
+    print_vec(v1)
+
+    ## Test with even-length vec
+    mut v2 = [10, 20, 30, 40]
+    print("Before reverse (even):")
+    print_vec(v2)
+    reverse_vec(v2)
+    print("After reverse:")
+    print_vec(v2)
+
+    ## Test with single element
+    mut v3 = [99]
+    reverse_vec(v3)
+    print("Single element reversed:")
+    print_vec(v3)
+
+    return 0

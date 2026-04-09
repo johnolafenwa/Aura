@@ -7,8 +7,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::{
-    Argument, AssignTarget, BinaryOp, Expr, ExprKind, FunctionDecl, Param, Pattern, ReceiverKind,
-    SelectArm, Stmt, UnaryOp,
+    Argument, AssignTarget, BinaryOp, Expr, ExprKind, FunctionDecl, LiteralPatternKind, Param,
+    Pattern, ReceiverKind, SelectArm, Stmt, UnaryOp,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinFunction, BuiltinMember, CallConvention,
@@ -23,6 +23,9 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     String(String),
+    Vec(VecValue),
+    Set(SetValue),
+    Map(MapValue),
     Duration(i128),
     Range(RangeValue),
     ModuleNamespace(ModuleNamespaceValue),
@@ -45,6 +48,25 @@ pub struct EnumVariantValue {
     pub enum_name: String,
     pub variant_name: String,
     pub payload: Option<Box<Value>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct VecValue {
+    pub element_type: Type,
+    pub elements: Vec<Value>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SetValue {
+    pub element_type: Type,
+    pub elements: Vec<Value>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MapValue {
+    pub key_type: Type,
+    pub value_type: Type,
+    pub entries: Vec<(Value, Value)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -123,6 +145,9 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
             Value::Float(_) => "float64".to_string(),
             Value::Bool(_) => "bool".to_string(),
             Value::String(_) => "String".to_string(),
+            Value::Vec(_) => "Vec".to_string(),
+            Value::Set(_) => "Set".to_string(),
+            Value::Map(_) => "Map".to_string(),
             Value::Duration(_) => "Duration".to_string(),
             Value::Range(_) => "Range".to_string(),
             Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
@@ -254,6 +279,38 @@ impl PartialEq for TaskGroupValue {
     }
 }
 
+impl PartialEq for VecValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.elements == other.elements
+    }
+}
+
+impl PartialEq for SetValue {
+    fn eq(&self, other: &Self) -> bool {
+        if self.elements.len() != other.elements.len() {
+            return false;
+        }
+        self.elements
+            .iter()
+            .all(|element| other.elements.iter().any(|candidate| candidate == element))
+    }
+}
+
+impl PartialEq for MapValue {
+    fn eq(&self, other: &Self) -> bool {
+        if self.entries.len() != other.entries.len() {
+            return false;
+        }
+        self.entries.iter().all(|(key, value)| {
+            other
+                .entries
+                .iter()
+                .find(|(candidate_key, _)| candidate_key == key)
+                .is_some_and(|(_, candidate_value)| candidate_value == value)
+        })
+    }
+}
+
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -262,6 +319,9 @@ impl PartialEq for Value {
             (Value::Float(left), Value::Float(right)) => left == right,
             (Value::Bool(left), Value::Bool(right)) => left == right,
             (Value::String(left), Value::String(right)) => left == right,
+            (Value::Vec(left), Value::Vec(right)) => left == right,
+            (Value::Set(left), Value::Set(right)) => left == right,
+            (Value::Map(left), Value::Map(right)) => left == right,
             (Value::Range(left), Value::Range(right)) => left == right,
             (Value::ModuleNamespace(left), Value::ModuleNamespace(right)) => left == right,
             (Value::Unit, Value::Unit) => true,
@@ -282,6 +342,41 @@ impl Value {
             Value::Float(value) => render_float(*value),
             Value::Bool(value) => value.to_string(),
             Value::String(value) => value.clone(),
+            Value::Vec(values) => {
+                let mut rendered = String::from("[");
+                for (index, value) in values.elements.iter().enumerate() {
+                    if index > 0 {
+                        rendered.push_str(", ");
+                    }
+                    rendered.push_str(&value.render());
+                }
+                rendered.push(']');
+                rendered
+            }
+            Value::Set(values) => {
+                let mut rendered = String::from("Set{");
+                for (index, value) in values.elements.iter().enumerate() {
+                    if index > 0 {
+                        rendered.push_str(", ");
+                    }
+                    rendered.push_str(&value.render());
+                }
+                rendered.push('}');
+                rendered
+            }
+            Value::Map(map) => {
+                let mut rendered = String::from("{");
+                for (index, (key, value)) in map.entries.iter().enumerate() {
+                    if index > 0 {
+                        rendered.push_str(", ");
+                    }
+                    rendered.push_str(&key.render());
+                    rendered.push_str(": ");
+                    rendered.push_str(&value.render());
+                }
+                rendered.push('}');
+                rendered
+            }
             Value::Duration(value) => format!("{}ms", value),
             Value::Range(range) => format!("range({}, {})", range.start, range.end),
             Value::ModuleNamespace(namespace) => format!("<module {}>", namespace.path),
@@ -512,7 +607,8 @@ pub fn run(program: &Program) -> Result<RunOutput> {
     let program = program.clone();
     std::thread::Builder::new()
         .name("aurora-interpreter".to_string())
-        .stack_size(128 * 1024 * 1024)
+        // Keep enough headroom for the explicit Aurora recursion limit in debug builds.
+        .stack_size(256 * 1024 * 1024)
         .spawn(move || {
             let stdout = Arc::new(Mutex::new(String::new()));
             let mut interpreter = Interpreter {
@@ -916,6 +1012,18 @@ impl Interpreter {
             Value::Float(_) => Some(Type::named("float64")),
             Value::Bool(_) => Some(Type::named("bool")),
             Value::String(_) => Some(Type::named("String")),
+            Value::Vec(vector) => Some(Type::Named(
+                "Vec".to_string(),
+                vec![vector.element_type.clone()],
+            )),
+            Value::Set(set) => Some(Type::Named(
+                "Set".to_string(),
+                vec![set.element_type.clone()],
+            )),
+            Value::Map(map) => Some(Type::Named(
+                "Map".to_string(),
+                vec![map.key_type.clone(), map.value_type.clone()],
+            )),
             Value::Duration(_) => Some(Type::named("Duration")),
             Value::Range(_) => Some(Type::named("Range")),
             Value::ModuleNamespace(namespace) => Some(Type::Module(namespace.path.clone())),
@@ -1046,10 +1154,40 @@ impl Interpreter {
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
             ExprKind::String(_) => Some(Type::named("String")),
+            ExprKind::List(elements) => Some(Type::Named(
+                "Vec".to_string(),
+                vec![elements
+                    .first()
+                    .and_then(|element| self.infer_expr_type(element, env))
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            )),
+            ExprKind::Set(elements) => Some(Type::Named(
+                "Set".to_string(),
+                vec![elements
+                    .first()
+                    .and_then(|element| self.infer_expr_type(element, env))
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            )),
+            ExprKind::Map(entries) => Some(Type::Named(
+                "Map".to_string(),
+                vec![
+                    entries
+                        .first()
+                        .and_then(|entry| self.infer_expr_type(&entry.key, env))
+                        .unwrap_or_else(|| Type::named("Unknown")),
+                    entries
+                        .first()
+                        .and_then(|entry| self.infer_expr_type(&entry.value, env))
+                        .unwrap_or_else(|| Type::named("Unknown")),
+                ],
+            )),
             ExprKind::FString(_) => Some(Type::named("String")),
             ExprKind::Specialize { expr, type_args } => match &expr.kind {
                 ExprKind::Name(name)
-                    if matches!(name.as_str(), "Option" | "Result" | "SendError" | "Channel") =>
+                    if matches!(
+                        name.as_str(),
+                        "Option" | "Result" | "SendError" | "Channel" | "Vec" | "Set" | "Map"
+                    ) =>
                 {
                     Some(Type::Named(
                         name.clone(),
@@ -1070,8 +1208,8 @@ impl Interpreter {
             ExprKind::Spawn { detached, value } => {
                 if *detached {
                     Some(Type::Unit)
-                } else if let ExprKind::Call { callee, .. } = &value.kind {
-                    self.infer_call_type(callee, env)
+                } else if let ExprKind::Call { callee, args } = &value.kind {
+                    self.infer_call_type(callee, args, env)
                         .map(|inner| Type::Named("Task".to_string(), vec![inner]))
                 } else {
                     None
@@ -1109,9 +1247,108 @@ impl Interpreter {
                 }
                 if let Some(Type::Named(class_name, class_args)) = self.infer_expr_type(object, env)
                 {
+                    if class_args.is_empty()
+                        && field == "to_string"
+                        && matches!(
+                            class_name.as_str(),
+                            "bool"
+                                | "int8"
+                                | "int16"
+                                | "int32"
+                                | "int64"
+                                | "int128"
+                                | "intsize"
+                                | "uint8"
+                                | "uint16"
+                                | "uint32"
+                                | "uint64"
+                                | "uint128"
+                                | "uintsize"
+                                | "float32"
+                                | "float64"
+                        )
+                    {
+                        return Some(Type::named("String"));
+                    }
+                    if class_name == "Vec" && class_args.len() == 1 {
+                        return match field.as_str() {
+                            "len" => Some(Type::named("int32")),
+                            "is_empty" => Some(Type::named("bool")),
+                            "clone" => Some(Type::Named("Vec".to_string(), class_args)),
+                            "push" => Some(Type::Unit),
+                            "swap" | "contains" => Some(Type::named("bool")),
+                            "extend" => Some(Type::Unit),
+                            "insert" => Some(Type::named("bool")),
+                            "clear" | "reverse" => Some(Type::Unit),
+                            "pop" => Some(Type::Named(
+                                "Option".to_string(),
+                                vec![class_args[0].clone()],
+                            )),
+                            "get" | "set" | "remove" => Some(Type::Named(
+                                "Option".to_string(),
+                                vec![class_args[0].clone()],
+                            )),
+                            _ => None,
+                        };
+                    }
+                    if class_name == "Set" && class_args.len() == 1 {
+                        return match field.as_str() {
+                            "len" => Some(Type::named("int32")),
+                            "is_empty" => Some(Type::named("bool")),
+                            "clone" => Some(Type::Named("Set".to_string(), class_args)),
+                            "contains" | "insert" | "remove" => Some(Type::named("bool")),
+                            _ => None,
+                        };
+                    }
+                    if class_name == "Map" && class_args.len() == 2 {
+                        return match field.as_str() {
+                            "len" => Some(Type::named("int32")),
+                            "is_empty" => Some(Type::named("bool")),
+                            "clone" => Some(Type::Named("Map".to_string(), class_args)),
+                            "contains_key" => Some(Type::named("bool")),
+                            "clear" | "extend" => Some(Type::Unit),
+                            "keys" => {
+                                Some(Type::Named("Vec".to_string(), vec![class_args[0].clone()]))
+                            }
+                            "values" => {
+                                Some(Type::Named("Vec".to_string(), vec![class_args[1].clone()]))
+                            }
+                            "items" | "entries" => Some(Type::Named(
+                                "Vec".to_string(),
+                                vec![Type::Named(
+                                    "MapEntry".to_string(),
+                                    vec![class_args[0].clone(), class_args[1].clone()],
+                                )],
+                            )),
+                            "get" | "set" | "remove" => Some(Type::Named(
+                                "Option".to_string(),
+                                vec![class_args[1].clone()],
+                            )),
+                            _ => None,
+                        };
+                    }
                     if class_name == "String" && class_args.is_empty() {
                         return match field.as_str() {
+                            "len" => Some(Type::named("int32")),
+                            "contains" | "starts_with" | "ends_with" => Some(Type::named("bool")),
+                            "split" => {
+                                Some(Type::Named("Vec".to_string(), vec![Type::named("String")]))
+                            }
+                            "replace" | "to_lower" | "to_upper" | "trim" | "join" => {
+                                Some(Type::named("String"))
+                            }
+                            "strip_prefix" | "strip_suffix" => Some(Type::Named(
+                                "Option".to_string(),
+                                vec![Type::named("String")],
+                            )),
                             "clone" => Some(Type::named("String")),
+                            _ => None,
+                        };
+                    }
+                    if class_name == "MapEntry" && class_args.len() == 2 {
+                        return match field.as_str() {
+                            "key" => Some(class_args[0].clone()),
+                            "value" => Some(class_args[1].clone()),
                             _ => None,
                         };
                     }
@@ -1180,7 +1417,18 @@ impl Interpreter {
                 }
                 None
             }
-            ExprKind::Call { callee, .. } => self.infer_call_type(callee, env),
+            ExprKind::Index { object, .. } => {
+                self.infer_expr_type(object, env).and_then(|ty| match ty {
+                    Type::Named(name, args) if name == "Vec" && args.len() == 1 => {
+                        Some(args[0].clone())
+                    }
+                    Type::Named(name, args) if name == "Map" && args.len() == 2 => {
+                        Some(args[1].clone())
+                    }
+                    _ => None,
+                })
+            }
+            ExprKind::Call { callee, args } => self.infer_call_type(callee, args, env),
         };
 
         if let Some(ty) = inferred.clone() {
@@ -1192,8 +1440,19 @@ impl Interpreter {
         inferred
     }
 
-    fn infer_call_type(&self, callee: &Expr, env: &Env) -> Option<Type> {
+    fn infer_call_type(&self, callee: &Expr, args: &[Argument], env: &Env) -> Option<Type> {
         match &callee.kind {
+            ExprKind::Specialize { expr, type_args } if matches!(&expr.kind, ExprKind::Name(name) if matches!(name.as_str(), "Channel" | "Vec" | "Set" | "Map")) =>
+            {
+                let name = match &expr.kind {
+                    ExprKind::Name(name) => name,
+                    _ => unreachable!(),
+                };
+                Some(Type::Named(
+                    name.clone(),
+                    type_args.iter().map(Self::lower_runtime_type).collect(),
+                ))
+            }
             ExprKind::Name(name) => {
                 if let Some(builtin) = BuiltinFunction::from_name(name) {
                     return match builtin {
@@ -1204,6 +1463,27 @@ impl Interpreter {
                         BuiltinFunction::Cancelled => Some(Type::named("bool")),
                         BuiltinFunction::After => Some(Type::named("Duration")),
                         BuiltinFunction::Sleep => Some(Type::Unit),
+                        BuiltinFunction::Abs => args
+                            .first()
+                            .and_then(|arg| self.infer_expr_type(&arg.value, env)),
+                        BuiltinFunction::Min | BuiltinFunction::Max => args
+                            .first()
+                            .and_then(|arg| self.infer_expr_type(&arg.value, env)),
+                        BuiltinFunction::Sqrt => args
+                            .first()
+                            .and_then(|arg| self.infer_expr_type(&arg.value, env)),
+                        BuiltinFunction::ParseInt32 => Some(Type::Named(
+                            "Result".to_string(),
+                            vec![Type::named("int32"), Type::named("String")],
+                        )),
+                        BuiltinFunction::ParseInt64 => Some(Type::Named(
+                            "Result".to_string(),
+                            vec![Type::named("int64"), Type::named("String")],
+                        )),
+                        BuiltinFunction::ParseFloat64 => Some(Type::Named(
+                            "Result".to_string(),
+                            vec![Type::named("float64"), Type::named("String")],
+                        )),
                     };
                 }
                 if let Some(function) = self.resolve_function_info(name) {
@@ -1658,10 +1938,119 @@ impl Interpreter {
                         }
                         Ok(ExecFlow::Continue)
                     }
+                    Value::Vec(mut vector) => {
+                        let binding_ty = self
+                            .infer_expr_type(&for_stmt.iterable, env)
+                            .and_then(|ty| match ty {
+                                Type::Named(name, args) if name == "Vec" && args.len() == 1 => {
+                                    Some(args[0].clone())
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| vector.element_type.clone());
+                        match for_stmt.borrow_mode {
+                            Some(ReceiverKind::BorrowMut) => {
+                                for index in 0..vector.elements.len() {
+                                    env.push_scope();
+                                    env.define_typed(
+                                        for_stmt.binding.clone(),
+                                        binding_ty.clone(),
+                                        vector.elements[index].clone(),
+                                    );
+                                    let flow = self.exec_block(&for_stmt.body, env, false)?;
+                                    let updated_value = env
+                                        .get(&for_stmt.binding)
+                                        .cloned()
+                                        .unwrap_or_else(|| vector.elements[index].clone());
+                                    env.pop_scope();
+                                    vector.elements[index] = updated_value;
+                                    match flow {
+                                        ExecFlow::Continue => {}
+                                        ExecFlow::Return(value) => {
+                                            self.write_place_expr(
+                                                &for_stmt.iterable,
+                                                env,
+                                                Value::Vec(vector),
+                                            )?;
+                                            return Ok(ExecFlow::Return(value));
+                                        }
+                                        ExecFlow::Break => break,
+                                        ExecFlow::ContinueLoop => continue,
+                                    }
+                                }
+                                self.write_place_expr(&for_stmt.iterable, env, Value::Vec(vector))?;
+                            }
+                            Some(_) => {
+                                for value in vector.elements.iter().cloned() {
+                                    env.push_scope();
+                                    env.define_typed(
+                                        for_stmt.binding.clone(),
+                                        binding_ty.clone(),
+                                        value,
+                                    );
+                                    let flow = self.exec_block(&for_stmt.body, env, false)?;
+                                    env.pop_scope();
+                                    match flow {
+                                        ExecFlow::Continue => {}
+                                        ExecFlow::Return(value) => {
+                                            return Ok(ExecFlow::Return(value))
+                                        }
+                                        ExecFlow::Break => break,
+                                        ExecFlow::ContinueLoop => continue,
+                                    }
+                                }
+                            }
+                            None => {
+                                for value in vector.elements {
+                                    env.push_scope();
+                                    env.define_typed(
+                                        for_stmt.binding.clone(),
+                                        binding_ty.clone(),
+                                        value,
+                                    );
+                                    let flow = self.exec_block(&for_stmt.body, env, false)?;
+                                    env.pop_scope();
+                                    match flow {
+                                        ExecFlow::Continue => {}
+                                        ExecFlow::Return(value) => {
+                                            return Ok(ExecFlow::Return(value))
+                                        }
+                                        ExecFlow::Break => break,
+                                        ExecFlow::ContinueLoop => continue,
+                                    }
+                                }
+                            }
+                        }
+                        Ok(ExecFlow::Continue)
+                    }
+                    Value::Set(set) => {
+                        let binding_ty = self
+                            .infer_expr_type(&for_stmt.iterable, env)
+                            .and_then(|ty| match ty {
+                                Type::Named(name, args) if name == "Set" && args.len() == 1 => {
+                                    Some(args[0].clone())
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| set.element_type.clone());
+                        for value in set.elements.iter().cloned() {
+                            env.push_scope();
+                            env.define_typed(for_stmt.binding.clone(), binding_ty.clone(), value);
+                            let flow = self.exec_block(&for_stmt.body, env, false)?;
+                            env.pop_scope();
+                            match flow {
+                                ExecFlow::Continue => {}
+                                ExecFlow::Return(value) => return Ok(ExecFlow::Return(value)),
+                                ExecFlow::Break => break,
+                                ExecFlow::ContinueLoop => continue,
+                            }
+                        }
+                        Ok(ExecFlow::Continue)
+                    }
                     other => Err(Diagnostic::at(
                         for_stmt.span,
                         format!(
-                            "`for` currently requires a `Range` or `Channel[T]` iterable, found `{}`",
+                            "`for` currently requires a `Range`, `Channel[T]`, `Vec[T]`, or `Set[T]` iterable, found `{}`",
                             other.render()
                         ),
                     )),
@@ -1733,6 +2122,23 @@ impl Interpreter {
     ) -> Result<Option<Option<(String, Value)>>> {
         match pattern {
             Pattern::Wildcard(_) => Ok(Some(None)),
+            Pattern::Literal(pattern) => match (&pattern.kind, value) {
+                (LiteralPatternKind::Int(expected), Value::Int(actual)) if actual == expected => {
+                    Ok(Some(None))
+                }
+                (LiteralPatternKind::Bool(expected), Value::Bool(actual)) if actual == expected => {
+                    Ok(Some(None))
+                }
+                (LiteralPatternKind::String(expected), Value::String(actual))
+                    if actual == expected =>
+                {
+                    Ok(Some(None))
+                }
+                (LiteralPatternKind::Int(_), Value::Int(_))
+                | (LiteralPatternKind::Bool(_), Value::Bool(_))
+                | (LiteralPatternKind::String(_), Value::String(_)) => Ok(None),
+                _ => Ok(None),
+            },
             Pattern::Variant(pattern) => {
                 let Value::EnumVariant(variant) = value else {
                     return Err(Diagnostic::at(
@@ -1968,6 +2374,82 @@ impl Interpreter {
             ExprKind::Float(value) => Ok(EvalOutcome::Value(Value::Float(*value))),
             ExprKind::Bool(value) => Ok(EvalOutcome::Value(Value::Bool(*value))),
             ExprKind::String(value) => Ok(EvalOutcome::Value(Value::String(value.clone()))),
+            ExprKind::List(elements) => {
+                let element_type = self
+                    .infer_expr_type(expr, env)
+                    .and_then(|ty| match ty {
+                        Type::Named(name, args) if name == "Vec" && args.len() == 1 => {
+                            Some(args[0].clone())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                let mut values = Vec::new();
+                for element in elements {
+                    let value = match self.eval_expr(element, env)? {
+                        EvalOutcome::Value(value) => value,
+                        EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                    };
+                    values.push(value);
+                }
+                Ok(EvalOutcome::Value(Value::Vec(VecValue {
+                    element_type,
+                    elements: values,
+                })))
+            }
+            ExprKind::Set(elements) => {
+                let element_type = self
+                    .infer_expr_type(expr, env)
+                    .and_then(|ty| match ty {
+                        Type::Named(name, args) if name == "Set" && args.len() == 1 => {
+                            Some(args[0].clone())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                let mut values = Vec::new();
+                for element in elements {
+                    let value = match self.eval_expr(element, env)? {
+                        EvalOutcome::Value(value) => value,
+                        EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                    };
+                    if !values.iter().any(|candidate| *candidate == value) {
+                        values.push(value);
+                    }
+                }
+                Ok(EvalOutcome::Value(Value::Set(SetValue {
+                    element_type,
+                    elements: values,
+                })))
+            }
+            ExprKind::Map(entries) => {
+                let (key_type, value_type) = self
+                    .infer_expr_type(expr, env)
+                    .and_then(|ty| match ty {
+                        Type::Named(name, args) if name == "Map" && args.len() == 2 => {
+                            Some((args[0].clone(), args[1].clone()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| (Type::named("Unknown"), Type::named("Unknown")));
+                let mut values = Vec::new();
+                for entry in entries {
+                    let key = match self.eval_expr(&entry.key, env)? {
+                        EvalOutcome::Value(value) => value,
+                        EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                    };
+                    let value = match self.eval_expr(&entry.value, env)? {
+                        EvalOutcome::Value(value) => value,
+                        EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                    };
+                    values.push((key, value));
+                }
+                Ok(EvalOutcome::Value(Value::Map(MapValue {
+                    key_type,
+                    value_type,
+                    entries: values,
+                })))
+            }
             ExprKind::FString(parts) => {
                 let mut rendered = String::new();
                 for part in parts {
@@ -2228,6 +2710,32 @@ impl Interpreter {
                     )),
                 }
             }
+            ExprKind::Index { object, index } => {
+                let object = match self.eval_expr(object, env)? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                let index_span = index.span;
+                match object {
+                    Value::Vec(vector) => {
+                        let index = self.evaluate_index_expr(index, env, index_span)?;
+                        Ok(EvalOutcome::Value(
+                            self.read_vector_element(&vector, index, index_span)?,
+                        ))
+                    }
+                    Value::Map(map) => {
+                        let raw_key = self.evaluate_map_key_expr(index, env, index_span)?;
+                        let key = self.coerce_value_to_type(raw_key, &map.key_type, index_span)?;
+                        Ok(EvalOutcome::Value(
+                            self.read_map_element(&map, &key, index_span)?,
+                        ))
+                    }
+                    _ => Err(Diagnostic::at(
+                        expr.span,
+                        "cannot index non-vector-or-map value",
+                    )),
+                }
+            }
             ExprKind::Call { callee, args } => self.eval_call(callee, args, env),
         }
     }
@@ -2239,6 +2747,62 @@ impl Interpreter {
         env: &mut Env,
     ) -> Result<EvalOutcome> {
         match &callee.kind {
+            ExprKind::Specialize { expr, type_args } if matches!(&expr.kind, ExprKind::Name(name) if name == "Vec") =>
+            {
+                if !args.is_empty() {
+                    return Err(Diagnostic::at(
+                        callee.span,
+                        "class `Vec` does not take constructor arguments; use a list literal or `push(...)`",
+                    ));
+                }
+                let element_type = type_args
+                    .first()
+                    .map(Self::lower_runtime_type)
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                Ok(EvalOutcome::Value(Value::Vec(VecValue {
+                    element_type,
+                    elements: Vec::new(),
+                })))
+            }
+            ExprKind::Specialize { expr, type_args } if matches!(&expr.kind, ExprKind::Name(name) if name == "Set") =>
+            {
+                if !args.is_empty() {
+                    return Err(Diagnostic::at(
+                        callee.span,
+                        "class `Set` does not take constructor arguments; use a set literal or `insert(...)`",
+                    ));
+                }
+                let element_type = type_args
+                    .first()
+                    .map(Self::lower_runtime_type)
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                Ok(EvalOutcome::Value(Value::Set(SetValue {
+                    element_type,
+                    elements: Vec::new(),
+                })))
+            }
+            ExprKind::Specialize { expr, type_args } if matches!(&expr.kind, ExprKind::Name(name) if name == "Map") =>
+            {
+                if !args.is_empty() {
+                    return Err(Diagnostic::at(
+                        callee.span,
+                        "class `Map` does not take constructor arguments; use a map literal or `set(...)`",
+                    ));
+                }
+                let key_type = type_args
+                    .first()
+                    .map(Self::lower_runtime_type)
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                let value_type = type_args
+                    .get(1)
+                    .map(Self::lower_runtime_type)
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                Ok(EvalOutcome::Value(Value::Map(MapValue {
+                    key_type,
+                    value_type,
+                    entries: Vec::new(),
+                })))
+            }
             ExprKind::Specialize { expr, .. } if matches!(&expr.kind, ExprKind::Name(name) if name == "Channel") =>
             {
                 let ordered_args = bind_call_arguments(
@@ -2394,6 +2958,198 @@ impl Interpreter {
                         })?;
                         std::thread::sleep(std::time::Duration::from_millis(duration));
                         Ok(EvalOutcome::Value(Value::Unit))
+                    }
+                    BuiltinFunction::Abs => {
+                        let value_arg =
+                            ordered_args[0].expect("`abs` requires exactly one argument");
+                        let value_ty = self
+                            .infer_expr_type(&value_arg.value, env)
+                            .unwrap_or_else(|| Type::named("Unknown"));
+                        let value = match self.eval_expr(&value_arg.value, env)? {
+                            EvalOutcome::Value(value) => value,
+                            EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                        };
+                        let abs_value = match value {
+                            Value::Int(IntegerValue::Signed(value)) => {
+                                Value::Int(IntegerValue::from_signed(
+                                    value.checked_abs().ok_or_else(|| {
+                                        Diagnostic::at(
+                                            value_arg.span,
+                                            "`abs(...)` overflowed the signed integer range",
+                                        )
+                                    })?,
+                                ))
+                            }
+                            Value::Int(IntegerValue::Unsigned(value)) => {
+                                Value::Int(IntegerValue::Unsigned(value))
+                            }
+                            Value::Float(value) => Value::Float(value.abs()),
+                            other => {
+                                return Err(Diagnostic::at(
+                                    value_arg.span,
+                                    format!(
+                                        "`abs(...)` expects an integer or float value, found `{}`",
+                                        other.render()
+                                    ),
+                                ))
+                            }
+                        };
+                        Ok(EvalOutcome::Value(self.coerce_value_to_type(
+                            abs_value,
+                            &value_ty,
+                            value_arg.span,
+                        )?))
+                    }
+                    BuiltinFunction::Min | BuiltinFunction::Max => {
+                        let left_arg =
+                            ordered_args[0].expect("`min`/`max` requires a left argument");
+                        let left = match self.eval_expr(&left_arg.value, env)? {
+                            EvalOutcome::Value(value) => value,
+                            EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                        };
+                        let right_arg =
+                            ordered_args[1].expect("`min`/`max` requires a right argument");
+                        let right = match self.eval_expr(&right_arg.value, env)? {
+                            EvalOutcome::Value(value) => value,
+                            EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                        };
+                        let value = match (&left, &right) {
+                            (Value::Int(left_value), Value::Int(right_value)) => {
+                                let take_left = match builtin {
+                                    BuiltinFunction::Min => left_value <= right_value,
+                                    BuiltinFunction::Max => left_value >= right_value,
+                                    _ => unreachable!(),
+                                };
+                                if take_left {
+                                    left
+                                } else {
+                                    right
+                                }
+                            }
+                            (Value::Float(left_value), Value::Float(right_value)) => {
+                                let take_left = match builtin {
+                                    BuiltinFunction::Min => left_value <= right_value,
+                                    BuiltinFunction::Max => left_value >= right_value,
+                                    _ => unreachable!(),
+                                };
+                                if take_left {
+                                    left
+                                } else {
+                                    right
+                                }
+                            }
+                            _ => {
+                                return Err(Diagnostic::at(
+                                    callee.span,
+                                    format!(
+                                        "`{}` expects matching numeric arguments",
+                                        builtin.name()
+                                    ),
+                                ))
+                            }
+                        };
+                        Ok(EvalOutcome::Value(value))
+                    }
+                    BuiltinFunction::Sqrt => {
+                        let value_arg =
+                            ordered_args[0].expect("`sqrt` requires exactly one argument");
+                        let value_ty = self
+                            .infer_expr_type(&value_arg.value, env)
+                            .unwrap_or_else(|| Type::named("Unknown"));
+                        let value = match self.eval_expr(&value_arg.value, env)? {
+                            EvalOutcome::Value(value) => value,
+                            EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                        };
+                        let result = match value {
+                            Value::Float(value) => Value::Float(value.sqrt()),
+                            other => {
+                                return Err(Diagnostic::at(
+                                    value_arg.span,
+                                    format!(
+                                        "`sqrt(...)` expects `float32` or `float64`, found `{}`",
+                                        other.render()
+                                    ),
+                                ))
+                            }
+                        };
+                        Ok(EvalOutcome::Value(self.coerce_value_to_type(
+                            result,
+                            &value_ty,
+                            value_arg.span,
+                        )?))
+                    }
+                    BuiltinFunction::ParseInt32 => {
+                        let text_arg =
+                            ordered_args[0].expect("`parse_int32` requires exactly one argument");
+                        let text = match self.eval_expr(&text_arg.value, env)? {
+                            EvalOutcome::Value(Value::String(text)) => text,
+                            EvalOutcome::Value(other) => {
+                                return Err(Diagnostic::at(
+                                    text_arg.span,
+                                    format!(
+                                        "`parse_int32(...)` expects `String`, found `{}`",
+                                        other.render()
+                                    ),
+                                ))
+                            }
+                            EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                        };
+                        match text.parse::<i32>() {
+                            Ok(value) => Ok(EvalOutcome::Value(result_ok(Value::Int(
+                                IntegerValue::from_signed(value as i128),
+                            )))),
+                            Err(error) => Ok(EvalOutcome::Value(result_err(Value::String(
+                                error.to_string(),
+                            )))),
+                        }
+                    }
+                    BuiltinFunction::ParseInt64 => {
+                        let text_arg =
+                            ordered_args[0].expect("`parse_int64` requires exactly one argument");
+                        let text = match self.eval_expr(&text_arg.value, env)? {
+                            EvalOutcome::Value(Value::String(text)) => text,
+                            EvalOutcome::Value(other) => {
+                                return Err(Diagnostic::at(
+                                    text_arg.span,
+                                    format!(
+                                        "`parse_int64(...)` expects `String`, found `{}`",
+                                        other.render()
+                                    ),
+                                ))
+                            }
+                            EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                        };
+                        match text.parse::<i64>() {
+                            Ok(value) => Ok(EvalOutcome::Value(result_ok(Value::Int(
+                                IntegerValue::from_signed(value as i128),
+                            )))),
+                            Err(error) => Ok(EvalOutcome::Value(result_err(Value::String(
+                                error.to_string(),
+                            )))),
+                        }
+                    }
+                    BuiltinFunction::ParseFloat64 => {
+                        let text_arg =
+                            ordered_args[0].expect("`parse_float64` requires exactly one argument");
+                        let text = match self.eval_expr(&text_arg.value, env)? {
+                            EvalOutcome::Value(Value::String(text)) => text,
+                            EvalOutcome::Value(other) => {
+                                return Err(Diagnostic::at(
+                                    text_arg.span,
+                                    format!(
+                                        "`parse_float64(...)` expects `String`, found `{}`",
+                                        other.render()
+                                    ),
+                                ))
+                            }
+                            EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                        };
+                        match text.parse::<f64>() {
+                            Ok(value) => Ok(EvalOutcome::Value(result_ok(Value::Float(value)))),
+                            Err(error) => Ok(EvalOutcome::Value(result_err(Value::String(
+                                error.to_string(),
+                            )))),
+                        }
                     }
                 }
             }
@@ -2728,6 +3484,43 @@ impl Interpreter {
                     );
                 }
 
+                if let Value::Vec(vector) = &receiver_value {
+                    return self.eval_vec_method(
+                        vector.clone(),
+                        field,
+                        object,
+                        args,
+                        env,
+                        callee.span,
+                    );
+                }
+
+                if let Value::Map(map) = &receiver_value {
+                    return self.eval_map_method(
+                        map.clone(),
+                        field,
+                        object,
+                        args,
+                        env,
+                        callee.span,
+                    );
+                }
+
+                if let Value::String(text) = &receiver_value {
+                    return self.eval_string_method(text.clone(), field, args, env, callee.span);
+                }
+
+                if let Value::Set(set) = &receiver_value {
+                    return self.eval_set_method(
+                        set.clone(),
+                        field,
+                        object,
+                        args,
+                        env,
+                        callee.span,
+                    );
+                }
+
                 if let Value::Task(task) = &receiver_value {
                     return self.eval_task_method(task.clone(), field, args, callee.span);
                 }
@@ -2956,6 +3749,18 @@ impl Interpreter {
                     Value::Float(value) if field == "sqrt" => {
                         BuiltinMember::FloatSqrt.bind_args(args, callee.span)?;
                         Ok(EvalOutcome::Value(Value::Float(value.sqrt())))
+                    }
+                    Value::Int(value) if field == "to_string" => {
+                        BuiltinMember::ScalarToString.bind_args(args, callee.span)?;
+                        Ok(EvalOutcome::Value(Value::String(value.to_string())))
+                    }
+                    Value::Float(value) if field == "to_string" => {
+                        BuiltinMember::ScalarToString.bind_args(args, callee.span)?;
+                        Ok(EvalOutcome::Value(Value::String(render_float(value))))
+                    }
+                    Value::Bool(value) if field == "to_string" => {
+                        BuiltinMember::ScalarToString.bind_args(args, callee.span)?;
+                        Ok(EvalOutcome::Value(Value::String(value.to_string())))
                     }
                     Value::String(value) if field == "clone" => {
                         BuiltinMember::StringClone.bind_args(args, callee.span)?;
@@ -3291,6 +4096,759 @@ impl Interpreter {
         }
     }
 
+    fn eval_vec_method(
+        &mut self,
+        vector: VecValue,
+        field: &str,
+        receiver_expr: &Expr,
+        args: &[Argument],
+        env: &mut Env,
+        span: crate::diag::Span,
+    ) -> Result<EvalOutcome> {
+        match field {
+            "len" => {
+                BuiltinMember::VecLen.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::Int(IntegerValue::from_literal(
+                    vector.elements.len() as u128,
+                ))))
+            }
+            "is_empty" => {
+                BuiltinMember::VecIsEmpty.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::Bool(vector.elements.is_empty())))
+            }
+            "clone" => {
+                BuiltinMember::VecClone.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::Vec(vector)))
+            }
+            "push" => {
+                let ordered_args = BuiltinMember::VecPush.bind_args(args, span)?;
+                let mut updated = vector;
+                let value = match self.eval_expr(
+                    &ordered_args[0]
+                        .expect("`push` requires exactly one argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                updated.elements.push(value);
+                self.write_place_expr(receiver_expr, env, Value::Vec(updated))?;
+                Ok(EvalOutcome::Value(Value::Unit))
+            }
+            "pop" => {
+                BuiltinMember::VecPop.bind_args(args, span)?;
+                let mut updated = vector;
+                let value = updated
+                    .elements
+                    .pop()
+                    .map(option_some)
+                    .unwrap_or_else(option_none);
+                self.write_place_expr(receiver_expr, env, Value::Vec(updated))?;
+                Ok(EvalOutcome::Value(value))
+            }
+            "get" => {
+                let ordered_args = BuiltinMember::VecGet.bind_args(args, span)?;
+                let index = self.evaluate_index_expr(
+                    &ordered_args[0]
+                        .expect("`get` requires exactly one argument")
+                        .value,
+                    env,
+                    span,
+                )?;
+                Ok(EvalOutcome::Value(
+                    vector
+                        .elements
+                        .get(index)
+                        .cloned()
+                        .map(option_some)
+                        .unwrap_or_else(option_none),
+                ))
+            }
+            "set" => {
+                let ordered_args = BuiltinMember::VecSet.bind_args(args, span)?;
+                let index = self.evaluate_index_expr(
+                    &ordered_args[0]
+                        .expect("`set` requires an `index` argument")
+                        .value,
+                    env,
+                    span,
+                )?;
+                let value = match self.eval_expr(
+                    &ordered_args[1]
+                        .expect("`set` requires a `value` argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                let mut updated = vector;
+                let previous = if index < updated.elements.len() {
+                    option_some(std::mem::replace(&mut updated.elements[index], value))
+                } else {
+                    option_none()
+                };
+                self.write_place_expr(receiver_expr, env, Value::Vec(updated))?;
+                Ok(EvalOutcome::Value(previous))
+            }
+            "remove" => {
+                let ordered_args = BuiltinMember::VecRemove.bind_args(args, span)?;
+                let index = self.evaluate_index_expr(
+                    &ordered_args[0]
+                        .expect("`remove` requires exactly one argument")
+                        .value,
+                    env,
+                    span,
+                )?;
+                let mut updated = vector;
+                let removed = if index < updated.elements.len() {
+                    option_some(updated.elements.remove(index))
+                } else {
+                    option_none()
+                };
+                self.write_place_expr(receiver_expr, env, Value::Vec(updated))?;
+                Ok(EvalOutcome::Value(removed))
+            }
+            "swap" => {
+                let ordered_args = BuiltinMember::VecSwap.bind_args(args, span)?;
+                let first = self.evaluate_index_expr(
+                    &ordered_args[0]
+                        .expect("`swap` requires a `first` argument")
+                        .value,
+                    env,
+                    span,
+                )?;
+                let second = self.evaluate_index_expr(
+                    &ordered_args[1]
+                        .expect("`swap` requires a `second` argument")
+                        .value,
+                    env,
+                    span,
+                )?;
+                let mut updated = vector;
+                let swapped = first < updated.elements.len() && second < updated.elements.len();
+                if swapped {
+                    updated.elements.swap(first, second);
+                }
+                self.write_place_expr(receiver_expr, env, Value::Vec(updated))?;
+                Ok(EvalOutcome::Value(Value::Bool(swapped)))
+            }
+            "contains" => {
+                let ordered_args = BuiltinMember::VecContains.bind_args(args, span)?;
+                let needle = match self.eval_expr(
+                    &ordered_args[0]
+                        .expect("`contains` requires a `value` argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                Ok(EvalOutcome::Value(Value::Bool(
+                    vector.elements.iter().any(|candidate| *candidate == needle),
+                )))
+            }
+            "extend" => {
+                let ordered_args = BuiltinMember::VecExtend.bind_args(args, span)?;
+                let other = match self.eval_expr(
+                    &ordered_args[0]
+                        .expect("`extend` requires an `other` argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                let Value::Vec(other) = other else {
+                    return Err(Diagnostic::at(
+                        span,
+                        "`extend` requires another `Vec[T]` value",
+                    ));
+                };
+                let mut updated = vector;
+                updated.elements.extend(other.elements);
+                self.write_place_expr(receiver_expr, env, Value::Vec(updated))?;
+                Ok(EvalOutcome::Value(Value::Unit))
+            }
+            "insert" => {
+                let ordered_args = BuiltinMember::VecInsert.bind_args(args, span)?;
+                let index = self.evaluate_index_expr(
+                    &ordered_args[0]
+                        .expect("`insert` requires an `index` argument")
+                        .value,
+                    env,
+                    span,
+                )?;
+                let value = match self.eval_expr(
+                    &ordered_args[1]
+                        .expect("`insert` requires a `value` argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                let mut updated = vector;
+                let inserted = index <= updated.elements.len();
+                if inserted {
+                    updated.elements.insert(index, value);
+                }
+                self.write_place_expr(receiver_expr, env, Value::Vec(updated))?;
+                Ok(EvalOutcome::Value(Value::Bool(inserted)))
+            }
+            "clear" => {
+                BuiltinMember::VecClear.bind_args(args, span)?;
+                let mut updated = vector;
+                updated.elements.clear();
+                self.write_place_expr(receiver_expr, env, Value::Vec(updated))?;
+                Ok(EvalOutcome::Value(Value::Unit))
+            }
+            "reverse" => {
+                BuiltinMember::VecReverse.bind_args(args, span)?;
+                let mut updated = vector;
+                updated.elements.reverse();
+                self.write_place_expr(receiver_expr, env, Value::Vec(updated))?;
+                Ok(EvalOutcome::Value(Value::Unit))
+            }
+            _ => Err(Diagnostic::at(
+                span,
+                format!("unsupported vector method `{}`", field),
+            )),
+        }
+    }
+
+    fn eval_map_method(
+        &mut self,
+        map: MapValue,
+        field: &str,
+        receiver_expr: &Expr,
+        args: &[Argument],
+        env: &mut Env,
+        span: crate::diag::Span,
+    ) -> Result<EvalOutcome> {
+        match field {
+            "len" => {
+                BuiltinMember::MapLen.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::Int(IntegerValue::from_literal(
+                    map.entries.len() as u128,
+                ))))
+            }
+            "is_empty" => {
+                BuiltinMember::MapIsEmpty.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::Bool(map.entries.is_empty())))
+            }
+            "clone" => {
+                BuiltinMember::MapClone.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::Map(map)))
+            }
+            "get" => {
+                let ordered_args = BuiltinMember::MapGet.bind_args(args, span)?;
+                let key = match self.eval_expr(
+                    &ordered_args[0]
+                        .expect("`get` requires exactly one argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                Ok(EvalOutcome::Value(
+                    map.entries
+                        .iter()
+                        .find(|(candidate_key, _)| *candidate_key == key)
+                        .map(|(_, value)| option_some(value.clone()))
+                        .unwrap_or_else(option_none),
+                ))
+            }
+            "set" => {
+                let ordered_args = BuiltinMember::MapSet.bind_args(args, span)?;
+                let key = match self.eval_expr(
+                    &ordered_args[0]
+                        .expect("`set` requires a `key` argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                let value = match self.eval_expr(
+                    &ordered_args[1]
+                        .expect("`set` requires a `value` argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                let key = self.coerce_value_to_type(key, &map.key_type, span)?;
+                let value = self.coerce_value_to_type(value, &map.value_type, span)?;
+                let mut updated = map;
+                let previous = if let Some(index) = updated
+                    .entries
+                    .iter()
+                    .position(|(candidate_key, _)| *candidate_key == key)
+                {
+                    option_some(std::mem::replace(&mut updated.entries[index].1, value))
+                } else {
+                    updated.entries.push((key, value));
+                    option_none()
+                };
+                self.write_place_expr(receiver_expr, env, Value::Map(updated))?;
+                Ok(EvalOutcome::Value(previous))
+            }
+            "remove" => {
+                let ordered_args = BuiltinMember::MapRemove.bind_args(args, span)?;
+                let key = match self.eval_expr(
+                    &ordered_args[0]
+                        .expect("`remove` requires exactly one argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                let key = self.coerce_value_to_type(key, &map.key_type, span)?;
+                let mut updated = map;
+                let removed = if let Some(index) = updated
+                    .entries
+                    .iter()
+                    .position(|(candidate_key, _)| *candidate_key == key)
+                {
+                    option_some(updated.entries.remove(index).1)
+                } else {
+                    option_none()
+                };
+                self.write_place_expr(receiver_expr, env, Value::Map(updated))?;
+                Ok(EvalOutcome::Value(removed))
+            }
+            "contains_key" => {
+                let ordered_args = BuiltinMember::MapContainsKey.bind_args(args, span)?;
+                let key = match self.eval_expr(
+                    &ordered_args[0]
+                        .expect("`contains_key` requires exactly one argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                let key = self.coerce_value_to_type(key, &map.key_type, span)?;
+                Ok(EvalOutcome::Value(Value::Bool(
+                    map.entries
+                        .iter()
+                        .any(|(candidate_key, _)| *candidate_key == key),
+                )))
+            }
+            "keys" => {
+                BuiltinMember::MapKeys.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::Vec(VecValue {
+                    element_type: map.key_type.clone(),
+                    elements: map.entries.iter().map(|(key, _)| key.clone()).collect(),
+                })))
+            }
+            "values" => {
+                BuiltinMember::MapValues.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::Vec(VecValue {
+                    element_type: map.value_type.clone(),
+                    elements: map.entries.iter().map(|(_, value)| value.clone()).collect(),
+                })))
+            }
+            "items" | "entries" => {
+                let builtin = if field == "items" {
+                    BuiltinMember::MapItems
+                } else {
+                    BuiltinMember::MapEntries
+                };
+                builtin.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::Vec(VecValue {
+                    element_type: Type::Named(
+                        "MapEntry".to_string(),
+                        vec![map.key_type.clone(), map.value_type.clone()],
+                    ),
+                    elements: map
+                        .entries
+                        .iter()
+                        .map(|(key, value)| {
+                            Value::Instance(InstanceValue {
+                                class_name: "MapEntry".to_string(),
+                                fields: BTreeMap::from([
+                                    ("key".to_string(), key.clone()),
+                                    ("value".to_string(), value.clone()),
+                                ]),
+                            })
+                        })
+                        .collect(),
+                })))
+            }
+            "clear" => {
+                BuiltinMember::MapClear.bind_args(args, span)?;
+                let mut updated = map;
+                updated.entries.clear();
+                self.write_place_expr(receiver_expr, env, Value::Map(updated))?;
+                Ok(EvalOutcome::Value(Value::Unit))
+            }
+            "extend" => {
+                let ordered_args = BuiltinMember::MapExtend.bind_args(args, span)?;
+                let other = match self.eval_expr(
+                    &ordered_args[0]
+                        .expect("`extend` requires an `other` argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                let Value::Map(other) = other else {
+                    return Err(Diagnostic::at(
+                        span,
+                        "`extend` requires another `Map[K, V]` value",
+                    ));
+                };
+                let mut updated = map;
+                for (key, value) in other.entries {
+                    if let Some(index) = updated
+                        .entries
+                        .iter()
+                        .position(|(candidate_key, _)| *candidate_key == key)
+                    {
+                        updated.entries[index].1 = value;
+                    } else {
+                        updated.entries.push((key, value));
+                    }
+                }
+                self.write_place_expr(receiver_expr, env, Value::Map(updated))?;
+                Ok(EvalOutcome::Value(Value::Unit))
+            }
+            _ => Err(Diagnostic::at(
+                span,
+                format!("unsupported map method `{}`", field),
+            )),
+        }
+    }
+
+    fn eval_string_method(
+        &mut self,
+        text: String,
+        field: &str,
+        args: &[Argument],
+        env: &mut Env,
+        span: crate::diag::Span,
+    ) -> Result<EvalOutcome> {
+        match field {
+            "len" => {
+                BuiltinMember::StringLen.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::Int(IntegerValue::from_literal(
+                    text.len() as u128,
+                ))))
+            }
+            "contains" => {
+                let ordered_args = BuiltinMember::StringContains.bind_args(args, span)?;
+                let value = &ordered_args[0]
+                    .expect("`contains` requires exactly one argument")
+                    .value;
+                let needle = match self.eval_expr(value, env)? {
+                    EvalOutcome::Value(Value::String(needle)) => needle,
+                    EvalOutcome::Value(other) => {
+                        return Err(Diagnostic::at(
+                            value.span,
+                            format!("`contains` requires a `String`, found `{}`", other.render()),
+                        ))
+                    }
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                Ok(EvalOutcome::Value(Value::Bool(text.contains(&needle))))
+            }
+            "starts_with" => {
+                let ordered_args = BuiltinMember::StringStartsWith.bind_args(args, span)?;
+                let value = &ordered_args[0]
+                    .expect("`starts_with` requires exactly one argument")
+                    .value;
+                let prefix = match self.eval_expr(value, env)? {
+                    EvalOutcome::Value(Value::String(prefix)) => prefix,
+                    EvalOutcome::Value(other) => {
+                        return Err(Diagnostic::at(
+                            value.span,
+                            format!(
+                                "`starts_with` requires a `String`, found `{}`",
+                                other.render()
+                            ),
+                        ))
+                    }
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                Ok(EvalOutcome::Value(Value::Bool(text.starts_with(&prefix))))
+            }
+            "ends_with" => {
+                let ordered_args = BuiltinMember::StringEndsWith.bind_args(args, span)?;
+                let value = &ordered_args[0]
+                    .expect("`ends_with` requires exactly one argument")
+                    .value;
+                let suffix = match self.eval_expr(value, env)? {
+                    EvalOutcome::Value(Value::String(suffix)) => suffix,
+                    EvalOutcome::Value(other) => {
+                        return Err(Diagnostic::at(
+                            value.span,
+                            format!(
+                                "`ends_with` requires a `String`, found `{}`",
+                                other.render()
+                            ),
+                        ))
+                    }
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                Ok(EvalOutcome::Value(Value::Bool(text.ends_with(&suffix))))
+            }
+            "split" => {
+                let ordered_args = BuiltinMember::StringSplit.bind_args(args, span)?;
+                let value = &ordered_args[0]
+                    .expect("`split` requires exactly one argument")
+                    .value;
+                let separator = match self.eval_expr(value, env)? {
+                    EvalOutcome::Value(Value::String(separator)) => separator,
+                    EvalOutcome::Value(other) => {
+                        return Err(Diagnostic::at(
+                            value.span,
+                            format!("`split` requires a `String`, found `{}`", other.render()),
+                        ))
+                    }
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                Ok(EvalOutcome::Value(Value::Vec(VecValue {
+                    element_type: Type::named("String"),
+                    elements: text
+                        .split(&separator)
+                        .map(|part| Value::String(part.to_string()))
+                        .collect(),
+                })))
+            }
+            "replace" => {
+                let ordered_args = BuiltinMember::StringReplace.bind_args(args, span)?;
+                let from_value = &ordered_args[0]
+                    .expect("`replace` requires exactly two arguments")
+                    .value;
+                let from = match self.eval_expr(from_value, env)? {
+                    EvalOutcome::Value(Value::String(from)) => from,
+                    EvalOutcome::Value(other) => {
+                        return Err(Diagnostic::at(
+                            from_value.span,
+                            format!(
+                                "`replace` requires `String` for `from`, found `{}`",
+                                other.render()
+                            ),
+                        ))
+                    }
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                let to_value = &ordered_args[1]
+                    .expect("`replace` requires exactly two arguments")
+                    .value;
+                let to = match self.eval_expr(to_value, env)? {
+                    EvalOutcome::Value(Value::String(to)) => to,
+                    EvalOutcome::Value(other) => {
+                        return Err(Diagnostic::at(
+                            to_value.span,
+                            format!(
+                                "`replace` requires `String` for `to`, found `{}`",
+                                other.render()
+                            ),
+                        ))
+                    }
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                Ok(EvalOutcome::Value(Value::String(text.replace(&from, &to))))
+            }
+            "to_lower" => {
+                BuiltinMember::StringToLower.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::String(text.to_lowercase())))
+            }
+            "to_upper" => {
+                BuiltinMember::StringToUpper.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::String(text.to_uppercase())))
+            }
+            "join" => {
+                let ordered_args = BuiltinMember::StringJoin.bind_args(args, span)?;
+                let parts = match self.eval_expr(
+                    &ordered_args[0]
+                        .expect("`join` requires exactly one argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(Value::Vec(parts)) => parts,
+                    EvalOutcome::Value(other) => {
+                        return Err(Diagnostic::at(
+                            span,
+                            format!("`join` requires `Vec[String]`, found `{}`", other.render()),
+                        ))
+                    }
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                let mut rendered_parts = Vec::new();
+                for value in parts.elements {
+                    let Value::String(part) = value else {
+                        return Err(Diagnostic::at(span, "`join` requires `Vec[String]`"));
+                    };
+                    rendered_parts.push(part);
+                }
+                Ok(EvalOutcome::Value(Value::String(
+                    rendered_parts.join(&text),
+                )))
+            }
+            "strip_prefix" => {
+                let ordered_args = BuiltinMember::StringStripPrefix.bind_args(args, span)?;
+                let value = &ordered_args[0]
+                    .expect("`strip_prefix` requires exactly one argument")
+                    .value;
+                let prefix = match self.eval_expr(value, env)? {
+                    EvalOutcome::Value(Value::String(prefix)) => prefix,
+                    EvalOutcome::Value(other) => {
+                        return Err(Diagnostic::at(
+                            value.span,
+                            format!(
+                                "`strip_prefix` requires a `String`, found `{}`",
+                                other.render()
+                            ),
+                        ))
+                    }
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                Ok(EvalOutcome::Value(
+                    text.strip_prefix(&prefix)
+                        .map(|rest| option_some(Value::String(rest.to_string())))
+                        .unwrap_or_else(option_none),
+                ))
+            }
+            "strip_suffix" => {
+                let ordered_args = BuiltinMember::StringStripSuffix.bind_args(args, span)?;
+                let value = &ordered_args[0]
+                    .expect("`strip_suffix` requires exactly one argument")
+                    .value;
+                let suffix = match self.eval_expr(value, env)? {
+                    EvalOutcome::Value(Value::String(suffix)) => suffix,
+                    EvalOutcome::Value(other) => {
+                        return Err(Diagnostic::at(
+                            value.span,
+                            format!(
+                                "`strip_suffix` requires a `String`, found `{}`",
+                                other.render()
+                            ),
+                        ))
+                    }
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                Ok(EvalOutcome::Value(
+                    text.strip_suffix(&suffix)
+                        .map(|rest| option_some(Value::String(rest.to_string())))
+                        .unwrap_or_else(option_none),
+                ))
+            }
+            "trim" => {
+                BuiltinMember::StringTrim.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::String(text.trim().to_string())))
+            }
+            "clone" => {
+                BuiltinMember::StringClone.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::String(text)))
+            }
+            _ => Err(Diagnostic::at(
+                span,
+                format!("unsupported string method `{}`", field),
+            )),
+        }
+    }
+
+    fn eval_set_method(
+        &mut self,
+        set: SetValue,
+        field: &str,
+        receiver_expr: &Expr,
+        args: &[Argument],
+        env: &mut Env,
+        span: crate::diag::Span,
+    ) -> Result<EvalOutcome> {
+        match field {
+            "len" => {
+                BuiltinMember::SetLen.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::Int(IntegerValue::from_literal(
+                    set.elements.len() as u128,
+                ))))
+            }
+            "is_empty" => {
+                BuiltinMember::SetIsEmpty.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::Bool(set.elements.is_empty())))
+            }
+            "clone" => {
+                BuiltinMember::SetClone.bind_args(args, span)?;
+                Ok(EvalOutcome::Value(Value::Set(set)))
+            }
+            "contains" => {
+                let ordered_args = BuiltinMember::SetContains.bind_args(args, span)?;
+                let needle = match self.eval_expr(
+                    &ordered_args[0]
+                        .expect("`contains` requires a `value` argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                Ok(EvalOutcome::Value(Value::Bool(
+                    set.elements.iter().any(|candidate| *candidate == needle),
+                )))
+            }
+            "insert" => {
+                let ordered_args = BuiltinMember::SetInsert.bind_args(args, span)?;
+                let value = match self.eval_expr(
+                    &ordered_args[0]
+                        .expect("`insert` requires a `value` argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                let mut updated = set;
+                let inserted = if updated.elements.iter().any(|candidate| *candidate == value) {
+                    false
+                } else {
+                    updated.elements.push(value);
+                    true
+                };
+                self.write_place_expr(receiver_expr, env, Value::Set(updated))?;
+                Ok(EvalOutcome::Value(Value::Bool(inserted)))
+            }
+            "remove" => {
+                let ordered_args = BuiltinMember::SetRemove.bind_args(args, span)?;
+                let value = match self.eval_expr(
+                    &ordered_args[0]
+                        .expect("`remove` requires a `value` argument")
+                        .value,
+                    env,
+                )? {
+                    EvalOutcome::Value(value) => value,
+                    EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
+                };
+                let mut updated = set;
+                let removed = if let Some(index) = updated
+                    .elements
+                    .iter()
+                    .position(|candidate| *candidate == value)
+                {
+                    updated.elements.remove(index);
+                    true
+                } else {
+                    false
+                };
+                self.write_place_expr(receiver_expr, env, Value::Set(updated))?;
+                Ok(EvalOutcome::Value(Value::Bool(removed)))
+            }
+            _ => Err(Diagnostic::at(
+                span,
+                format!("unsupported set method `{}`", field),
+            )),
+        }
+    }
+
     fn eval_task_method(
         &mut self,
         task: TaskValue,
@@ -3422,6 +4980,89 @@ impl Interpreter {
         result.map_err(|message| Diagnostic::at(span, message))
     }
 
+    fn evaluate_index_expr(
+        &mut self,
+        index: &Expr,
+        env: &mut Env,
+        span: crate::diag::Span,
+    ) -> Result<usize> {
+        let value = match self.eval_expr(index, env)? {
+            EvalOutcome::Value(value) => value,
+            EvalOutcome::Return(_) => {
+                return Err(Diagnostic::at(
+                    span,
+                    "assignment targets cannot early-return while evaluating an index",
+                ))
+            }
+        };
+        let Value::Int(value) = value else {
+            return Err(Diagnostic::at(span, "vector indices must be integers"));
+        };
+        let index = value.as_i128().ok_or_else(|| {
+            Diagnostic::at(span, "vector index is outside the supported signed range")
+        })?;
+        if index < 0 {
+            return Err(Diagnostic::at(
+                span,
+                format!("vector index `{}` cannot be negative", index),
+            ));
+        }
+        usize::try_from(index).map_err(|_| {
+            Diagnostic::at(
+                span,
+                "vector index does not fit in the runtime address space",
+            )
+        })
+    }
+
+    fn read_vector_element(
+        &self,
+        vector: &VecValue,
+        index: usize,
+        span: crate::diag::Span,
+    ) -> Result<Value> {
+        vector.elements.get(index).cloned().ok_or_else(|| {
+            Diagnostic::at(
+                span,
+                format!(
+                    "vector index `{}` is out of bounds for length `{}`",
+                    index,
+                    vector.elements.len()
+                ),
+            )
+        })
+    }
+
+    fn evaluate_map_key_expr(
+        &mut self,
+        index: &Expr,
+        env: &mut Env,
+        span: crate::diag::Span,
+    ) -> Result<Value> {
+        match self.eval_expr(index, env)? {
+            EvalOutcome::Value(value) => Ok(value),
+            EvalOutcome::Return(_) => Err(Diagnostic::at(
+                span,
+                "assignment targets cannot early-return while evaluating a map key",
+            )),
+        }
+    }
+
+    fn read_map_element(
+        &self,
+        map: &MapValue,
+        key: &Value,
+        span: crate::diag::Span,
+    ) -> Result<Value> {
+        map.entries
+            .iter()
+            .find(|(candidate_key, _)| candidate_key == key)
+            .map(|(_, value)| value.clone())
+            .ok_or_else(|| {
+                Diagnostic::at(span, format!("map key `{}` was not present", key.render()))
+            })
+    }
+
     fn read_assign_target(
         &mut self,
         target: &AssignTarget,
@@ -3449,6 +5090,24 @@ impl Interpreter {
                         format!("class `{}` has no field `{}`", instance.class_name, field),
                     )
                 })
+            }
+            AssignTarget::Index { object, index } => {
+                let value = self.read_place_expr(object, env)?;
+                match value {
+                    Value::Vec(vector) => {
+                        let index = self.evaluate_index_expr(index, env, span)?;
+                        self.read_vector_element(&vector, index, span)
+                    }
+                    Value::Map(map) => {
+                        let raw_key = self.evaluate_map_key_expr(index, env, span)?;
+                        let key = self.coerce_value_to_type(raw_key, &map.key_type, span)?;
+                        self.read_map_element(&map, &key, span)
+                    }
+                    _ => Err(Diagnostic::at(
+                        span,
+                        "cannot index non-vector-or-map value in compound assignment",
+                    )),
+                }
             }
         }
     }
@@ -3496,6 +5155,46 @@ impl Interpreter {
                 instance.fields.insert(field.clone(), value);
                 self.write_place_expr(object, env, object_value)
             }
+            AssignTarget::Index { object, index } => {
+                let mut object_value = self.read_place_expr(object, env)?;
+                match &mut object_value {
+                    Value::Vec(vector) => {
+                        let index = self.evaluate_index_expr(index, env, span)?;
+                        if index >= vector.elements.len() {
+                            return Err(Diagnostic::at(
+                                span,
+                                format!(
+                                    "vector index `{}` is out of bounds for length `{}`",
+                                    index,
+                                    vector.elements.len()
+                                ),
+                            ));
+                        }
+                        let value = self.coerce_value_to_type(value, &vector.element_type, span)?;
+                        vector.elements[index] = value;
+                        self.write_place_expr(object, env, object_value)
+                    }
+                    Value::Map(map) => {
+                        let raw_key = self.evaluate_map_key_expr(index, env, span)?;
+                        let key = self.coerce_value_to_type(raw_key, &map.key_type, span)?;
+                        let value = self.coerce_value_to_type(value, &map.value_type, span)?;
+                        if let Some(entry) = map
+                            .entries
+                            .iter_mut()
+                            .find(|(candidate_key, _)| *candidate_key == key)
+                        {
+                            entry.1 = value;
+                        } else {
+                            map.entries.push((key, value));
+                        }
+                        self.write_place_expr(object, env, object_value)
+                    }
+                    _ => Err(Diagnostic::at(
+                        span,
+                        "cannot assign through an index on a non-vector-or-map value",
+                    )),
+                }
+            }
         }
     }
 
@@ -3520,6 +5219,24 @@ impl Interpreter {
                         format!("class `{}` has no field `{}`", instance.class_name, field),
                     )
                 })
+            }
+            ExprKind::Index { object, index } => {
+                let object_value = self.read_place_expr(object, env)?;
+                match object_value {
+                    Value::Vec(vector) => {
+                        let index = self.evaluate_index_expr(index, env, expr.span)?;
+                        self.read_vector_element(&vector, index, expr.span)
+                    }
+                    Value::Map(map) => {
+                        let raw_key = self.evaluate_map_key_expr(index, env, expr.span)?;
+                        let key = self.coerce_value_to_type(raw_key, &map.key_type, expr.span)?;
+                        self.read_map_element(&map, &key, expr.span)
+                    }
+                    _ => Err(Diagnostic::at(
+                        expr.span,
+                        "cannot index non-vector-or-map value",
+                    )),
+                }
             }
             _ => Err(Diagnostic::at(
                 expr.span,
@@ -3551,6 +5268,46 @@ impl Interpreter {
                 }
                 instance.fields.insert(field.clone(), value);
                 self.write_place_expr(object, env, object_value)
+            }
+            ExprKind::Index { object, index } => {
+                let mut object_value = self.read_place_expr(object, env)?;
+                match &mut object_value {
+                    Value::Vec(vector) => {
+                        let index = self.evaluate_index_expr(index, env, expr.span)?;
+                        if index >= vector.elements.len() {
+                            return Err(Diagnostic::at(
+                                expr.span,
+                                format!(
+                                    "vector index `{}` is out of bounds for length `{}`",
+                                    index,
+                                    vector.elements.len()
+                                ),
+                            ));
+                        }
+                        vector.elements[index] =
+                            self.coerce_value_to_type(value, &vector.element_type, expr.span)?;
+                        self.write_place_expr(object, env, object_value)
+                    }
+                    Value::Map(map) => {
+                        let raw_key = self.evaluate_map_key_expr(index, env, expr.span)?;
+                        let key = self.coerce_value_to_type(raw_key, &map.key_type, expr.span)?;
+                        let value = self.coerce_value_to_type(value, &map.value_type, expr.span)?;
+                        if let Some(entry) = map
+                            .entries
+                            .iter_mut()
+                            .find(|(candidate_key, _)| *candidate_key == key)
+                        {
+                            entry.1 = value;
+                        } else {
+                            map.entries.push((key, value));
+                        }
+                        self.write_place_expr(object, env, object_value)
+                    }
+                    _ => Err(Diagnostic::at(
+                        expr.span,
+                        "cannot assign through an index on a non-vector-or-map value",
+                    )),
+                }
             }
             _ => Err(Diagnostic::at(
                 expr.span,

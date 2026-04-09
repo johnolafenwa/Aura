@@ -1,0 +1,46 @@
+def sum_set(values: borrow Set[int32]) -> int32:
+    mut total = 0
+    for value in borrow values:
+        total += value
+    return total
+
+def main() -> int32:
+    mut values = [1, 3]
+    print(values.insert(1, 2).to_string())
+    print(values.insert(7, 9).to_string())
+    values.push(4)
+    values.reverse()
+    print(values[0].to_string())
+    print(values[3].to_string())
+    values.clear()
+    print(values.is_empty().to_string())
+
+    mut counts = {"a": 1}
+    other = {"b": 2, "c": 3}
+    counts.extend(other)
+    items = counts.items()
+    print(items[0].key)
+    print(items[2].value.to_string())
+    print(counts.entries().len().to_string())
+    counts.clear()
+    print(counts.is_empty().to_string())
+
+    mut seen = Set{1, 2, 2, 3}
+    print(seen.len().to_string())
+    print(seen.contains(2).to_string())
+    print(seen.insert(2).to_string())
+    print(seen.insert(4).to_string())
+    print(seen.remove(1).to_string())
+    print(sum_set(seen).to_string())
+
+    copy = seen.clone()
+    mut moved_total = 0
+    for value in copy:
+        moved_total += value
+    print(moved_total.to_string())
+
+    mut names: Set[String] = Set[String]()
+    print(names.is_empty().to_string())
+    print(names.insert("aurora").to_string())
+    print(names.len().to_string())
+    return 0

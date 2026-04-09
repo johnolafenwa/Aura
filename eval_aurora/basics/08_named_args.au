@@ -1,0 +1,16 @@
+# Test 8: Named arguments
+
+def describe(name: str, age: int32, city: str) -> str:
+    return f"{name} is {age} years old from {city}"
+
+# Positional
+print(describe("Alice", 30, "NYC"))
+
+# Named arguments
+print(describe(name="Bob", age=25, city="LA"))
+
+# Mixed positional and named
+print(describe("Charlie", age=35, city="SF"))
+
+# Named in different order
+print(describe(city="Chicago", name="Diana", age=28))

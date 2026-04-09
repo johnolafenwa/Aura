@@ -1,0 +1,30 @@
+# Test 04: Nested loops - for inside for, while inside for
+
+def main() -> int32:
+    # Nested for loops - count pairs
+    mut pair_count: int32 = 0
+    for i in range(3):
+        for j in range(4):
+            pair_count += 1
+    print("nested for pair count:")
+    print(pair_count)
+
+    # Nested for loops - compute product sum
+    mut product_sum: int32 = 0
+    for i in range(start=1, stop=4):
+        for j in range(start=1, stop=4):
+            product_sum += i * j
+    print("product sum:")
+    print(product_sum)
+
+    # While inside for
+    mut total: int32 = 0
+    for i in range(start=1, stop=4):
+        mut count: int32 = 0
+        while count < i:
+            total += 1
+            count += 1
+    print("while inside for:")
+    print(total)
+
+    return 0

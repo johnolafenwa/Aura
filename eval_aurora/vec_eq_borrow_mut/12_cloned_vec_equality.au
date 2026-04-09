@@ -1,0 +1,12 @@
+def print_bool(value: bool):
+    match value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def main() -> int32:
+    v = [10, 20, 30]
+    c = v.clone()
+    print_bool(c == v)
+    return 0

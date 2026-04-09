@@ -1,0 +1,11 @@
+class Counter:
+    value: int32
+
+def double_mut(a: borrow mut Counter, b: borrow mut Counter):
+    a.value += 10
+    b.value += 100
+
+def main():
+    mut c = Counter(value=0)
+    double_mut(a=c, b=c)
+    print(c.value)

@@ -1,0 +1,6 @@
+def main() -> int32:
+    s = Set[int32]()
+    for x in s:
+        print(x)
+    print("done")
+    return 0

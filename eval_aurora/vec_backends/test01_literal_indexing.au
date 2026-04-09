@@ -1,0 +1,6 @@
+def main() -> int32:
+    xs = [10, 20, 30]
+    print(xs[0])
+    print(xs[1])
+    print(xs[2])
+    return 0

@@ -1,0 +1,9 @@
+class Resource:
+    name: String
+
+def main() -> int32:
+    r1 = Resource(name="file.txt")
+    r2 = r1
+    print(r2.name)
+    print(r1.name)
+    return 0

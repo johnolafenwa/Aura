@@ -1,0 +1,10 @@
+import pkg.user
+from pkg.named import Named
+
+def render[T: Named](value: T) -> String:
+    return value.name()
+
+def main() -> int32:
+    user = pkg.user.User(label="Ada")
+    print(render(value=user))
+    return 0

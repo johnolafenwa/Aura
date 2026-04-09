@@ -1,0 +1,18 @@
+def main() -> int32:
+    # Single element vec
+    v = [42]
+    print(v[0])
+    print(v.len())
+    print(v.is_empty())
+
+    # Single string
+    s = ["hello"]
+    for x in borrow s:
+        print(x)
+    print(s.len())
+
+    # Single bool
+    b = [true]
+    print(b[0])
+
+    return 0

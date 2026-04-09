@@ -1,0 +1,39 @@
+# Test 6: String operations
+
+# Basic string
+s1 = "Hello"
+s2 = "World"
+print(s1)
+print(s2)
+
+# String concatenation with +
+s3 = s1 + " " + s2
+print(s3)
+
+# f-strings
+name = "Aurora"
+version = 1
+msg = f"Language: {name}, Version: {version}"
+print(msg)
+
+# f-string with expressions
+x = 10
+y = 20
+result = f"{x} + {y} = {x + y}"
+print(result)
+
+# String with special characters
+special = "Hello\tWorld\n"
+print(special)
+
+# Empty string
+empty = ""
+print(empty)
+
+# String with numbers
+num_str = "42"
+print(num_str)
+
+# Nested quotes
+quoted = "She said \"hello\""
+print(quoted)

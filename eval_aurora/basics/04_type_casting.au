@@ -1,0 +1,46 @@
+# Test 4: Type casting with "as" keyword
+
+# int to float
+x: int32 = 42
+f: float64 = x as float64
+print(f)
+
+# float to int (truncation)
+pi: float64 = 3.99
+i: int32 = pi as int32
+print(i)
+
+# Negative float to int
+neg: float64 = -2.7
+ni: int32 = neg as int32
+print(ni)
+
+# Widening cast: int8 to int64
+small: int8 = 100
+big: int64 = small as int64
+print(big)
+
+# Narrowing cast: int32 to int8
+large: int32 = 200
+narrow: int8 = large as int8
+print(narrow)
+
+# uint to int
+u: uint32 = 42
+si: int32 = u as int32
+print(si)
+
+# int to uint
+pos: int32 = 50
+up: uint32 = pos as uint32
+print(up)
+
+# float32 to float64
+f32: float32 = 3.14
+f64: float64 = f32 as float64
+print(f64)
+
+# int to bool - if supported
+# zero: int32 = 0
+# b: bool = zero as bool
+# print(b)

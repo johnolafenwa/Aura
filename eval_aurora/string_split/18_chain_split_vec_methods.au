@@ -1,0 +1,14 @@
+def print_bool(value: bool):
+    match value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def main() -> int32:
+    s = "red,green,blue"
+    print(s.split(",").len())
+    colors = s.split(",")
+    print_bool(colors.contains("green"))
+    print_bool(colors.is_empty())
+    return 0

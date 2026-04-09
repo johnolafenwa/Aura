@@ -1,0 +1,18 @@
+# Test 16: Borrow mut exclusivity - two mutable borrows should fail
+class Data:
+    value: int32
+
+def modify_a(d: borrow mut Data):
+    d.value += 1
+
+def modify_b(d: borrow mut Data):
+    d.value += 2
+
+def main() -> int32:
+    mut data = Data(value=0)
+    # Sequential mutable borrows should be fine
+    modify_a(data)
+    print(data.value)
+    modify_b(data)
+    print(data.value)
+    return 0

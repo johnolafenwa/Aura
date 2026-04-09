@@ -1,0 +1,12 @@
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    select:
+        case value = ch.recv():
+            match value:
+                case Option.Some(v):
+                    print(v)
+                case Option.None:
+                    print(0)
+        case after(1ms):
+            print(7)
+    return 0

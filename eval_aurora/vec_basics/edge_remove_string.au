@@ -1,0 +1,14 @@
+def main() -> int32:
+    # Test: .remove() on Vec[String]
+    mut v: Vec[String] = ["a", "b", "c", "d"]
+    match v.remove(1):
+        case Some(removed):
+            print(removed)
+        case None:
+            print("None")
+
+    print(v.len())
+    for s in borrow v:
+        print(s)
+
+    return 0

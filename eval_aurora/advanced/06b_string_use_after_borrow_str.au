@@ -1,0 +1,11 @@
+# Test 6b: Verify String is still usable after being passed as borrow str
+def print_borrowed(s: borrow str):
+    print(s)
+
+def main() -> int32:
+    text: String = "hello"
+    print_borrowed(text)
+    print_borrowed(text)
+    # Still usable after borrows
+    print(text)
+    return 0

@@ -1,0 +1,7 @@
+# Test 4: Insert into empty vec
+def main() -> int32:
+    mut v = Vec[int32]()
+    v.insert(index=0, value=42)
+    print(v.len())
+    print(v[0])
+    return 0

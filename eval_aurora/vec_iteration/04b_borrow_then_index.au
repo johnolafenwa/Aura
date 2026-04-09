@@ -1,0 +1,7 @@
+# Test 04b: Can we index after borrow iteration?
+def main() -> int32:
+    mut items: Vec[String] = ["first", "second", "third"]
+    for item in borrow items:
+        print(item)
+    print(items[0])
+    return 0

@@ -1,0 +1,6 @@
+def main() -> int32:
+    names = ["Alice", "Bob"]
+    ages = [30, 25]
+    print(f"Name: {names[0]}, Age: {ages[0]}")
+    print(f"Name: {names[1]}, Age: {ages[1]}")
+    return 0

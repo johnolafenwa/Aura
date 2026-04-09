@@ -1,0 +1,13 @@
+# Test 05: len() on empty vec should return 0 as int32
+def main() -> int32:
+    v = Vec[int32]()
+    print(v.len())
+
+    empty_strs = Vec[String]()
+    print(empty_strs.len())
+
+    # Verify it works in comparison
+    if v.len() == 0:
+        print("empty vec len is 0")
+
+    return 0

@@ -1,0 +1,7 @@
+def main() -> int32:
+    m = {"x": 1, "y": 2}
+    entries = m.entries()
+    print(entries.len())
+    for e in borrow entries:
+        print(f"{e.key}={e.value}")
+    return 0

@@ -1,0 +1,7 @@
+def main() -> int32:
+    s = "hello world"
+    old = "world"
+    new_str = "aurora"
+    result = s.replace(old, new_str)
+    print(result)
+    return 0

@@ -1,0 +1,28 @@
+def print_string_option(value: Option[String]):
+    match value:
+        case Some(text):
+            print(text)
+        case None:
+            print("none")
+
+def main() -> int32:
+    text = "  aurora repo  "
+    print(text.len())
+    print(text.contains("repo"))
+    print(text.starts_with("  au"))
+    print(text.ends_with("  "))
+    trimmed = text.trim()
+    print(trimmed)
+    parts = trimmed.split(" ")
+    print(parts.len())
+    print(parts[0])
+    print(parts[1])
+    print(trimmed.replace("repo", "lang"))
+    print(trimmed.to_lower())
+    print(trimmed.to_upper())
+    print_string_option(trimmed.strip_prefix("aurora "))
+    print_string_option(trimmed.strip_prefix("repo"))
+    print_string_option(trimmed.strip_suffix(" repo"))
+    print_string_option(trimmed.strip_suffix("aurora"))
+    print(trimmed.clone().len())
+    return 0

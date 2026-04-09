@@ -1,0 +1,24 @@
+## Reverse words in a sentence: Vec[String] reversed in-place using swap.
+## Uses: swap, len(), borrow iteration on Vec[String]
+
+def reverse_in_place(words: borrow mut Vec[String]):
+    n = words.len()
+    mut left: int32 = 0
+    mut right = n - 1
+    while left < right:
+        words.swap(left, right)
+        left += 1
+        right -= 1
+
+def main() -> int32:
+    mut sentence: Vec[String] = ["hello", "beautiful", "world"]
+    print("Original:")
+    for word in borrow sentence:
+        print(word)
+
+    reverse_in_place(sentence)
+    print("Reversed:")
+    for word in borrow sentence:
+        print(word)
+
+    return 0

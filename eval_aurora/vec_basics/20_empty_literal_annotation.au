@@ -1,0 +1,24 @@
+def main() -> int32:
+    # Empty literal with float64 annotation
+    mut v: Vec[float64] = []
+    print(v.is_empty())
+    print(v.len())
+
+    v.push(1.1)
+    v.push(2.2)
+    v.push(3.3)
+
+    print(v.len())
+    print(v[0])
+    print(v[1])
+    print(v[2])
+
+    # Also try with bool
+    mut bools: Vec[bool] = []
+    bools.push(true)
+    bools.push(false)
+    print(bools.len())
+    print(bools[0])
+    print(bools[1])
+
+    return 0

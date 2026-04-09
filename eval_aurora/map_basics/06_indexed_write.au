@@ -1,0 +1,10 @@
+def main() -> int32:
+    mut m = Map[String, int32]()
+    m["key"] = 42
+    print(m.len())
+    match m.get("key"):
+        case Some(v):
+            print(v)
+        case None:
+            print("None")
+    return 0

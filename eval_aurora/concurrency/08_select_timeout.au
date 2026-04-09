@@ -1,0 +1,16 @@
+# Test 8: Select with timeout (after clause)
+def main() -> int32:
+    ch: Channel[int32] = channel()
+
+    # No one sends to ch, so timeout should fire
+    select:
+        case value = ch.recv():
+            match value:
+                case Option.Some(v):
+                    print(v)
+                case Option.None:
+                    print("closed")
+        case after(10ms):
+            print("timeout")
+
+    return 0

@@ -1,0 +1,8 @@
+def main() -> int32:
+    s = "http://example.com"
+    match s.strip_prefix("http://"):
+        case Some(rest):
+            print(rest.to_upper())
+        case None:
+            print("no match")
+    return 0

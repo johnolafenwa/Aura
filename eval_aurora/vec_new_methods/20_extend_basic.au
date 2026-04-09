@@ -1,0 +1,8 @@
+# Test 20: Basic extend - a = [1,2], b = [3,4], a.extend(b) -> [1,2,3,4]
+def main() -> int32:
+    mut a = [1, 2]
+    b = [3, 4]
+    a.extend(b)
+    for x in borrow a:
+        print(x)
+    return 0

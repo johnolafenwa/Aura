@@ -1,0 +1,16 @@
+# Extend from empty + push vs literal
+def main():
+    a = [1, 2, 3]
+
+    mut b: Vec[int32] = []
+    b.push(1)
+    b.push(2)
+    b.push(3)
+
+    # Also test extend-built
+    mut c: Vec[int32] = []
+    c.extend([1, 2, 3])
+
+    print(f"literal == push: {a == b}")
+    print(f"literal == extend-from-empty: {a == c}")
+    print(f"push == extend-from-empty: {b == c}")

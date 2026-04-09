@@ -1,0 +1,43 @@
+## Test 10: Nested maps
+## Map[String, Map[String, int32]] — student -> subject -> grade
+
+def main() -> int32:
+    mut grades = Map[String, Map[String, int32]]()
+
+    ## Set up Alice's grades
+    mut alice_grades = Map[String, int32]()
+    alice_grades["math"] = 95
+    alice_grades["science"] = 88
+    alice_grades["english"] = 92
+    grades["Alice"] = alice_grades
+
+    ## Set up Bob's grades
+    mut bob_grades = Map[String, int32]()
+    bob_grades["math"] = 78
+    bob_grades["science"] = 85
+    bob_grades["english"] = 90
+    grades["Bob"] = bob_grades
+
+    print(f"students: {grades.len()}")
+
+    ## Retrieve nested values
+    alice = grades["Alice"]
+    alice_math = alice["math"]
+    alice_sci = alice["science"]
+    print(f"Alice math: {alice_math}")
+    print(f"Alice science: {alice_sci}")
+
+    bob = grades["Bob"]
+    bob_math = bob["math"]
+    bob_eng = bob["english"]
+    print(f"Bob math: {bob_math}")
+    print(f"Bob english: {bob_eng}")
+
+    ## Check keys
+    students = grades.keys()
+    for student in students:
+        inner = grades[student.clone()]
+        subjects = inner.keys()
+        print(f"{student} has {subjects.len()} subjects")
+
+    return 0

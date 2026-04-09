@@ -204,6 +204,193 @@ test("compiler bridge includes imported trait methods in completions", async () 
   }
 });
 
+test("compiler bridge includes Vec collection members in completions", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-vec-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source =
+      "def main() -> int32:\n    mut values = [1, 2, 3]\n    values.\n    return 0\n";
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.ok(Array.isArray(analysis.diagnostics));
+
+    const lineIndex = source.split("\n").findIndex((line) => line.includes("values."));
+    const lineText = source.split("\n")[lineIndex];
+    const character = lineText.indexOf(".") + 1;
+    const completions = await completeWithCompiler(mainUri, source, lineIndex, character, ".");
+
+    assert.ok(completions);
+    const names = new Set(completions.map((item) => item.name));
+    assert.ok(names.has("len"));
+    assert.ok(names.has("is_empty"));
+    assert.ok(names.has("push"));
+    assert.ok(names.has("pop"));
+    assert.ok(names.has("get"));
+    assert.ok(names.has("set"));
+    assert.ok(names.has("remove"));
+    assert.ok(names.has("swap"));
+    assert.ok(names.has("contains"));
+    assert.ok(names.has("extend"));
+    assert.ok(names.has("insert"));
+    assert.ok(names.has("clear"));
+    assert.ok(names.has("reverse"));
+    const insert = completions.find((item) => item.name === "insert");
+    assert.ok(insert);
+    assert.equal(insert.detail, "insert(index: int32, value: T) -> bool");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge includes String and Map builtin members in completions", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-string-map-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source =
+      "def main() -> int32:\n    text = \"  aurora repo  \"\n    mut counts = Map[String, int32]()\n    text.\n    counts.\n    return 0\n";
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.ok(Array.isArray(analysis.diagnostics));
+
+    const lines = source.split("\n");
+    const textLineIndex = lines.findIndex((line) => line.includes("text."));
+    const textCharacter = lines[textLineIndex].indexOf(".") + 1;
+    const textCompletions = await completeWithCompiler(
+      mainUri,
+      source,
+      textLineIndex,
+      textCharacter,
+      "."
+    );
+
+    assert.ok(textCompletions);
+    const textNames = new Set(textCompletions.map((item) => item.name));
+    assert.ok(textNames.has("len"));
+    assert.ok(textNames.has("contains"));
+    assert.ok(textNames.has("starts_with"));
+    assert.ok(textNames.has("ends_with"));
+    assert.ok(textNames.has("trim"));
+    assert.ok(textNames.has("split"));
+    assert.ok(textNames.has("replace"));
+    assert.ok(textNames.has("to_lower"));
+    assert.ok(textNames.has("to_upper"));
+    assert.ok(textNames.has("strip_prefix"));
+    assert.ok(textNames.has("strip_suffix"));
+    assert.ok(textNames.has("clone"));
+    assert.ok(textNames.has("join"));
+
+    const mapLineIndex = lines.findIndex((line) => line.includes("counts."));
+    const mapCharacter = lines[mapLineIndex].indexOf(".") + 1;
+    const mapCompletions = await completeWithCompiler(
+      mainUri,
+      source,
+      mapLineIndex,
+      mapCharacter,
+      "."
+    );
+
+    assert.ok(mapCompletions);
+    const mapNames = new Set(mapCompletions.map((item) => item.name));
+    assert.ok(mapNames.has("len"));
+    assert.ok(mapNames.has("is_empty"));
+    assert.ok(mapNames.has("clone"));
+    assert.ok(mapNames.has("get"));
+    assert.ok(mapNames.has("set"));
+    assert.ok(mapNames.has("remove"));
+    assert.ok(mapNames.has("contains_key"));
+    assert.ok(mapNames.has("keys"));
+    assert.ok(mapNames.has("values"));
+    assert.ok(mapNames.has("items"));
+    assert.ok(mapNames.has("entries"));
+    assert.ok(mapNames.has("clear"));
+    assert.ok(mapNames.has("extend"));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge includes Set collection members and MapEntry fields", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-set-mapentry-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source = [
+      "def main() -> int32:",
+      "    mut seen = Set{1, 2, 3}",
+      "    counts = {\"a\": 1, \"b\": 2}",
+      "    entry = counts.items()[0]",
+      "    seen.",
+      "    entry.",
+      "    return 0"
+    ].join("\n");
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.ok(Array.isArray(analysis.diagnostics));
+
+    const lines = source.split("\n");
+    const seenLineIndex = lines.findIndex((line) => line.includes("seen."));
+    const seenCharacter = lines[seenLineIndex].indexOf(".") + 1;
+    const setCompletions = await completeWithCompiler(
+      mainUri,
+      source,
+      seenLineIndex,
+      seenCharacter,
+      "."
+    );
+
+    assert.ok(setCompletions);
+    const setNames = new Set(setCompletions.map((item) => item.name));
+    assert.ok(setNames.has("len"));
+    assert.ok(setNames.has("is_empty"));
+    assert.ok(setNames.has("clone"));
+    assert.ok(setNames.has("contains"));
+    assert.ok(setNames.has("insert"));
+    assert.ok(setNames.has("remove"));
+
+    const entryLineIndex = lines.findIndex((line) => line.includes("entry."));
+    const entryCharacter = lines[entryLineIndex].indexOf(".") + 1;
+    const entryCompletions = await completeWithCompiler(
+      mainUri,
+      source,
+      entryLineIndex,
+      entryCharacter,
+      "."
+    );
+
+    assert.ok(entryCompletions);
+    const entryNames = new Set(entryCompletions.map((item) => item.name));
+    assert.ok(entryNames.has("key"));
+    assert.ok(entryNames.has("value"));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge analyzes indexed member chains and f-string indexed lookups", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-index-chain-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source =
+      "def main() -> int32:\n    keys = [\"a\", \"b\"]\n    idx = 1\n    mut counts = {\"key\": 7}\n    print(keys[idx].clone())\n    print(f\"val: {counts[\"key\"]}\")\n    return 0\n";
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.deepStrictEqual(analysis.diagnostics, []);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge recovers completions and symbols for dangling-dot EOF buffers", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-dangling-dot-"));
   try {

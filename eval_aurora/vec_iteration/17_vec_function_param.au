@@ -1,0 +1,17 @@
+# Test 17: Vec as function parameter (by value and by borrow)
+
+def sum_values(values: Vec[int32]) -> int32:
+    mut total: int32 = 0
+    for v in values:
+        total += v
+    return total
+
+def print_all(values: borrow Vec[int32]):
+    for v in borrow values:
+        print(v)
+
+def main() -> int32:
+    xs = [1, 2, 3, 4, 5]
+    print_all(xs)
+    print(sum_values(xs))
+    return 0

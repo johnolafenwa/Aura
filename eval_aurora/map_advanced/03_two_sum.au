@@ -1,0 +1,28 @@
+## Test 03: Two-sum problem
+## Given Vec[int32] and target, find two numbers summing to target
+
+def main() -> int32:
+    nums = [2, 7, 11, 15, 1, 8]
+    target: int32 = 9
+
+    mut seen = Map[int32, int32]()
+    mut found = false
+
+    n = nums.len() as int32
+    mut i: int32 = 0
+    while i < n:
+        num = nums[i]
+        complement = target - num
+        match seen.get(complement):
+            case Some(j):
+                print(f"Found: nums[{j}] + nums[{i}] = {complement} + {num} = {target}")
+                found = true
+            case None:
+                pass
+        seen[num] = i
+        i += 1
+
+    if not found:
+        print("No solution found")
+
+    return 0

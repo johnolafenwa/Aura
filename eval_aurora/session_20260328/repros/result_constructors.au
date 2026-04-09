@@ -1,0 +1,11 @@
+def double_or_error(value: int32) -> Result[int32, String]:
+    if value < 0:
+        return Err("negative")
+    return Ok(value * 2)
+
+def main() -> None:
+    match double_or_error(-1):
+        case Ok(result):
+            print(result)
+        case Err(error):
+            print(error)

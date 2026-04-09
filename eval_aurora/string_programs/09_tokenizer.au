@@ -1,0 +1,70 @@
+## Program 9: Tokenizer
+## Split source line by spaces, classify tokens
+
+def classify_token(token: String) -> String:
+    ## Comments start with #
+    if token.starts_with("#"):
+        return "comment"
+
+    ## Keywords
+    if token == "def":
+        return "keyword"
+    if token == "return":
+        return "keyword"
+    if token == "if":
+        return "keyword"
+    if token == "for":
+        return "keyword"
+    if token == "in":
+        return "keyword"
+    if token == "mut":
+        return "keyword"
+
+    ## Operators contain special chars
+    if token.contains("="):
+        return "operator"
+    if token.contains("+"):
+        return "operator"
+    if token.contains("-"):
+        return "operator"
+    if token.contains("*"):
+        return "operator"
+
+    ## Strings start and end with quote
+    if token.starts_with("\""):
+        return "string"
+
+    ## Numeric-like: starts with digit char
+    if token.starts_with("0"):
+        return "number"
+    if token.starts_with("1"):
+        return "number"
+    if token.starts_with("2"):
+        return "number"
+    if token.starts_with("3"):
+        return "number"
+
+    ## Ends with colon = block starter
+    if token.ends_with(":"):
+        return "block"
+
+    return "identifier"
+
+def tokenize_line(line: String):
+    print(f"Line: {line}")
+    tokens = line.trim().split(" ")
+    for tok in tokens:
+        if tok.len() > 0:
+            kind = classify_token(tok.clone())
+            print(f"  [{kind}] {tok}")
+    print("")
+
+def main() -> int32:
+    tokenize_line("def main() -> int32:")
+    tokenize_line("    mut x = 10 + 20")
+    tokenize_line("    ## this is a comment")
+    tokenize_line("    return x * 3")
+    tokenize_line("    for i in range(10):")
+    tokenize_line("    name = \"hello\"")
+
+    return 0

@@ -1,0 +1,9 @@
+# Test 7: Insert String
+def main() -> int32:
+    mut v = ["hello", "world"]
+    v.insert(index=1, value="beautiful")
+    print(v.len())
+    print(v[0])
+    print(v[1])
+    print(v[2])
+    return 0

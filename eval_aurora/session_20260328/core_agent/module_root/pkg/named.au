@@ -1,0 +1,2 @@
+public trait Named:
+    def name(borrow self) -> String

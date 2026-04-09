@@ -1,0 +1,13 @@
+def main() -> int32:
+    # Test: .set() on Vec[String]
+    mut v: Vec[String] = ["hello", "world"]
+    match v.set(index=0, value="goodbye"):
+        case Some(old):
+            print(old)
+        case None:
+            print("None")
+
+    for s in borrow v:
+        print(s)
+
+    return 0

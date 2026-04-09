@@ -1,0 +1,91 @@
+## Stack data structure using a linked list with indirect nodes.
+## Push and pop operations, using Option for pop return.
+
+class StackNode:
+    value: int32
+    next: indirect StackNode?
+
+class Stack:
+    top: indirect StackNode?
+    size: int32
+
+    def new() -> Stack:
+        return Stack(top=Option.None, size=0)
+
+    def push(borrow mut self, value: int32):
+        old_top = self.top
+        self.top = Option.Some(StackNode(value=value, next=old_top))
+        self.size += 1
+
+    def pop(borrow mut self) -> Option[int32]:
+        match self.top:
+            case Some(node):
+                result = node.value
+                self.top = node.next
+                self.size -= 1
+                return Option.Some(result)
+            case None:
+                return Option.None
+
+    def peek(borrow self) -> Option[int32]:
+        match borrow self.top:
+            case Some(node):
+                return Option.Some(node.value)
+            case None:
+                return Option.None
+
+    def get_size(borrow self) -> int32:
+        return self.size
+
+    def is_empty(borrow self) -> bool:
+        return self.size == 0
+
+def main() -> int32:
+    mut stack = Stack.new()
+
+    print(f"Stack empty: {stack.is_empty()}")
+
+    ## Push some values
+    stack.push(10)
+    stack.push(20)
+    stack.push(30)
+    print(f"Size after 3 pushes: {stack.get_size()}")
+
+    ## Peek at top
+    match stack.peek():
+        case Option.Some(val):
+            print(f"Peek: {val}")
+        case Option.None:
+            print("Stack is empty")
+
+    ## Pop values
+    match stack.pop():
+        case Option.Some(val):
+            print(f"Popped: {val}")
+        case Option.None:
+            print("Nothing to pop")
+
+    match stack.pop():
+        case Option.Some(val):
+            print(f"Popped: {val}")
+        case Option.None:
+            print("Nothing to pop")
+
+    print(f"Size after 2 pops: {stack.get_size()}")
+
+    match stack.pop():
+        case Option.Some(val):
+            print(f"Popped: {val}")
+        case Option.None:
+            print("Nothing to pop")
+
+    ## Pop from empty stack
+    match stack.pop():
+        case Option.Some(val):
+            print(f"Popped: {val}")
+        case Option.None:
+            print("Pop from empty: None")
+
+    print(f"Stack empty: {stack.is_empty()}")
+
+    return 0

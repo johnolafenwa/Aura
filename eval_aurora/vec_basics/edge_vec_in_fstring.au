@@ -1,0 +1,5 @@
+def main() -> int32:
+    # Can we use a Vec in an f-string?
+    v = [1, 2, 3]
+    print(f"vec: {v}")
+    return 0

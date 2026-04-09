@@ -1,0 +1,9 @@
+def main() -> int32:
+    items = ["http://a.com", "https://b.com", "http://c.com", "ftp://d.com"]
+    for item in items:
+        match item.strip_prefix("http://"):
+            case Some(rest):
+                print("http: " + rest)
+            case None:
+                print("other: " + item)
+    return 0

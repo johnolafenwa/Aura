@@ -172,12 +172,70 @@ struct NativeCodegen<'a> {
     box_bool: FuncId,
     box_unit: FuncId,
     string_literal: FuncId,
+    string_len: FuncId,
+    string_contains: FuncId,
+    string_starts_with: FuncId,
+    string_ends_with: FuncId,
+    string_split: FuncId,
+    string_replace: FuncId,
+    string_to_lower: FuncId,
+    string_to_upper: FuncId,
+    string_strip_prefix: FuncId,
+    string_strip_suffix: FuncId,
+    string_trim: FuncId,
+    string_join: FuncId,
     stringify_value: FuncId,
+    abs_value: FuncId,
+    min_value: FuncId,
+    max_value: FuncId,
+    sqrt_value: FuncId,
+    parse_int32: FuncId,
+    parse_int64: FuncId,
+    parse_float64: FuncId,
     duration_literal: FuncId,
     range_new: FuncId,
     range_current: FuncId,
     range_end: FuncId,
     range_advance: FuncId,
+    vec_empty: FuncId,
+    vec_len: FuncId,
+    vec_is_empty: FuncId,
+    vec_push_in_place: FuncId,
+    vec_pop_in_place: FuncId,
+    vec_get: FuncId,
+    vec_set_in_place: FuncId,
+    vec_remove_in_place: FuncId,
+    vec_swap_in_place: FuncId,
+    vec_contains: FuncId,
+    vec_extend_in_place: FuncId,
+    vec_insert_in_place: FuncId,
+    vec_clear_in_place: FuncId,
+    vec_reverse_in_place: FuncId,
+    vec_index: FuncId,
+    vec_index_option: FuncId,
+    vec_set_index_in_place: FuncId,
+    map_empty: FuncId,
+    map_len: FuncId,
+    map_is_empty: FuncId,
+    map_get: FuncId,
+    map_set_in_place: FuncId,
+    map_remove_in_place: FuncId,
+    map_contains_key: FuncId,
+    map_keys: FuncId,
+    map_values: FuncId,
+    map_items: FuncId,
+    map_entries: FuncId,
+    map_clear_in_place: FuncId,
+    map_extend_in_place: FuncId,
+    map_index: FuncId,
+    map_set_index_in_place: FuncId,
+    set_empty: FuncId,
+    set_len: FuncId,
+    set_is_empty: FuncId,
+    set_contains: FuncId,
+    set_insert_in_place: FuncId,
+    set_remove_in_place: FuncId,
+    set_index_option: FuncId,
     clone_value: FuncId,
     unbox_i64: FuncId,
     unbox_f64: FuncId,
@@ -311,9 +369,123 @@ impl<'a> NativeCodegen<'a> {
             &[types::I64, types::I64],
             Some(types::I64),
         )?;
+        let string_len = declare_runtime_function(
+            &mut object,
+            "aurora_direct_string_len",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let string_contains = declare_runtime_function(
+            &mut object,
+            "aurora_direct_string_contains",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let string_starts_with = declare_runtime_function(
+            &mut object,
+            "aurora_direct_string_starts_with",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let string_ends_with = declare_runtime_function(
+            &mut object,
+            "aurora_direct_string_ends_with",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let string_split = declare_runtime_function(
+            &mut object,
+            "aurora_direct_string_split",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let string_replace = declare_runtime_function(
+            &mut object,
+            "aurora_direct_string_replace",
+            &[types::I64, types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let string_to_lower = declare_runtime_function(
+            &mut object,
+            "aurora_direct_string_to_lower",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let string_to_upper = declare_runtime_function(
+            &mut object,
+            "aurora_direct_string_to_upper",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let string_strip_prefix = declare_runtime_function(
+            &mut object,
+            "aurora_direct_string_strip_prefix",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let string_strip_suffix = declare_runtime_function(
+            &mut object,
+            "aurora_direct_string_strip_suffix",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let string_trim = declare_runtime_function(
+            &mut object,
+            "aurora_direct_string_trim",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let string_join = declare_runtime_function(
+            &mut object,
+            "aurora_direct_string_join",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
         let stringify_value = declare_runtime_function(
             &mut object,
             "aurora_direct_stringify_value",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let abs_value = declare_runtime_function(
+            &mut object,
+            "aurora_direct_abs",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let min_value = declare_runtime_function(
+            &mut object,
+            "aurora_direct_min",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let max_value = declare_runtime_function(
+            &mut object,
+            "aurora_direct_max",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let sqrt_value = declare_runtime_function(
+            &mut object,
+            "aurora_direct_sqrt",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let parse_int32 = declare_runtime_function(
+            &mut object,
+            "aurora_direct_parse_int32",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let parse_int64 = declare_runtime_function(
+            &mut object,
+            "aurora_direct_parse_int64",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let parse_float64 = declare_runtime_function(
+            &mut object,
+            "aurora_direct_parse_float64",
             &[types::I64],
             Some(types::I64),
         )?;
@@ -345,6 +517,240 @@ impl<'a> NativeCodegen<'a> {
             &mut object,
             "aurora_direct_range_advance",
             &[types::I64],
+            Some(types::I64),
+        )?;
+        let vec_empty = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_empty",
+            &[],
+            Some(types::I64),
+        )?;
+        let vec_len = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_len",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let vec_is_empty = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_is_empty",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let vec_push_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_push_in_place",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let vec_pop_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_pop_in_place",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let vec_get = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_get",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let vec_set_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_set_in_place",
+            &[types::I64, types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let vec_remove_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_remove_in_place",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let vec_swap_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_swap_in_place",
+            &[types::I64, types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let vec_contains = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_contains",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let vec_extend_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_extend_in_place",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let vec_insert_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_insert_in_place",
+            &[types::I64, types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let vec_clear_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_clear_in_place",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let vec_reverse_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_reverse_in_place",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let vec_index = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_index",
+            &[types::I64, types::I64, types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let vec_index_option = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_index_option",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let vec_set_index_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_vec_set_index_in_place",
+            &[types::I64, types::I64, types::I64, types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let map_empty = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_empty",
+            &[],
+            Some(types::I64),
+        )?;
+        let map_len = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_len",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let map_is_empty = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_is_empty",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let map_get = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_get",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let map_set_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_set_in_place",
+            &[types::I64, types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let map_remove_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_remove_in_place",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let map_contains_key = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_contains_key",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let map_keys = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_keys",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let map_values = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_values",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let map_items = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_items",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let map_entries = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_entries",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let map_clear_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_clear_in_place",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let map_extend_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_extend_in_place",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let map_index = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_index",
+            &[types::I64, types::I64, types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let map_set_index_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_map_set_index_in_place",
+            &[types::I64, types::I64, types::I64, types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let set_empty = declare_runtime_function(
+            &mut object,
+            "aurora_direct_set_empty",
+            &[],
+            Some(types::I64),
+        )?;
+        let set_len = declare_runtime_function(
+            &mut object,
+            "aurora_direct_set_len",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let set_is_empty = declare_runtime_function(
+            &mut object,
+            "aurora_direct_set_is_empty",
+            &[types::I64],
+            Some(types::I64),
+        )?;
+        let set_contains = declare_runtime_function(
+            &mut object,
+            "aurora_direct_set_contains",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let set_insert_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_set_insert_in_place",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let set_remove_in_place = declare_runtime_function(
+            &mut object,
+            "aurora_direct_set_remove_in_place",
+            &[types::I64, types::I64],
+            Some(types::I64),
+        )?;
+        let set_index_option = declare_runtime_function(
+            &mut object,
+            "aurora_direct_set_index_option",
+            &[types::I64, types::I64],
             Some(types::I64),
         )?;
         let clone_value = declare_runtime_function(
@@ -624,12 +1030,70 @@ impl<'a> NativeCodegen<'a> {
             box_bool,
             box_unit,
             string_literal,
+            string_len,
+            string_contains,
+            string_starts_with,
+            string_ends_with,
+            string_split,
+            string_replace,
+            string_to_lower,
+            string_to_upper,
+            string_strip_prefix,
+            string_strip_suffix,
+            string_trim,
+            string_join,
             stringify_value,
+            abs_value,
+            min_value,
+            max_value,
+            sqrt_value,
+            parse_int32,
+            parse_int64,
+            parse_float64,
             duration_literal,
             range_new,
             range_current,
             range_end,
             range_advance,
+            vec_empty,
+            vec_len,
+            vec_is_empty,
+            vec_push_in_place,
+            vec_pop_in_place,
+            vec_get,
+            vec_set_in_place,
+            vec_remove_in_place,
+            vec_swap_in_place,
+            vec_contains,
+            vec_extend_in_place,
+            vec_insert_in_place,
+            vec_clear_in_place,
+            vec_reverse_in_place,
+            vec_index,
+            vec_index_option,
+            vec_set_index_in_place,
+            map_empty,
+            map_len,
+            map_is_empty,
+            map_get,
+            map_set_in_place,
+            map_remove_in_place,
+            map_contains_key,
+            map_keys,
+            map_values,
+            map_items,
+            map_entries,
+            map_clear_in_place,
+            map_extend_in_place,
+            map_index,
+            map_set_index_in_place,
+            set_empty,
+            set_len,
+            set_is_empty,
+            set_contains,
+            set_insert_in_place,
+            set_remove_in_place,
+            set_index_option,
             clone_value,
             unbox_i64,
             unbox_f64,
@@ -932,9 +1396,66 @@ impl<'a> NativeCodegen<'a> {
         let string_literal = self
             .object
             .declare_func_in_func(self.string_literal, builder.func);
+        let string_len = self
+            .object
+            .declare_func_in_func(self.string_len, builder.func);
+        let string_contains = self
+            .object
+            .declare_func_in_func(self.string_contains, builder.func);
+        let string_starts_with = self
+            .object
+            .declare_func_in_func(self.string_starts_with, builder.func);
+        let string_ends_with = self
+            .object
+            .declare_func_in_func(self.string_ends_with, builder.func);
+        let string_split = self
+            .object
+            .declare_func_in_func(self.string_split, builder.func);
+        let string_replace = self
+            .object
+            .declare_func_in_func(self.string_replace, builder.func);
+        let string_to_lower = self
+            .object
+            .declare_func_in_func(self.string_to_lower, builder.func);
+        let string_to_upper = self
+            .object
+            .declare_func_in_func(self.string_to_upper, builder.func);
+        let string_strip_prefix = self
+            .object
+            .declare_func_in_func(self.string_strip_prefix, builder.func);
+        let string_strip_suffix = self
+            .object
+            .declare_func_in_func(self.string_strip_suffix, builder.func);
+        let string_trim = self
+            .object
+            .declare_func_in_func(self.string_trim, builder.func);
+        let string_join = self
+            .object
+            .declare_func_in_func(self.string_join, builder.func);
         let stringify_value = self
             .object
             .declare_func_in_func(self.stringify_value, builder.func);
+        let abs_value = self
+            .object
+            .declare_func_in_func(self.abs_value, builder.func);
+        let min_value = self
+            .object
+            .declare_func_in_func(self.min_value, builder.func);
+        let max_value = self
+            .object
+            .declare_func_in_func(self.max_value, builder.func);
+        let sqrt_value = self
+            .object
+            .declare_func_in_func(self.sqrt_value, builder.func);
+        let parse_int32 = self
+            .object
+            .declare_func_in_func(self.parse_int32, builder.func);
+        let parse_int64 = self
+            .object
+            .declare_func_in_func(self.parse_int64, builder.func);
+        let parse_float64 = self
+            .object
+            .declare_func_in_func(self.parse_float64, builder.func);
         let duration_literal = self
             .object
             .declare_func_in_func(self.duration_literal, builder.func);
@@ -950,6 +1471,113 @@ impl<'a> NativeCodegen<'a> {
         let range_advance = self
             .object
             .declare_func_in_func(self.range_advance, builder.func);
+        let vec_empty = self
+            .object
+            .declare_func_in_func(self.vec_empty, builder.func);
+        let vec_len = self.object.declare_func_in_func(self.vec_len, builder.func);
+        let vec_is_empty = self
+            .object
+            .declare_func_in_func(self.vec_is_empty, builder.func);
+        let vec_push_in_place = self
+            .object
+            .declare_func_in_func(self.vec_push_in_place, builder.func);
+        let vec_pop_in_place = self
+            .object
+            .declare_func_in_func(self.vec_pop_in_place, builder.func);
+        let vec_get = self.object.declare_func_in_func(self.vec_get, builder.func);
+        let vec_set_in_place = self
+            .object
+            .declare_func_in_func(self.vec_set_in_place, builder.func);
+        let vec_remove_in_place = self
+            .object
+            .declare_func_in_func(self.vec_remove_in_place, builder.func);
+        let vec_swap_in_place = self
+            .object
+            .declare_func_in_func(self.vec_swap_in_place, builder.func);
+        let vec_contains = self
+            .object
+            .declare_func_in_func(self.vec_contains, builder.func);
+        let vec_extend_in_place = self
+            .object
+            .declare_func_in_func(self.vec_extend_in_place, builder.func);
+        let vec_insert_in_place = self
+            .object
+            .declare_func_in_func(self.vec_insert_in_place, builder.func);
+        let vec_clear_in_place = self
+            .object
+            .declare_func_in_func(self.vec_clear_in_place, builder.func);
+        let vec_reverse_in_place = self
+            .object
+            .declare_func_in_func(self.vec_reverse_in_place, builder.func);
+        let vec_index = self
+            .object
+            .declare_func_in_func(self.vec_index, builder.func);
+        let vec_index_option = self
+            .object
+            .declare_func_in_func(self.vec_index_option, builder.func);
+        let vec_set_index_in_place = self
+            .object
+            .declare_func_in_func(self.vec_set_index_in_place, builder.func);
+        let map_empty = self
+            .object
+            .declare_func_in_func(self.map_empty, builder.func);
+        let map_len = self.object.declare_func_in_func(self.map_len, builder.func);
+        let map_is_empty = self
+            .object
+            .declare_func_in_func(self.map_is_empty, builder.func);
+        let map_get = self.object.declare_func_in_func(self.map_get, builder.func);
+        let map_set_in_place = self
+            .object
+            .declare_func_in_func(self.map_set_in_place, builder.func);
+        let map_remove_in_place = self
+            .object
+            .declare_func_in_func(self.map_remove_in_place, builder.func);
+        let map_contains_key = self
+            .object
+            .declare_func_in_func(self.map_contains_key, builder.func);
+        let map_keys = self
+            .object
+            .declare_func_in_func(self.map_keys, builder.func);
+        let map_values = self
+            .object
+            .declare_func_in_func(self.map_values, builder.func);
+        let map_items = self
+            .object
+            .declare_func_in_func(self.map_items, builder.func);
+        let map_entries = self
+            .object
+            .declare_func_in_func(self.map_entries, builder.func);
+        let map_clear_in_place = self
+            .object
+            .declare_func_in_func(self.map_clear_in_place, builder.func);
+        let map_extend_in_place = self
+            .object
+            .declare_func_in_func(self.map_extend_in_place, builder.func);
+        let map_index = self
+            .object
+            .declare_func_in_func(self.map_index, builder.func);
+        let map_set_index_in_place = self
+            .object
+            .declare_func_in_func(self.map_set_index_in_place, builder.func);
+        let set_empty = self
+            .object
+            .declare_func_in_func(self.set_empty, builder.func);
+        let set_len = self.object.declare_func_in_func(self.set_len, builder.func);
+        let set_is_empty = self
+            .object
+            .declare_func_in_func(self.set_is_empty, builder.func);
+        let set_contains = self
+            .object
+            .declare_func_in_func(self.set_contains, builder.func);
+        let set_insert_in_place = self
+            .object
+            .declare_func_in_func(self.set_insert_in_place, builder.func);
+        let set_remove_in_place = self
+            .object
+            .declare_func_in_func(self.set_remove_in_place, builder.func);
+        let set_index_option = self
+            .object
+            .declare_func_in_func(self.set_index_option, builder.func);
         let clone_value = self
             .object
             .declare_func_in_func(self.clone_value, builder.func);
@@ -1077,12 +1705,70 @@ impl<'a> NativeCodegen<'a> {
             box_bool,
             box_unit,
             string_literal,
+            string_len,
+            string_contains,
+            string_starts_with,
+            string_ends_with,
+            string_split,
+            string_replace,
+            string_to_lower,
+            string_to_upper,
+            string_strip_prefix,
+            string_strip_suffix,
+            string_trim,
+            string_join,
             stringify_value,
+            abs_value,
+            min_value,
+            max_value,
+            sqrt_value,
+            parse_int32,
+            parse_int64,
+            parse_float64,
             duration_literal,
             range_new,
             range_current,
             range_end,
             range_advance,
+            vec_empty,
+            vec_len,
+            vec_is_empty,
+            vec_push_in_place,
+            vec_pop_in_place,
+            vec_get,
+            vec_set_in_place,
+            vec_remove_in_place,
+            vec_swap_in_place,
+            vec_contains,
+            vec_extend_in_place,
+            vec_insert_in_place,
+            vec_clear_in_place,
+            vec_reverse_in_place,
+            vec_index,
+            vec_index_option,
+            vec_set_index_in_place,
+            map_empty,
+            map_len,
+            map_is_empty,
+            map_get,
+            map_set_in_place,
+            map_remove_in_place,
+            map_contains_key,
+            map_keys,
+            map_values,
+            map_items,
+            map_entries,
+            map_clear_in_place,
+            map_extend_in_place,
+            map_index,
+            map_set_index_in_place,
+            set_empty,
+            set_len,
+            set_is_empty,
+            set_contains,
+            set_insert_in_place,
+            set_remove_in_place,
+            set_index_option,
             clone_value,
             unbox_i64,
             unbox_f64,
@@ -1333,12 +2019,70 @@ struct FunctionCompiler<'a> {
     box_bool: cranelift_codegen::ir::FuncRef,
     box_unit: cranelift_codegen::ir::FuncRef,
     string_literal: cranelift_codegen::ir::FuncRef,
+    string_len: cranelift_codegen::ir::FuncRef,
+    string_contains: cranelift_codegen::ir::FuncRef,
+    string_starts_with: cranelift_codegen::ir::FuncRef,
+    string_ends_with: cranelift_codegen::ir::FuncRef,
+    string_split: cranelift_codegen::ir::FuncRef,
+    string_replace: cranelift_codegen::ir::FuncRef,
+    string_to_lower: cranelift_codegen::ir::FuncRef,
+    string_to_upper: cranelift_codegen::ir::FuncRef,
+    string_strip_prefix: cranelift_codegen::ir::FuncRef,
+    string_strip_suffix: cranelift_codegen::ir::FuncRef,
+    string_trim: cranelift_codegen::ir::FuncRef,
+    string_join: cranelift_codegen::ir::FuncRef,
     stringify_value: cranelift_codegen::ir::FuncRef,
+    abs_value: cranelift_codegen::ir::FuncRef,
+    min_value: cranelift_codegen::ir::FuncRef,
+    max_value: cranelift_codegen::ir::FuncRef,
+    sqrt_value: cranelift_codegen::ir::FuncRef,
+    parse_int32: cranelift_codegen::ir::FuncRef,
+    parse_int64: cranelift_codegen::ir::FuncRef,
+    parse_float64: cranelift_codegen::ir::FuncRef,
     duration_literal: cranelift_codegen::ir::FuncRef,
     range_new: cranelift_codegen::ir::FuncRef,
     range_current: cranelift_codegen::ir::FuncRef,
     range_end: cranelift_codegen::ir::FuncRef,
     range_advance: cranelift_codegen::ir::FuncRef,
+    vec_empty: cranelift_codegen::ir::FuncRef,
+    vec_len: cranelift_codegen::ir::FuncRef,
+    vec_is_empty: cranelift_codegen::ir::FuncRef,
+    vec_push_in_place: cranelift_codegen::ir::FuncRef,
+    vec_pop_in_place: cranelift_codegen::ir::FuncRef,
+    vec_get: cranelift_codegen::ir::FuncRef,
+    vec_set_in_place: cranelift_codegen::ir::FuncRef,
+    vec_remove_in_place: cranelift_codegen::ir::FuncRef,
+    vec_swap_in_place: cranelift_codegen::ir::FuncRef,
+    vec_contains: cranelift_codegen::ir::FuncRef,
+    vec_extend_in_place: cranelift_codegen::ir::FuncRef,
+    vec_insert_in_place: cranelift_codegen::ir::FuncRef,
+    vec_clear_in_place: cranelift_codegen::ir::FuncRef,
+    vec_reverse_in_place: cranelift_codegen::ir::FuncRef,
+    vec_index: cranelift_codegen::ir::FuncRef,
+    vec_index_option: cranelift_codegen::ir::FuncRef,
+    vec_set_index_in_place: cranelift_codegen::ir::FuncRef,
+    map_empty: cranelift_codegen::ir::FuncRef,
+    map_len: cranelift_codegen::ir::FuncRef,
+    map_is_empty: cranelift_codegen::ir::FuncRef,
+    map_get: cranelift_codegen::ir::FuncRef,
+    map_set_in_place: cranelift_codegen::ir::FuncRef,
+    map_remove_in_place: cranelift_codegen::ir::FuncRef,
+    map_contains_key: cranelift_codegen::ir::FuncRef,
+    map_keys: cranelift_codegen::ir::FuncRef,
+    map_values: cranelift_codegen::ir::FuncRef,
+    map_items: cranelift_codegen::ir::FuncRef,
+    map_entries: cranelift_codegen::ir::FuncRef,
+    map_clear_in_place: cranelift_codegen::ir::FuncRef,
+    map_extend_in_place: cranelift_codegen::ir::FuncRef,
+    map_index: cranelift_codegen::ir::FuncRef,
+    map_set_index_in_place: cranelift_codegen::ir::FuncRef,
+    set_empty: cranelift_codegen::ir::FuncRef,
+    set_len: cranelift_codegen::ir::FuncRef,
+    set_is_empty: cranelift_codegen::ir::FuncRef,
+    set_contains: cranelift_codegen::ir::FuncRef,
+    set_insert_in_place: cranelift_codegen::ir::FuncRef,
+    set_remove_in_place: cranelift_codegen::ir::FuncRef,
+    set_index_option: cranelift_codegen::ir::FuncRef,
     clone_value: cranelift_codegen::ir::FuncRef,
     unbox_i64: cranelift_codegen::ir::FuncRef,
     unbox_f64: cranelift_codegen::ir::FuncRef,
@@ -1537,6 +2281,75 @@ impl<'a> FunctionCompiler<'a> {
                 self.compile_binary(*op, left, right, Some(*span))
             }
             Rvalue::Call { callee, args } => self.compile_call(callee, args),
+            Rvalue::VecLiteral {
+                elements,
+                element_type,
+            } => {
+                let init = self.builder.ins().call(self.vec_empty, &[]);
+                let vector = ValueRef {
+                    values: self.builder.inst_results(init).to_vec(),
+                    ty: DirectType::Opaque(Type::Named(
+                        "Vec".to_string(),
+                        vec![element_type.clone()],
+                    )),
+                };
+                for element in elements {
+                    let value = self.load_operand(element)?;
+                    let value = self.ensure_opaque(value)?;
+                    let _ = self
+                        .builder
+                        .ins()
+                        .call(self.vec_push_in_place, &[vector.values[0], value.values[0]]);
+                }
+                Ok(vector)
+            }
+            Rvalue::MapLiteral {
+                entries,
+                key_type,
+                value_type,
+            } => {
+                let init = self.builder.ins().call(self.map_empty, &[]);
+                let map = ValueRef {
+                    values: self.builder.inst_results(init).to_vec(),
+                    ty: DirectType::Opaque(Type::Named(
+                        "Map".to_string(),
+                        vec![key_type.clone(), value_type.clone()],
+                    )),
+                };
+                for entry in entries {
+                    let key = self.load_operand(&entry.key)?;
+                    let key = self.ensure_opaque(key)?;
+                    let value = self.load_operand(&entry.value)?;
+                    let value = self.ensure_opaque(value)?;
+                    let _ = self.builder.ins().call(
+                        self.map_set_in_place,
+                        &[map.values[0], key.values[0], value.values[0]],
+                    );
+                }
+                Ok(map)
+            }
+            Rvalue::SetLiteral {
+                elements,
+                element_type,
+            } => {
+                let init = self.builder.ins().call(self.set_empty, &[]);
+                let set = ValueRef {
+                    values: self.builder.inst_results(init).to_vec(),
+                    ty: DirectType::Opaque(Type::Named(
+                        "Set".to_string(),
+                        vec![element_type.clone()],
+                    )),
+                };
+                for element in elements {
+                    let value = self.load_operand(element)?;
+                    let value = self.ensure_opaque(value)?;
+                    let _ = self
+                        .builder
+                        .ins()
+                        .call(self.set_insert_in_place, &[set.values[0], value.values[0]]);
+                }
+                Ok(set)
+            }
             Rvalue::Construct { class_name, fields } => self.compile_construct(class_name, fields),
             Rvalue::Member { object, field } => {
                 let object = self.load_operand(object)?;
@@ -2049,6 +2862,130 @@ impl<'a> FunctionCompiler<'a> {
                 ty: DirectType::Scalar(ScalarKind::Unit),
             });
         }
+        if name == "abs" {
+            let [argument] = args else {
+                return Err("direct backend expected `abs()` to receive one argument".to_string());
+            };
+            let loaded = self.load_operand(&argument.value)?;
+            let return_ty = loaded.ty.clone();
+            let value = self.ensure_opaque(loaded)?;
+            let inst = self.builder.ins().call(self.abs_value, &[value.values[0]]);
+            return self.coerce_value(
+                ValueRef {
+                    values: self.builder.inst_results(inst).to_vec(),
+                    ty: DirectType::Opaque(Type::named("Unknown")),
+                },
+                &return_ty,
+            );
+        }
+        if matches!(name, "parse_int32" | "parse_int64" | "parse_float64") {
+            let [argument] = args else {
+                return Err(format!(
+                    "direct backend expected `{}`() to receive one string argument",
+                    name
+                ));
+            };
+            let loaded = self.load_operand(&argument.value)?;
+            let value = self.ensure_opaque(loaded)?;
+            let func = match name {
+                "parse_int32" => self.parse_int32,
+                "parse_int64" => self.parse_int64,
+                "parse_float64" => self.parse_float64,
+                _ => unreachable!(),
+            };
+            let inst = self.builder.ins().call(func, &[value.values[0]]);
+            let return_ty = match name {
+                "parse_int32" => Type::Named(
+                    "Result".to_string(),
+                    vec![Type::named("int32"), Type::named("String")],
+                ),
+                "parse_int64" => Type::Named(
+                    "Result".to_string(),
+                    vec![Type::named("int64"), Type::named("String")],
+                ),
+                "parse_float64" => Type::Named(
+                    "Result".to_string(),
+                    vec![Type::named("float64"), Type::named("String")],
+                ),
+                _ => unreachable!(),
+            };
+            return Ok(ValueRef {
+                values: self.builder.inst_results(inst).to_vec(),
+                ty: DirectType::Opaque(return_ty),
+            });
+        }
+        if name == "min" || name == "max" {
+            let [left_arg, right_arg] = args else {
+                return Err(format!(
+                    "direct backend expected `{}`() to receive two arguments",
+                    name
+                ));
+            };
+            let left = self.load_operand(&left_arg.value)?;
+            let return_ty = left.ty.clone();
+            let left = self.ensure_opaque(left)?;
+            let right = self.load_operand(&right_arg.value)?;
+            let right = self.ensure_opaque(right)?;
+            let func = if name == "min" {
+                self.min_value
+            } else {
+                self.max_value
+            };
+            let inst = self
+                .builder
+                .ins()
+                .call(func, &[left.values[0], right.values[0]]);
+            return self.coerce_value(
+                ValueRef {
+                    values: self.builder.inst_results(inst).to_vec(),
+                    ty: DirectType::Opaque(Type::named("Unknown")),
+                },
+                &return_ty,
+            );
+        }
+        if name == "sqrt" {
+            let [argument] = args else {
+                return Err("direct backend expected `sqrt()` to receive one argument".to_string());
+            };
+            let loaded = self.load_operand(&argument.value)?;
+            let return_ty = loaded.ty.clone();
+            let value = self.ensure_opaque(loaded)?;
+            let inst = self.builder.ins().call(self.sqrt_value, &[value.values[0]]);
+            return self.coerce_value(
+                ValueRef {
+                    values: self.builder.inst_results(inst).to_vec(),
+                    ty: DirectType::Opaque(Type::named("Unknown")),
+                },
+                &return_ty,
+            );
+        }
+        if matches!(name, "Vec" | "Set" | "Map") {
+            if !args.is_empty() {
+                return Err(format!(
+                    "direct backend expected `{}`() to take no arguments",
+                    name
+                ));
+            }
+            let func = match name {
+                "Vec" => self.vec_empty,
+                "Set" => self.set_empty,
+                "Map" => self.map_empty,
+                _ => unreachable!(),
+            };
+            let inst = self.builder.ins().call(func, &[]);
+            let ty = match name {
+                "Vec" | "Set" => Type::Named(name.to_string(), vec![Type::named("Unknown")]),
+                "Map" => Type::Named(
+                    "Map".to_string(),
+                    vec![Type::named("Unknown"), Type::named("Unknown")],
+                ),
+                _ => unreachable!(),
+            };
+            return Ok(ValueRef {
+                values: self.builder.inst_results(inst).to_vec(),
+                ty: DirectType::Opaque(ty),
+            });
+        }
         let func_ref = *self
             .function_refs
             .get(name)
@@ -2253,6 +3190,21 @@ impl<'a> FunctionCompiler<'a> {
                 self.compile_opaque_member_call(&ty, object, field, receiver_place, args)
             }
             DirectType::Scalar(_) => {
+                if field == "to_string" {
+                    if !args.is_empty() {
+                        return Err("direct backend expected `to_string()` to take no arguments"
+                            .to_string());
+                    }
+                    let object = self.ensure_opaque(object)?;
+                    let inst = self
+                        .builder
+                        .ins()
+                        .call(self.stringify_value, &[object.values[0]]);
+                    return Ok(ValueRef {
+                        values: self.builder.inst_results(inst).to_vec(),
+                        ty: DirectType::Opaque(Type::named("String")),
+                    });
+                }
                 let receiver_ty = direct_type_to_type(&object.ty);
                 if self.find_trait_method(&receiver_ty, field).is_some() {
                     return self.compile_class_member_call(
@@ -3177,6 +4129,22 @@ impl<'a> FunctionCompiler<'a> {
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
+        if field == "to_string" {
+            if !args.is_empty() {
+                return Err(
+                    "direct backend expected `to_string()` to take no arguments".to_string()
+                );
+            }
+            let object = self.ensure_opaque(object)?;
+            let inst = self
+                .builder
+                .ins()
+                .call(self.stringify_value, &[object.values[0]]);
+            return Ok(ValueRef {
+                values: self.builder.inst_results(inst).to_vec(),
+                ty: DirectType::Opaque(Type::named("String")),
+            });
+        }
         if field == "clone" {
             if !args.is_empty() {
                 return Err("direct backend expected `clone()` to take no arguments".to_string());
@@ -3192,6 +4160,1020 @@ impl<'a> FunctionCompiler<'a> {
             });
         }
         if let Type::Named(name, class_args) = object_ty {
+            if name == "String" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "len" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `len()` to take no arguments".to_string()
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.string_len, &[object.values[0]]);
+                        let len = self.builder.inst_results(inst)[0];
+                        self.emit_int32_bounds_check(len, None);
+                        Ok(ValueRef {
+                            values: vec![len],
+                            ty: DirectType::Scalar(ScalarKind::Int32),
+                        })
+                    }
+                    "contains" | "starts_with" | "ends_with" => {
+                        let [argument] = args else {
+                            return Err(format!(
+                                "direct backend expected `{}`() to receive one string argument",
+                                field
+                            ));
+                        };
+                        let loaded_value = self.load_operand(&argument.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let func = match field {
+                            "contains" => self.string_contains,
+                            "starts_with" => self.string_starts_with,
+                            "ends_with" => self.string_ends_with,
+                            _ => unreachable!(),
+                        };
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(func, &[object.values[0], value.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        })
+                    }
+                    "split" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `split()` to receive one string argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_value = self.load_operand(&argument.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.string_split, &[object.values[0], value.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Vec".to_string(),
+                                vec![Type::named("String")],
+                            )),
+                        })
+                    }
+                    "replace" => {
+                        let [from_arg, to_arg] = args else {
+                            return Err(
+                                "direct backend expected `replace()` to receive `from` and `to` string arguments"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_from = self.load_operand(&from_arg.value)?;
+                        let from = self.ensure_opaque(loaded_from)?;
+                        let loaded_to = self.load_operand(&to_arg.value)?;
+                        let to = self.ensure_opaque(loaded_to)?;
+                        let inst = self.builder.ins().call(
+                            self.string_replace,
+                            &[object.values[0], from.values[0], to.values[0]],
+                        );
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::named("String")),
+                        })
+                    }
+                    "to_lower" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `to_lower()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.string_to_lower, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::named("String")),
+                        })
+                    }
+                    "to_upper" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `to_upper()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.string_to_upper, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::named("String")),
+                        })
+                    }
+                    "join" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `join()` to receive one vector argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_value = self.load_operand(&argument.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.string_join, &[object.values[0], value.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::named("String")),
+                        })
+                    }
+                    "strip_prefix" | "strip_suffix" => {
+                        let [argument] = args else {
+                            return Err(format!(
+                                "direct backend expected `{}`() to receive one string argument",
+                                field
+                            ));
+                        };
+                        let loaded_value = self.load_operand(&argument.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let func = match field {
+                            "strip_prefix" => self.string_strip_prefix,
+                            "strip_suffix" => self.string_strip_suffix,
+                            _ => unreachable!(),
+                        };
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(func, &[object.values[0], value.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Option".to_string(),
+                                vec![Type::named("String")],
+                            )),
+                        })
+                    }
+                    "trim" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `trim()` to take no arguments".to_string()
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.string_trim, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::named("String")),
+                        })
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "Vec" {
+                let object = self.ensure_opaque(object)?;
+                let element_ty = class_args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                let element_direct_ty =
+                    ensure_direct_type(&element_ty, &self.classes, "Vec element")?;
+                return match field {
+                    "len" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `len()` to take no arguments".to_string()
+                            );
+                        }
+                        let inst = self.builder.ins().call(self.vec_len, &[object.values[0]]);
+                        let len = self.builder.inst_results(inst)[0];
+                        self.emit_int32_bounds_check(len, None);
+                        Ok(ValueRef {
+                            values: vec![len],
+                            ty: DirectType::Scalar(ScalarKind::Int32),
+                        })
+                    }
+                    "is_empty" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `is_empty()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.vec_is_empty, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        })
+                    }
+                    "clone" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `clone()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.clone_value, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Vec".to_string(),
+                                class_args.clone(),
+                            )),
+                        })
+                    }
+                    "push" => {
+                        let [argument] = args else {
+                            return Err("direct backend expected `push()` to receive one argument"
+                                .to_string());
+                        };
+                        let loaded_value = self.load_operand(&argument.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let _ = self
+                            .builder
+                            .ins()
+                            .call(self.vec_push_in_place, &[object.values[0], value.values[0]]);
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
+                    }
+                    "pop" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `pop()` to take no arguments".to_string()
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.vec_pop_in_place, &[object.values[0]]);
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Option".to_string(),
+                                vec![element_ty],
+                            )),
+                        })
+                    }
+                    "get" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `get()` to receive one index argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_index = self.load_operand(&argument.value)?;
+                        let index = self
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.vec_get, &[object.values[0], index.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Option".to_string(),
+                                vec![class_args
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                            )),
+                        })
+                    }
+                    "__index_option" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected internal optional vector indexing to receive one argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_index = self.load_operand(&argument.value)?;
+                        let index = self
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.vec_index_option, &[object.values[0], index.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Option".to_string(),
+                                vec![class_args
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                            )),
+                        })
+                    }
+                    "__index" => {
+                        let [argument, line_arg, column_arg] = args else {
+                            return Err(
+                                "direct backend expected internal vector indexing to receive index, line, and column"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_index = self.load_operand(&argument.value)?;
+                        let index = self
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let loaded_line = self.load_operand(&line_arg.value)?;
+                        let line =
+                            self.coerce_value(loaded_line, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let loaded_column = self.load_operand(&column_arg.value)?;
+                        let column = self
+                            .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self.builder.ins().call(
+                            self.vec_index,
+                            &[
+                                object.values[0],
+                                index.values[0],
+                                line.values[0],
+                                column.values[0],
+                            ],
+                        );
+                        self.coerce_value(
+                            ValueRef {
+                                values: self.builder.inst_results(inst).to_vec(),
+                                ty: DirectType::Opaque(element_ty),
+                            },
+                            &element_direct_ty,
+                        )
+                    }
+                    "set" => {
+                        let [index_arg, value_arg] = args else {
+                            return Err(
+                                "direct backend expected `set()` to receive index and value"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_index = self.load_operand(&index_arg.value)?;
+                        let index = self
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let loaded_value = self.load_operand(&value_arg.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let inst = self.builder.ins().call(
+                            self.vec_set_in_place,
+                            &[object.values[0], index.values[0], value.values[0]],
+                        );
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Option".to_string(),
+                                vec![class_args
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                            )),
+                        })
+                    }
+                    "__set_index" => {
+                        let [index_arg, value_arg, line_arg, column_arg] = args else {
+                            return Err(
+                                "direct backend expected internal indexed assignment to receive index, value, line, and column"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_index = self.load_operand(&index_arg.value)?;
+                        let index = self
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let loaded_value = self.load_operand(&value_arg.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let loaded_line = self.load_operand(&line_arg.value)?;
+                        let line =
+                            self.coerce_value(loaded_line, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let loaded_column = self.load_operand(&column_arg.value)?;
+                        let column = self
+                            .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let _ = self.builder.ins().call(
+                            self.vec_set_index_in_place,
+                            &[
+                                object.values[0],
+                                index.values[0],
+                                value.values[0],
+                                line.values[0],
+                                column.values[0],
+                            ],
+                        );
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
+                    }
+                    "remove" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `remove()` to receive one index argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_index = self.load_operand(&argument.value)?;
+                        let index = self
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self.builder.ins().call(
+                            self.vec_remove_in_place,
+                            &[object.values[0], index.values[0]],
+                        );
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Option".to_string(),
+                                vec![class_args
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                            )),
+                        })
+                    }
+                    "swap" => {
+                        let [first_arg, second_arg] = args else {
+                            return Err(
+                                "direct backend expected `swap()` to receive two index arguments"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_first = self.load_operand(&first_arg.value)?;
+                        let first = self
+                            .coerce_value(loaded_first, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let loaded_second = self.load_operand(&second_arg.value)?;
+                        let second = self
+                            .coerce_value(loaded_second, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self.builder.ins().call(
+                            self.vec_swap_in_place,
+                            &[object.values[0], first.values[0], second.values[0]],
+                        );
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        })
+                    }
+                    "contains" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `contains()` to receive one value argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_value = self.load_operand(&argument.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.vec_contains, &[object.values[0], value.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        })
+                    }
+                    "insert" => {
+                        let [index_arg, value_arg] = args else {
+                            return Err(
+                                "direct backend expected `insert()` to receive index and value"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_index = self.load_operand(&index_arg.value)?;
+                        let index = self
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let loaded_value = self.load_operand(&value_arg.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let inst = self.builder.ins().call(
+                            self.vec_insert_in_place,
+                            &[object.values[0], index.values[0], value.values[0]],
+                        );
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        })
+                    }
+                    "clear" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `clear()` to take no arguments"
+                                .to_string());
+                        }
+                        let _ = self
+                            .builder
+                            .ins()
+                            .call(self.vec_clear_in_place, &[object.values[0]]);
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
+                    }
+                    "reverse" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `reverse()` to take no arguments"
+                                .to_string());
+                        }
+                        let _ = self
+                            .builder
+                            .ins()
+                            .call(self.vec_reverse_in_place, &[object.values[0]]);
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
+                    }
+                    "extend" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `extend()` to receive one vector argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_value = self.load_operand(&argument.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let _ = self.builder.ins().call(
+                            self.vec_extend_in_place,
+                            &[object.values[0], value.values[0]],
+                        );
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "Map" {
+                let object = self.ensure_opaque(object)?;
+                let key_ty = class_args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                let value_ty = class_args
+                    .get(1)
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                let value_direct_ty = ensure_direct_type(&value_ty, &self.classes, "Map value")?;
+                return match field {
+                    "len" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `len()` to take no arguments".to_string()
+                            );
+                        }
+                        let inst = self.builder.ins().call(self.map_len, &[object.values[0]]);
+                        let len = self.builder.inst_results(inst)[0];
+                        self.emit_int32_bounds_check(len, None);
+                        Ok(ValueRef {
+                            values: vec![len],
+                            ty: DirectType::Scalar(ScalarKind::Int32),
+                        })
+                    }
+                    "is_empty" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `is_empty()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.map_is_empty, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        })
+                    }
+                    "clone" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `clone()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.clone_value, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Map".to_string(),
+                                class_args.clone(),
+                            )),
+                        })
+                    }
+                    "get" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `get()` to receive one key argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_key = self.load_operand(&argument.value)?;
+                        let key = self.ensure_opaque(loaded_key)?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.map_get, &[object.values[0], key.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Option".to_string(),
+                                vec![value_ty.clone()],
+                            )),
+                        })
+                    }
+                    "__index" => {
+                        let [key_arg, line_arg, column_arg] = args else {
+                            return Err(
+                                "direct backend expected internal map indexing to receive key, line, and column"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_key = self.load_operand(&key_arg.value)?;
+                        let key = self.ensure_opaque(loaded_key)?;
+                        let loaded_line = self.load_operand(&line_arg.value)?;
+                        let line =
+                            self.coerce_value(loaded_line, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let loaded_column = self.load_operand(&column_arg.value)?;
+                        let column = self
+                            .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self.builder.ins().call(
+                            self.map_index,
+                            &[
+                                object.values[0],
+                                key.values[0],
+                                line.values[0],
+                                column.values[0],
+                            ],
+                        );
+                        self.coerce_value(
+                            ValueRef {
+                                values: self.builder.inst_results(inst).to_vec(),
+                                ty: DirectType::Opaque(value_ty.clone()),
+                            },
+                            &value_direct_ty,
+                        )
+                    }
+                    "set" => {
+                        let [key_arg, value_arg] = args else {
+                            return Err("direct backend expected `set()` to receive key and value"
+                                .to_string());
+                        };
+                        let loaded_key = self.load_operand(&key_arg.value)?;
+                        let key = self.ensure_opaque(loaded_key)?;
+                        let loaded_value = self.load_operand(&value_arg.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let inst = self.builder.ins().call(
+                            self.map_set_in_place,
+                            &[object.values[0], key.values[0], value.values[0]],
+                        );
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Option".to_string(),
+                                vec![value_ty.clone()],
+                            )),
+                        })
+                    }
+                    "__set_index" => {
+                        let [key_arg, value_arg, line_arg, column_arg] = args else {
+                            return Err(
+                                "direct backend expected internal map indexed assignment to receive key, value, line, and column"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_key = self.load_operand(&key_arg.value)?;
+                        let key = self.ensure_opaque(loaded_key)?;
+                        let loaded_value = self.load_operand(&value_arg.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let loaded_line = self.load_operand(&line_arg.value)?;
+                        let line =
+                            self.coerce_value(loaded_line, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let loaded_column = self.load_operand(&column_arg.value)?;
+                        let column = self
+                            .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let _ = self.builder.ins().call(
+                            self.map_set_index_in_place,
+                            &[
+                                object.values[0],
+                                key.values[0],
+                                value.values[0],
+                                line.values[0],
+                                column.values[0],
+                            ],
+                        );
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
+                    }
+                    "remove" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `remove()` to receive one key argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_key = self.load_operand(&argument.value)?;
+                        let key = self.ensure_opaque(loaded_key)?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.map_remove_in_place, &[object.values[0], key.values[0]]);
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Option".to_string(),
+                                vec![value_ty.clone()],
+                            )),
+                        })
+                    }
+                    "contains_key" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `contains_key()` to receive one key argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_key = self.load_operand(&argument.value)?;
+                        let key = self.ensure_opaque(loaded_key)?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.map_contains_key, &[object.values[0], key.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        })
+                    }
+                    "keys" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `keys()` to take no arguments".to_string()
+                            );
+                        }
+                        let inst = self.builder.ins().call(self.map_keys, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Vec".to_string(),
+                                vec![key_ty.clone()],
+                            )),
+                        })
+                    }
+                    "values" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `values()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.map_values, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Vec".to_string(),
+                                vec![value_ty.clone()],
+                            )),
+                        })
+                    }
+                    "items" | "entries" => {
+                        if !args.is_empty() {
+                            return Err(format!(
+                                "direct backend expected `{}`() to take no arguments",
+                                field
+                            ));
+                        }
+                        let func = if field == "items" {
+                            self.map_items
+                        } else {
+                            self.map_entries
+                        };
+                        let inst = self.builder.ins().call(func, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Vec".to_string(),
+                                vec![Type::Named(
+                                    "MapEntry".to_string(),
+                                    vec![key_ty.clone(), value_ty.clone()],
+                                )],
+                            )),
+                        })
+                    }
+                    "clear" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `clear()` to take no arguments"
+                                .to_string());
+                        }
+                        let _ = self
+                            .builder
+                            .ins()
+                            .call(self.map_clear_in_place, &[object.values[0]]);
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
+                    }
+                    "extend" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `extend()` to receive one map argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_value = self.load_operand(&argument.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let _ = self.builder.ins().call(
+                            self.map_extend_in_place,
+                            &[object.values[0], value.values[0]],
+                        );
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(unit_value(&mut self.builder))
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "Set" {
+                let object = self.ensure_opaque(object)?;
+                let element_ty = class_args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                return match field {
+                    "len" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `len()` to take no arguments".to_string()
+                            );
+                        }
+                        let inst = self.builder.ins().call(self.set_len, &[object.values[0]]);
+                        let len = self.builder.inst_results(inst)[0];
+                        self.emit_int32_bounds_check(len, None);
+                        Ok(ValueRef {
+                            values: vec![len],
+                            ty: DirectType::Scalar(ScalarKind::Int32),
+                        })
+                    }
+                    "is_empty" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `is_empty()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.set_is_empty, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        })
+                    }
+                    "clone" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `clone()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.clone_value, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Set".to_string(),
+                                class_args.clone(),
+                            )),
+                        })
+                    }
+                    "contains" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `contains()` to receive one value argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_value = self.load_operand(&argument.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.set_contains, &[object.values[0], value.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        })
+                    }
+                    "insert" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `insert()` to receive one value argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_value = self.load_operand(&argument.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let inst = self.builder.ins().call(
+                            self.set_insert_in_place,
+                            &[object.values[0], value.values[0]],
+                        );
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        })
+                    }
+                    "remove" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `remove()` to receive one value argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_value = self.load_operand(&argument.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let inst = self.builder.ins().call(
+                            self.set_remove_in_place,
+                            &[object.values[0], value.values[0]],
+                        );
+                        if let Some(place) = receiver_place {
+                            self.store_place(place, object.clone())?;
+                        }
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        })
+                    }
+                    "__index_option" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected internal optional set indexing to receive one argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_index = self.load_operand(&argument.value)?;
+                        let index = self
+                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.set_index_option, &[object.values[0], index.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Opaque(Type::Named(
+                                "Option".to_string(),
+                                vec![element_ty],
+                            )),
+                        })
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
             if self.classes.contains_key(name) || self.find_trait_method(object_ty, field).is_some()
             {
                 if let Ok(result) = self.compile_class_member_call(
@@ -4140,6 +6122,39 @@ fn validate_rvalue(
             }
             Ok(())
         }
+        Rvalue::VecLiteral {
+            elements,
+            element_type,
+        } => {
+            ensure_direct_type(element_type, classes, "Vec element")?;
+            for element in elements {
+                validate_operand(element)?;
+            }
+            Ok(())
+        }
+        Rvalue::MapLiteral {
+            entries,
+            key_type,
+            value_type,
+        } => {
+            ensure_direct_type(key_type, classes, "Map key")?;
+            ensure_direct_type(value_type, classes, "Map value")?;
+            for entry in entries {
+                validate_operand(&entry.key)?;
+                validate_operand(&entry.value)?;
+            }
+            Ok(())
+        }
+        Rvalue::SetLiteral {
+            elements,
+            element_type,
+        } => {
+            ensure_direct_type(element_type, classes, "Set element")?;
+            for element in elements {
+                validate_operand(element)?;
+            }
+            Ok(())
+        }
         Rvalue::Construct { class_name, .. } => ensure_direct_type(
             &Type::named(class_name),
             classes,
@@ -4311,6 +6326,18 @@ fn infer_rvalue_type(
                 "Channel".to_string(),
                 vec![Type::named("Unknown")],
             ))),
+            CallTarget::Name(name) if name == "Vec" => Some(DirectType::Opaque(Type::Named(
+                "Vec".to_string(),
+                vec![Type::named("Unknown")],
+            ))),
+            CallTarget::Name(name) if name == "Set" => Some(DirectType::Opaque(Type::Named(
+                "Set".to_string(),
+                vec![Type::named("Unknown")],
+            ))),
+            CallTarget::Name(name) if name == "Map" => Some(DirectType::Opaque(Type::Named(
+                "Map".to_string(),
+                vec![Type::named("Unknown"), Type::named("Unknown")],
+            ))),
             CallTarget::Name(name) if name == "task_group" => {
                 Some(DirectType::Opaque(Type::named("TaskGroup")))
             }
@@ -4318,6 +6345,24 @@ fn infer_rvalue_type(
                 Some(DirectType::Scalar(ScalarKind::Bool))
             }
             CallTarget::Name(name) if name == "sleep" => Some(DirectType::Scalar(ScalarKind::Unit)),
+            CallTarget::Name(name) if name == "parse_int32" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![Type::named("int32"), Type::named("String")],
+                )))
+            }
+            CallTarget::Name(name) if name == "parse_int64" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![Type::named("int64"), Type::named("String")],
+                )))
+            }
+            CallTarget::Name(name) if name == "parse_float64" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![Type::named("float64"), Type::named("String")],
+                )))
+            }
             CallTarget::Name(name) => function_return_types.get(name).cloned(),
             CallTarget::Member { object, field, .. } => {
                 let object_ty = infer_operand_type(object, variable_types, classes)?;
@@ -4325,6 +6370,9 @@ fn infer_rvalue_type(
                     && field == "sqrt"
                 {
                     return Some(object_ty);
+                }
+                if object_ty.scalar_kind().is_some() && field == "to_string" {
+                    return Some(DirectType::Opaque(Type::named("String")));
                 }
                 match object_ty {
                     DirectType::PlainClass(class_ty) => {
@@ -4346,6 +6394,22 @@ fn infer_rvalue_type(
                 }
             }
         },
+        Rvalue::VecLiteral { element_type, .. } => Some(DirectType::Opaque(Type::Named(
+            "Vec".to_string(),
+            vec![element_type.clone()],
+        ))),
+        Rvalue::MapLiteral {
+            key_type,
+            value_type,
+            ..
+        } => Some(DirectType::Opaque(Type::Named(
+            "Map".to_string(),
+            vec![key_type.clone(), value_type.clone()],
+        ))),
+        Rvalue::SetLiteral { element_type, .. } => Some(DirectType::Opaque(Type::Named(
+            "Set".to_string(),
+            vec![element_type.clone()],
+        ))),
         Rvalue::Construct { class_name, .. } => direct_type(&Type::named(class_name), classes),
         Rvalue::Member { object, field } => {
             match infer_operand_type(object, variable_types, classes)? {
@@ -4442,7 +6506,151 @@ fn builtin_opaque_member_return_type(
     let Type::Named(name, args) = object_ty else {
         return None;
     };
+    if args.is_empty()
+        && field == "to_string"
+        && matches!(
+            name.as_str(),
+            "bool"
+                | "int8"
+                | "int16"
+                | "int32"
+                | "int64"
+                | "int128"
+                | "intsize"
+                | "uint8"
+                | "uint16"
+                | "uint32"
+                | "uint64"
+                | "uint128"
+                | "uintsize"
+                | "float32"
+                | "float64"
+        )
+    {
+        return Some(DirectType::Opaque(Type::named("String")));
+    }
     match (name.as_str(), field) {
+        ("String", "len") => direct_type(&Type::named("int32"), classes),
+        ("String", "contains") | ("String", "starts_with") | ("String", "ends_with") => {
+            Some(DirectType::Scalar(ScalarKind::Bool))
+        }
+        ("String", "split") => Some(DirectType::Opaque(Type::Named(
+            "Vec".to_string(),
+            vec![Type::named("String")],
+        ))),
+        ("String", "replace")
+        | ("String", "to_lower")
+        | ("String", "to_upper")
+        | ("String", "trim")
+        | ("String", "clone") => Some(DirectType::Opaque(Type::named("String"))),
+        ("String", "join") => Some(DirectType::Opaque(Type::named("String"))),
+        ("String", "strip_prefix") | ("String", "strip_suffix") => Some(DirectType::Opaque(
+            Type::Named("Option".to_string(), vec![Type::named("String")]),
+        )),
+        ("Vec", "len") => direct_type(&Type::named("int32"), classes),
+        ("Vec", "is_empty") => Some(DirectType::Scalar(ScalarKind::Bool)),
+        ("Vec", "clone") => Some(DirectType::Opaque(Type::Named(
+            "Vec".to_string(),
+            args.clone(),
+        ))),
+        ("Vec", "push")
+        | ("Vec", "extend")
+        | ("Vec", "clear")
+        | ("Vec", "reverse")
+        | ("Vec", "__set_index") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("Vec", "swap") | ("Vec", "contains") | ("Vec", "insert") => {
+            Some(DirectType::Scalar(ScalarKind::Bool))
+        }
+        ("Vec", "pop")
+        | ("Vec", "get")
+        | ("Vec", "set")
+        | ("Vec", "remove")
+        | ("Vec", "__index_option") => direct_type(
+            &Type::Named(
+                "Option".to_string(),
+                vec![args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            ),
+            classes,
+        ),
+        ("Vec", "__index") => direct_type(args.first().unwrap_or(&Type::named("Unknown")), classes),
+        ("Map", "len") => direct_type(&Type::named("int32"), classes),
+        ("Map", "is_empty") | ("Map", "contains_key") => Some(DirectType::Scalar(ScalarKind::Bool)),
+        ("Map", "clone") => Some(DirectType::Opaque(Type::Named(
+            "Map".to_string(),
+            args.clone(),
+        ))),
+        ("Map", "get") | ("Map", "set") | ("Map", "remove") => direct_type(
+            &Type::Named(
+                "Option".to_string(),
+                vec![args
+                    .get(1)
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            ),
+            classes,
+        ),
+        ("Map", "keys") => direct_type(
+            &Type::Named(
+                "Vec".to_string(),
+                vec![args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            ),
+            classes,
+        ),
+        ("Map", "values") => direct_type(
+            &Type::Named(
+                "Vec".to_string(),
+                vec![args
+                    .get(1)
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            ),
+            classes,
+        ),
+        ("Map", "items") | ("Map", "entries") => direct_type(
+            &Type::Named(
+                "Vec".to_string(),
+                vec![Type::Named(
+                    "MapEntry".to_string(),
+                    vec![
+                        args.first()
+                            .cloned()
+                            .unwrap_or_else(|| Type::named("Unknown")),
+                        args.get(1)
+                            .cloned()
+                            .unwrap_or_else(|| Type::named("Unknown")),
+                    ],
+                )],
+            ),
+            classes,
+        ),
+        ("Map", "clear") | ("Map", "extend") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("Map", "__index") => direct_type(args.get(1).unwrap_or(&Type::named("Unknown")), classes),
+        ("Map", "__set_index") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("Set", "len") => direct_type(&Type::named("int32"), classes),
+        ("Set", "is_empty") => Some(DirectType::Scalar(ScalarKind::Bool)),
+        ("Set", "clone") => Some(DirectType::Opaque(Type::Named(
+            "Set".to_string(),
+            args.clone(),
+        ))),
+        ("Set", "contains") | ("Set", "insert") | ("Set", "remove") => {
+            Some(DirectType::Scalar(ScalarKind::Bool))
+        }
+        ("Set", "__index_option") => direct_type(
+            &Type::Named(
+                "Option".to_string(),
+                vec![args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            ),
+            classes,
+        ),
         ("Channel", "clone") => Some(DirectType::Opaque(Type::Named(
             "Channel".to_string(),
             args.clone(),
@@ -4529,6 +6737,13 @@ fn direct_field_type(
     let DirectType::Opaque(Type::Named(class_name, args)) = ty else {
         return None;
     };
+    if class_name == "MapEntry" && args.len() == 2 {
+        return match field {
+            "key" => direct_type(&args[0], classes),
+            "value" => direct_type(&args[1], classes),
+            _ => None,
+        };
+    }
     if !args.is_empty() {
         return None;
     }

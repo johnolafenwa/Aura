@@ -1,0 +1,26 @@
+# Test 20: Large message count - send many messages through channel
+def producer(out: Channel[int32], count: int32):
+    mut i: int32 = 0
+    while i < count:
+        out.send(i)
+        i += 1
+    out.close()
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    task = spawn producer(ch.clone(), 1000)
+
+    mut sum: int32 = 0
+    mut received: int32 = 0
+    while true:
+        match ch.recv():
+            case Option.Some(v):
+                sum += v
+                received += 1
+            case Option.None:
+                break
+
+    task.join()
+    print(received)
+    print(sum)
+    return 0

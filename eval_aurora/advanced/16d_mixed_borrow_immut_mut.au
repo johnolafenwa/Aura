@@ -1,0 +1,13 @@
+# Test 16d: Can we have immutable borrow and mutable borrow coexisting?
+class Data:
+    value: int32
+
+def read_and_write(r: borrow Data, w: borrow mut Data):
+    w.value += r.value
+
+def main() -> int32:
+    mut data = Data(value=5)
+    # Passing same value as both immutable and mutable borrow
+    read_and_write(data, data)
+    print(data.value)
+    return 0

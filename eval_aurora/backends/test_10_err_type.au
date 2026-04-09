@@ -1,0 +1,3 @@
+def main() -> int32:
+    x: int32 = "not a number"
+    return x

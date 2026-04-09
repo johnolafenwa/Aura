@@ -1121,6 +1121,66 @@ fn build_with_direct_backend_supports_string_example() {
 }
 
 #[test]
+fn build_with_direct_backend_supports_string_methods_example() {
+    assert_direct_backend_example_runs(
+        "examples/strings/string_methods.au",
+        "string-methods-direct",
+        "15\ntrue\ntrue\ntrue\naurora repo\n2\naurora\nrepo\naurora lang\naurora repo\nAURORA REPO\nrepo\nnone\naurora\nnone\n11\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_indexed_member_chains_and_fstring_indexing() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-index-chain-fstring",
+        "def main() -> int32:\n    keys = [\"a\", \"b\"]\n    idx = 1\n    mut counts = {\"key\": 7}\n    print(keys[idx].clone())\n    print(f\"val: {counts[\"key\"]}\")\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct backend indexed-chain/fstring binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "b\nval: 7\n");
+}
+
+#[test]
+fn build_with_direct_backend_supports_numeric_builtins_example() {
+    assert_direct_backend_example_runs(
+        "examples/numbers/numeric_builtins.au",
+        "numeric-builtins-direct",
+        "7\n3.5\n2\n12\n9.0\n9.0\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_map_basics_example() {
+    assert_direct_backend_example_runs(
+        "examples/collections/map_basics.au",
+        "map-basics-direct",
+        "3\ntrue\n1\n1\n5\naurora\n3\n3\n3\n3\ntrue\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_set_basics_example() {
+    assert_direct_backend_example_runs(
+        "examples/collections/set_basics.au",
+        "set-basics-direct",
+        "3\ntrue\nfalse\ntrue\ntrue\n9\ntrue\ntrue\n1\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_string_parsing_and_formatting_example() {
+    assert_direct_backend_example_runs(
+        "examples/strings/string_parsing_and_formatting.au",
+        "string-parsing-formatting-direct",
+        "42\n-9000000000\n3.5\ntrue\naurora-lang-tests\ntrue\n12\n4\n9\n3.0\n",
+    );
+}
+
+#[test]
 fn build_with_direct_backend_supports_try_and_result_example() {
     assert_direct_backend_example_runs(
         "examples/error_handling/try_result.au",
@@ -1262,6 +1322,42 @@ fn build_with_direct_backend_supports_for_range_example() {
 }
 
 #[test]
+fn build_with_direct_backend_supports_literal_match_example() {
+    assert_direct_backend_example_runs(
+        "examples/control_flow/match_literals.au",
+        "match-literals-direct",
+        "negative\nzero\nmany\nyes\nno\nrepo\nother\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_vec_basics_example() {
+    assert_direct_backend_example_runs(
+        "examples/collections/vec_basics.au",
+        "vec-basics-direct",
+        "3\n1\n2\n2\n20\n1\n99\nfalse\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_vec_polish_example() {
+    assert_direct_backend_example_runs(
+        "examples/collections/vec_polish.au",
+        "vec-polish-direct",
+        "Ada\nGrace\ntrue\nfalse\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_vec_iteration_example() {
+    assert_direct_backend_example_runs(
+        "examples/collections/vec_iteration.au",
+        "vec-iteration-direct",
+        "Ada\nGrace\n2\n9\n",
+    );
+}
+
+#[test]
 fn build_with_direct_backend_supports_full_range_uint128_example() {
     assert_direct_backend_example_runs(
         "examples/numbers/uint128_values.au",
@@ -1283,6 +1379,81 @@ fn build_with_direct_backend_supports_bare_none_unit_values() {
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
+}
+
+#[test]
+fn build_with_direct_backend_supports_vec_literals_and_iteration() {
+    let temp = TempDir::new("aurora-build-direct-vec");
+    let source_path = temp.path().join("main.au");
+    fs::write(
+        &source_path,
+        "def main() -> int32:\n    mut values = [1, 2]\n    values.push(3)\n    mut total = 0\n    for value in values:\n        total += value\n    print(total)\n    return 0\n",
+    )
+    .expect("failed to write vec source");
+    let output_path = temp.path().join("vec-main");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build --backend direct");
+
+    assert!(
+        build.status.success(),
+        "direct backend vec build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run vec direct-backend binary");
+
+    assert!(
+        run.status.success(),
+        "vec direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "6\n");
+}
+
+#[test]
+fn build_with_direct_backend_supports_vec_methods_and_constructor() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-vec-methods",
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = Vec[int32]()\n    print(values.is_empty())\n    mut items = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print_int_option(items.set(index=1, value=20))\n    print_int_option(items.remove(0))\n    items.push(99)\n    print_int_option(items.pop())\n    mut total = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "vec direct-backend methods binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "true\n3\n2\n2\n1\n99\n23\n"
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_string_map_and_numeric_builtins() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-string-map-numbers",
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aurora repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts = {\"aurora\": 1, \"codex\": 2}\n    print(counts.len())\n    print(counts.contains_key(\"aurora\"))\n    print_int_option(counts.get(\"aurora\"))\n    print_int_option(counts.set(key=\"aurora\", value=5))\n    print(counts[\"aurora\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct backend string/map/numbers binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "15\ntrue\ntrue\ntrue\naurora repo\n7\n2\n12\n9.0\n2\ntrue\n1\n1\n5\n2\n2\n2\nfalse\n"
+    );
 }
 
 #[test]
@@ -1352,11 +1523,92 @@ fn default_build_supports_simple_example() {
 }
 
 #[test]
+fn default_build_supports_literal_match_example() {
+    assert_default_backend_example_runs(
+        "examples/control_flow/match_literals.au",
+        "match-literals-auto",
+        "negative\nzero\nmany\nyes\nno\nrepo\nother\n",
+    );
+}
+
+#[test]
+fn default_build_supports_vec_basics_example() {
+    assert_default_backend_example_runs(
+        "examples/collections/vec_basics.au",
+        "vec-basics-auto",
+        "3\n1\n2\n2\n20\n1\n99\nfalse\n",
+    );
+}
+
+#[test]
+fn default_build_supports_vec_polish_example() {
+    assert_default_backend_example_runs(
+        "examples/collections/vec_polish.au",
+        "vec-polish-auto",
+        "Ada\nGrace\ntrue\nfalse\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
+    );
+}
+
+#[test]
+fn default_build_supports_map_basics_example() {
+    assert_default_backend_example_runs(
+        "examples/collections/map_basics.au",
+        "map-basics-auto",
+        "3\ntrue\n1\n1\n5\naurora\n3\n3\n3\n3\ntrue\n",
+    );
+}
+
+#[test]
+fn default_build_supports_set_basics_example() {
+    assert_default_backend_example_runs(
+        "examples/collections/set_basics.au",
+        "set-basics-auto",
+        "3\ntrue\nfalse\ntrue\ntrue\n9\ntrue\ntrue\n1\n",
+    );
+}
+
+#[test]
+fn default_build_supports_vec_iteration_example() {
+    assert_default_backend_example_runs(
+        "examples/collections/vec_iteration.au",
+        "vec-iteration-auto",
+        "Ada\nGrace\n2\n9\n",
+    );
+}
+
+#[test]
 fn default_build_supports_generic_constructor_specialization_example() {
     assert_default_backend_example_runs(
         "examples/generics/generic_constructor_specialization.au",
         "generic-specialization-auto",
         "42\n",
+    );
+}
+
+#[test]
+fn default_build_supports_string_methods_example() {
+    assert_default_backend_example_runs(
+        "examples/strings/string_methods.au",
+        "string-methods-auto",
+        "15\ntrue\ntrue\ntrue\naurora repo\n2\naurora\nrepo\naurora lang\naurora repo\nAURORA REPO\nrepo\nnone\naurora\nnone\n11\n",
+    );
+}
+
+#[test]
+fn default_build_supports_numeric_builtins_example() {
+    assert_default_backend_example_runs(
+        "examples/numbers/numeric_builtins.au",
+        "numeric-builtins-auto",
+        "7\n3.5\n2\n12\n9.0\n9.0\n",
+    );
+}
+
+#[test]
+fn default_build_supports_string_parsing_and_formatting_example() {
+    assert_default_backend_example_runs(
+        "examples/strings/string_parsing_and_formatting.au",
+        "string-parsing-formatting-auto",
+        "42\n-9000000000\n3.5\ntrue\naurora-lang-tests\ntrue\n12\n4\n9\n3.0\n",
     );
 }
 
@@ -1900,6 +2152,264 @@ fn run_mir_executes_with_example() {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "demo\nclosed demo\ndone\n"
+    );
+}
+
+#[test]
+fn run_mir_executes_literal_match_example() {
+    let fixture = repo_root().join("examples/control_flow/match_literals.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir on literal match example");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for literal match example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "negative\nzero\nmany\nyes\nno\nrepo\nother\n"
+    );
+}
+
+#[test]
+fn run_mir_executes_vec_basics_example() {
+    let fixture = repo_root().join("examples/collections/vec_basics.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir on vec basics example");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for vec basics example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "3\n1\n2\n2\n20\n1\n99\nfalse\n"
+    );
+}
+
+#[test]
+fn run_mir_executes_vec_polish_example() {
+    let fixture = repo_root().join("examples/collections/vec_polish.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir on vec polish example");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for vec polish example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Ada\nGrace\ntrue\nfalse\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n"
+    );
+}
+
+#[test]
+fn run_mir_executes_vec_iteration_example() {
+    let fixture = repo_root().join("examples/collections/vec_iteration.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir on vec iteration example");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for vec iteration example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Ada\nGrace\n2\n9\n"
+    );
+}
+
+#[test]
+fn run_mir_executes_vec_literals_and_iteration() {
+    let temp = TempDir::new("aurora-run-mir-vec");
+    let source_path = temp.path().join("main.au");
+    fs::write(
+        &source_path,
+        "def main() -> int32:\n    mut values = [1, 2]\n    values.push(3)\n    mut total = 0\n    for value in values:\n        total += value\n    print(total)\n    return 0\n",
+    )
+    .expect("failed to write vec source");
+
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run-mir");
+
+    assert!(
+        output.status.success(),
+        "run-mir vec execution should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "6\n");
+}
+
+#[test]
+fn run_mir_executes_vec_methods_and_constructor() {
+    let temp = TempDir::new("aurora-run-mir-vec-methods");
+    let source_path = temp.path().join("main.au");
+    fs::write(
+        &source_path,
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = Vec[int32]()\n    print(values.is_empty())\n    mut items = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print_int_option(items.set(index=1, value=20))\n    print_int_option(items.remove(0))\n    items.push(99)\n    print_int_option(items.pop())\n    mut total = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
+    )
+    .expect("failed to write vec methods source");
+
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run-mir");
+
+    assert!(
+        output.status.success(),
+        "run-mir vec methods execution should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "true\n3\n2\n2\n1\n99\n23\n"
+    );
+}
+
+#[test]
+fn run_mir_executes_map_basics_example() {
+    let fixture = repo_root().join("examples/collections/map_basics.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir on map basics example");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for map basics example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "3\ntrue\n1\n1\n5\naurora\n3\n3\n3\n3\ntrue\n"
+    );
+}
+
+#[test]
+fn run_mir_executes_set_basics_example() {
+    let fixture = repo_root().join("examples/collections/set_basics.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir on set basics example");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for set basics example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "3\ntrue\nfalse\ntrue\ntrue\n9\ntrue\ntrue\n1\n"
+    );
+}
+
+#[test]
+fn run_mir_executes_string_methods_example() {
+    let fixture = repo_root().join("examples/strings/string_methods.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir on string methods example");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for string methods example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "15\ntrue\ntrue\ntrue\naurora repo\n2\naurora\nrepo\naurora lang\naurora repo\nAURORA REPO\nrepo\nnone\naurora\nnone\n11\n"
+    );
+}
+
+#[test]
+fn run_mir_executes_numeric_builtins_example() {
+    let fixture = repo_root().join("examples/numbers/numeric_builtins.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir on numeric builtins example");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for numeric builtins example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "7\n3.5\n2\n12\n9.0\n9.0\n"
+    );
+}
+
+#[test]
+fn run_mir_executes_string_parsing_and_formatting_example() {
+    let fixture = repo_root().join("examples/strings/string_parsing_and_formatting.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir on string parsing example");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for string parsing example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "42\n-9000000000\n3.5\ntrue\naurora-lang-tests\ntrue\n12\n4\n9\n3.0\n"
+    );
+}
+
+#[test]
+fn run_mir_executes_string_map_and_numeric_builtins() {
+    let temp = TempDir::new("aurora-run-mir-string-map-numbers");
+    let source_path = temp.path().join("main.au");
+    fs::write(
+        &source_path,
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aurora repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts = {\"aurora\": 1, \"codex\": 2}\n    print(counts.len())\n    print(counts.contains_key(\"aurora\"))\n    print_int_option(counts.get(\"aurora\"))\n    print_int_option(counts.set(key=\"aurora\", value=5))\n    print(counts[\"aurora\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
+    )
+    .expect("failed to write string/map/numbers source");
+
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run-mir");
+
+    assert!(
+        output.status.success(),
+        "run-mir string/map/numbers execution should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "15\ntrue\ntrue\ntrue\naurora repo\n7\n2\n12\n9.0\n2\ntrue\n1\n1\n5\n2\n2\n2\nfalse\n"
     );
 }
 

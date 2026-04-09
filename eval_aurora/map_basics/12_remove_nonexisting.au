@@ -1,0 +1,11 @@
+def main() -> int32:
+    mut m = Map[String, int32]()
+    m.set("a", 1)
+    result = m.remove("nonexistent")
+    match result:
+        case Some(v):
+            print(v)
+        case None:
+            print("None")
+    print(m.len())
+    return 0

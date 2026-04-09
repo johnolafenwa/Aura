@@ -1,0 +1,5 @@
+def main() -> int32:
+    s = "Hello World"
+    result = s.to_lower()
+    print(result)
+    return 0

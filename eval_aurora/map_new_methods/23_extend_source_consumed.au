@@ -1,0 +1,9 @@
+# After extend, the source map should be consumed (moved).
+# Using m2 after extend should be an error.
+def main() -> int32:
+    mut m1 = {"a": 1}
+    m2 = {"b": 2}
+    m1.extend(m2)
+    # If m2 is consumed/moved, the next line should fail.
+    print(m2.len())
+    return 0

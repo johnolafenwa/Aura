@@ -1,0 +1,6 @@
+def main() -> int32:
+    mut m = Map[String, int32]()
+    m.set("key", 42)
+    val = m["key"]
+    print(val)
+    return 0

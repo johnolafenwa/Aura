@@ -171,15 +171,113 @@ test("member completion works for parenthesized receiver expressions", () => {
   assert.ok(names.has("sqrt"));
 });
 
-test("string member completion exposes clone but not as_str", () => {
-  const lineIndex = stringCloneSource.split("\n").findIndex((line) => line.includes("text.clone()"));
-  const lineText = stringCloneSource.split("\n")[lineIndex];
+test("string member completion exposes the maintained String method surface", () => {
+  const source =
+    "def main() -> int32:\n    text = \"  aurora repo  \"\n    text.\n    return 0\n";
+  const lineIndex = source.split("\n").findIndex((line) => line.includes("text."));
+  const lineText = source.split("\n")[lineIndex];
   const character = lineText.indexOf(".") + 1;
-  const items = completionsForDocument(stringCloneSource, lineIndex, character, ".");
+  const items = completionsForDocument(source, lineIndex, character, ".");
   const names = new Set(items.map((item) => item.name));
 
+  assert.ok(names.has("len"));
+  assert.ok(names.has("contains"));
+  assert.ok(names.has("starts_with"));
+  assert.ok(names.has("ends_with"));
+  assert.ok(names.has("trim"));
+  assert.ok(names.has("split"));
+  assert.ok(names.has("replace"));
+  assert.ok(names.has("to_lower"));
+  assert.ok(names.has("to_upper"));
+  assert.ok(names.has("strip_prefix"));
+  assert.ok(names.has("strip_suffix"));
   assert.ok(names.has("clone"));
+  assert.ok(names.has("join"));
   assert.ok(!names.has("as_str"));
+});
+
+test("collection member completion exposes Vec methods", () => {
+  const source =
+    "def main() -> int32:\n    mut values = [1, 2, 3]\n    values.push(4)\n    values.\n    return 0\n";
+  const lineIndex = source.split("\n").findIndex((line) => line.includes("values."));
+  const lineText = source.split("\n")[lineIndex];
+  const character = lineText.indexOf(".") + 1;
+  const items = completionsForDocument(source, lineIndex, character, ".");
+  const names = new Set(items.map((item) => item.name));
+
+  assert.ok(names.has("len"));
+  assert.ok(names.has("is_empty"));
+  assert.ok(names.has("push"));
+  assert.ok(names.has("pop"));
+  assert.ok(names.has("get"));
+  assert.ok(names.has("set"));
+  assert.ok(names.has("remove"));
+  assert.ok(names.has("swap"));
+  assert.ok(names.has("contains"));
+  assert.ok(names.has("extend"));
+  assert.ok(names.has("insert"));
+  assert.ok(names.has("clear"));
+  assert.ok(names.has("reverse"));
+});
+
+test("collection member completion exposes Map methods", () => {
+  const source =
+    "def main() -> int32:\n    mut counts = Map[String, int32]()\n    counts.\n    return 0\n";
+  const lineIndex = source.split("\n").findIndex((line) => line.includes("counts."));
+  const lineText = source.split("\n")[lineIndex];
+  const character = lineText.indexOf(".") + 1;
+  const items = completionsForDocument(source, lineIndex, character, ".");
+  const names = new Set(items.map((item) => item.name));
+
+  assert.ok(names.has("len"));
+  assert.ok(names.has("is_empty"));
+  assert.ok(names.has("clone"));
+  assert.ok(names.has("get"));
+  assert.ok(names.has("set"));
+  assert.ok(names.has("remove"));
+  assert.ok(names.has("contains_key"));
+  assert.ok(names.has("keys"));
+  assert.ok(names.has("values"));
+  assert.ok(names.has("items"));
+  assert.ok(names.has("entries"));
+  assert.ok(names.has("clear"));
+  assert.ok(names.has("extend"));
+});
+
+test("collection member completion exposes Set methods", () => {
+  const source =
+    "def main() -> int32:\n    mut seen = Set{1, 2, 3}\n    seen.\n    return 0\n";
+  const lineIndex = source.split("\n").findIndex((line) => line.includes("seen."));
+  const lineText = source.split("\n")[lineIndex];
+  const character = lineText.indexOf(".") + 1;
+  const items = completionsForDocument(source, lineIndex, character, ".");
+  const names = new Set(items.map((item) => item.name));
+
+  assert.ok(names.has("len"));
+  assert.ok(names.has("is_empty"));
+  assert.ok(names.has("clone"));
+  assert.ok(names.has("contains"));
+  assert.ok(names.has("insert"));
+  assert.ok(names.has("remove"));
+});
+
+test("member completion exposes builtin MapEntry fields", () => {
+  const source = [
+    "def main() -> int32:",
+    "    counts = {\"a\": 1, \"b\": 2}",
+    "    entries = counts.items()",
+    "    entry = entries[0]",
+    "    entry.",
+    "    return 0"
+  ].join("\n");
+  const lineIndex = source.split("\n").findIndex((line) => line.includes("entry."));
+  const lineText = source.split("\n")[lineIndex];
+  const character = lineText.indexOf(".") + 1;
+  const items = completionsForDocument(source, lineIndex, character, ".");
+  const names = new Set(items.map((item) => item.name));
+
+  assert.ok(names.has("key"));
+  assert.ok(names.has("value"));
 });
 
 test("top-level completion includes keywords and declarations", () => {
@@ -193,6 +291,13 @@ test("top-level completion includes keywords and declarations", () => {
   assert.ok(names.has("Point"));
   assert.ok(names.has("distance"));
   assert.ok(names.has("print"));
+  assert.ok(names.has("abs"));
+  assert.ok(names.has("min"));
+  assert.ok(names.has("max"));
+  assert.ok(names.has("sqrt"));
+  assert.ok(names.has("parse_int32"));
+  assert.ok(names.has("parse_int64"));
+  assert.ok(names.has("parse_float64"));
   const range = items.find((item) => item.name === "range");
   assert.ok(range);
   assert.match(range.detail, /range\(start: int32, stop: int32\)/);
@@ -335,6 +440,30 @@ test("enum example does not report false diagnostics for variants or match paylo
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `ParseResult`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `value`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `message`/.test(diagnostic.message)));
+});
+
+test("literal match patterns do not report false diagnostics", () => {
+  const source = [
+    "def describe(flag: bool, value: int32, name: String) -> String:",
+    "    match flag:",
+    "        case true:",
+    "            print(value)",
+    "        case false:",
+    "            pass",
+    "    match value:",
+    "        case 0:",
+    "            return \"zero\"",
+    "        case _:",
+    "            pass",
+    "    match borrow name:",
+    "        case \"aurora\":",
+    "            return \"repo\"",
+    "        case _:",
+    "            return \"other\""
+  ].join("\n");
+
+  const diagnostics = diagnosticsForDocument(source);
+  assert.equal(diagnostics.length, 0);
 });
 
 test("enum names and variants appear in completions and hover", () => {

@@ -1,0 +1,5 @@
+def main() -> int32:
+    s = "foo bar foo"
+    result = s.replace("foo", "baz")
+    print(result)
+    return 0

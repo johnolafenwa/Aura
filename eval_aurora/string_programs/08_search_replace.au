@@ -1,0 +1,59 @@
+## Program 8: String Search and Replace
+## Find-and-replace across a Vec[String] of lines
+
+def search_replace(lines: Vec[String], find: String, replacement: String) -> Vec[String]:
+    mut result: Vec[String] = []
+    mut changes = 0
+    for line in lines:
+        if line.contains(find.clone()):
+            new_line = line.replace(find.clone(), replacement.clone())
+            result.push(new_line)
+            changes += 1
+        else:
+            result.push(line)
+    print(f"  Replacements made: {changes}")
+    return result
+
+def main() -> int32:
+    lines: Vec[String] = ["let x = 10", "let y = 20", "print(x + y)", "let z = x * y", "return z"]
+
+    print("Original:")
+    for i in range(lines.len()):
+        print(f"  {i}: {lines[i]}")
+
+    print("")
+
+    ## Replace "let" with "mut"
+    print("Replace 'let' with 'mut':")
+    lines2 = search_replace(lines, "let", "mut")
+    for i in range(lines2.len()):
+        print(f"  {i}: {lines2[i]}")
+
+    print("")
+
+    ## Replace variable names
+    print("Replace 'x' with 'alpha':")
+    lines3 = search_replace(lines2, "x", "alpha")
+    for i in range(lines3.len()):
+        print(f"  {i}: {lines3[i]}")
+
+    print("")
+
+    ## Check that original patterns are gone
+    mut found_let = false
+    for line in borrow lines3:
+        if line.contains("let"):
+            found_let = true
+    if found_let:
+        print("Still contains 'let': yes")
+    else:
+        print("Still contains 'let': no")
+
+    mut found_alpha = false
+    for line in borrow lines3:
+        if line.contains("alpha"):
+            found_alpha = true
+    if found_alpha:
+        print("Contains 'alpha': yes")
+
+    return 0

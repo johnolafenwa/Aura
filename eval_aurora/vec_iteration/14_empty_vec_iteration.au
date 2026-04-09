@@ -1,0 +1,8 @@
+# Test 14: Empty vec iteration - loop body should execute zero times
+def main() -> int32:
+    empty: Vec[int32] = []
+    mut count: int32 = 0
+    for x in empty:
+        count += 1
+    print(count)
+    return 0

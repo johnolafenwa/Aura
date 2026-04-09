@@ -1,0 +1,6 @@
+def main() -> int32:
+    s = Set{1, 2, 3}
+    print(f"the set is: {s}")
+    print(f"length: {s.len()}")
+    print(f"has 2: {s.contains(2)}")
+    return 0

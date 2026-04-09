@@ -9,7 +9,11 @@ From the repository root:
 ```bash
 cargo run -p aura -- check examples/classes/point_distance.au
 cargo run -p aura -- run examples/classes/point_distance.au
+cargo run -p aura -- run examples/collections/vec_basics.au
+cargo run -p aura -- run examples/collections/set_basics.au
 cargo run -p aura -- run-mir examples/classes/methods.au
+cargo run -p aura -- run-mir examples/collections/vec_iteration.au
+cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au
 cargo run -p aura -- build -o ./target/aurora-point examples/point.au
 cargo run -p aura -- build --backend direct -o ./target/aurora-direct examples/basic_addition.au
 cargo run -p aura -- ast examples/classes/point_distance.au

@@ -1,0 +1,5 @@
+# Test 2a: Immutable variable reassignment - should fail with compiler error
+x = 10
+print(x)
+x = 20
+print(x)

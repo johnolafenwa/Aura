@@ -1,0 +1,12 @@
+# Test 8b: Named args with defaults - skip middle parameter
+def make(name: str, size: int32 = 10, color: str = "red") -> str:
+    return f"{name}: size={size}, color={color}"
+
+# Use default for size, override color
+print(make("box", color="blue"))
+
+# Use default for both
+print(make("circle"))
+
+# Override both
+print(make("triangle", size=5, color="green"))

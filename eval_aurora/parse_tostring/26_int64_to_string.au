@@ -1,0 +1,4 @@
+def main() -> int32:
+    x: int64 = 9999999999
+    print(x.to_string())
+    return 0

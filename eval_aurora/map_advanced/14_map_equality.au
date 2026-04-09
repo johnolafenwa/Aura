@@ -1,0 +1,38 @@
+## Test 14: Map equality
+## Check if two maps with same entries compare equal
+
+def print_bool(value: bool):
+    match value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def main() -> int32:
+    mut a = Map[String, int32]()
+    a["x"] = 1
+    a["y"] = 2
+
+    mut b = Map[String, int32]()
+    b["x"] = 1
+    b["y"] = 2
+
+    mut c = Map[String, int32]()
+    c["x"] = 1
+    c["y"] = 3
+
+    print("a == b (same entries):")
+    print_bool(a == b)
+
+    print("a == c (different value):")
+    print_bool(a == c)
+
+    ## Test with different insertion order
+    mut d = Map[String, int32]()
+    d["y"] = 2
+    d["x"] = 1
+
+    print("a == d (same entries, different order):")
+    print_bool(a == d)
+
+    return 0

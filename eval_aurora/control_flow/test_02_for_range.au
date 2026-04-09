@@ -1,0 +1,39 @@
+# Test 02: For with range - range(n), range(start, stop), nested for loops
+
+def main() -> int32:
+    # Test range(n) - should go 0..n-1
+    print("range(5):")
+    mut sum1: int32 = 0
+    for i in range(5):
+        sum1 += i
+    print(sum1)
+
+    # Test range(start, stop) with named args
+    print("range(start=2, stop=6):")
+    mut sum2: int32 = 0
+    for i in range(start=2, stop=6):
+        sum2 += i
+    print(sum2)
+
+    # Test range(0) - empty range
+    print("range(0):")
+    mut count_zero: int32 = 0
+    for i in range(0):
+        count_zero += 1
+    print(count_zero)
+
+    # Test range(1) - single element range
+    print("range(1):")
+    mut sum_one: int32 = 0
+    for i in range(1):
+        sum_one += i
+    print(sum_one)
+
+    # Test range(start=5, stop=5) - empty range (start == stop)
+    print("range(start=5, stop=5):")
+    mut count_eq: int32 = 0
+    for i in range(start=5, stop=5):
+        count_eq += 1
+    print(count_eq)
+
+    return 0

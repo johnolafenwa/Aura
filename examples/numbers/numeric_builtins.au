@@ -1,0 +1,9 @@
+def main() -> int32:
+    value: float64 = 81.0
+    print(abs(-7))
+    print(abs(-3.5))
+    print(min(9, 2))
+    print(max(4, 12))
+    print(sqrt(value))
+    print(value.sqrt())
+    return 0

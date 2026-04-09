@@ -1,0 +1,9 @@
+# Test 3d: Truly dynamic negative index - uses function call to hide from const prop
+def negate(x: int32) -> int32:
+    return 0 - x
+
+def main() -> int32:
+    v = [10, 20, 30]
+    i = negate(1)
+    print(v[i])
+    return 0

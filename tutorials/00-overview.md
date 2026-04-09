@@ -10,9 +10,11 @@ These tutorials teach the language as it exists in this repository today, not th
 - bindings, mutability, `None`, and the current builtin type names
 - functions, return rules, and typed parameters
 - classes, keyword construction, defaults, receivers, and methods
+- owned `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals, indexing where applicable, and iteration
 - enums, exhaustive `match`, built-in `Result[T, E]`, `Option[T]`, and `SendError[T]`
-- strings, numbers, duration literals, and the current builtin methods
+- strings, string parsing/formatting, numbers, duration literals, and the current builtin methods
 - `if`, `elif`, `else`, `while`, `for range(...)`, `break`, and `continue`
+- statement-form `match` over enum variants plus literal `bool`, integer, and `String` cases
 - `with`, `try expr`, channels, spawned tasks, detached tasks, task groups, and `select`
 - CLI inspection commands and compiler-backed editor tooling
 
@@ -28,6 +30,7 @@ Today’s working subset includes:
 - omitted `-> None` return types
 - user-defined enums plus built-in `Result`, `Option`, and `SendError`
 - user-defined generic classes, enums, and functions
+- builtin `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals
 - class methods with `self`, `borrow self`, and `borrow mut self`
 - arithmetic, comparisons, strings, booleans, and duration literals
 - `if`, `elif`, `else`, `while`, `for`, `match`, `with`, `select`, `break`, and `continue`

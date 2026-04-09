@@ -1,0 +1,18 @@
+def print_bool(value: bool):
+    match value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def main() -> int32:
+    mut v = [10, 20, 30, 40, 50]
+    mut count = 0
+    for x in borrow mut v:
+        count += 1
+        x = count
+    print(count)
+    print_bool(count == v.len())
+    for x in borrow v:
+        print(x)
+    return 0

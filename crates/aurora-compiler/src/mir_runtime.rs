@@ -12,7 +12,8 @@ use crate::diag::{Diagnostic, Result};
 use crate::integer::IntegerValue;
 use crate::interpreter::{
     cast_numeric_value, CancellationContext, ChannelValue, EnumVariantValue, InstanceValue,
-    RangeValue, RunOutput, TaskGroupValue, TaskValue, TryRecvResult, Value,
+    MapValue, RangeValue, RunOutput, SetValue, TaskGroupValue, TaskValue, TryRecvResult, Value,
+    VecValue,
 };
 use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod, MirModule,
@@ -364,6 +365,18 @@ impl MirRuntime {
             Value::Float(_) => Some(Type::named("float64")),
             Value::Bool(_) => Some(Type::named("bool")),
             Value::String(_) => Some(Type::named("String")),
+            Value::Vec(vector) => Some(Type::Named(
+                "Vec".to_string(),
+                vec![vector.element_type.clone()],
+            )),
+            Value::Set(set) => Some(Type::Named(
+                "Set".to_string(),
+                vec![set.element_type.clone()],
+            )),
+            Value::Map(map) => Some(Type::Named(
+                "Map".to_string(),
+                vec![map.key_type.clone(), map.value_type.clone()],
+            )),
             Value::Duration(_) => Some(Type::named("Duration")),
             Value::Range(_) => Some(Type::named("Range")),
             Value::ModuleNamespace(_) => None,
@@ -974,6 +987,49 @@ impl MirRuntime {
             Rvalue::Call { callee, args } => {
                 Ok(RvalueOutcome::Value(self.evaluate_call(callee, args, env)?))
             }
+            Rvalue::VecLiteral {
+                elements,
+                element_type,
+            } => Ok(RvalueOutcome::Value(Value::Vec(VecValue {
+                element_type: element_type.clone(),
+                elements: elements
+                    .iter()
+                    .map(|operand| self.evaluate_operand(operand, env))
+                    .collect::<Result<Vec<_>>>()?,
+            }))),
+            Rvalue::SetLiteral {
+                elements,
+                element_type,
+            } => {
+                let mut values = Vec::new();
+                for operand in elements {
+                    let value = self.evaluate_operand(operand, env)?;
+                    if !values.iter().any(|candidate| *candidate == value) {
+                        values.push(value);
+                    }
+                }
+                Ok(RvalueOutcome::Value(Value::Set(SetValue {
+                    element_type: element_type.clone(),
+                    elements: values,
+                })))
+            }
+            Rvalue::MapLiteral {
+                entries,
+                key_type,
+                value_type,
+            } => Ok(RvalueOutcome::Value(Value::Map(MapValue {
+                key_type: key_type.clone(),
+                value_type: value_type.clone(),
+                entries: entries
+                    .iter()
+                    .map(|entry| {
+                        Ok((
+                            self.evaluate_operand(&entry.key, env)?,
+                            self.evaluate_operand(&entry.value, env)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            }))),
             Rvalue::Construct { class_name, fields } => {
                 let mut values = BTreeMap::new();
                 for field in fields {
@@ -1068,6 +1124,34 @@ impl MirRuntime {
                     return Ok(Value::Channel(ChannelValue::new()));
                 }
 
+                if name == "Vec" {
+                    let values = evaluate_named_args(args, env)?;
+                    bind_builtin_args(&[], values)?;
+                    return Ok(Value::Vec(VecValue {
+                        element_type: Type::named("Unknown"),
+                        elements: Vec::new(),
+                    }));
+                }
+
+                if name == "Set" {
+                    let values = evaluate_named_args(args, env)?;
+                    bind_builtin_args(&[], values)?;
+                    return Ok(Value::Set(SetValue {
+                        element_type: Type::named("Unknown"),
+                        elements: Vec::new(),
+                    }));
+                }
+
+                if name == "Map" {
+                    let values = evaluate_named_args(args, env)?;
+                    bind_builtin_args(&[], values)?;
+                    return Ok(Value::Map(MapValue {
+                        key_type: Type::named("Unknown"),
+                        value_type: Type::named("Unknown"),
+                        entries: Vec::new(),
+                    }));
+                }
+
                 if name == "task_group" {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
@@ -1121,6 +1205,120 @@ impl MirRuntime {
                     return Ok(Value::Unit);
                 }
 
+                if name == "abs" {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["value"], values)?;
+                    return match bound[0].value.clone() {
+                        Value::Int(IntegerValue::Signed(value)) => value
+                            .checked_abs()
+                            .map(IntegerValue::from_signed)
+                            .map(Value::Int)
+                            .ok_or_else(|| {
+                                Diagnostic::new("`abs(...)` overflowed the signed integer range")
+                            }),
+                        Value::Int(IntegerValue::Unsigned(value)) => {
+                            Ok(Value::Int(IntegerValue::Unsigned(value)))
+                        }
+                        Value::Float(value) => Ok(Value::Float(value.abs())),
+                        other => Err(Diagnostic::new(format!(
+                            "`abs(...)` expects an integer or float value, found `{}`",
+                            other.render()
+                        ))),
+                    };
+                }
+
+                if name == "min" || name == "max" {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["left", "right"], values)?;
+                    return match (&bound[0].value, &bound[1].value) {
+                        (Value::Int(left), Value::Int(right)) => Ok(
+                            if (name == "min" && left <= right) || (name == "max" && left >= right)
+                            {
+                                bound[0].value.clone()
+                            } else {
+                                bound[1].value.clone()
+                            },
+                        ),
+                        (Value::Float(left), Value::Float(right)) => Ok(
+                            if (name == "min" && left <= right) || (name == "max" && left >= right)
+                            {
+                                bound[0].value.clone()
+                            } else {
+                                bound[1].value.clone()
+                            },
+                        ),
+                        _ => Err(Diagnostic::new(format!(
+                            "`{}` expects matching numeric arguments",
+                            name
+                        ))),
+                    };
+                }
+
+                if name == "sqrt" {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["value"], values)?;
+                    return match bound[0].value.clone() {
+                        Value::Float(value) => Ok(Value::Float(value.sqrt())),
+                        other => Err(Diagnostic::new(format!(
+                            "`sqrt(...)` expects `float32` or `float64`, found `{}`",
+                            other.render()
+                        ))),
+                    };
+                }
+
+                if name == "parse_int32" {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["text"], values)?;
+                    return match &bound[0].value {
+                        Value::String(text) => match text.parse::<i32>() {
+                            Ok(value) => Ok(result_ok(Value::Int(IntegerValue::from_signed(
+                                value as i128,
+                            )))),
+                            Err(error) => Ok(result_err(Value::String(error.to_string()))),
+                        },
+                        other => Err(Diagnostic::new(format!(
+                            "`parse_int32(...)` expects `String`, found `{}`",
+                            other.render()
+                        ))),
+                    };
+                }
+
+                if name == "parse_int64" {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["text"], values)?;
+                    return match &bound[0].value {
+                        Value::String(text) => match text.parse::<i64>() {
+                            Ok(value) => Ok(result_ok(Value::Int(IntegerValue::from_signed(
+                                value as i128,
+                            )))),
+                            Err(error) => Ok(result_err(Value::String(error.to_string()))),
+                        },
+                        other => Err(Diagnostic::new(format!(
+                            "`parse_int64(...)` expects `String`, found `{}`",
+                            other.render()
+                        ))),
+                    };
+                }
+
+                if name == "parse_float64" {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["text"], values)?;
+                    return match &bound[0].value {
+                        Value::String(text) => match text.parse::<f64>() {
+                            Ok(value) => Ok(result_ok(Value::Float(value))),
+                            Err(error) => Ok(result_err(Value::String(error.to_string()))),
+                        },
+                        other => Err(Diagnostic::new(format!(
+                            "`parse_float64(...)` expects `String`, found `{}`",
+                            other.render()
+                        ))),
+                    };
+                }
+
+                if name == "print" || name == "range" {
+                    unreachable!("handled earlier");
+                }
+
                 let function =
                     self.functions.get(name).cloned().ok_or_else(|| {
                         Diagnostic::new(format!("unknown MIR function `{}`", name))
@@ -1143,17 +1341,59 @@ impl MirRuntime {
                 let receiver = self.evaluate_operand(object, env)?;
 
                 match &receiver {
+                    Value::Vec(vector) => {
+                        return self.evaluate_vec_method(
+                            vector.clone(),
+                            field,
+                            receiver_place.as_deref(),
+                            args,
+                            env,
+                        );
+                    }
+                    Value::Map(map) => {
+                        return self.evaluate_map_method(
+                            map.clone(),
+                            field,
+                            receiver_place.as_deref(),
+                            args,
+                            env,
+                        );
+                    }
                     Value::Float(value) if field == "sqrt" => {
                         if !args.is_empty() {
                             return Err(Diagnostic::new("`sqrt` does not take arguments"));
                         }
                         return Ok(Value::Float(value.sqrt()));
                     }
-                    Value::String(value) if field == "clone" => {
+                    Value::Int(value) if field == "to_string" => {
                         if !args.is_empty() {
-                            return Err(Diagnostic::new("`clone` does not take arguments"));
+                            return Err(Diagnostic::new("`to_string` does not take arguments"));
                         }
-                        return Ok(Value::String(value.clone()));
+                        return Ok(Value::String(value.to_string()));
+                    }
+                    Value::Float(value) if field == "to_string" => {
+                        if !args.is_empty() {
+                            return Err(Diagnostic::new("`to_string` does not take arguments"));
+                        }
+                        return Ok(Value::String(Value::Float(*value).render()));
+                    }
+                    Value::Bool(value) if field == "to_string" => {
+                        if !args.is_empty() {
+                            return Err(Diagnostic::new("`to_string` does not take arguments"));
+                        }
+                        return Ok(Value::String(value.to_string()));
+                    }
+                    Value::String(value) => {
+                        return self.evaluate_string_method(value.clone(), field, args, env);
+                    }
+                    Value::Set(set) => {
+                        return self.evaluate_set_method(
+                            set.clone(),
+                            field,
+                            receiver_place.as_deref(),
+                            args,
+                            env,
+                        );
                     }
                     Value::Channel(channel) => {
                         return self.evaluate_channel_method(channel.clone(), field, args, env);
@@ -1443,6 +1683,725 @@ impl MirRuntime {
                 field
             ))),
         }
+    }
+
+    fn evaluate_vec_method(
+        &mut self,
+        vector: VecValue,
+        field: &str,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        match field {
+            "len" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`len` does not take arguments"));
+                }
+                Ok(Value::Int(IntegerValue::from_literal(
+                    vector.elements.len() as u128,
+                )))
+            }
+            "is_empty" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`is_empty` does not take arguments"));
+                }
+                Ok(Value::Bool(vector.elements.is_empty()))
+            }
+            "clone" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`clone` does not take arguments"));
+                }
+                Ok(Value::Vec(vector))
+            }
+            "push" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["value"], values)?;
+                let mut updated = vector;
+                let value = bound
+                    .into_iter()
+                    .next()
+                    .expect("push should bind one arg")
+                    .value;
+                updated.elements.push(value);
+                let updated_value = Value::Vec(updated);
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`push` requires a mutable vector place"));
+                };
+                env.write_place(place, updated_value)?;
+                Ok(Value::Unit)
+            }
+            "pop" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`pop` does not take arguments"));
+                }
+                let mut updated = vector;
+                let value = updated.elements.pop();
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`pop` requires a mutable vector place"));
+                };
+                env.write_place(place, Value::Vec(updated))?;
+                Ok(value.map(option_some).unwrap_or_else(option_none))
+            }
+            "get" | "__index_option" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["index"], values)?;
+                let index = self.mir_index_from_value(bound[0].value.clone())?;
+                Ok(vector
+                    .elements
+                    .get(index)
+                    .cloned()
+                    .map(option_some)
+                    .unwrap_or_else(option_none))
+            }
+            "__index" => {
+                let values = evaluate_named_args(args, env)?;
+                if values.len() != 3 {
+                    return Err(Diagnostic::new(
+                        "internal vector indexing requires index, line, and column operands",
+                    ));
+                }
+                let index = self.mir_index_from_value(values[0].value.clone())?;
+                let line = self.mir_index_from_value(values[1].value.clone())?;
+                let column = self.mir_index_from_value(values[2].value.clone())?;
+                vector.elements.get(index).cloned().ok_or_else(|| {
+                    Diagnostic::at(
+                        crate::diag::Span::new(line, column),
+                        format!(
+                            "vector index `{}` is out of bounds for length `{}`",
+                            index,
+                            vector.elements.len()
+                        ),
+                    )
+                })
+            }
+            "set" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["index", "value"], values)?;
+                let index = self.mir_index_from_value(bound[0].value.clone())?;
+                let mut updated = vector;
+                let previous = if index < updated.elements.len() {
+                    Some(std::mem::replace(
+                        &mut updated.elements[index],
+                        bound[1].value.clone(),
+                    ))
+                } else {
+                    None
+                };
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`set` requires a mutable vector place"));
+                };
+                env.write_place(place, Value::Vec(updated))?;
+                Ok(previous.map(option_some).unwrap_or_else(option_none))
+            }
+            "__set_index" => {
+                let values = evaluate_named_args(args, env)?;
+                if values.len() != 4 {
+                    return Err(Diagnostic::new(
+                        "internal indexed assignment requires index, value, line, and column operands",
+                    ));
+                }
+                let index = self.mir_index_from_value(values[0].value.clone())?;
+                let line = self.mir_index_from_value(values[2].value.clone())?;
+                let column = self.mir_index_from_value(values[3].value.clone())?;
+                let mut updated = vector;
+                if index >= updated.elements.len() {
+                    return Err(Diagnostic::at(
+                        crate::diag::Span::new(line, column),
+                        format!(
+                            "vector index `{}` is out of bounds for length `{}`",
+                            index,
+                            updated.elements.len()
+                        ),
+                    ));
+                }
+                updated.elements[index] = values[1].value.clone();
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new(
+                        "indexed assignment requires a mutable vector place",
+                    ));
+                };
+                env.write_place(place, Value::Vec(updated))?;
+                Ok(Value::Unit)
+            }
+            "remove" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["index"], values)?;
+                let index = self.mir_index_from_value(bound[0].value.clone())?;
+                let mut updated = vector;
+                let previous = if index < updated.elements.len() {
+                    Some(updated.elements.remove(index))
+                } else {
+                    None
+                };
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`remove` requires a mutable vector place"));
+                };
+                env.write_place(place, Value::Vec(updated))?;
+                Ok(previous.map(option_some).unwrap_or_else(option_none))
+            }
+            "swap" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["first", "second"], values)?;
+                let first = self.mir_index_from_value(bound[0].value.clone())?;
+                let second = self.mir_index_from_value(bound[1].value.clone())?;
+                let mut updated = vector;
+                let swapped = first < updated.elements.len() && second < updated.elements.len();
+                if swapped {
+                    updated.elements.swap(first, second);
+                }
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`swap` requires a mutable vector place"));
+                };
+                env.write_place(place, Value::Vec(updated))?;
+                Ok(Value::Bool(swapped))
+            }
+            "contains" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["value"], values)?;
+                Ok(Value::Bool(
+                    vector
+                        .elements
+                        .iter()
+                        .any(|candidate| *candidate == bound[0].value),
+                ))
+            }
+            "insert" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["index", "value"], values)?;
+                let index = self.mir_index_from_value(bound[0].value.clone())?;
+                let mut updated = vector;
+                let inserted = index <= updated.elements.len();
+                if inserted {
+                    updated.elements.insert(index, bound[1].value.clone());
+                }
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`insert` requires a mutable vector place"));
+                };
+                env.write_place(place, Value::Vec(updated))?;
+                Ok(Value::Bool(inserted))
+            }
+            "clear" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`clear` does not take arguments"));
+                }
+                let mut updated = vector;
+                updated.elements.clear();
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`clear` requires a mutable vector place"));
+                };
+                env.write_place(place, Value::Vec(updated))?;
+                Ok(Value::Unit)
+            }
+            "reverse" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`reverse` does not take arguments"));
+                }
+                let mut updated = vector;
+                updated.elements.reverse();
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`reverse` requires a mutable vector place"));
+                };
+                env.write_place(place, Value::Vec(updated))?;
+                Ok(Value::Unit)
+            }
+            "extend" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["other"], values)?;
+                let Value::Vec(other) = bound[0].value.clone() else {
+                    return Err(Diagnostic::new("`extend` requires another `Vec[T]` value"));
+                };
+                let mut updated = vector;
+                updated.elements.extend(other.elements);
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`extend` requires a mutable vector place"));
+                };
+                env.write_place(place, Value::Vec(updated))?;
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported vector method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_map_method(
+        &mut self,
+        map: MapValue,
+        field: &str,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        match field {
+            "len" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`len` does not take arguments"));
+                }
+                Ok(Value::Int(IntegerValue::from_literal(
+                    map.entries.len() as u128
+                )))
+            }
+            "is_empty" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`is_empty` does not take arguments"));
+                }
+                Ok(Value::Bool(map.entries.is_empty()))
+            }
+            "clone" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`clone` does not take arguments"));
+                }
+                Ok(Value::Map(map))
+            }
+            "get" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["key"], values)?;
+                Ok(map
+                    .entries
+                    .iter()
+                    .find(|(candidate_key, _)| *candidate_key == bound[0].value)
+                    .map(|(_, value)| option_some(value.clone()))
+                    .unwrap_or_else(option_none))
+            }
+            "__index" => {
+                let values = evaluate_named_args(args, env)?;
+                if values.len() != 3 {
+                    return Err(Diagnostic::new(
+                        "internal map indexing requires key, line, and column operands",
+                    ));
+                }
+                let key = values[0].value.clone();
+                let line = self.mir_index_from_value(values[1].value.clone())?;
+                let column = self.mir_index_from_value(values[2].value.clone())?;
+                map.entries
+                    .iter()
+                    .find(|(candidate_key, _)| *candidate_key == key)
+                    .map(|(_, value)| value.clone())
+                    .ok_or_else(|| {
+                        Diagnostic::at(
+                            crate::diag::Span::new(line, column),
+                            format!("map key `{}` was not present", key.render()),
+                        )
+                    })
+            }
+            "set" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["key", "value"], values)?;
+                let mut updated = map;
+                let previous = if let Some(index) = updated
+                    .entries
+                    .iter()
+                    .position(|(candidate_key, _)| *candidate_key == bound[0].value)
+                {
+                    Some(std::mem::replace(
+                        &mut updated.entries[index].1,
+                        bound[1].value.clone(),
+                    ))
+                } else {
+                    updated
+                        .entries
+                        .push((bound[0].value.clone(), bound[1].value.clone()));
+                    None
+                };
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`set` requires a mutable map place"));
+                };
+                env.write_place(place, Value::Map(updated))?;
+                Ok(previous.map(option_some).unwrap_or_else(option_none))
+            }
+            "__set_index" => {
+                let values = evaluate_named_args(args, env)?;
+                if values.len() != 4 {
+                    return Err(Diagnostic::new(
+                        "internal map indexed assignment requires key, value, line, and column operands",
+                    ));
+                }
+                let mut updated = map;
+                let key = values[0].value.clone();
+                let value = values[1].value.clone();
+                if let Some(index) = updated
+                    .entries
+                    .iter()
+                    .position(|(candidate_key, _)| *candidate_key == key)
+                {
+                    updated.entries[index].1 = value;
+                } else {
+                    updated.entries.push((key, value));
+                }
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new(
+                        "indexed assignment requires a mutable map place",
+                    ));
+                };
+                env.write_place(place, Value::Map(updated))?;
+                Ok(Value::Unit)
+            }
+            "remove" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["key"], values)?;
+                let mut updated = map;
+                let removed = if let Some(index) = updated
+                    .entries
+                    .iter()
+                    .position(|(candidate_key, _)| *candidate_key == bound[0].value)
+                {
+                    Some(updated.entries.remove(index).1)
+                } else {
+                    None
+                };
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`remove` requires a mutable map place"));
+                };
+                env.write_place(place, Value::Map(updated))?;
+                Ok(removed.map(option_some).unwrap_or_else(option_none))
+            }
+            "contains_key" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["key"], values)?;
+                Ok(Value::Bool(map.entries.iter().any(|(candidate_key, _)| {
+                    *candidate_key == bound[0].value
+                })))
+            }
+            "keys" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`keys` does not take arguments"));
+                }
+                Ok(Value::Vec(VecValue {
+                    element_type: map.key_type.clone(),
+                    elements: map.entries.iter().map(|(key, _)| key.clone()).collect(),
+                }))
+            }
+            "values" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`values` does not take arguments"));
+                }
+                Ok(Value::Vec(VecValue {
+                    element_type: map.value_type.clone(),
+                    elements: map.entries.iter().map(|(_, value)| value.clone()).collect(),
+                }))
+            }
+            "items" | "entries" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new(format!(
+                        "`{}` does not take arguments",
+                        field
+                    )));
+                }
+                Ok(Value::Vec(VecValue {
+                    element_type: Type::Named(
+                        "MapEntry".to_string(),
+                        vec![map.key_type.clone(), map.value_type.clone()],
+                    ),
+                    elements: map
+                        .entries
+                        .iter()
+                        .map(|(key, value)| {
+                            Value::Instance(InstanceValue {
+                                class_name: "MapEntry".to_string(),
+                                fields: BTreeMap::from([
+                                    ("key".to_string(), key.clone()),
+                                    ("value".to_string(), value.clone()),
+                                ]),
+                            })
+                        })
+                        .collect(),
+                }))
+            }
+            "clear" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`clear` does not take arguments"));
+                }
+                let mut updated = map;
+                updated.entries.clear();
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`clear` requires a mutable map place"));
+                };
+                env.write_place(place, Value::Map(updated))?;
+                Ok(Value::Unit)
+            }
+            "extend" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["other"], values)?;
+                let Value::Map(other) = bound[0].value.clone() else {
+                    return Err(Diagnostic::new(
+                        "`extend` requires another `Map[K, V]` value",
+                    ));
+                };
+                let mut updated = map;
+                for (key, value) in other.entries {
+                    if let Some(index) = updated
+                        .entries
+                        .iter()
+                        .position(|(candidate_key, _)| *candidate_key == key)
+                    {
+                        updated.entries[index].1 = value;
+                    } else {
+                        updated.entries.push((key, value));
+                    }
+                }
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`extend` requires a mutable map place"));
+                };
+                env.write_place(place, Value::Map(updated))?;
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported map method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_string_method(
+        &mut self,
+        text: String,
+        field: &str,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        match field {
+            "len" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`len` does not take arguments"));
+                }
+                Ok(Value::Int(IntegerValue::from_literal(text.len() as u128)))
+            }
+            "contains" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["text"], values)?;
+                let Value::String(needle) = bound[0].value.clone() else {
+                    return Err(Diagnostic::new("`contains` requires a `String` argument"));
+                };
+                Ok(Value::Bool(text.contains(&needle)))
+            }
+            "starts_with" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["text"], values)?;
+                let Value::String(prefix) = bound[0].value.clone() else {
+                    return Err(Diagnostic::new(
+                        "`starts_with` requires a `String` argument",
+                    ));
+                };
+                Ok(Value::Bool(text.starts_with(&prefix)))
+            }
+            "ends_with" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["text"], values)?;
+                let Value::String(suffix) = bound[0].value.clone() else {
+                    return Err(Diagnostic::new("`ends_with` requires a `String` argument"));
+                };
+                Ok(Value::Bool(text.ends_with(&suffix)))
+            }
+            "split" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["text"], values)?;
+                let Value::String(separator) = bound[0].value.clone() else {
+                    return Err(Diagnostic::new("`split` requires a `String` argument"));
+                };
+                Ok(Value::Vec(VecValue {
+                    element_type: Type::named("String"),
+                    elements: text
+                        .split(&separator)
+                        .map(|part| Value::String(part.to_string()))
+                        .collect(),
+                }))
+            }
+            "replace" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["from", "to"], values)?;
+                let Value::String(from) = bound[0].value.clone() else {
+                    return Err(Diagnostic::new("`replace` requires `String` for `from`"));
+                };
+                let Value::String(to) = bound[1].value.clone() else {
+                    return Err(Diagnostic::new("`replace` requires `String` for `to`"));
+                };
+                Ok(Value::String(text.replace(&from, &to)))
+            }
+            "to_lower" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`to_lower` does not take arguments"));
+                }
+                Ok(Value::String(text.to_lowercase()))
+            }
+            "to_upper" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`to_upper` does not take arguments"));
+                }
+                Ok(Value::String(text.to_uppercase()))
+            }
+            "join" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["parts"], values)?;
+                let Value::Vec(parts) = bound[0].value.clone() else {
+                    return Err(Diagnostic::new("`join` requires `Vec[String]`"));
+                };
+                let mut rendered_parts = Vec::new();
+                for value in parts.elements {
+                    let Value::String(part) = value else {
+                        return Err(Diagnostic::new("`join` requires `Vec[String]`"));
+                    };
+                    rendered_parts.push(part);
+                }
+                Ok(Value::String(rendered_parts.join(&text)))
+            }
+            "strip_prefix" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["text"], values)?;
+                let Value::String(prefix) = bound[0].value.clone() else {
+                    return Err(Diagnostic::new(
+                        "`strip_prefix` requires a `String` argument",
+                    ));
+                };
+                Ok(text
+                    .strip_prefix(&prefix)
+                    .map(|rest| option_some(Value::String(rest.to_string())))
+                    .unwrap_or_else(option_none))
+            }
+            "strip_suffix" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["text"], values)?;
+                let Value::String(suffix) = bound[0].value.clone() else {
+                    return Err(Diagnostic::new(
+                        "`strip_suffix` requires a `String` argument",
+                    ));
+                };
+                Ok(text
+                    .strip_suffix(&suffix)
+                    .map(|rest| option_some(Value::String(rest.to_string())))
+                    .unwrap_or_else(option_none))
+            }
+            "trim" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`trim` does not take arguments"));
+                }
+                Ok(Value::String(text.trim().to_string()))
+            }
+            "clone" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`clone` does not take arguments"));
+                }
+                Ok(Value::String(text))
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported string method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_set_method(
+        &mut self,
+        set: SetValue,
+        field: &str,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        match field {
+            "len" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`len` does not take arguments"));
+                }
+                Ok(Value::Int(IntegerValue::from_literal(
+                    set.elements.len() as u128
+                )))
+            }
+            "is_empty" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`is_empty` does not take arguments"));
+                }
+                Ok(Value::Bool(set.elements.is_empty()))
+            }
+            "clone" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`clone` does not take arguments"));
+                }
+                Ok(Value::Set(set))
+            }
+            "contains" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["value"], values)?;
+                Ok(Value::Bool(
+                    set.elements
+                        .iter()
+                        .any(|candidate| *candidate == bound[0].value),
+                ))
+            }
+            "insert" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["value"], values)?;
+                let mut updated = set;
+                let inserted = if updated
+                    .elements
+                    .iter()
+                    .any(|candidate| *candidate == bound[0].value)
+                {
+                    false
+                } else {
+                    updated.elements.push(bound[0].value.clone());
+                    true
+                };
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`insert` requires a mutable set place"));
+                };
+                env.write_place(place, Value::Set(updated))?;
+                Ok(Value::Bool(inserted))
+            }
+            "remove" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["value"], values)?;
+                let mut updated = set;
+                let removed = if let Some(index) = updated
+                    .elements
+                    .iter()
+                    .position(|candidate| *candidate == bound[0].value)
+                {
+                    updated.elements.remove(index);
+                    true
+                } else {
+                    false
+                };
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new("`remove` requires a mutable set place"));
+                };
+                env.write_place(place, Value::Set(updated))?;
+                Ok(Value::Bool(removed))
+            }
+            "__index_option" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["index"], values)?;
+                let index = self.mir_index_from_value(bound[0].value.clone())?;
+                Ok(set
+                    .elements
+                    .get(index)
+                    .cloned()
+                    .map(option_some)
+                    .unwrap_or_else(option_none))
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported set method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn mir_index_from_value(&self, value: Value) -> Result<usize> {
+        let Value::Int(value) = value else {
+            return Err(Diagnostic::new("vector indices must be integers"));
+        };
+        let index = value
+            .as_i128()
+            .ok_or_else(|| Diagnostic::new("vector index is outside the supported signed range"))?;
+        if index < 0 {
+            return Err(Diagnostic::new(format!(
+                "vector index `{}` cannot be negative",
+                index
+            )));
+        }
+        usize::try_from(index)
+            .map_err(|_| Diagnostic::new("vector index does not fit in the MIR address space"))
     }
 
     fn evaluate_task_method(

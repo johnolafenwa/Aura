@@ -1,0 +1,15 @@
+# Test 13: Basic clear
+def print_bool(value: bool):
+    match value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def main() -> int32:
+    mut v = [1, 2, 3]
+    print(v.len())
+    v.clear()
+    print(v.len())
+    print_bool(v.is_empty())
+    return 0

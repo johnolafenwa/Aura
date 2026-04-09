@@ -1,0 +1,59 @@
+## Sliding window max: for each window of size 3, find the max.
+## Uses: len(), indexing, push, borrow iteration
+
+def sliding_window_max(data: borrow Vec[int32], window_size: int32) -> Vec[int32]:
+    mut maxes: Vec[int32] = []
+    n = data.len()
+    mut i: int32 = 0
+    while i <= n - window_size:
+        ## Find max in window [i, i+window_size)
+        mut max_val = data[i]
+        mut j: int32 = 1
+        while j < window_size:
+            if data[i + j] > max_val:
+                max_val = data[i + j]
+            j += 1
+        maxes.push(max_val)
+        i += 1
+    return maxes
+
+def print_vec(arr: borrow Vec[int32]):
+    mut first = true
+    mut buf = "["
+    for val in borrow arr:
+        if first:
+            first = false
+        else:
+            buf = buf + ", "
+        buf = buf + f"{val}"
+    buf = buf + "]"
+    print(buf)
+
+def main() -> int32:
+    data = [1, 3, -1, -3, 5, 3, 6, 7]
+    print("Data:")
+    print_vec(data)
+
+    result = sliding_window_max(data, 3)
+    print("Sliding window max (size 3):")
+    print_vec(result)
+    ## Expected: [3, 3, 5, 5, 6, 7]
+
+    ## Verify element-by-element
+    ## (Note: == has known bug comparing push-built vs literal-built vecs)
+    expected = [3, 3, 5, 5, 6, 7]
+    mut ok = true
+    if result.len() != expected.len():
+        ok = false
+    else:
+        mut k: int32 = 0
+        while k < result.len():
+            if result[k] != expected[k]:
+                ok = false
+            k += 1
+    if ok:
+        print("Result verified correct!")
+    else:
+        print("Result INCORRECT")
+
+    return 0

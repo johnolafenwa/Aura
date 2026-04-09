@@ -1,0 +1,4 @@
+def main() -> int32:
+    value: int32 = -1
+    print(value as uint8)
+    return 0

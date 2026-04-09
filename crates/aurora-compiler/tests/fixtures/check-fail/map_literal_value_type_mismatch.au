@@ -1,0 +1,3 @@
+def main() -> int32:
+    values: Map[String, int32] = {"aurora": 1, "codex": "bad"}
+    return 0

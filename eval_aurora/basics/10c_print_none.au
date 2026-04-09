@@ -1,0 +1,8 @@
+# Test 10c: What does print(None) do?
+def get_none() -> None:
+    pass
+
+x = get_none()
+print("before")
+print(x)
+print("after")

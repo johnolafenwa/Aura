@@ -1,0 +1,10 @@
+class Accumulator:
+    total: int32
+
+    def add_from(borrow mut self, source: borrow mut Accumulator):
+        self.total += source.total
+
+def main():
+    mut acc = Accumulator(total=10)
+    acc.add_from(source=acc)
+    print(acc.total)

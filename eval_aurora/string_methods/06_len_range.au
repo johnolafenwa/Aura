@@ -1,0 +1,5 @@
+def main() -> int32:
+    s = "abc"
+    for i in range(s.len()):
+        print(i)
+    return 0

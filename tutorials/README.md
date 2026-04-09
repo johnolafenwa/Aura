@@ -41,6 +41,7 @@ The current tutorial set covers:
 - bindings, mutability, and type annotations
 - functions with explicit and omitted `None` return types
 - classes with fields, default values, receiver forms, mutating methods, and `public` field syntax
+- owned `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals, methods, and iteration where supported
 - enums with exhaustive `match`
 - user-defined generic classes, enums, and functions
 - trait declarations, trait impls, and bounded generic calls
@@ -49,7 +50,7 @@ The current tutorial set covers:
 - `try expr`
 - `with` using `close(borrow mut self)` and `with task_group() as group:`
 - `Channel[T]`, `channel()`, `spawn`, `spawn detached`, `Task[T].join()`, `task_group()`, `select`, send-result errors, and cooperative cancellation
-- arithmetic, strings, booleans, comparisons, and duration literals
+- arithmetic, strings, string parsing/formatting, booleans, comparisons, and duration literals
 - `if`, `elif`, `else`, `for`, `while`, `match`, `break`, and `continue`
 - `print`
 - CLI inspection commands such as `check`, `ast`, `ast-json`, `analyze`, `complete`, and `mir`

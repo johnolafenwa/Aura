@@ -1,0 +1,23 @@
+# Test 1: Immutable borrow - pass class by borrow, read fields
+class Person:
+    name: String
+    age: int32
+
+def read_name(p: borrow Person) -> String:
+    return p.name.clone()
+
+def read_age(p: borrow Person) -> int32:
+    return p.age
+
+def describe(p: borrow Person) -> String:
+    return f"{p.name} is {p.age}"
+
+def main() -> int32:
+    person = Person(name="Alice", age=30)
+    print(read_name(person))
+    print(read_age(person))
+    print(describe(person))
+    # person should still be usable after immutable borrows
+    print(person.name)
+    print(person.age)
+    return 0

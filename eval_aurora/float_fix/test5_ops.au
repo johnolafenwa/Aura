@@ -1,0 +1,22 @@
+enum Op:
+    Add(float64)
+    Mul(float64)
+    Negate
+
+def apply(base: float64, op: Op) -> float64:
+    match op:
+        case Op.Add(v):
+            return base + v
+        case Op.Mul(v):
+            return base * v
+        case Op.Negate:
+            return base * -1.0
+
+def main():
+    mut x = 10.0
+    x = apply(base=x, op=Op.Add(5.0))
+    print(x)
+    x = apply(base=x, op=Op.Mul(2.0))
+    print(x)
+    x = apply(base=x, op=Op.Negate)
+    print(x)

@@ -1,0 +1,9 @@
+# String vec: push vs literal
+def main():
+    a = ["hello", "world"]
+
+    mut b: Vec[String] = []
+    b.push("hello")
+    b.push("world")
+
+    print(a == b)

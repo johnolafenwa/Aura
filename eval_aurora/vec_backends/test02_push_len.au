@@ -1,0 +1,13 @@
+def main() -> int32:
+    mut xs: Vec[int32] = []
+    xs.push(1)
+    print(xs.len())
+    xs.push(2)
+    print(xs.len())
+    xs.push(3)
+    print(xs.len())
+    xs.push(4)
+    print(xs.len())
+    xs.push(5)
+    print(xs.len())
+    return 0

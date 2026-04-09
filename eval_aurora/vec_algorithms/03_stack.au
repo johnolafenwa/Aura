@@ -1,0 +1,61 @@
+## Stack using Vec: implement push/pop/peek wrapped in a class
+
+class Stack:
+    data: Vec[int32]
+
+    def new() -> Stack:
+        empty: Vec[int32] = []
+        return Stack(data=empty)
+
+    def push(borrow mut self, value: int32):
+        self.data.push(value)
+
+    def pop(borrow mut self) -> Option[int32]:
+        return self.data.pop()
+
+    def peek(borrow self) -> Option[int32]:
+        if self.data.is_empty():
+            return Option.None
+        idx = self.data.len() as int32 - 1
+        return Option.Some(self.data[idx])
+
+    def size(borrow self) -> int32:
+        return self.data.len() as int32
+
+    def is_empty(borrow self) -> bool:
+        return self.data.is_empty()
+
+def print_option(label: String, opt: Option[int32]):
+    match opt:
+        case Some(val):
+            print(f"{label}: {val}")
+        case None:
+            print(f"{label}: None")
+
+def main() -> int32:
+    mut stack = Stack.new()
+    print(f"Empty? {stack.is_empty()}")
+    print(f"Size: {stack.size()}")
+
+    ## Push values
+    stack.push(10)
+    stack.push(20)
+    stack.push(30)
+    print(f"Size after 3 pushes: {stack.size()}")
+
+    ## Peek
+    print_option("Peek", stack.peek())
+
+    ## Pop
+    print_option("Pop", stack.pop())
+    print_option("Pop", stack.pop())
+    print(f"Size after 2 pops: {stack.size()}")
+
+    print_option("Peek", stack.peek())
+    print_option("Pop", stack.pop())
+
+    ## Pop from empty
+    print_option("Pop empty", stack.pop())
+    print(f"Empty? {stack.is_empty()}")
+
+    return 0

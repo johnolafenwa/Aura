@@ -1,0 +1,27 @@
+# Test 18: Generic enum - create and match custom generic enum
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+def unwrap_or[T](value: Maybe[T], default: T) -> T:
+    match value:
+        case Maybe.Just(inner):
+            return inner
+        case Maybe.Nothing:
+            return default
+
+def main() -> int32:
+    some_int: Maybe[int32] = Maybe.Just(42)
+    none_int: Maybe[int32] = Maybe.Nothing
+
+    print(unwrap_or(value=some_int, default=0))
+    print(unwrap_or(value=none_int, default=-1))
+
+    some_str: Maybe[String] = Maybe.Just("hello")
+    match some_str:
+        case Maybe.Just(s):
+            print(s)
+        case Maybe.Nothing:
+            print("nothing")
+
+    return 0

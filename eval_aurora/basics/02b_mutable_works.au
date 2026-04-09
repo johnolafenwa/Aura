@@ -1,0 +1,24 @@
+# Test 2b: Mutable variable works correctly
+mut x = 10
+print(x)
+x = 20
+print(x)
+x = 30
+print(x)
+
+# Compound assignment
+mut y = 100
+y += 50
+print(y)
+
+y -= 25
+print(y)
+
+y *= 2
+print(y)
+
+y /= 5
+print(y)
+
+y %= 7
+print(y)

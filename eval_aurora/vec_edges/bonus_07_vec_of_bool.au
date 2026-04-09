@@ -1,0 +1,8 @@
+# Bonus: Vec of bool
+def main() -> int32:
+    mut v = [true, false, true]
+    v.push(false)
+    print(v.len())
+    for b in v:
+        print(b)
+    return 0

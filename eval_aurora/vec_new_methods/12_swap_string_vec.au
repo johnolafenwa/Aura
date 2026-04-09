@@ -1,0 +1,7 @@
+# Test 12: Swap on String vec (non-copy types)
+def main() -> int32:
+    mut v = ["hello", "world", "aurora"]
+    v.swap(0, 2)
+    for s in borrow v:
+        print(s)
+    return 0

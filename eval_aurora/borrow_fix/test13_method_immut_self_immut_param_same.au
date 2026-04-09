@@ -1,0 +1,11 @@
+# Test 13: borrow self (immutable) + borrow param (immutable) same object — should WORK
+class Data:
+    value: int32
+
+    def compare(borrow self, other: borrow Data) -> bool:
+        return self.value == other.value
+
+def main():
+    d = Data(value=42)
+    result = d.compare(other=d)
+    print(result)

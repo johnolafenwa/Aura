@@ -1,0 +1,27 @@
+def print_bool(value: bool):
+    match value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def sum_set(values: borrow Set[int32]) -> int32:
+    mut total = 0
+    for value in borrow values:
+        total += value
+    return total
+
+def main() -> int32:
+    mut seen = Set{1, 2, 2, 3}
+    print(seen.len())
+    print_bool(seen.contains(2))
+    print_bool(seen.insert(2))
+    print_bool(seen.insert(4))
+    print_bool(seen.remove(1))
+    print(sum_set(seen))
+
+    mut names: Set[String] = Set[String]()
+    print_bool(names.is_empty())
+    print_bool(names.insert("aurora"))
+    print(names.len())
+    return 0

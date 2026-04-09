@@ -1,0 +1,37 @@
+# Test 1: Basic channel - create, send, recv, close
+def main() -> int32:
+    ch: Channel[int32] = channel()
+
+    # Send values
+    ch.send(10)
+    ch.send(20)
+    ch.send(30)
+    ch.close()
+
+    # Receive all values
+    match ch.recv():
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    match ch.recv():
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    match ch.recv():
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("none")
+
+    # After close and drain, should get None
+    match ch.recv():
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print("channel drained")
+
+    return 0

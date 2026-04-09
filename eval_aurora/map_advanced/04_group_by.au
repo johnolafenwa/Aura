@@ -1,0 +1,35 @@
+## Test 04: Group by even/odd
+## Group integers into Map[String, Vec[int32]]
+
+def main() -> int32:
+    numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+    mut groups = Map[String, Vec[int32]]()
+    groups["even"] = Vec[int32]()
+    groups["odd"] = Vec[int32]()
+
+    for num in numbers:
+        if num % 2 == 0:
+            mut evens = groups["even"]
+            evens.push(num)
+            groups["even"] = evens
+        else:
+            mut odds = groups["odd"]
+            odds.push(num)
+            groups["odd"] = odds
+
+    evens = groups["even"]
+    odds = groups["odd"]
+
+    print(f"even count: {evens.len()}")
+    print(f"odd count: {odds.len()}")
+
+    print("even:")
+    for val in evens:
+        print(f"  {val}")
+
+    print("odd:")
+    for val in odds:
+        print(f"  {val}")
+
+    return 0

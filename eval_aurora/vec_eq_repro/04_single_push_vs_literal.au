@@ -1,0 +1,8 @@
+# Single element: push vs literal
+def main():
+    a = [42]
+
+    mut b: Vec[int32] = []
+    b.push(42)
+
+    print(a == b)

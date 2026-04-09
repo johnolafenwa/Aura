@@ -1,0 +1,6 @@
+def main() -> int32:
+    s = "first,second,third"
+    print(s.split(",")[0])
+    print(s.split(",")[1])
+    print(s.split(",")[2])
+    return 0

@@ -1,0 +1,31 @@
+# Test 9: Select on two channels
+def sender(ch: Channel[int32], value: int32):
+    sleep(5ms)
+    ch.send(value)
+
+def main() -> int32:
+    ch1: Channel[int32] = channel()
+    ch2: Channel[int32] = channel()
+
+    # Send on ch1 after a brief delay
+    t1 = spawn sender(ch1.clone(), 100)
+
+    # Select should pick whichever is ready first
+    select:
+        case value = ch1.recv():
+            match value:
+                case Option.Some(v):
+                    print(v)
+                case Option.None:
+                    print("ch1 closed")
+        case value = ch2.recv():
+            match value:
+                case Option.Some(v):
+                    print(v)
+                case Option.None:
+                    print("ch2 closed")
+        case after(500ms):
+            print("timeout")
+
+    t1.join()
+    return 0

@@ -1,0 +1,7 @@
+def main() -> int32:
+    s = "  hello  "
+    print(s.trim().len())
+    print(s.trim().contains("hell"))
+    print(s.trim().starts_with("hel"))
+    print(s.trim().ends_with("llo"))
+    return 0

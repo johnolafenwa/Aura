@@ -1,0 +1,15 @@
+enum Shape:
+    Circle(float64)
+    Rectangle(float64)
+
+def area(s: Shape) -> float64:
+    match s:
+        case Shape.Circle(r):
+            return r * r
+        case Shape.Rectangle(side):
+            return side * side
+
+def main() -> int32:
+    c = Shape.Circle(5.0)
+    print(area(c))
+    return 0

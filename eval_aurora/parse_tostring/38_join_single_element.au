@@ -1,0 +1,4 @@
+def main() -> int32:
+    parts = ["only"]
+    print(", ".join(parts))
+    return 0

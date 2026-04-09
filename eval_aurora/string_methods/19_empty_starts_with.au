@@ -1,0 +1,4 @@
+def main() -> int32:
+    s = ""
+    print(s.starts_with("a"))
+    return 0

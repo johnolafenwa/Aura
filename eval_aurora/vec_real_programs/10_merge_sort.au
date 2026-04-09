@@ -1,0 +1,106 @@
+## Simplified merge sort: split, sort halves with bubble sort, merge with extend.
+## Uses: swap, extend, len(), borrow iteration, push
+
+def bubble_sort(arr: borrow mut Vec[int32]):
+    n = arr.len()
+    mut i: int32 = 0
+    while i < n:
+        mut j: int32 = 0
+        while j < n - 1 - i:
+            if arr[j] > arr[j + 1]:
+                arr.swap(j, j + 1)
+            j += 1
+        i += 1
+
+def merge(a: borrow Vec[int32], b: borrow Vec[int32]) -> Vec[int32]:
+    mut result: Vec[int32] = []
+    mut i: int32 = 0
+    mut j: int32 = 0
+    a_len = a.len()
+    b_len = b.len()
+
+    while i < a_len and j < b_len:
+        if a[i] <= b[j]:
+            result.push(a[i])
+            i += 1
+        else:
+            result.push(b[j])
+            j += 1
+
+    while i < a_len:
+        result.push(a[i])
+        i += 1
+
+    while j < b_len:
+        result.push(b[j])
+        j += 1
+
+    return result
+
+def print_vec(arr: borrow Vec[int32]):
+    mut first = true
+    mut buf = "["
+    for val in borrow arr:
+        if first:
+            first = false
+        else:
+            buf = buf + ", "
+        buf = buf + f"{val}"
+    buf = buf + "]"
+    print(buf)
+
+def main() -> int32:
+    data = [38, 27, 43, 3, 9, 82, 10]
+    print("Original:")
+    print_vec(data)
+
+    ## Split into two halves
+    mid = data.len() / 2
+    mut left: Vec[int32] = []
+    mut right: Vec[int32] = []
+
+    mut i: int32 = 0
+    while i < data.len():
+        if i < mid:
+            left.push(data[i])
+        else:
+            right.push(data[i])
+        i += 1
+
+    print("Left half:")
+    print_vec(left)
+    print("Right half:")
+    print_vec(right)
+
+    ## Sort each half
+    bubble_sort(left)
+    bubble_sort(right)
+
+    print("Left sorted:")
+    print_vec(left)
+    print("Right sorted:")
+    print_vec(right)
+
+    ## Merge
+    sorted_data = merge(left, right)
+    print("Merged result:")
+    print_vec(sorted_data)
+
+    ## Verify correctness by checking each element
+    ## (Note: == has a known bug when comparing push-built vs literal-built vecs)
+    expected = [3, 9, 10, 27, 38, 43, 82]
+    mut verified = true
+    if sorted_data.len() != expected.len():
+        verified = false
+    else:
+        mut k: int32 = 0
+        while k < sorted_data.len():
+            if sorted_data[k] != expected[k]:
+                verified = false
+            k += 1
+    if verified:
+        print("Sort verified correct!")
+    else:
+        print("Sort FAILED!")
+
+    return 0

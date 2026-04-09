@@ -1,0 +1,4 @@
+def main() -> int32:
+    s = "  hi  "
+    print(s.trim().len())
+    return 0

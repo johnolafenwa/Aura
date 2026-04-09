@@ -1,0 +1,31 @@
+# Test 13: Deeply nested control flow - if inside match inside for inside while
+
+enum Status:
+    Active(int32)
+    Inactive
+
+def make_status(n: int32) -> Status:
+    if n % 3 == 0:
+        return Status.Inactive
+    return Status.Active(n)
+
+def main() -> int32:
+    mut round: int32 = 0
+    mut total: int32 = 0
+
+    while round < 3:
+        round += 1
+        for i in range(start=1, stop=5):
+            status = make_status(n=i * round)
+            match status:
+                case Status.Active(val):
+                    if val > 5:
+                        total += val
+                    else:
+                        total += 1
+                case Status.Inactive:
+                    total += 0
+
+    print("deeply nested total:")
+    print(total)
+    return 0

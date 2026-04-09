@@ -1,0 +1,6 @@
+# Test 13b: Attempt to import a private function
+from helpers.math import private_helper
+
+def main() -> int32:
+    print(private_helper(x=5))
+    return 0

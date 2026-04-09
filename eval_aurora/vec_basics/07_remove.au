@@ -1,0 +1,40 @@
+def print_opt(value: Option[int32]):
+    match value:
+        case Some(inner):
+            print(inner)
+        case None:
+            print("None")
+
+def main() -> int32:
+    # Remove from middle
+    mut v1 = [10, 20, 30, 40, 50]
+    print_opt(v1.remove(2))
+    print(v1.len())
+    # Should be [10, 20, 40, 50]
+    print(v1[0])
+    print(v1[1])
+    print(v1[2])
+    print(v1[3])
+
+    # Remove from beginning
+    mut v2 = [10, 20, 30]
+    print_opt(v2.remove(0))
+    print(v2.len())
+    # Should be [20, 30]
+    print(v2[0])
+    print(v2[1])
+
+    # Remove from end
+    mut v3 = [10, 20, 30]
+    print_opt(v3.remove(2))
+    print(v3.len())
+    # Should be [10, 20]
+    print(v3[0])
+    print(v3[1])
+
+    # Remove out of bounds
+    mut v4 = [10, 20]
+    print_opt(v4.remove(5))
+    print(v4.len())
+
+    return 0

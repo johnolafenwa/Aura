@@ -1,0 +1,4 @@
+# Test 2c: Compound assignment on immutable - should fail
+x = 10
+x += 5
+print(x)

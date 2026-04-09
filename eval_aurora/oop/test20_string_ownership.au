@@ -1,0 +1,13 @@
+class Message:
+    sender: String
+    content: String
+
+    def display(borrow self) -> String:
+        return self.sender + ": " + self.content
+
+def main() -> int32:
+    msg = Message(sender="Alice", content="Hello World")
+    print(msg.display())
+    print(msg.sender)
+    print(msg.content)
+    return 0

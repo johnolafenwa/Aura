@@ -1,9 +1,11 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::sema::Type;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum IntegerValue {
     Signed(i128),
     Unsigned(u128),

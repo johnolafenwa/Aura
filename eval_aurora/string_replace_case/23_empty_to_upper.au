@@ -1,0 +1,5 @@
+def main() -> int32:
+    s = ""
+    result = s.to_upper()
+    print(result)
+    return 0

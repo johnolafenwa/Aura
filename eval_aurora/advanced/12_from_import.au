@@ -1,0 +1,14 @@
+# Test 12: From import - import specific items
+from helpers.math import double
+from helpers.math import add
+from helpers.counter import Counter
+
+def main() -> int32:
+    print(double(x=5))
+    print(add(a=3, b=4))
+
+    mut counter = Counter(value=10)
+    print(counter.read())
+    counter.increment()
+    print(counter.read())
+    return 0

@@ -15,7 +15,7 @@ Remove the duplicate free-function borrow parameter spelling, fix direct nested-
 - Added normal success paths for `aura help`, `aura --help`, `aura version`, and `aura --version`.
 - Replaced machine-local absolute repo paths in the maintained READMEs/tutorials with portable relative links or `$(pwd)` examples.
 - Refreshed `examples/README.md` to include `examples/modules/trait_impl_imports.au` and clarified that `examples/modules/pkg/` contains helper modules rather than runnable entrypoints.
-- Documented the current user-facing limitations called out by review, including missing list literals, no `String(...)` constructor, no bare `Ok(...)` / `Err(...)` constructors, required `Channel[T]` context for `channel()`, and named-function-only `spawn` targets.
+- Documented the then-current user-facing limitations called out by review, including list literals being absent at that point, no `String(...)` constructor, no bare `Ok(...)` / `Err(...)` constructors, required `Channel[T]` context for `channel()`, and named-function-only `spawn` targets.
 
 ## Verification
 

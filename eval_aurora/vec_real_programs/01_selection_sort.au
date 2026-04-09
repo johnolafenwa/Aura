@@ -1,0 +1,42 @@
+## Selection sort using swap: find min in unsorted portion, swap with front.
+## Uses: swap, len(), borrow iteration, indexing
+
+def selection_sort(arr: borrow mut Vec[int32]):
+    n = arr.len()
+    mut i: int32 = 0
+    while i < n - 1:
+        mut min_idx = i
+        mut j = i + 1
+        while j < n:
+            if arr[j] < arr[min_idx]:
+                min_idx = j
+            j += 1
+        if min_idx != i:
+            arr.swap(i, min_idx)
+        i += 1
+
+def print_vec(arr: borrow Vec[int32]):
+    mut first = true
+    mut buf = "["
+    for val in borrow arr:
+        if first:
+            first = false
+        else:
+            buf = buf + ", "
+        buf = buf + f"{val}"
+    buf = buf + "]"
+    print(buf)
+
+def main() -> int32:
+    mut data = [64, 25, 12, 22, 11]
+    print("Before:")
+    print_vec(data)
+    selection_sort(data)
+    print("After:")
+    print_vec(data)
+
+    ## Verify with contains
+    if data.contains(11) and data.contains(64):
+        print("Contains check passed")
+
+    return 0

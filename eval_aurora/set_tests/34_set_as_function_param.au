@@ -1,0 +1,10 @@
+def print_set_info(s: borrow Set[int32]) -> int32:
+    print(s.len())
+    print(s.contains(1))
+    return 0
+
+def main() -> int32:
+    s = Set{1, 2, 3}
+    print_set_info(s)
+    print(s.len())
+    return 0

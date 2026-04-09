@@ -1,0 +1,10 @@
+# Test 2: Insert at end (append)
+def main() -> int32:
+    mut v = [1, 2, 3]
+    v.insert(index=v.len(), value=4)
+    print(v.len())
+    print(v[0])
+    print(v[1])
+    print(v[2])
+    print(v[3])
+    return 0

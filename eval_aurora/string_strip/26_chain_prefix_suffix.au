@@ -1,0 +1,12 @@
+def main() -> int32:
+    s = "[wrapped]"
+    match s.strip_prefix("["):
+        case Some(no_open):
+            match no_open.strip_suffix("]"):
+                case Some(unwrapped):
+                    print(unwrapped)
+                case None:
+                    print("FAIL: no closing bracket")
+        case None:
+            print("FAIL: no opening bracket")
+    return 0

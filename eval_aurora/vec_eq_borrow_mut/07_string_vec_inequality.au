@@ -1,0 +1,12 @@
+def print_bool(value: bool):
+    match value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def main() -> int32:
+    a = ["hello"]
+    b = ["world"]
+    print_bool(a == b)
+    return 0

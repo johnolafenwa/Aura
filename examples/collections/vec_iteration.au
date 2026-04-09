@@ -1,0 +1,14 @@
+def main() -> int32:
+    mut names: Vec[String] = ["Ada", "Grace"]
+    for name in borrow names:
+        print(name)
+    print(names.len())
+
+    mut values = Vec[int32]()
+    values.extend([4, 5])
+
+    mut total = 0
+    for value in values:
+        total += value
+    print(total)
+    return 0

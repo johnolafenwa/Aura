@@ -1,0 +1,28 @@
+# Test 16: Channel clone - clone and use from multiple tasks
+def sender(ch: Channel[int32], value: int32):
+    ch.send(value)
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+
+    # Clone channel for multiple senders
+    ch2 = ch.clone()
+    ch3 = ch.clone()
+
+    t1 = spawn sender(ch2, 100)
+    t2 = spawn sender(ch3, 200)
+
+    mut total: int32 = 0
+    mut count: int32 = 0
+    while count < 2:
+        match ch.recv():
+            case Option.Some(v):
+                total += v
+                count += 1
+            case Option.None:
+                break
+
+    t1.join()
+    t2.join()
+    print(total)
+    return 0

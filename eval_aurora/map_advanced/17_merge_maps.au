@@ -1,0 +1,28 @@
+## Test 17: Merge two maps
+## Iterate one map's keys, set into the other
+
+def main() -> int32:
+    mut base = Map[String, int32]()
+    base["a"] = 1
+    base["b"] = 2
+    base["c"] = 3
+
+    mut overlay = Map[String, int32]()
+    overlay["b"] = 20
+    overlay["d"] = 40
+    overlay["e"] = 50
+
+    print(f"base before merge: {base.len()}")
+
+    ## Merge overlay into base (overlay wins on conflict)
+    keys = overlay.keys()
+    for key in keys:
+        base[key.clone()] = overlay[key]
+
+    print(f"base after merge: {base.len()}")
+
+    all_keys = base.keys()
+    for k in all_keys:
+        print(f"  {k}: {base[k.clone()]}")
+
+    return 0

@@ -1,0 +1,9 @@
+# Test 08: Swap adjacent elements
+def main() -> int32:
+    mut v = [10, 20, 30, 40]
+    v.swap(1, 2)
+    print(v[0])
+    print(v[1])
+    print(v[2])
+    print(v[3])
+    return 0

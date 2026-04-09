@@ -1,0 +1,8 @@
+def main() -> int32:
+    s = Set{10, 20, 30}
+    # consuming iteration (no borrow)
+    mut total = 0
+    for x in s:
+        total = total + x
+    print(total)
+    return 0

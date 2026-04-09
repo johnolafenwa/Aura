@@ -1,0 +1,14 @@
+# Test 11: borrow mut self + borrow mut param of DIFFERENT object — should WORK
+class Acc:
+    val: int32
+
+    def steal(borrow mut self, source: borrow mut Acc):
+        self.val += source.val
+        source.val = 0
+
+def main():
+    mut a = Acc(val=10)
+    mut b = Acc(val=20)
+    a.steal(source=b)
+    print(a.val)
+    print(b.val)

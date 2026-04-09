@@ -1,0 +1,12 @@
+# Test 5c: Modulo with negatives
+a = 10 % 3
+print(a)
+
+b = -10 % 3
+print(b)
+
+c = 10 % -3
+print(c)
+
+d = -10 % -3
+print(d)

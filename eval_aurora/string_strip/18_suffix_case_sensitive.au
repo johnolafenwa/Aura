@@ -1,0 +1,8 @@
+def main() -> int32:
+    result = "HelloWorld".strip_suffix("world")
+    match result:
+        case Some(inner):
+            print("FAIL: should be case sensitive, got: " + inner)
+        case None:
+            print("None (case sensitive)")
+    return 0

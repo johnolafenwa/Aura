@@ -1,0 +1,4 @@
+def main() -> int32:
+    x: int32 = 0
+    print(x.to_string())
+    return 0

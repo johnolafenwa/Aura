@@ -1031,6 +1031,10 @@ impl<'a> AnalysisBuilder<'a> {
                     }
                 }
             }
+            AssignTarget::Index { object, index } => {
+                self.visit_expr(object, scope);
+                self.visit_expr(index, scope);
+            }
         }
     }
 
@@ -1177,6 +1181,21 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Unary { expr, .. } => self.visit_expr(expr, scope),
             ExprKind::Spawn { value, .. } => self.visit_expr(value, scope),
             ExprKind::Try(inner) | ExprKind::Group(inner) => self.visit_expr(inner, scope),
+            ExprKind::List(elements) | ExprKind::Set(elements) => {
+                for element in elements {
+                    self.visit_expr(element, scope);
+                }
+            }
+            ExprKind::Map(entries) => {
+                for entry in entries {
+                    self.visit_expr(&entry.key, scope);
+                    self.visit_expr(&entry.value, scope);
+                }
+            }
+            ExprKind::Index { object, index } => {
+                self.visit_expr(object, scope);
+                self.visit_expr(index, scope);
+            }
             ExprKind::Int(_)
             | ExprKind::DurationMillis(_)
             | ExprKind::Float(_)
@@ -1374,6 +1393,38 @@ impl<'a> AnalysisBuilder<'a> {
             });
         }
 
+        if base_name == "MapEntry" {
+            return match field {
+                "key" => Some(ResolvedMember {
+                    hover: format_value_hover(
+                        "field",
+                        "key",
+                        &receiver_type
+                            .type_arguments()
+                            .first()
+                            .cloned()
+                            .unwrap_or(Type::named("Unknown")),
+                    ),
+                    definition: None,
+                    ty: receiver_type.type_arguments().first().cloned(),
+                }),
+                "value" => Some(ResolvedMember {
+                    hover: format_value_hover(
+                        "field",
+                        "value",
+                        &receiver_type
+                            .type_arguments()
+                            .get(1)
+                            .cloned()
+                            .unwrap_or(Type::named("Unknown")),
+                    ),
+                    definition: None,
+                    ty: receiver_type.type_arguments().get(1).cloned(),
+                }),
+                _ => None,
+            };
+        }
+
         if let Some(enum_info) = self.program.enums.get(base_name) {
             if let Some(variant_info) = enum_info.variants.get(field) {
                 return Some(ResolvedMember {
@@ -1387,7 +1438,111 @@ impl<'a> AnalysisBuilder<'a> {
         if let Some(builtin_member) = BuiltinMember::resolve(base_name, field) {
             let ty = match builtin_member {
                 BuiltinMember::FloatSqrt => Some(Type::named("float64")),
+                BuiltinMember::StringLen => Some(Type::named("int32")),
+                BuiltinMember::StringContains
+                | BuiltinMember::StringStartsWith
+                | BuiltinMember::StringEndsWith => Some(Type::named("bool")),
+                BuiltinMember::StringSplit => {
+                    Some(Type::Named("Vec".to_string(), vec![Type::named("String")]))
+                }
+                BuiltinMember::StringReplace
+                | BuiltinMember::StringToLower
+                | BuiltinMember::StringToUpper
+                | BuiltinMember::StringTrim
+                | BuiltinMember::StringJoin
+                | BuiltinMember::ScalarToString => Some(Type::named("String")),
+                BuiltinMember::StringStripPrefix | BuiltinMember::StringStripSuffix => Some(
+                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                ),
+                BuiltinMember::VecLen => Some(Type::named("int32")),
+                BuiltinMember::VecIsEmpty => Some(Type::named("bool")),
+                BuiltinMember::VecClone => Some(receiver_type.clone()),
+                BuiltinMember::VecPush | BuiltinMember::VecClear | BuiltinMember::VecReverse => {
+                    Some(Type::Unit)
+                }
+                BuiltinMember::VecInsert => Some(Type::named("bool")),
+                BuiltinMember::VecSwap | BuiltinMember::VecContains => Some(Type::named("bool")),
+                BuiltinMember::VecExtend => Some(Type::Unit),
+                BuiltinMember::MapLen => Some(Type::named("int32")),
+                BuiltinMember::MapIsEmpty => Some(Type::named("bool")),
+                BuiltinMember::MapClone => Some(receiver_type.clone()),
+                BuiltinMember::MapContainsKey => Some(Type::named("bool")),
+                BuiltinMember::MapKeys => receiver_type
+                    .type_arguments()
+                    .first()
+                    .cloned()
+                    .map(|key| Type::Named("Vec".to_string(), vec![key])),
+                BuiltinMember::MapValues => receiver_type
+                    .type_arguments()
+                    .get(1)
+                    .cloned()
+                    .map(|value| Type::Named("Vec".to_string(), vec![value])),
+                BuiltinMember::MapItems | BuiltinMember::MapEntries => Some(Type::Named(
+                    "Vec".to_string(),
+                    vec![Type::Named(
+                        "MapEntry".to_string(),
+                        vec![
+                            receiver_type
+                                .type_arguments()
+                                .first()
+                                .cloned()
+                                .unwrap_or(Type::Unit),
+                            receiver_type
+                                .type_arguments()
+                                .get(1)
+                                .cloned()
+                                .unwrap_or(Type::Unit),
+                        ],
+                    )],
+                )),
+                BuiltinMember::MapClear | BuiltinMember::MapExtend => Some(Type::Unit),
+                BuiltinMember::MapGet | BuiltinMember::MapSet | BuiltinMember::MapRemove => {
+                    let payload = receiver_type
+                        .type_arguments()
+                        .get(1)
+                        .cloned()
+                        .unwrap_or(Type::Unit);
+                    Some(Type::Named("Option".to_string(), vec![payload]))
+                }
+                BuiltinMember::VecPop => {
+                    let payload = receiver_type
+                        .type_arguments()
+                        .first()
+                        .cloned()
+                        .unwrap_or(Type::Unit);
+                    Some(Type::Named("Option".to_string(), vec![payload]))
+                }
+                BuiltinMember::VecGet => {
+                    let payload = receiver_type
+                        .type_arguments()
+                        .first()
+                        .cloned()
+                        .unwrap_or(Type::Unit);
+                    Some(Type::Named("Option".to_string(), vec![payload]))
+                }
+                BuiltinMember::VecSet => {
+                    let payload = receiver_type
+                        .type_arguments()
+                        .first()
+                        .cloned()
+                        .unwrap_or(Type::Unit);
+                    Some(Type::Named("Option".to_string(), vec![payload]))
+                }
+                BuiltinMember::VecRemove => {
+                    let payload = receiver_type
+                        .type_arguments()
+                        .first()
+                        .cloned()
+                        .unwrap_or(Type::Unit);
+                    Some(Type::Named("Option".to_string(), vec![payload]))
+                }
                 BuiltinMember::StringClone => Some(Type::named("String")),
+                BuiltinMember::SetLen => Some(Type::named("int32")),
+                BuiltinMember::SetIsEmpty => Some(Type::named("bool")),
+                BuiltinMember::SetClone => Some(receiver_type.clone()),
+                BuiltinMember::SetContains
+                | BuiltinMember::SetInsert
+                | BuiltinMember::SetRemove => Some(Type::named("bool")),
                 BuiltinMember::ChannelClone => Some(receiver_type.clone()),
                 BuiltinMember::ChannelSend => {
                     let payload = receiver_type
@@ -1467,8 +1622,57 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
             ExprKind::String(_) => Some(Type::named("String")),
+            ExprKind::List(elements) => Some(Type::Named(
+                "Vec".to_string(),
+                vec![elements
+                    .first()
+                    .and_then(|element| self.infer_expr_type(element, scope))
+                    .unwrap_or(Type::named("Unknown"))],
+            )),
+            ExprKind::Set(elements) => Some(Type::Named(
+                "Set".to_string(),
+                vec![elements
+                    .first()
+                    .and_then(|element| self.infer_expr_type(element, scope))
+                    .unwrap_or(Type::named("Unknown"))],
+            )),
+            ExprKind::Map(entries) => Some(Type::Named(
+                "Map".to_string(),
+                vec![
+                    entries
+                        .first()
+                        .and_then(|entry| self.infer_expr_type(&entry.key, scope))
+                        .unwrap_or(Type::named("Unknown")),
+                    entries
+                        .first()
+                        .and_then(|entry| self.infer_expr_type(&entry.value, scope))
+                        .unwrap_or(Type::named("Unknown")),
+                ],
+            )),
             ExprKind::FString(_) => Some(Type::named("String")),
-            ExprKind::Specialize { expr, .. } => self.infer_expr_type(expr, scope),
+            ExprKind::Specialize { expr, type_args } => match &expr.kind {
+                ExprKind::Name(name)
+                    if self.program.classes.contains_key(name)
+                        || self.program.enums.contains_key(name)
+                        || matches!(
+                            name.as_str(),
+                            "Option"
+                                | "Result"
+                                | "SendError"
+                                | "Channel"
+                                | "Vec"
+                                | "Set"
+                                | "Map"
+                                | "Task"
+                        ) =>
+                {
+                    Some(Type::Named(
+                        name.clone(),
+                        type_args.iter().map(lower_type_ref).collect(),
+                    ))
+                }
+                _ => self.infer_expr_type(expr, scope),
+            },
             ExprKind::Group(inner) => self.infer_expr_type(inner, scope),
             ExprKind::Cast { ty, .. } => Some(lower_type_ref(ty)),
             ExprKind::Unary { op, expr } => {
@@ -1516,6 +1720,14 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Member { object, field } => self
                 .resolve_member_expr(object, field, scope)
                 .and_then(|member| member.ty),
+            ExprKind::Index { object, .. } => {
+                self.infer_expr_type(object, scope)
+                    .and_then(|ty| match base_type_name(&ty) {
+                        "Vec" => ty.type_arguments().first().cloned(),
+                        "Map" => ty.type_arguments().get(1).cloned(),
+                        _ => None,
+                    })
+            }
             ExprKind::Call { callee, args } => self.infer_call_type(callee, args, scope),
             ExprKind::Binary { op, left, right } => {
                 let left_ty = self.infer_expr_type(left, scope)?;
@@ -1560,7 +1772,15 @@ impl<'a> AnalysisBuilder<'a> {
                 if self.program.classes.contains_key(name) {
                     return Some(Type::named(name));
                 }
-                return builtin_function_return_type(name);
+                return match BuiltinFunction::from_name(name)? {
+                    BuiltinFunction::Abs | BuiltinFunction::Min | BuiltinFunction::Max => args
+                        .first()
+                        .and_then(|arg| self.infer_expr_type(&arg.value, scope)),
+                    BuiltinFunction::Sqrt => args
+                        .first()
+                        .and_then(|arg| self.infer_expr_type(&arg.value, scope)),
+                    _ => builtin_function_return_type(name),
+                };
             }
             ExprKind::Member { object, field } => {
                 if let ExprKind::Name(enum_name) = &object.kind {
@@ -1576,6 +1796,18 @@ impl<'a> AnalysisBuilder<'a> {
                 self.resolve_member_expr(object, field, scope)
                     .and_then(|member| member.ty)
             }
+            ExprKind::Specialize { expr, type_args } => match &expr.kind {
+                ExprKind::Name(name)
+                    if self.program.classes.contains_key(name)
+                        || matches!(name.as_str(), "Channel" | "Vec" | "Set" | "Map" | "Task") =>
+                {
+                    Some(Type::Named(
+                        name.clone(),
+                        type_args.iter().map(lower_type_ref).collect(),
+                    ))
+                }
+                _ => self.infer_call_type(expr, args, scope),
+            },
             _ => None,
         }
     }
@@ -1585,21 +1817,16 @@ impl<'a> AnalysisBuilder<'a> {
         iterable: &Expr,
         scope: &BTreeMap<String, BindingInfo>,
     ) -> Option<Type> {
-        match &iterable.kind {
-            ExprKind::Call { callee, .. } => {
-                if matches!(&callee.kind, ExprKind::Name(name) if name == "range") {
-                    Some(Type::named("int32"))
-                } else {
-                    None
-                }
-            }
-            ExprKind::Name(name) => scope.get(name).and_then(|binding| {
-                if base_type_name(&binding.ty) == "Channel" {
-                    binding.ty.type_arguments().first().cloned()
-                } else {
-                    None
-                }
-            }),
+        if matches!(
+            &iterable.kind,
+            ExprKind::Call { callee, .. } if matches!(&callee.kind, ExprKind::Name(name) if name == "range")
+        ) {
+            return Some(Type::named("int32"));
+        }
+
+        let iterable_ty = self.infer_expr_type(iterable, scope)?;
+        match base_type_name(&iterable_ty) {
+            "Channel" | "Vec" | "Set" => iterable_ty.type_arguments().first().cloned(),
             _ => None,
         }
     }
@@ -2091,12 +2318,144 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 AnalysisCompletion {
                     name: "len".to_string(),
                     kind: "method".to_string(),
-                    detail: "len() -> uintsize".to_string(),
+                    detail: "len() -> int32".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "is_empty".to_string(),
+                    kind: "method".to_string(),
+                    detail: "is_empty() -> bool".to_string(),
                 },
                 AnalysisCompletion {
                     name: "clone".to_string(),
                     kind: "method".to_string(),
                     detail: "clone() -> Vec[T]".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "push".to_string(),
+                    kind: "method".to_string(),
+                    detail: "push(value) -> None".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "pop".to_string(),
+                    kind: "method".to_string(),
+                    detail: "pop() -> Option[T]".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "get".to_string(),
+                    kind: "method".to_string(),
+                    detail: "get(index: int32) -> Option[T]".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "set".to_string(),
+                    kind: "method".to_string(),
+                    detail: "set(index: int32, value: T) -> Option[T]".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "remove".to_string(),
+                    kind: "method".to_string(),
+                    detail: "remove(index: int32) -> Option[T]".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "swap".to_string(),
+                    kind: "method".to_string(),
+                    detail: "swap(first: int32, second: int32) -> bool".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "contains".to_string(),
+                    kind: "method".to_string(),
+                    detail: "contains(value: T) -> bool".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "insert".to_string(),
+                    kind: "method".to_string(),
+                    detail: "insert(index: int32, value: T) -> bool".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "clear".to_string(),
+                    kind: "method".to_string(),
+                    detail: "clear() -> None".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "reverse".to_string(),
+                    kind: "method".to_string(),
+                    detail: "reverse() -> None".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "extend".to_string(),
+                    kind: "method".to_string(),
+                    detail: "extend(other: Vec[T]) -> None".to_string(),
+                },
+            ]);
+        }
+        "Map" => {
+            completions.extend([
+                AnalysisCompletion {
+                    name: "items".to_string(),
+                    kind: "method".to_string(),
+                    detail: "items() -> Vec[MapEntry[K, V]]".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "entries".to_string(),
+                    kind: "method".to_string(),
+                    detail: "entries() -> Vec[MapEntry[K, V]]".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "clear".to_string(),
+                    kind: "method".to_string(),
+                    detail: "clear() -> None".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "extend".to_string(),
+                    kind: "method".to_string(),
+                    detail: "extend(other: Map[K, V]) -> None".to_string(),
+                },
+            ]);
+        }
+        "Set" => {
+            completions.extend([
+                AnalysisCompletion {
+                    name: "len".to_string(),
+                    kind: "method".to_string(),
+                    detail: "len() -> int32".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "is_empty".to_string(),
+                    kind: "method".to_string(),
+                    detail: "is_empty() -> bool".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "clone".to_string(),
+                    kind: "method".to_string(),
+                    detail: "clone() -> Set[T]".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "contains".to_string(),
+                    kind: "method".to_string(),
+                    detail: "contains(value: T) -> bool".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "insert".to_string(),
+                    kind: "method".to_string(),
+                    detail: "insert(value: T) -> bool".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "remove".to_string(),
+                    kind: "method".to_string(),
+                    detail: "remove(value: T) -> bool".to_string(),
+                },
+            ]);
+        }
+        "MapEntry" => {
+            completions.extend([
+                AnalysisCompletion {
+                    name: "key".to_string(),
+                    kind: "field".to_string(),
+                    detail: "key: K".to_string(),
+                },
+                AnalysisCompletion {
+                    name: "value".to_string(),
+                    kind: "field".to_string(),
+                    detail: "value: V".to_string(),
                 },
             ]);
         }
@@ -2112,7 +2471,42 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
 
     for builtin in [
         BuiltinMember::FloatSqrt,
+        BuiltinMember::StringLen,
+        BuiltinMember::StringContains,
+        BuiltinMember::StringStartsWith,
+        BuiltinMember::StringEndsWith,
+        BuiltinMember::StringSplit,
+        BuiltinMember::StringReplace,
+        BuiltinMember::StringToLower,
+        BuiltinMember::StringToUpper,
+        BuiltinMember::StringJoin,
+        BuiltinMember::StringStripPrefix,
+        BuiltinMember::StringStripSuffix,
+        BuiltinMember::StringTrim,
         BuiltinMember::StringClone,
+        BuiltinMember::ScalarToString,
+        BuiltinMember::VecInsert,
+        BuiltinMember::VecClear,
+        BuiltinMember::VecReverse,
+        BuiltinMember::MapLen,
+        BuiltinMember::MapIsEmpty,
+        BuiltinMember::MapClone,
+        BuiltinMember::MapGet,
+        BuiltinMember::MapSet,
+        BuiltinMember::MapRemove,
+        BuiltinMember::MapContainsKey,
+        BuiltinMember::MapKeys,
+        BuiltinMember::MapValues,
+        BuiltinMember::MapItems,
+        BuiltinMember::MapEntries,
+        BuiltinMember::MapClear,
+        BuiltinMember::MapExtend,
+        BuiltinMember::SetLen,
+        BuiltinMember::SetIsEmpty,
+        BuiltinMember::SetClone,
+        BuiltinMember::SetContains,
+        BuiltinMember::SetInsert,
+        BuiltinMember::SetRemove,
         BuiltinMember::ChannelClone,
         BuiltinMember::ChannelSend,
         BuiltinMember::ChannelRecv,
@@ -2141,7 +2535,23 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
         BuiltinFunction::Cancelled => Some(Type::named("bool")),
         BuiltinFunction::After => Some(Type::named("Duration")),
         BuiltinFunction::Sleep => Some(Type::Unit),
+        BuiltinFunction::Abs => None,
+        BuiltinFunction::Min => None,
+        BuiltinFunction::Max => None,
+        BuiltinFunction::Sqrt => None,
         BuiltinFunction::Channel => None,
+        BuiltinFunction::ParseInt32 => Some(Type::Named(
+            "Result".to_string(),
+            vec![Type::named("int32"), Type::named("String")],
+        )),
+        BuiltinFunction::ParseInt64 => Some(Type::Named(
+            "Result".to_string(),
+            vec![Type::named("int64"), Type::named("String")],
+        )),
+        BuiltinFunction::ParseFloat64 => Some(Type::Named(
+            "Result".to_string(),
+            vec![Type::named("float64"), Type::named("String")],
+        )),
     }
 }
 
@@ -2588,11 +2998,11 @@ mod tests {
     }
 
     #[test]
-    fn compiler_member_completion_for_string_exposes_clone_only() {
-        let source = include_str!("../../../examples/strings/string_clone.au");
+    fn compiler_member_completion_for_string_exposes_string_methods() {
+        let source = "def main() -> int32:\n    text = \"  aurora  \"\n    text.\n    return 0\n";
         let line_index = source
             .lines()
-            .position(|line| line.contains("text.clone()"))
+            .position(|line| line.contains("text."))
             .expect("string clone example should contain member access");
         let line_text = source.lines().nth(line_index).unwrap();
         let character = line_text.find('.').unwrap() + 1;
@@ -2604,8 +3014,68 @@ mod tests {
             .map(|item| item.name)
             .collect::<Vec<_>>();
 
+        assert!(names.contains(&"len".to_string()));
+        assert!(names.contains(&"contains".to_string()));
+        assert!(names.contains(&"starts_with".to_string()));
+        assert!(names.contains(&"ends_with".to_string()));
+        assert!(names.contains(&"trim".to_string()));
+        assert!(names.contains(&"split".to_string()));
+        assert!(names.contains(&"replace".to_string()));
+        assert!(names.contains(&"to_lower".to_string()));
+        assert!(names.contains(&"to_upper".to_string()));
+        assert!(names.contains(&"strip_prefix".to_string()));
+        assert!(names.contains(&"strip_suffix".to_string()));
         assert!(names.contains(&"clone".to_string()));
         assert!(!names.contains(&"as_str".to_string()));
+    }
+
+    #[test]
+    fn compiler_member_completion_for_map_exposes_map_methods() {
+        let source = "def main() -> int32:\n    mut counts = Map[String, int32]()\n    counts.\n    return 0\n";
+        let line_index = source
+            .lines()
+            .position(|line| line.contains("counts."))
+            .expect("map source should contain member access");
+        let line_text = source.lines().nth(line_index).unwrap();
+        let character = line_text.find('.').unwrap() + 1;
+
+        let completions = complete_source(source, line_index, character, Some('.'))
+            .expect("completion should work");
+        let names = completions
+            .into_iter()
+            .map(|item| item.name)
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"len".to_string()));
+        assert!(names.contains(&"is_empty".to_string()));
+        assert!(names.contains(&"clone".to_string()));
+        assert!(names.contains(&"get".to_string()));
+        assert!(names.contains(&"set".to_string()));
+        assert!(names.contains(&"remove".to_string()));
+        assert!(names.contains(&"contains_key".to_string()));
+        assert!(names.contains(&"keys".to_string()));
+        assert!(names.contains(&"values".to_string()));
+    }
+
+    #[test]
+    fn compiler_member_completion_for_vec_reports_insert_bool_detail() {
+        let source =
+            "def main() -> int32:\n    mut values = [1, 2, 3]\n    values.\n    return 0\n";
+        let line_index = source
+            .lines()
+            .position(|line| line.contains("values."))
+            .expect("vec source should contain member access");
+        let line_text = source.lines().nth(line_index).unwrap();
+        let character = line_text.find('.').unwrap() + 1;
+
+        let completions = complete_source(source, line_index, character, Some('.'))
+            .expect("completion should work");
+        let insert = completions
+            .into_iter()
+            .find(|item| item.name == "insert")
+            .expect("insert completion should exist");
+
+        assert_eq!(insert.detail, "insert(index: int32, value: T) -> bool");
     }
 
     #[test]
@@ -2642,6 +3112,10 @@ mod tests {
         assert!(names.contains(&"Point".to_string()));
         assert!(names.contains(&"distance".to_string()));
         assert!(names.contains(&"print".to_string()));
+        assert!(names.contains(&"abs".to_string()));
+        assert!(names.contains(&"min".to_string()));
+        assert!(names.contains(&"max".to_string()));
+        assert!(names.contains(&"sqrt".to_string()));
         let range = completions
             .iter()
             .find(|item| item.name == "range")

@@ -1,0 +1,27 @@
+# Test 7b: Default parameter edge cases
+
+# Default with expression (if supported)
+# def add_offset(x: int32, offset: int32 = 2 + 3) -> int32:
+#     return x + offset
+# print(add_offset(10))
+
+# Default string empty
+def maybe_greet(name: str = "") -> str:
+    return f"Hello {name}"
+
+print(maybe_greet())
+print(maybe_greet("Alice"))
+
+# Default bool false
+def check(x: int32, verbose: bool = false) -> int32:
+    return x * 2
+
+print(check(5))
+print(check(5, true))
+
+# Default float
+def circle_area(radius: float64, pi: float64 = 3.14159) -> float64:
+    return pi * radius * radius
+
+print(circle_area(10.0))
+print(circle_area(10.0, 3.0))

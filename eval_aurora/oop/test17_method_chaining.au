@@ -1,0 +1,21 @@
+copy class Vec2:
+    x: float64
+    y: float64
+
+    def add(borrow self, other: Vec2) -> Vec2:
+        return Vec2(x=self.x + other.x, y=self.y + other.y)
+
+    def scale(borrow self, factor: float64) -> Vec2:
+        return Vec2(x=self.x * factor, y=self.y * factor)
+
+    def length_sq(borrow self) -> float64:
+        return self.x * self.x + self.y * self.y
+
+def main() -> int32:
+    v1 = Vec2(x=1.0, y=2.0)
+    v2 = Vec2(x=3.0, y=4.0)
+    result = v1.add(other=v2).scale(factor=2.0)
+    print(result.x)
+    print(result.y)
+    print(result.length_sq())
+    return 0

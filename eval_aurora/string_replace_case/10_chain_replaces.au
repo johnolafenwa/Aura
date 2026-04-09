@@ -1,0 +1,5 @@
+def main() -> int32:
+    s = "aXa"
+    result = s.replace("a", "b").replace("b", "c")
+    print(result)
+    return 0

@@ -1,0 +1,9 @@
+# Bonus: Can we compare two vecs for equality?
+def main() -> int32:
+    a = [1, 2, 3]
+    b = [1, 2, 3]
+    if a == b:
+        print("equal")
+    else:
+        print("not equal")
+    return 0

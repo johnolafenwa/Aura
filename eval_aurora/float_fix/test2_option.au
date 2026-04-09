@@ -1,0 +1,18 @@
+def unwrap_float(opt: Option[float64]) -> float64:
+    match opt:
+        case Option.Some(v):
+            return v
+        case Option.None:
+            return 0.0
+
+def make_some(x: float64) -> Option[float64]:
+    return Option.Some(x)
+
+def make_none() -> Option[float64]:
+    return Option.None
+
+def main():
+    a = make_some(3.14)
+    b = make_none()
+    print(unwrap_float(a))
+    print(unwrap_float(b))

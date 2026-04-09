@@ -1,0 +1,24 @@
+def main() -> int32:
+    # Test float64 vec operations
+    mut v: Vec[float64] = []
+    v.push(1.5)
+    v.push(2.7)
+    v.push(3.14)
+
+    print(v.len())
+    print(v[0])
+    print(v[1])
+    print(v[2])
+
+    v[1] = 99.9
+    print(v[1])
+
+    match v.pop():
+        case Some(x):
+            print(x)
+        case None:
+            print("None")
+
+    print(v.len())
+
+    return 0

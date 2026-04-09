@@ -1,0 +1,5 @@
+# Test 3: Negative index - what happens?
+def main() -> int32:
+    v = [10, 20, 30]
+    print(v[-1])
+    return 0

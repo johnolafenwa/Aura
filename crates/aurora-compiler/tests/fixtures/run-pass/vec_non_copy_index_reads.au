@@ -1,0 +1,9 @@
+def main() -> int32:
+    names = ["Ada", "Grace"]
+    print(names[0])
+    print(names[1])
+
+    grids = [[1, 2], [3, 4]]
+    print(grids[0][1])
+    print(grids[1][0])
+    return 0

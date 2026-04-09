@@ -1,0 +1,8 @@
+# Test 02: For-in with sum accumulator
+def main() -> int32:
+    values = [1, 2, 3, 4, 5]
+    mut total: int32 = 0
+    for v in values:
+        total += v
+    print(total)
+    return 0

@@ -1,0 +1,4 @@
+def main() -> None:
+    x: Option[int32] = Option.None
+    if x == Option.None:
+        print(4)

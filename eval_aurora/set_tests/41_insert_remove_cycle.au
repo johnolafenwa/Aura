@@ -1,0 +1,24 @@
+def main() -> int32:
+    mut s = Set[int32]()
+    # insert 0..9
+    mut i = 0
+    while i < 10:
+        s.insert(i)
+        i = i + 1
+    print(s.len())
+    # remove evens
+    i = 0
+    while i < 10:
+        s.remove(i)
+        i = i + 2
+    print(s.len())
+    # verify odds remain
+    print(s.contains(1))
+    print(s.contains(3))
+    print(s.contains(5))
+    print(s.contains(7))
+    print(s.contains(9))
+    # verify evens gone
+    print(s.contains(0))
+    print(s.contains(2))
+    return 0

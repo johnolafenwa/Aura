@@ -1,0 +1,13 @@
+def main() -> int32:
+    results: Vec[Result[String, String]] = [Result.Ok("success"), Result.Err("failure")]
+    match results[0]:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+    match results[1]:
+        case Result.Ok(v):
+            print(v)
+        case Result.Err(e):
+            print(e)
+    return 0

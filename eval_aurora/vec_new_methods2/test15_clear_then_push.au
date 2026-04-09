@@ -1,0 +1,10 @@
+# Test 15: Clear then push new elements
+def main() -> int32:
+    mut v = [1, 2, 3]
+    v.clear()
+    v.push(10)
+    v.push(20)
+    print(v.len())
+    print(v[0])
+    print(v[1])
+    return 0

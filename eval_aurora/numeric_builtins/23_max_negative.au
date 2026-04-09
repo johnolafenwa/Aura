@@ -1,0 +1,3 @@
+def main() -> int32:
+    print(max(-10, -3))
+    return 0

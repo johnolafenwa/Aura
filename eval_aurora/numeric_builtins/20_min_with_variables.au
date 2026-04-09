@@ -1,0 +1,5 @@
+def main() -> int32:
+    x: int32 = 100
+    y: int32 = 42
+    print(min(x, y))
+    return 0

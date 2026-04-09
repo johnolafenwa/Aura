@@ -1,0 +1,8 @@
+# Test 04c: Multiple index accesses after borrow iteration
+def main() -> int32:
+    mut items: Vec[String] = ["first", "second", "third"]
+    for item in borrow items:
+        print(item)
+    print(items[0])
+    print(items[2])
+    return 0

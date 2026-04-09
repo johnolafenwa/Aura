@@ -1,0 +1,20 @@
+# Test 30: Build sorted vec by finding correct insertion position
+def main() -> int32:
+    mut sorted = Vec[int32]()
+    # Values to sort: 5, 3, 8, 1, 9, 2
+    mut values = [5, 3, 8, 1, 9, 2]
+
+    for val in values:
+        mut pos = 0
+        while pos < sorted.len():
+            if sorted[pos] > val:
+                break
+            pos += 1
+        sorted.insert(index=pos, value=val)
+
+    # Should print: 1 2 3 5 8 9
+    mut i = 0
+    while i < sorted.len():
+        print(sorted[i])
+        i += 1
+    return 0

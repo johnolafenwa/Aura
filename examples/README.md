@@ -45,6 +45,70 @@ The examples are organized by topic so they can serve both as quick references a
   - the `pass` no-op statement in empty classes and functions
   - prints `0`
 
+### `collections/`
+
+- `vec_basics.au`
+  - list literals, indexed reads, `Vec[T]` methods, and indexed mutation through `set(...)`
+  - prints:
+    - `3`
+    - `1`
+    - `2`
+    - `2`
+    - `20`
+    - `1`
+    - `99`
+    - `false`
+- `vec_iteration.au`
+  - empty-vector construction with `Vec[T]()`, `extend(...)`, explicit `Vec[T]` annotations, and iteration by value or `borrow`
+  - prints:
+    - `Ada`
+    - `Grace`
+    - `2`
+    - `9`
+- `vec_polish.au`
+  - non-copy index reads, `borrow mut` iteration, `insert(...)`, `reverse()`, `extend(...)`, `clear()`, and the richer `Vec[T]` method surface with equality
+  - prints:
+    - `Ada`
+    - `Grace`
+    - `true`
+    - `false`
+    - `4`
+    - `1`
+    - `14`
+    - `13`
+    - `12`
+    - `11`
+    - `true`
+    - `100`
+    - `true`
+    - `true`
+- `map_basics.au`
+  - `Map[K, V]` literals, `extend(...)`, `items()` / `entries()`, indexed reads/writes, and the maintained map method surface
+  - prints:
+    - `3`
+    - `true`
+    - `1`
+    - `1`
+    - `5`
+    - `aurora`
+    - `3`
+    - `3`
+    - `3`
+    - `3`
+    - `true`
+- `set_basics.au`
+  - `Set[T]` literals, shared-borrow iteration, deduplication, and the maintained set method surface
+  - prints:
+    - `3`
+    - `true`
+    - `false`
+    - `true`
+    - `true`
+    - `9`
+    - `true`
+    - `true`
+    - `1`
+
 ### `classes/`
 
 - `point_distance.au`
@@ -89,6 +153,16 @@ The examples are organized by topic so they can serve both as quick references a
   - `for` loops over `range(...)`, plus `break` and `continue`
   - prints `7`
   - current bootstrap note: `range(...)` bounds must fit the signed index space used by the compiler/runtime
+- `match_literals.au`
+  - statement-form `match` over literal `bool`, integer, and `String` cases
+  - prints:
+    - `negative`
+    - `zero`
+    - `many`
+    - `yes`
+    - `no`
+    - `repo`
+    - `other`
 - `while_break_continue.au`
   - loops, `break`, `continue`, and compound assignment
   - prints `ok`
@@ -273,6 +347,15 @@ Helper modules under `modules/pkg/` support the maintained module examples above
     - `3.0`
     - `1.25`
     - `2.0`
+- `numeric_builtins.au`
+  - builtin numeric helpers `abs(...)`, `min(...)`, `max(...)`, plus `sqrt(...)` and `float64.sqrt()`
+  - prints:
+    - `7`
+    - `3.5`
+    - `2`
+    - `12`
+    - `9.0`
+    - `9.0`
 - `uint128_values.au`
   - full-range `uint128` literals and arithmetic through the current runtimes and direct backend
   - prints:
@@ -293,6 +376,38 @@ Helper modules under `modules/pkg/` support the maintained module examples above
 - `string_clone.au`
   - `String.clone()` on owned strings
   - prints `aurora`
+- `string_methods.au`
+  - the maintained `String` method surface: `len()`, `contains(...)`, `starts_with(...)`, `ends_with(...)`, `split(...)`, `replace(...)`, `to_lower()`, `to_upper()`, `strip_prefix(...)`, `strip_suffix(...)`, `trim()`, and `clone()`
+  - prints:
+    - `15`
+    - `true`
+    - `true`
+    - `true`
+    - `aurora repo`
+    - `2`
+    - `aurora`
+    - `repo`
+    - `aurora lang`
+    - `aurora repo`
+    - `AURORA REPO`
+    - `repo`
+    - `none`
+    - `aurora`
+    - `none`
+    - `11`
+- `string_parsing_and_formatting.au`
+  - parsing builtins, scalar and boolean `.to_string()`, and `String.join(...)`
+  - prints:
+    - `42`
+    - `-9000000000`
+    - `3.5`
+    - `true`
+    - `aurora-lang-tests`
+    - `true`
+    - `12`
+    - `4`
+    - `9`
+    - `3.0`
 - `borrow_str.au`
   - borrowed string parameters with `borrow str`
   - prints `Hello, Aurora`
@@ -321,10 +436,16 @@ cargo run -p aura -- run examples/basics/named_builtin_arguments.au
 cargo run -p aura -- run examples/basics/default_arguments.au
 cargo run -p aura -- run examples/basics/borrow_parameters.au
 cargo run -p aura -- run examples/basics/pass_keyword.au
+cargo run -p aura -- run examples/collections/vec_basics.au
+cargo run -p aura -- run examples/collections/vec_iteration.au
+cargo run -p aura -- run examples/collections/vec_polish.au
+cargo run -p aura -- run examples/collections/map_basics.au
+cargo run -p aura -- run examples/collections/set_basics.au
 cargo run -p aura -- run examples/classes/point_distance.au
 cargo run -p aura -- run examples/classes/methods.au
 cargo run -p aura -- run examples/classes/mutating_methods.au
 cargo run -p aura -- run examples/control_flow/for_range.au
+cargo run -p aura -- run examples/control_flow/match_literals.au
 cargo run -p aura -- run examples/control_flow/boolean_logic.au
 cargo run -p aura -- run examples/control_flow/while_break_continue.au
 cargo run -p aura -- run examples/enums/result_match.au
@@ -351,8 +472,11 @@ cargo run -p aura -- run examples/concurrency/sleep_builtin.au
 cargo run -p aura -- run examples/concurrency/minute_duration.au
 cargo run -p aura -- run examples/numbers/float32_values.au
 cargo run -p aura -- run examples/numbers/numeric_casts.au
+cargo run -p aura -- run examples/numbers/numeric_builtins.au
 cargo run -p aura -- run examples/numbers/unary_minus.au
 cargo run -p aura -- run examples/strings/string_clone.au
+cargo run -p aura -- run examples/strings/string_methods.au
+cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au
 ```
 
 ## Build Standalone Artifacts

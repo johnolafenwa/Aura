@@ -1,0 +1,15 @@
+enum Value:
+    IntVal(int32)
+    FloatVal(float64)
+
+def to_int(v: Value) -> int32:
+    match v:
+        case Value.IntVal(i):
+            return i
+        case Value.FloatVal(f):
+            return 0
+
+def main() -> int32:
+    a = Value.IntVal(42)
+    print(to_int(a))
+    return 0

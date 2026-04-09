@@ -1,0 +1,9 @@
+def main() -> int32:
+    names = ["Alice", "Bob", "Charlie"]
+    if names[0] == "Alice":
+        print("found Alice")
+    if names[1] == "Bob":
+        print("found Bob")
+    if names[2] == "Charlie":
+        print("found Charlie")
+    return 0

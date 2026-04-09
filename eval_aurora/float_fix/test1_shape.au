@@ -1,0 +1,16 @@
+enum Shape:
+    Circle(float64)
+    Square(float64)
+
+def area(s: Shape) -> float64:
+    match s:
+        case Shape.Circle(r):
+            return 3.14159 * r * r
+        case Shape.Square(side):
+            return side * side
+
+def main():
+    c = Shape.Circle(5.0)
+    s = Shape.Square(3.0)
+    print(area(s=c))
+    print(area(s=s))

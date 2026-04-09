@@ -1,0 +1,5 @@
+error: empty list literals require an expected `Vec[T]` type annotation in the bootstrap compiler
+ --> crates/aurora-compiler/tests/fixtures/check-fail/vec_empty_literal_requires_type.au:2:14
+  |
+2 |     values = []
+  |              ^

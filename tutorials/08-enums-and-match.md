@@ -1,6 +1,6 @@
 # Enums And Match
 
-Aurora now supports enum declarations with unit variants, single-payload variants, and exhaustive `match`.
+Aurora now supports enum declarations with unit variants, single-payload variants, and exhaustive statement-form `match` over both enums and a small literal subset.
 
 ## Declaring An Enum
 
@@ -98,6 +98,36 @@ Unqualified variants like `case Ok(value):` are supported when the scrutinee alr
 
 See [examples/enums/match_borrow.au](../examples/enums/match_borrow.au).
 
+## Literal Match Patterns
+
+Aurora also supports literal `case` arms for `bool`, integer, and `String` scrutinees:
+
+```python
+def describe_number(value: int32) -> String:
+    match value:
+        case 0:
+            return "zero"
+        case 1:
+            return "one"
+        case _:
+            return "many"
+```
+
+Boolean matches can stay fully exhaustive without a wildcard when they cover both `true` and `false`:
+
+```python
+def describe_flag(flag: bool) -> String:
+    match flag:
+        case true:
+            return "yes"
+        case false:
+            return "no"
+```
+
+Open-ended literal domains like integers and strings still need a final wildcard arm.
+
+See [examples/control_flow/match_literals.au](../examples/control_flow/match_literals.au).
+
 ## Current Limits
 
 The bootstrap compiler currently supports:
@@ -107,6 +137,7 @@ The bootstrap compiler currently supports:
 - statement-form `match`
 - variant patterns of the form `Enum.Variant` and `Enum.Variant(name)`
 - unqualified variant patterns such as `case Ok(value):` when the scrutinee type is known
+- literal patterns over `bool`, integer, and `String` scrutinees
 - `match borrow value:` and `match borrow mut value:`
 - wildcard patterns with `case _:`
 
@@ -114,6 +145,7 @@ It does not yet support:
 
 - nested patterns
 - expression-form `match`
+- floating-point literal patterns
 - keyword arguments for variant payload construction
 - multi-payload variants
 

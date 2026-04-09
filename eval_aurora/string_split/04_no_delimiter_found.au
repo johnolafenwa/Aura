@@ -1,0 +1,5 @@
+def main() -> int32:
+    result = "hello".split(",")
+    print(result.len())
+    print(result[0])
+    return 0

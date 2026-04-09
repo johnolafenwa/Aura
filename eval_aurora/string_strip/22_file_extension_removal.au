@@ -1,0 +1,8 @@
+def main() -> int32:
+    filename = "photo.jpg"
+    match filename.strip_suffix(".jpg"):
+        case Some(base):
+            print(base)
+        case None:
+            print("FAIL: expected Some")
+    return 0

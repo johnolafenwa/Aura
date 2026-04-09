@@ -1,0 +1,11 @@
+def main() -> int32:
+    # Count unique words
+    words = ["the", "cat", "sat", "on", "the", "mat", "the", "cat"]
+    mut unique = Set[String]()
+    for w in words:
+        unique.insert(w)
+    print(f"total words: {8}")
+    print(f"unique words: {unique.len()}")
+    print(unique.contains("cat"))
+    print(unique.contains("dog"))
+    return 0

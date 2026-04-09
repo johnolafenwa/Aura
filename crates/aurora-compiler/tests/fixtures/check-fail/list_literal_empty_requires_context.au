@@ -1,0 +1,3 @@
+def main() -> int32:
+    xs = []
+    return 0

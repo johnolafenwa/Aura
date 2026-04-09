@@ -1,0 +1,30 @@
+# Test 8: Remove at index 0 repeatedly - verify shifting
+def main() -> int32:
+    mut v = [10, 20, 30, 40, 50]
+    print(v.len())
+
+    # Remove first element repeatedly
+    match v.remove(0):
+        case Some(val):
+            print(val)
+        case None:
+            print(-1)
+
+    match v.remove(0):
+        case Some(val):
+            print(val)
+        case None:
+            print(-1)
+
+    match v.remove(0):
+        case Some(val):
+            print(val)
+        case None:
+            print(-1)
+
+    # Print remaining
+    print(v.len())
+    for x in v:
+        print(x)
+
+    return 0

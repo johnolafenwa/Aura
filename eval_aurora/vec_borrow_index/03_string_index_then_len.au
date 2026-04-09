@@ -1,0 +1,5 @@
+def main() -> int32:
+    names = ["Alice", "Bob", "Charlie"]
+    print(names[0])
+    print(names.len())
+    return 0

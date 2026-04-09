@@ -1,0 +1,15 @@
+# Test 13: Reverse a vec in-place using swap in a loop
+def reverse(arr: borrow mut Vec[int32]):
+    mut left: int32 = 0
+    mut right = arr.len() - 1
+    while left < right:
+        arr.swap(left, right)
+        left += 1
+        right -= 1
+
+def main() -> int32:
+    mut v = [1, 2, 3, 4, 5]
+    reverse(v)
+    for x in borrow v:
+        print(x)
+    return 0

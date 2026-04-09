@@ -1,0 +1,33 @@
+def main() -> int32:
+    match parse_int32("42"):
+        case Result.Ok(value):
+            print(value.to_string())
+        case Result.Err(_):
+            print("bad-int32")
+
+    match parse_int64("-9000000000"):
+        case Result.Ok(value):
+            print(value.to_string())
+        case Result.Err(_):
+            print("bad-int64")
+
+    match parse_float64("3.5"):
+        case Result.Ok(value):
+            print(value.to_string())
+        case Result.Err(_):
+            print("bad-float64")
+
+    match parse_int32("oops"):
+        case Result.Ok(_):
+            print("false")
+        case Result.Err(message):
+            print(message.contains("invalid").to_string())
+
+    parts = ["aurora", "lang", "tests"]
+    print("-".join(parts))
+    print(true.to_string())
+    print(abs(-12).to_string())
+    print(min(4, 9).to_string())
+    print(max(4, 9).to_string())
+    print(sqrt(9.0).to_string())
+    return 0

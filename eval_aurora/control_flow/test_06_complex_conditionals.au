@@ -1,0 +1,50 @@
+# Test 06: Complex conditionals - compound boolean expressions in if conditions
+
+def main() -> int32:
+    a = true
+    b = false
+    c = true
+
+    # and
+    if a and c:
+        print("a and c: true")
+    else:
+        print("a and c: false")
+
+    # or
+    if a or b:
+        print("a or b: true")
+    else:
+        print("a or b: false")
+
+    # not
+    if not b:
+        print("not b: true")
+    else:
+        print("not b: false")
+
+    # compound: and + or + not
+    if (a and not b) or (b and c):
+        print("compound 1: true")
+    else:
+        print("compound 1: false")
+
+    # all false
+    if b and not a:
+        print("compound 2: true")
+    else:
+        print("compound 2: false")
+
+    # numeric comparisons combined
+    x: int32 = 15
+    if x > 10 and x < 20:
+        print("in range")
+    else:
+        print("out of range")
+
+    if x < 5 or x > 10:
+        print("outside 5-10")
+    else:
+        print("inside 5-10")
+
+    return 0

@@ -1,0 +1,12 @@
+def build_map() -> Map[String, int32]:
+    mut m = Map[String, int32]()
+    m.set("x", 10)
+    m.set("y", 20)
+    return m
+
+def main() -> int32:
+    m = build_map()
+    print(m["x"])
+    print(m["y"])
+    print(m.len())
+    return 0

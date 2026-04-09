@@ -1,0 +1,12 @@
+def main() -> int32:
+    mut s = Set[int32]()
+    mut i = 0
+    while i < 100:
+        s.insert(i)
+        i = i + 1
+    print(s.len())
+    print(s.contains(0))
+    print(s.contains(50))
+    print(s.contains(99))
+    print(s.contains(100))
+    return 0

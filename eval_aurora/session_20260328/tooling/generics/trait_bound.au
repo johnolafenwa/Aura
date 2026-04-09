@@ -1,0 +1,24 @@
+trait Named:
+    def name(borrow self) -> String
+
+class User:
+    label: String
+
+impl Named for User:
+    def name(borrow self) -> String:
+        return self.label.clone()
+
+class Wrapper[T: Named]:
+    value: T
+
+    def render(borrow self) -> String:
+        return self.value.name()
+
+def show[T: Named](value: T) -> String:
+    return value.name()
+
+def main() -> int32:
+    wrapped = Wrapper(value=User(label="aurora"))
+    print(wrapped.render())
+    print(show(value=User(label="beta")))
+    return 0

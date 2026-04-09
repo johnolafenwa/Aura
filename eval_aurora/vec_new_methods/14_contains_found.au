@@ -1,0 +1,7 @@
+# Test 14: contains - element found
+def main() -> int32:
+    v = [1, 2, 3, 4, 5]
+    print(v.contains(2))
+    print(v.contains(5))
+    print(v.contains(1))
+    return 0

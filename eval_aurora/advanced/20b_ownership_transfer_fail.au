@@ -1,0 +1,16 @@
+# Test 20b: Verify caller can't use value after ownership transfer
+class Resource:
+    name: String
+    id: int32
+
+def process(r: Resource) -> int32:
+    print(r.name)
+    return r.id
+
+def main() -> int32:
+    res = Resource(name="file.txt", id=42)
+    result = process(res)
+    print(result)
+    # This should fail - res was moved
+    print(res.name)
+    return 0

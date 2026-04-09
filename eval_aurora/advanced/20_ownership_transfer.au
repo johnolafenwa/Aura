@@ -1,0 +1,16 @@
+# Test 20: Ownership transfer in function calls
+class Resource:
+    name: String
+    id: int32
+
+def process(r: Resource) -> int32:
+    print(r.name)
+    return r.id
+
+def main() -> int32:
+    res = Resource(name="file.txt", id=42)
+    result = process(res)
+    print(result)
+    # res was moved into process, should not be usable
+    # This test verifies the move happened successfully
+    return 0

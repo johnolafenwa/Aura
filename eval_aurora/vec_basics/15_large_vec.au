@@ -1,0 +1,18 @@
+def main() -> int32:
+    mut v = Vec[int32]()
+
+    # Push 1000 elements
+    for i in range(1000):
+        v.push(i)
+
+    print(v.len())
+
+    # Compute sum
+    mut total: int32 = 0
+    for x in v:
+        total += x
+
+    # Sum of 0..999 = 999*1000/2 = 499500
+    print(total)
+
+    return 0

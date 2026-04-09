@@ -1,0 +1,18 @@
+mut n: int32 = 0
+mut total: int32 = 0
+
+while n < 10:
+    n += 1
+
+    if n % 2 == 0:
+        continue
+
+    if n > 7:
+        break
+
+    total += n
+
+if total == 16:
+    print("ok")
+else:
+    print("bad")

@@ -1,0 +1,23 @@
+def print_opt(value: Option[int32]):
+    match value:
+        case Some(inner):
+            print(inner)
+        case None:
+            print("None")
+
+def main() -> int32:
+    v = [10, 20, 30, 40, 50]
+
+    # Get valid indices
+    print_opt(v.get(0))
+    print_opt(v.get(1))
+    print_opt(v.get(2))
+    print_opt(v.get(3))
+    print_opt(v.get(4))
+
+    # Get out-of-bounds indices - should return None
+    print_opt(v.get(5))
+    print_opt(v.get(100))
+    print_opt(v.get(999))
+
+    return 0

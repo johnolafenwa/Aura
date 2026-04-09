@@ -1,0 +1,16 @@
+# Test 11: Set at out-of-bounds index on 3-element vec
+def main() -> int32:
+    mut v = [1, 2, 3]
+    result = v.set(index=100, value=42)
+    match result:
+        case Some(old):
+            print(old)
+        case None:
+            print("set OOB returned None")
+
+    # Verify vec unchanged
+    print(v.len())
+    print(v[0])
+    print(v[1])
+    print(v[2])
+    return 0

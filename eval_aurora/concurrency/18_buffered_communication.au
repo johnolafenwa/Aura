@@ -1,0 +1,24 @@
+# Test 18: Buffered communication - multiple sends before receives
+def main() -> int32:
+    ch: Channel[int32] = channel()
+
+    # Send multiple values
+    ch.send(1)
+    ch.send(2)
+    ch.send(3)
+    ch.send(4)
+    ch.send(5)
+
+    # Now receive all
+    mut sum: int32 = 0
+    mut count: int32 = 0
+    while count < 5:
+        match ch.recv():
+            case Option.Some(v):
+                sum += v
+                count += 1
+            case Option.None:
+                break
+
+    print(sum)
+    return 0

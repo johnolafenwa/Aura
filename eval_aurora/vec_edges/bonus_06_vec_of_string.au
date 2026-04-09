@@ -1,0 +1,8 @@
+# Bonus: Vec of String operations
+def main() -> int32:
+    mut v = ["hello", "world"]
+    v.push("aurora")
+    print(v.len())
+    for s in v:
+        print(s)
+    return 0

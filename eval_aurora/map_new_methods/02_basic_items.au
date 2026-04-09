@@ -1,0 +1,5 @@
+def main() -> int32:
+    m = {"a": 1, "b": 2}
+    for e in m.items():
+        print(f"{e.key} {e.value}")
+    return 0

@@ -1,0 +1,18 @@
+enum Maybe[T]:
+    Just(T)
+    Nothing
+
+def unwrap_or[T](m: Maybe[T], default: T) -> T:
+    match m:
+        case Maybe.Just(v):
+            return v
+        case Maybe.Nothing:
+            return default
+
+def main() -> int32:
+    val: Maybe[int32] = Maybe.Just(99)
+    empty: Maybe[int32] = Maybe.Nothing
+
+    print(unwrap_or(m=val, default=0))
+    print(unwrap_or(m=empty, default=-1))
+    return 0

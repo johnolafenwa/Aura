@@ -1,0 +1,25 @@
+trait A:
+    def a_val(borrow self) -> int32
+
+trait B:
+    def b_val(borrow self) -> int32
+
+class Widget:
+    x: int32
+    y: int32
+
+impl A for Widget:
+    def a_val(borrow self) -> int32:
+        return self.x
+
+impl B for Widget:
+    def b_val(borrow self) -> int32:
+        return self.y
+
+def sum_ab[T: A + B](value: T) -> int32:
+    return value.a_val() + value.b_val()
+
+def main() -> int32:
+    w = Widget(x=10, y=20)
+    print(sum_ab(value=w))
+    return 0

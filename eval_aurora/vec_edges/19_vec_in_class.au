@@ -1,0 +1,12 @@
+# Test 19: Vec as a class field
+class Container:
+    items: Vec[int32]
+    name: String
+
+def main() -> int32:
+    mut c = Container(items=[1, 2, 3], name="test")
+    print(c.name)
+    print(c.items.len())
+    for item in c.items:
+        print(item)
+    return 0

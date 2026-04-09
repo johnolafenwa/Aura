@@ -1,0 +1,3 @@
+def main() -> int32:
+    print(min(0, 42))
+    return 0

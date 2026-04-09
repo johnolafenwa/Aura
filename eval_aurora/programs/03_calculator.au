@@ -1,0 +1,63 @@
+## Simple calculator with hardcoded test cases.
+## Uses Result for division-by-zero handling.
+
+enum Op:
+    Add
+    Subtract
+    Multiply
+    Divide
+
+def calculate(a: float64, b: float64, op: Op) -> Result[float64, String]:
+    match op:
+        case Op.Add:
+            return Result.Ok(a + b)
+        case Op.Subtract:
+            return Result.Ok(a - b)
+        case Op.Multiply:
+            return Result.Ok(a * b)
+        case Op.Divide:
+            if b == 0.0:
+                return Result.Err("Error: division by zero")
+            return Result.Ok(a / b)
+
+def print_result(a: float64, b: float64, op_name: String, result: Result[float64, String]):
+    match result:
+        case Result.Ok(value):
+            print(f"{a} {op_name} {b} = {value}")
+        case Result.Err(message):
+            print(f"{a} {op_name} {b} -> {message}")
+
+def main() -> int32:
+    ## Addition tests
+    r1 = calculate(10.0, 5.0, Op.Add)
+    print_result(10.0, 5.0, "+", r1)
+
+    r2 = calculate(-3.5, 7.2, Op.Add)
+    print_result(-3.5, 7.2, "+", r2)
+
+    ## Subtraction tests
+    r3 = calculate(20.0, 8.0, Op.Subtract)
+    print_result(20.0, 8.0, "-", r3)
+
+    r4 = calculate(5.0, 10.0, Op.Subtract)
+    print_result(5.0, 10.0, "-", r4)
+
+    ## Multiplication tests
+    r5 = calculate(6.0, 7.0, Op.Multiply)
+    print_result(6.0, 7.0, "*", r5)
+
+    r6 = calculate(-2.5, 4.0, Op.Multiply)
+    print_result(-2.5, 4.0, "*", r6)
+
+    ## Division tests
+    r7 = calculate(100.0, 4.0, Op.Divide)
+    print_result(100.0, 4.0, "/", r7)
+
+    r8 = calculate(7.0, 2.0, Op.Divide)
+    print_result(7.0, 2.0, "/", r8)
+
+    ## Division by zero
+    r9 = calculate(10.0, 0.0, Op.Divide)
+    print_result(10.0, 0.0, "/", r9)
+
+    return 0

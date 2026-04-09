@@ -1,0 +1,15 @@
+# Test 23: Double reverse equals original
+def print_bool(value: bool):
+    match value:
+        case true:
+            print("true")
+        case false:
+            print("false")
+
+def main() -> int32:
+    mut v = [1, 2, 3, 4, 5]
+    mut original = v.clone()
+    v.reverse()
+    v.reverse()
+    print_bool(v == original)
+    return 0

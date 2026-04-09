@@ -1,0 +1,42 @@
+def print_int_option(value: Option[int32]):
+    match value:
+        case Some(inner):
+            print(inner)
+        case None:
+            print("None")
+
+def main() -> int32:
+    mut words: Vec[String] = ["hello", "world", "hello", "aurora", "world", "hello"]
+    mut freq = Map[String, int32]()
+
+    for word in borrow words:
+        if freq.contains_key(word):
+            old = freq[word]
+            freq[word] = old + 1
+        else:
+            freq[word] = 1
+
+    print(freq.len())
+    print_int_option(freq.get("hello"))
+    print_int_option(freq.get("world"))
+    print_int_option(freq.get("aurora"))
+
+    mut counts: Vec[int32] = []
+    for key in freq.keys():
+        counts.push(freq[key])
+
+    mut min_count = counts[0]
+    mut max_count = counts[0]
+    for c in borrow counts:
+        min_count = min(min_count, c)
+        max_count = max(max_count, c)
+
+    print(min_count)
+    print(max_count)
+    print(abs(min_count - max_count))
+
+    total_words = words.len()
+    unique_words = freq.len()
+    print(total_words)
+    print(unique_words)
+    return 0

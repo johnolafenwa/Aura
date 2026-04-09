@@ -1,0 +1,6 @@
+import helper
+
+def main() -> int32:
+    pair = helper.make(value=2)
+    print(pair.hidden())
+    return 0

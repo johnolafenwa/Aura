@@ -1,0 +1,9 @@
+def main() -> int32:
+    result = "Hello".strip_suffix("Hello")
+    match result:
+        case Some(inner):
+            print("got empty: " + inner + ".")
+            print(inner.len())
+        case None:
+            print("FAIL: expected Some")
+    return 0

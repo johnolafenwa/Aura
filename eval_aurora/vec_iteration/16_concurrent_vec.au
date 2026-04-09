@@ -1,0 +1,20 @@
+# Test 16: Build vec from channel values (producer/consumer)
+def producer(out: Channel[int32]):
+    out.send(10)
+    out.send(20)
+    out.send(30)
+    out.close()
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+    task = spawn producer(ch.clone())
+
+    mut collected: Vec[int32] = []
+    for val in ch:
+        collected.push(val)
+
+    task.join()
+    print(collected.len())
+    for item in collected:
+        print(item)
+    return 0

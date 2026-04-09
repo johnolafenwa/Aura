@@ -166,9 +166,44 @@ const RANGE_START_STOP_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::required("start"),
     CallableParam::required("stop"),
 ];
+const ABS_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
+const MIN_MAX_PARAMS: [CallableParam<'static>; 2] = [
+    CallableParam::required("left"),
+    CallableParam::required("right"),
+];
+const SQRT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
+const PARSE_TEXT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
 const AFTER_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("duration")];
 const SLEEP_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("duration")];
 const CHANNEL_SEND_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
+const VEC_INDEX_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("index")];
+const VEC_PUSH_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
+const VEC_SET_PARAMS: [CallableParam<'static>; 2] = [
+    CallableParam::required("index"),
+    CallableParam::required("value"),
+];
+const VEC_SWAP_PARAMS: [CallableParam<'static>; 2] = [
+    CallableParam::required("first"),
+    CallableParam::required("second"),
+];
+const VEC_INSERT_PARAMS: [CallableParam<'static>; 2] = [
+    CallableParam::required("index"),
+    CallableParam::required("value"),
+];
+const VEC_EXTEND_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("other")];
+const STRING_TEXT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
+const STRING_REPLACE_PARAMS: [CallableParam<'static>; 2] = [
+    CallableParam::required("from"),
+    CallableParam::required("to"),
+];
+const STRING_JOIN_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("parts")];
+const MAP_KEY_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("key")];
+const MAP_SET_PARAMS: [CallableParam<'static>; 2] = [
+    CallableParam::required("key"),
+    CallableParam::required("value"),
+];
+const MAP_EXTEND_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("other")];
+const SET_VALUE_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BuiltinFunction {
@@ -179,6 +214,13 @@ pub enum BuiltinFunction {
     Cancelled,
     After,
     Sleep,
+    Abs,
+    Min,
+    Max,
+    Sqrt,
+    ParseInt32,
+    ParseInt64,
+    ParseFloat64,
 }
 
 pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
@@ -189,6 +231,13 @@ pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction::Cancelled,
     BuiltinFunction::After,
     BuiltinFunction::Sleep,
+    BuiltinFunction::Abs,
+    BuiltinFunction::Min,
+    BuiltinFunction::Max,
+    BuiltinFunction::Sqrt,
+    BuiltinFunction::ParseInt32,
+    BuiltinFunction::ParseInt64,
+    BuiltinFunction::ParseFloat64,
 ];
 
 impl BuiltinFunction {
@@ -201,6 +250,13 @@ impl BuiltinFunction {
             "cancelled" => Some(Self::Cancelled),
             "after" => Some(Self::After),
             "sleep" => Some(Self::Sleep),
+            "abs" => Some(Self::Abs),
+            "min" => Some(Self::Min),
+            "max" => Some(Self::Max),
+            "sqrt" => Some(Self::Sqrt),
+            "parse_int32" => Some(Self::ParseInt32),
+            "parse_int64" => Some(Self::ParseInt64),
+            "parse_float64" => Some(Self::ParseFloat64),
             _ => None,
         }
     }
@@ -214,6 +270,13 @@ impl BuiltinFunction {
             Self::Cancelled => "cancelled",
             Self::After => "after",
             Self::Sleep => "sleep",
+            Self::Abs => "abs",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Sqrt => "sqrt",
+            Self::ParseInt32 => "parse_int32",
+            Self::ParseInt64 => "parse_int64",
+            Self::ParseFloat64 => "parse_float64",
         }
     }
 
@@ -226,6 +289,13 @@ impl BuiltinFunction {
             Self::Cancelled => "cancelled() -> bool",
             Self::After => "after(duration: Duration) -> Duration",
             Self::Sleep => "sleep(duration: Duration) -> None",
+            Self::Abs => "abs(value: number) -> number",
+            Self::Min => "min(left: number, right: number) -> number",
+            Self::Max => "max(left: number, right: number) -> number",
+            Self::Sqrt => "sqrt(value: float32|float64) -> float32|float64",
+            Self::ParseInt32 => "parse_int32(text: String) -> Result[int32, String]",
+            Self::ParseInt64 => "parse_int64(text: String) -> Result[int64, String]",
+            Self::ParseFloat64 => "parse_float64(text: String) -> Result[float64, String]",
         }
     }
 
@@ -246,6 +316,13 @@ impl BuiltinFunction {
                 "Builds a timeout/select timer expression from a duration literal or duration value."
             }
             Self::Sleep => "Blocks the current task for the requested duration.",
+            Self::Abs => "Returns the absolute value of an integer or float.",
+            Self::Min => "Returns the smaller of two numeric values of the same type.",
+            Self::Max => "Returns the larger of two numeric values of the same type.",
+            Self::Sqrt => "Returns the square root of a `float32` or `float64` value.",
+            Self::ParseInt32 => "Parses a `String` into an `int32`, returning `Result.Err(String)` on failure.",
+            Self::ParseInt64 => "Parses a `String` into an `int64`, returning `Result.Err(String)` on failure.",
+            Self::ParseFloat64 => "Parses a `String` into a `float64`, returning `Result.Err(String)` on failure.",
         }
     }
 
@@ -320,6 +397,41 @@ impl BuiltinFunction {
                 span,
                 CallConvention::PositionalOrNamed,
             ),
+            Self::Abs => bind_call_arguments(
+                "`abs`",
+                &ABS_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::Min => bind_call_arguments(
+                "`min`",
+                &MIN_MAX_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::Max => bind_call_arguments(
+                "`max`",
+                &MIN_MAX_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::Sqrt => bind_call_arguments(
+                "`sqrt`",
+                &SQRT_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::ParseInt32 | Self::ParseInt64 | Self::ParseFloat64 => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &PARSE_TEXT_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
         }
     }
 }
@@ -327,6 +439,52 @@ impl BuiltinFunction {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BuiltinMember {
     FloatSqrt,
+    StringLen,
+    StringContains,
+    StringStartsWith,
+    StringEndsWith,
+    StringSplit,
+    StringReplace,
+    StringToLower,
+    StringToUpper,
+    StringStripPrefix,
+    StringStripSuffix,
+    StringTrim,
+    StringJoin,
+    ScalarToString,
+    VecLen,
+    VecIsEmpty,
+    VecClone,
+    VecPush,
+    VecPop,
+    VecGet,
+    VecSet,
+    VecRemove,
+    VecSwap,
+    VecContains,
+    VecExtend,
+    VecInsert,
+    VecClear,
+    VecReverse,
+    MapLen,
+    MapIsEmpty,
+    MapClone,
+    MapGet,
+    MapSet,
+    MapRemove,
+    MapContainsKey,
+    MapKeys,
+    MapValues,
+    MapItems,
+    MapEntries,
+    MapClear,
+    MapExtend,
+    SetLen,
+    SetIsEmpty,
+    SetClone,
+    SetContains,
+    SetInsert,
+    SetRemove,
     StringClone,
     ChannelClone,
     ChannelSend,
@@ -341,6 +499,66 @@ impl BuiltinMember {
     pub fn resolve(receiver_base: &str, name: &str) -> Option<Self> {
         match (receiver_base, name) {
             ("float64", "sqrt") => Some(Self::FloatSqrt),
+            ("bool", "to_string") => Some(Self::ScalarToString),
+            ("int8", "to_string")
+            | ("int16", "to_string")
+            | ("int32", "to_string")
+            | ("int64", "to_string")
+            | ("int128", "to_string")
+            | ("intsize", "to_string")
+            | ("uint8", "to_string")
+            | ("uint16", "to_string")
+            | ("uint32", "to_string")
+            | ("uint64", "to_string")
+            | ("uint128", "to_string")
+            | ("uintsize", "to_string")
+            | ("float32", "to_string")
+            | ("float64", "to_string") => Some(Self::ScalarToString),
+            ("Vec", "len") => Some(Self::VecLen),
+            ("Vec", "is_empty") => Some(Self::VecIsEmpty),
+            ("Vec", "clone") => Some(Self::VecClone),
+            ("Vec", "push") => Some(Self::VecPush),
+            ("Vec", "pop") => Some(Self::VecPop),
+            ("Vec", "get") => Some(Self::VecGet),
+            ("Vec", "set") => Some(Self::VecSet),
+            ("Vec", "remove") => Some(Self::VecRemove),
+            ("Vec", "swap") => Some(Self::VecSwap),
+            ("Vec", "contains") => Some(Self::VecContains),
+            ("Vec", "extend") => Some(Self::VecExtend),
+            ("Vec", "insert") => Some(Self::VecInsert),
+            ("Vec", "clear") => Some(Self::VecClear),
+            ("Vec", "reverse") => Some(Self::VecReverse),
+            ("Map", "len") => Some(Self::MapLen),
+            ("Map", "is_empty") => Some(Self::MapIsEmpty),
+            ("Map", "clone") => Some(Self::MapClone),
+            ("Map", "get") => Some(Self::MapGet),
+            ("Map", "set") => Some(Self::MapSet),
+            ("Map", "remove") => Some(Self::MapRemove),
+            ("Map", "contains_key") => Some(Self::MapContainsKey),
+            ("Map", "keys") => Some(Self::MapKeys),
+            ("Map", "values") => Some(Self::MapValues),
+            ("Map", "items") => Some(Self::MapItems),
+            ("Map", "entries") => Some(Self::MapEntries),
+            ("Map", "clear") => Some(Self::MapClear),
+            ("Map", "extend") => Some(Self::MapExtend),
+            ("Set", "len") => Some(Self::SetLen),
+            ("Set", "is_empty") => Some(Self::SetIsEmpty),
+            ("Set", "clone") => Some(Self::SetClone),
+            ("Set", "contains") => Some(Self::SetContains),
+            ("Set", "insert") => Some(Self::SetInsert),
+            ("Set", "remove") => Some(Self::SetRemove),
+            ("String", "len") => Some(Self::StringLen),
+            ("String", "contains") => Some(Self::StringContains),
+            ("String", "starts_with") => Some(Self::StringStartsWith),
+            ("String", "ends_with") => Some(Self::StringEndsWith),
+            ("String", "split") => Some(Self::StringSplit),
+            ("String", "replace") => Some(Self::StringReplace),
+            ("String", "to_lower") => Some(Self::StringToLower),
+            ("String", "to_upper") => Some(Self::StringToUpper),
+            ("String", "strip_prefix") => Some(Self::StringStripPrefix),
+            ("String", "strip_suffix") => Some(Self::StringStripSuffix),
+            ("String", "trim") => Some(Self::StringTrim),
+            ("String", "join") => Some(Self::StringJoin),
             ("String", "clone") => Some(Self::StringClone),
             ("Channel", "clone") => Some(Self::ChannelClone),
             ("Channel", "send") => Some(Self::ChannelSend),
@@ -356,7 +574,55 @@ impl BuiltinMember {
     pub const fn name(self) -> &'static str {
         match self {
             Self::FloatSqrt => "sqrt",
-            Self::StringClone | Self::ChannelClone | Self::TaskClone => "clone",
+            Self::ScalarToString => "to_string",
+            Self::StringLen => "len",
+            Self::StringContains => "contains",
+            Self::StringStartsWith => "starts_with",
+            Self::StringEndsWith => "ends_with",
+            Self::StringSplit => "split",
+            Self::StringReplace => "replace",
+            Self::StringToLower => "to_lower",
+            Self::StringToUpper => "to_upper",
+            Self::StringStripPrefix => "strip_prefix",
+            Self::StringStripSuffix => "strip_suffix",
+            Self::StringTrim => "trim",
+            Self::StringJoin => "join",
+            Self::VecLen => "len",
+            Self::VecIsEmpty => "is_empty",
+            Self::VecClone
+            | Self::MapClone
+            | Self::StringClone
+            | Self::ChannelClone
+            | Self::TaskClone => "clone",
+            Self::VecPush => "push",
+            Self::VecPop => "pop",
+            Self::VecGet => "get",
+            Self::VecSet => "set",
+            Self::VecRemove => "remove",
+            Self::VecSwap => "swap",
+            Self::VecContains => "contains",
+            Self::VecExtend => "extend",
+            Self::VecInsert => "insert",
+            Self::VecClear => "clear",
+            Self::VecReverse => "reverse",
+            Self::MapLen => "len",
+            Self::MapIsEmpty => "is_empty",
+            Self::MapGet => "get",
+            Self::MapSet => "set",
+            Self::MapRemove => "remove",
+            Self::MapContainsKey => "contains_key",
+            Self::MapKeys => "keys",
+            Self::MapValues => "values",
+            Self::MapItems => "items",
+            Self::MapEntries => "entries",
+            Self::MapClear => "clear",
+            Self::MapExtend => "extend",
+            Self::SetLen => "len",
+            Self::SetIsEmpty => "is_empty",
+            Self::SetClone => "clone",
+            Self::SetContains => "contains",
+            Self::SetInsert => "insert",
+            Self::SetRemove => "remove",
             Self::ChannelSend => "send",
             Self::ChannelRecv => "recv",
             Self::ChannelClose => "close",
@@ -368,6 +634,52 @@ impl BuiltinMember {
     pub const fn detail(self) -> &'static str {
         match self {
             Self::FloatSqrt => "sqrt() -> float64",
+            Self::ScalarToString => "to_string() -> String",
+            Self::StringLen => "len() -> int32",
+            Self::StringContains => "contains(text: String) -> bool",
+            Self::StringStartsWith => "starts_with(text: String) -> bool",
+            Self::StringEndsWith => "ends_with(text: String) -> bool",
+            Self::StringSplit => "split(text: String) -> Vec[String]",
+            Self::StringReplace => "replace(from: String, to: String) -> String",
+            Self::StringToLower => "to_lower() -> String",
+            Self::StringToUpper => "to_upper() -> String",
+            Self::StringStripPrefix => "strip_prefix(text: String) -> Option[String]",
+            Self::StringStripSuffix => "strip_suffix(text: String) -> Option[String]",
+            Self::StringTrim => "trim() -> String",
+            Self::StringJoin => "join(parts: Vec[String]) -> String",
+            Self::VecLen => "len() -> int32",
+            Self::VecIsEmpty => "is_empty() -> bool",
+            Self::VecClone => "clone() -> Vec[T]",
+            Self::VecPush => "push(value) -> None",
+            Self::VecPop => "pop() -> Option[T]",
+            Self::VecGet => "get(index: int32) -> Option[T]",
+            Self::VecSet => "set(index: int32, value: T) -> Option[T]",
+            Self::VecRemove => "remove(index: int32) -> Option[T]",
+            Self::VecSwap => "swap(first: int32, second: int32) -> bool",
+            Self::VecContains => "contains(value: T) -> bool",
+            Self::VecExtend => "extend(other: Vec[T]) -> None",
+            Self::VecInsert => "insert(index: int32, value: T) -> bool",
+            Self::VecClear => "clear() -> None",
+            Self::VecReverse => "reverse() -> None",
+            Self::MapLen => "len() -> int32",
+            Self::MapIsEmpty => "is_empty() -> bool",
+            Self::MapClone => "clone() -> Map[K, V]",
+            Self::MapGet => "get(key: K) -> Option[V]",
+            Self::MapSet => "set(key: K, value: V) -> Option[V]",
+            Self::MapRemove => "remove(key: K) -> Option[V]",
+            Self::MapContainsKey => "contains_key(key: K) -> bool",
+            Self::MapKeys => "keys() -> Vec[K]",
+            Self::MapValues => "values() -> Vec[V]",
+            Self::MapItems => "items() -> Vec[MapEntry[K, V]]",
+            Self::MapEntries => "entries() -> Vec[MapEntry[K, V]]",
+            Self::MapClear => "clear() -> None",
+            Self::MapExtend => "extend(other: Map[K, V]) -> None",
+            Self::SetLen => "len() -> int32",
+            Self::SetIsEmpty => "is_empty() -> bool",
+            Self::SetClone => "clone() -> Set[T]",
+            Self::SetContains => "contains(value: T) -> bool",
+            Self::SetInsert => "insert(value: T) -> bool",
+            Self::SetRemove => "remove(value: T) -> bool",
             Self::StringClone => "clone() -> String",
             Self::ChannelClone => "clone() -> Channel[T]",
             Self::ChannelSend => "send(value) -> Result[None, SendError[T]]",
@@ -382,6 +694,84 @@ impl BuiltinMember {
     pub const fn docs(self) -> &'static str {
         match self {
             Self::FloatSqrt => "Returns the square root of a `float64` value.",
+            Self::ScalarToString => "Returns a `String` rendering of a numeric or `bool` value.",
+            Self::StringLen => "Returns the number of bytes in the string.",
+            Self::StringContains => "Returns true when the string contains `text`.",
+            Self::StringStartsWith => "Returns true when the string starts with `text`.",
+            Self::StringEndsWith => "Returns true when the string ends with `text`.",
+            Self::StringSplit => {
+                "Splits the string on each occurrence of `text` and returns the pieces as `Vec[String]`."
+            }
+            Self::StringReplace => {
+                "Returns a new `String` with each occurrence of `from` replaced by `to`."
+            }
+            Self::StringToLower => {
+                "Returns a new `String` with Unicode lowercase conversion applied."
+            }
+            Self::StringToUpper => {
+                "Returns a new `String` with Unicode uppercase conversion applied."
+            }
+            Self::StringStripPrefix => {
+                "Removes `text` from the front of the string and returns the remaining `String`, or `Option.None` when it does not match."
+            }
+            Self::StringStripSuffix => {
+                "Removes `text` from the end of the string and returns the remaining `String`, or `Option.None` when it does not match."
+            }
+            Self::StringTrim => {
+                "Returns a new `String` with surrounding Unicode whitespace removed."
+            }
+            Self::StringJoin => {
+                "Joins the `Vec[String]` parts using the receiver string as the separator."
+            }
+            Self::VecLen => "Returns the current number of elements in the vector.",
+            Self::VecIsEmpty => "Returns true when the vector contains no elements.",
+            Self::VecClone => "Creates a new owned `Vec[T]` with cloned element values.",
+            Self::VecPush => "Appends a value to the end of the vector.",
+            Self::VecPop => "Removes and returns the final element, or `Option.None` when empty.",
+            Self::VecGet => {
+                "Returns the element at `index`, or `Option.None` when the index is out of bounds."
+            }
+            Self::VecSet => {
+                "Replaces the element at `index` and returns the previous element, or `Option.None` when the index is out of bounds."
+            }
+            Self::VecRemove => {
+                "Removes the element at `index` and returns it, or `Option.None` when the index is out of bounds."
+            }
+            Self::VecSwap => {
+                "Swaps the elements at `first` and `second`, returning `false` when either index is out of bounds."
+            }
+            Self::VecContains => "Returns true when the vector contains `value`.",
+            Self::VecExtend => "Appends the elements of `other` to the end of the vector.",
+            Self::VecInsert => {
+                "Inserts `value` at `index`, returning `false` when the index is out of bounds."
+            }
+            Self::VecClear => "Removes all elements from the vector.",
+            Self::VecReverse => "Reverses the vector elements in place.",
+            Self::MapLen => "Returns the current number of entries in the map.",
+            Self::MapIsEmpty => "Returns true when the map contains no entries.",
+            Self::MapClone => "Creates a new owned `Map[K, V]` with cloned keys and values.",
+            Self::MapGet => {
+                "Returns the value for `key`, or `Option.None` when the key is absent."
+            }
+            Self::MapSet => {
+                "Inserts or replaces `key`, returning the previous value as `Option[V]`."
+            }
+            Self::MapRemove => {
+                "Removes `key` and returns its previous value, or `Option.None` when absent."
+            }
+            Self::MapContainsKey => "Returns true when the map contains `key`.",
+            Self::MapKeys => "Returns the current keys as a `Vec[K]`.",
+            Self::MapValues => "Returns the current values as a `Vec[V]`.",
+            Self::MapItems => "Returns the current entries as `Vec[MapEntry[K, V]]` in insertion order.",
+            Self::MapEntries => "Returns the current entries as `Vec[MapEntry[K, V]]` in insertion order.",
+            Self::MapClear => "Removes all entries from the map.",
+            Self::MapExtend => "Inserts the entries from `other`, replacing matching keys.",
+            Self::SetLen => "Returns the current number of elements in the set.",
+            Self::SetIsEmpty => "Returns true when the set contains no elements.",
+            Self::SetClone => "Creates a new owned `Set[T]` with cloned element values.",
+            Self::SetContains => "Returns true when the set contains `value`.",
+            Self::SetInsert => "Inserts `value`, returning false when it is already present.",
+            Self::SetRemove => "Removes `value`, returning false when it is absent.",
             Self::StringClone => "Creates a new owned `String` with the same contents.",
             Self::ChannelClone => "Creates another handle to the same underlying channel.",
             Self::ChannelSend => {
@@ -406,6 +796,28 @@ impl BuiltinMember {
     ) -> Result<Vec<Option<&'arg Argument>>> {
         match self {
             Self::FloatSqrt
+            | Self::ScalarToString
+            | Self::StringLen
+            | Self::StringToLower
+            | Self::StringToUpper
+            | Self::StringTrim
+            | Self::VecLen
+            | Self::VecIsEmpty
+            | Self::VecClone
+            | Self::VecClear
+            | Self::VecReverse
+            | Self::MapLen
+            | Self::MapIsEmpty
+            | Self::MapClone
+            | Self::MapKeys
+            | Self::MapValues
+            | Self::MapItems
+            | Self::MapEntries
+            | Self::MapClear
+            | Self::SetLen
+            | Self::SetIsEmpty
+            | Self::SetClone
+            | Self::VecPop
             | Self::StringClone
             | Self::ChannelClone
             | Self::ChannelRecv
@@ -418,6 +830,115 @@ impl BuiltinMember {
                 args,
                 span,
                 CallConvention::PositionalOnly,
+            ),
+            Self::VecGet | Self::VecRemove => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &VEC_INDEX_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::VecPush => bind_call_arguments(
+                "`push`",
+                &VEC_PUSH_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::VecSet => bind_call_arguments(
+                "`set`",
+                &VEC_SET_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::VecSwap => bind_call_arguments(
+                "`swap`",
+                &VEC_SWAP_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::VecContains => bind_call_arguments(
+                "`contains`",
+                &VEC_PUSH_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::VecExtend => bind_call_arguments(
+                "`extend`",
+                &VEC_EXTEND_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::VecInsert => bind_call_arguments(
+                "`insert`",
+                &VEC_INSERT_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::StringContains | Self::StringStartsWith | Self::StringEndsWith => {
+                bind_call_arguments(
+                    &format!("`{}`", self.name()),
+                    &STRING_TEXT_PARAMS,
+                    args,
+                    span,
+                    CallConvention::PositionalOrNamed,
+                )
+            }
+            Self::StringSplit | Self::StringStripPrefix | Self::StringStripSuffix => {
+                bind_call_arguments(
+                    &format!("`{}`", self.name()),
+                    &STRING_TEXT_PARAMS,
+                    args,
+                    span,
+                    CallConvention::PositionalOrNamed,
+                )
+            }
+            Self::StringReplace => bind_call_arguments(
+                "`replace`",
+                &STRING_REPLACE_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::StringJoin => bind_call_arguments(
+                "`join`",
+                &STRING_JOIN_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::MapGet | Self::MapRemove | Self::MapContainsKey => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &MAP_KEY_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::MapSet => bind_call_arguments(
+                "`set`",
+                &MAP_SET_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::MapExtend => bind_call_arguments(
+                "`extend`",
+                &MAP_EXTEND_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::SetContains | Self::SetInsert | Self::SetRemove => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &SET_VALUE_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
             ),
             Self::ChannelSend => bind_call_arguments(
                 "`send`",

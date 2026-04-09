@@ -1,0 +1,27 @@
+## Test 13: Remove during iteration (safe pattern)
+## Build keys list first, iterate keys, remove some entries
+
+def main() -> int32:
+    mut m = Map[String, int32]()
+    m["keep1"] = 10
+    m["remove1"] = 20
+    m["keep2"] = 30
+    m["remove2"] = 40
+    m["keep3"] = 50
+
+    print(f"before remove: {m.len()}")
+
+    ## Get keys first, then iterate and remove
+    keys = m.keys()
+    for key in keys:
+        if key.starts_with("remove"):
+            m.remove(key)
+
+    print(f"after remove: {m.len()}")
+
+    ## Verify remaining entries
+    remaining = m.keys()
+    for key in remaining:
+        print(f"  {key}: {m[key.clone()]}")
+
+    return 0

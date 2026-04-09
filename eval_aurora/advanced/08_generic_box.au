@@ -1,0 +1,25 @@
+# Test 8: Generic class Box[T] - instantiate with different types
+class Box[T]:
+    value: T
+
+    def get(borrow self) -> T:
+        return self.value
+
+def main() -> int32:
+    # Box with int
+    int_box: Box[int32] = Box(value=42)
+    print(int_box.get())
+
+    # Box with String
+    str_box: Box[String] = Box(value="hello")
+    print(str_box.get())
+
+    # Box with bool
+    bool_box: Box[bool] = Box(value=true)
+    print(bool_box.get())
+
+    # Box with float
+    float_box: Box[float64] = Box(value=3.14)
+    print(float_box.get())
+
+    return 0

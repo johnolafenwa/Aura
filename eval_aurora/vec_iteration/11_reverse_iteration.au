@@ -1,0 +1,8 @@
+# Test 11: Reverse iteration using while loop and index
+def main() -> int32:
+    xs = [10, 20, 30, 40, 50]
+    mut i = xs.len() as int32 - 1
+    while i >= 0:
+        print(xs[i])
+        i -= 1
+    return 0

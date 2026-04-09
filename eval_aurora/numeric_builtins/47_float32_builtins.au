@@ -1,0 +1,8 @@
+def main() -> int32:
+    a: float32 = -2.5
+    print(abs(a))
+    b: float32 = 25.0
+    print(sqrt(b))
+    print(min(a, b))
+    print(max(a, b))
+    return 0

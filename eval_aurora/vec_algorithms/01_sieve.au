@@ -1,0 +1,41 @@
+## Sieve of Eratosthenes using Vec[bool]
+## Find all primes up to 100
+
+def main() -> int32:
+    limit = 101
+
+    ## Create a bool vec of size 101, all set to true initially
+    ## Index represents the number; true means "is prime"
+    mut is_prime: Vec[bool] = []
+    mut i = 0
+    while i < limit:
+        is_prime.push(true)
+        i += 1
+
+    ## 0 and 1 are not prime
+    is_prime.set(index=0, value=false)
+    is_prime.set(index=1, value=false)
+
+    ## Sieve: for each number starting from 2, mark multiples as not prime
+    mut p = 2
+    while p * p < limit:
+        if is_prime[p]:
+            ## Mark all multiples of p starting from p*p
+            mut multiple = p * p
+            while multiple < limit:
+                is_prime.set(index=multiple, value=false)
+                multiple += p
+        p += 1
+
+    ## Collect and print primes
+    mut count = 0
+    print("Primes up to 100:")
+    mut n = 2
+    while n < limit:
+        if is_prime[n]:
+            print(n)
+            count += 1
+        n += 1
+
+    print(f"Total primes found: {count}")
+    return 0

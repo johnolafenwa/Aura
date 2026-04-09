@@ -1,0 +1,49 @@
+## Remove duplicates from a sorted Vec[int32]
+## Returns a new vec with unique elements
+
+def remove_duplicates(arr: borrow Vec[int32]) -> Vec[int32]:
+    mut result: Vec[int32] = []
+    n = arr.len() as int32
+    if n > 0:
+        result.push(arr[0])
+        mut i: int32 = 1
+        while i < n:
+            if arr[i] != arr[i - 1]:
+                result.push(arr[i])
+            i += 1
+    return result
+
+def print_vec(arr: borrow Vec[int32]):
+    mut i: int32 = 0
+    n = arr.len() as int32
+    while i < n:
+        print(arr[i])
+        i += 1
+
+def main() -> int32:
+    data = [1, 1, 2, 3, 3, 3, 4, 5, 5, 6]
+    print("Original:")
+    print_vec(data)
+
+    unique = remove_duplicates(data)
+    print("After removing duplicates:")
+    print_vec(unique)
+
+    ## All same
+    same = [7, 7, 7, 7]
+    unique2 = remove_duplicates(same)
+    print("All same -> unique:")
+    print_vec(unique2)
+
+    ## Already unique
+    already = [1, 2, 3, 4, 5]
+    unique3 = remove_duplicates(already)
+    print("Already unique:")
+    print_vec(unique3)
+
+    ## Empty
+    empty: Vec[int32] = []
+    unique4 = remove_duplicates(empty)
+    print(f"Empty result length: {unique4.len()}")
+
+    return 0

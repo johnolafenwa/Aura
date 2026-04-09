@@ -1,0 +1,14 @@
+# Test 15: Vec of Vec - nested vectors
+def main() -> int32:
+    mut outer: Vec[Vec[int32]] = []
+    mut inner1 = [1, 2, 3]
+    mut inner2 = [4, 5, 6]
+    outer.push(inner1)
+    outer.push(inner2)
+
+    print(outer.len())
+    for row in outer:
+        for val in row:
+            print(val)
+
+    return 0

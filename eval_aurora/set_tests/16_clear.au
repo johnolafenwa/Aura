@@ -1,0 +1,7 @@
+def main() -> int32:
+    mut s = Set{1, 2, 3}
+    print(s.len())
+    s.clear()
+    print(s.len())
+    print(s.is_empty())
+    return 0

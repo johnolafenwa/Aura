@@ -1,0 +1,12 @@
+# Test 9: borrow self (immutable) + borrow mut param of same object — should REJECT
+class Data:
+    value: int32
+
+    def read_and_mutate(borrow self, other: borrow mut Data):
+        print(self.value)
+        other.value += 1
+
+def main():
+    mut d = Data(value=10)
+    d.read_and_mutate(other=d)
+    print(d.value)

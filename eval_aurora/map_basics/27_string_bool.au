@@ -1,0 +1,5 @@
+def main() -> int32:
+    m = {"active": true, "admin": false}
+    print(m["active"])
+    print(m["admin"])
+    return 0

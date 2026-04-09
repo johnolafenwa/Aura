@@ -1,0 +1,15 @@
+class Node:
+    value: int32
+    next: indirect Node? = Option.None
+
+def main() -> int32:
+    leaf = Node(value=3)
+    mid = Node(value=2, next=Option.Some(leaf))
+    head = Node(value=1, next=Option.Some(mid))
+    print(head.value)
+    match head.next:
+        case Option.Some(n):
+            print(n.value)
+        case Option.None:
+            print(0)
+    return 0

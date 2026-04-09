@@ -1,0 +1,10 @@
+# Test 7: Pop on empty vec - should return Option.None
+def main() -> int32:
+    mut v: Vec[int32] = []
+    result = v.pop()
+    match result:
+        case Some(val):
+            print(val)
+        case None:
+            print("empty pop returned None")
+    return 0

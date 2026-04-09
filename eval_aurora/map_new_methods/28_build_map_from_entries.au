@@ -1,0 +1,10 @@
+def main() -> int32:
+    source = {"a": 1, "b": 2, "c": 3}
+    mut dest = Map[String, int32]()
+    for e in source.entries():
+        dest.set(e.key, e.value)
+    print(dest.len())
+    print(dest["a"])
+    print(dest["b"])
+    print(dest["c"])
+    return 0

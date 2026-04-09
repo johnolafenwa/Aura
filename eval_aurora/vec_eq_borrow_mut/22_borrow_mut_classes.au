@@ -1,0 +1,13 @@
+class Point:
+    x: int32
+    y: int32
+
+def main() -> int32:
+    mut points: Vec[Point] = [Point(x=1, y=2), Point(x=3, y=4)]
+    for p in borrow mut points:
+        p.x += 10
+        p.y += 10
+    for p in borrow points:
+        print(p.x)
+        print(p.y)
+    return 0

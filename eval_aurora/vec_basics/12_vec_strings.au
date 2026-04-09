@@ -1,0 +1,26 @@
+def main() -> int32:
+    mut names: Vec[String] = []
+    names.push("Alice")
+    names.push("Bob")
+    names.push("Charlie")
+    names.push("Diana")
+
+    print(names.len())
+
+    # Iterate with borrow - should not consume the vec
+    for name in borrow names:
+        print(name)
+
+    # Vec should still be usable after borrow iteration
+    print(names.len())
+    print(names.is_empty())
+
+    # Push more after borrow iteration
+    names.push("Eve")
+    print(names.len())
+
+    # Borrow iterate again
+    for name in borrow names:
+        print(name)
+
+    return 0

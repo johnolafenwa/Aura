@@ -1,0 +1,13 @@
+def main() -> int32:
+    mut s = Set[String]()
+    s.insert("apple")
+    s.insert("banana")
+    s.insert("cherry")
+    print(s.len())
+    print(s.contains("banana"))
+    s.remove("banana")
+    print(s.len())
+    print(s.contains("banana"))
+    for x in borrow s:
+        print(x)
+    return 0

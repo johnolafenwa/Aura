@@ -1,0 +1,6 @@
+# Bonus: Direct indexing v[5] on 3-element vec (not .get, the [] operator)
+# Does this panic or return a clean error?
+def main() -> int32:
+    v = [10, 20, 30]
+    print(v[5])
+    return 0

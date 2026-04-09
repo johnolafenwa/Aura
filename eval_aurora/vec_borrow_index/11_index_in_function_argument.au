@@ -1,0 +1,9 @@
+def greet(name: borrow str):
+    print(name)
+
+def main() -> int32:
+    names = ["Alice", "Bob", "Charlie"]
+    greet(name=names[0])
+    greet(name=names[1])
+    greet(name=names[2])
+    return 0

@@ -1,0 +1,16 @@
+class Counter:
+    value: int32
+
+    def bump(borrow mut self):
+        self.value += 1
+
+    def reset(borrow mut self):
+        self.value = 0
+
+def main() -> int32:
+    mut counter = Counter(value=1)
+    counter.bump()
+    counter.bump()
+    counter.reset()
+    print(counter.value)
+    return 0

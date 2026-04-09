@@ -1,0 +1,66 @@
+# Test 20: Error handling pipeline - chain of functions that can fail
+
+def validate_positive(x: int32) -> Result[int32, String]:
+    if x <= 0:
+        return Result.Err("not positive")
+    return Result.Ok(x)
+
+def validate_under_limit(x: int32, limit: int32) -> Result[int32, String]:
+    if x > limit:
+        return Result.Err("exceeds limit")
+    return Result.Ok(x)
+
+def safe_divide(a: int32, b: int32) -> Result[int32, String]:
+    if b == 0:
+        return Result.Err("division by zero")
+    return Result.Ok(a / b)
+
+def process(a: int32, b: int32) -> Result[int32, String]:
+    va = try validate_positive(x=a)
+    vb = try validate_positive(x=b)
+    bounded_a = try validate_under_limit(x=va, limit=1000)
+    result = try safe_divide(a=bounded_a, b=vb)
+    return Result.Ok(result)
+
+def main() -> int32:
+    # All steps succeed: 100 / 5 = 20
+    match process(a=100, b=5):
+        case Result.Ok(val):
+            print("process(100, 5):")
+            print(val)
+        case Result.Err(e):
+            print(e)
+
+    # First validation fails: a is negative
+    match process(a=-1, b=5):
+        case Result.Ok(val):
+            print(val)
+        case Result.Err(e):
+            print("process(-1, 5):")
+            print(e)
+
+    # Second validation fails: b is zero
+    match process(a=10, b=0):
+        case Result.Ok(val):
+            print(val)
+        case Result.Err(e):
+            print("process(10, 0):")
+            print(e)
+
+    # Limit check fails: a too large
+    match process(a=5000, b=2):
+        case Result.Ok(val):
+            print(val)
+        case Result.Err(e):
+            print("process(5000, 2):")
+            print(e)
+
+    # Multiple chained tries all succeed
+    match process(a=50, b=10):
+        case Result.Ok(val):
+            print("process(50, 10):")
+            print(val)
+        case Result.Err(e):
+            print(e)
+
+    return 0

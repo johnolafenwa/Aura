@@ -1,0 +1,10 @@
+# Test 10b: Implicit None return
+def say_hello():
+    print("hello")
+
+# Calling a function with no return
+say_hello()
+
+# Can we use the result?
+x = say_hello()
+print(x)

@@ -1,0 +1,41 @@
+## Set union: merge two vecs, skip duplicates using contains.
+## Uses: contains, extend, borrow iteration, push, len()
+
+def union(a: borrow Vec[int32], b: borrow Vec[int32]) -> Vec[int32]:
+    mut result: Vec[int32] = []
+    ## Add all from a
+    for val in borrow a:
+        if not result.contains(val):
+            result.push(val)
+    ## Add from b only if not already present
+    for val in borrow b:
+        if not result.contains(val):
+            result.push(val)
+    return result
+
+def print_vec(arr: borrow Vec[int32]):
+    mut first = true
+    mut buf = "["
+    for val in borrow arr:
+        if first:
+            first = false
+        else:
+            buf = buf + ", "
+        buf = buf + f"{val}"
+    buf = buf + "]"
+    print(buf)
+
+def main() -> int32:
+    a = [1, 2, 3, 4]
+    b = [3, 4, 5, 6]
+
+    result = union(a, b)
+    print("A:")
+    print_vec(a)
+    print("B:")
+    print_vec(b)
+    print("Union:")
+    print_vec(result)
+    print(f"Size: {result.len()}")
+
+    return 0

@@ -1,0 +1,7 @@
+def main() -> int32:
+    s = Set{"hello", "world"}
+    print(s.len())
+    print(s.contains("hello"))
+    print(s.contains("world"))
+    print(s.contains("other"))
+    return 0

@@ -1,0 +1,4 @@
+def main() -> int32:
+    value = try 5
+    print(value)
+    return 0

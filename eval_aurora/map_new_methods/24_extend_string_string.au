@@ -1,0 +1,9 @@
+def main() -> int32:
+    mut m1 = {"name": "Alice"}
+    m2 = {"city": "Paris", "country": "France"}
+    m1.extend(m2)
+    print(m1.len())
+    print(m1["name"])
+    print(m1["city"])
+    print(m1["country"])
+    return 0

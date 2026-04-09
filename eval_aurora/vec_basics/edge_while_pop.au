@@ -1,0 +1,21 @@
+def main() -> int32:
+    mut v = [1, 2, 3, 4, 5]
+    mut sum: int32 = 0
+
+    # Use a while-like pattern with for range to pop all
+    mut done = false
+    for _ in range(100):
+        if done:
+            pass
+        else:
+            match v.pop():
+                case Some(val):
+                    sum += val
+                case None:
+                    done = true
+
+    print(sum)
+    print(v.len())
+    print(v.is_empty())
+
+    return 0

@@ -48,7 +48,18 @@ See [examples/numbers/unary_minus.au](../examples/numbers/unary_minus.au).
 
 ## Floating-point Math
 
-`float64` currently supports the builtin `.sqrt()` method:
+Aurora currently supports the builtin numeric helpers `abs(...)`, `min(...)`, `max(...)`, and `sqrt(...)`.
+
+```python
+print(abs(-7))
+print(min(9, 2))
+print(max(4, 12))
+print(sqrt(81.0))
+```
+
+See [examples/numbers/numeric_builtins.au](../examples/numbers/numeric_builtins.au).
+
+`float64` also supports the builtin `.sqrt()` method:
 
 ```python
 def main():
@@ -57,6 +68,15 @@ def main():
 ```
 
 See [examples/numbers/float_sqrt.au](../examples/numbers/float_sqrt.au).
+
+Primitive numeric and boolean values also support `.to_string()`:
+
+```python
+count: int32 = 42
+ok: bool = true
+print(count.to_string())
+print(ok.to_string())
+```
 
 Whole-number floating-point values keep a trailing `.0` when printed, so `5.0` remains visually distinct from `5`.
 
@@ -109,6 +129,8 @@ answer: int32 = 42
 print(f"Hello, {name} {answer}")
 ```
 
+Interpolations accept ordinary expressions, including indexed lookups such as `f"value: {counts["key"]}"`.
+
 See [examples/strings/f_strings.au](../examples/strings/f_strings.au).
 
 The current compiler supports:
@@ -118,6 +140,18 @@ The current compiler supports:
 - borrowed `str` parameters
 - interpolated `f"..."` strings
 - equality and inequality comparisons
+- `String.len()`
+- `String.contains(...)`
+- `String.starts_with(...)`
+- `String.ends_with(...)`
+- `String.split(...)`
+- `String.replace(...)`
+- `String.to_lower()`
+- `String.to_upper()`
+- `String.strip_prefix(...)`
+- `String.strip_suffix(...)`
+- `String.trim()`
+- `String.join(...)`
 - `String.clone()`
 
 Example:
@@ -131,6 +165,76 @@ def main() -> int32:
 ```
 
 See [examples/strings/string_clone.au](../examples/strings/string_clone.au).
+
+The maintained string-method surface now looks like this:
+
+```python
+def print_string_option(value: Option[String]):
+    match value:
+        case Some(text):
+            print(text)
+        case None:
+            print("none")
+
+def main() -> int32:
+    text = "  aurora repo  "
+    print(text.len())
+    print(text.contains("repo"))
+    print(text.starts_with("  au"))
+    print(text.ends_with("  "))
+    trimmed = text.trim()
+    print(trimmed)
+    parts = trimmed.split(" ")
+    print(parts.len())
+    print(parts[0])
+    print(parts[1])
+    print(trimmed.replace("repo", "lang"))
+    print(trimmed.to_lower())
+    print(trimmed.to_upper())
+    print_string_option(trimmed.strip_prefix("aurora "))
+    print_string_option(trimmed.strip_prefix("repo"))
+    print_string_option(trimmed.strip_suffix(" repo"))
+    print_string_option(trimmed.strip_suffix("aurora"))
+    print(trimmed.clone().len())
+    return 0
+```
+
+See [examples/strings/string_methods.au](../examples/strings/string_methods.au).
+
+`split(...)` returns `Vec[String]`. `strip_prefix(...)` and `strip_suffix(...)` return `Option[String]`, so they compose naturally with `match`.
+
+`join(...)` uses the receiver as the separator:
+
+```python
+parts = ["aurora", "lang", "tests"]
+print("-".join(parts))
+```
+
+## Parsing And Formatting
+
+Aurora now includes parsing builtins for common scalar text conversion:
+
+- `parse_int32(text: borrow str) -> Result[int32, String]`
+- `parse_int64(text: borrow str) -> Result[int64, String]`
+- `parse_float64(text: borrow str) -> Result[float64, String]`
+
+Combined with `.to_string()` and `String.join(...)`, they cover the current maintained formatting surface:
+
+```python
+def main() -> int32:
+    match parse_int32("42"):
+        case Result.Ok(value):
+            print(value.to_string())
+        case Result.Err(message):
+            print(message)
+
+    parts = ["aurora", "lang", "tests"]
+    print("-".join(parts))
+    print(true.to_string())
+    return 0
+```
+
+See [examples/strings/string_parsing_and_formatting.au](../examples/strings/string_parsing_and_formatting.au).
 
 ## String Equality
 

@@ -1,0 +1,9 @@
+# Test 10: Transform pattern - iterate source, push doubled values
+def main() -> int32:
+    source = [1, 2, 3, 4, 5]
+    mut doubled: Vec[int32] = []
+    for val in source:
+        doubled.push(val * 2)
+    for d in doubled:
+        print(d)
+    return 0

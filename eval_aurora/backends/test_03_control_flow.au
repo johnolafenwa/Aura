@@ -1,0 +1,34 @@
+def main() -> int32:
+    score: int32 = 85
+
+    if score < 50:
+        print("low")
+    elif score < 80:
+        print("mid")
+    else:
+        print("high")
+
+    mut total: int32 = 0
+    for i in range(5):
+        total += i
+    print(total)
+
+    mut n: int32 = 0
+    mut sum: int32 = 0
+    while n < 10:
+        n += 1
+        if n % 2 == 0:
+            continue
+        if n > 7:
+            break
+        sum += n
+    print(sum)
+
+    for j in range(5):
+        if j == 2:
+            continue
+        if j == 4:
+            break
+        print(j)
+
+    return 0

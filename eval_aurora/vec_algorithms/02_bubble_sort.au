@@ -1,0 +1,53 @@
+## Bubble sort: sort a Vec[int32] in place using nested loops and index swapping
+
+def bubble_sort(arr: borrow mut Vec[int32]):
+    n = arr.len() as int32
+    mut i: int32 = 0
+    while i < n:
+        mut j: int32 = 0
+        while j < n - 1 - i:
+            if arr[j] > arr[j + 1]:
+                ## Swap arr[j] and arr[j+1]
+                tmp = arr[j]
+                arr.set(index=j, value=arr[j + 1])
+                arr.set(index=j + 1, value=tmp)
+            j += 1
+        i += 1
+
+def print_vec(arr: borrow Vec[int32]):
+    mut i: int32 = 0
+    n = arr.len() as int32
+    while i < n:
+        print(arr[i])
+        i += 1
+
+def main() -> int32:
+    mut data = [64, 34, 25, 12, 22, 11, 90]
+
+    print("Before sorting:")
+    print_vec(data)
+
+    bubble_sort(data)
+
+    print("After sorting:")
+    print_vec(data)
+
+    ## Test with already sorted
+    mut sorted = [1, 2, 3, 4, 5]
+    bubble_sort(sorted)
+    print("Already sorted:")
+    print_vec(sorted)
+
+    ## Test with reverse sorted
+    mut reverse = [5, 4, 3, 2, 1]
+    bubble_sort(reverse)
+    print("Reverse sorted -> sorted:")
+    print_vec(reverse)
+
+    ## Test with single element
+    mut single = [42]
+    bubble_sort(single)
+    print("Single element:")
+    print_vec(single)
+
+    return 0

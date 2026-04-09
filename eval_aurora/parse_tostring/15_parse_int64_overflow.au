@@ -1,0 +1,7 @@
+def main() -> int32:
+    match parse_int64("9223372036854775808"):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(e):
+            print("ERR: " + e)
+    return 0

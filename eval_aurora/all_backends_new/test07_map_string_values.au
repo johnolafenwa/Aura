@@ -1,0 +1,10 @@
+def main() -> int32:
+    mut m = Map[String, String]()
+    m.set(key="greeting", value="  Hello, Aurora!  ")
+    m.set(key="farewell", value="  Goodbye!  ")
+    print(m["greeting"])
+    print(m["greeting"].trim())
+    print(m["greeting"].len())
+    print(m["farewell"].trim())
+    print(m["farewell"].contains("Goodbye"))
+    return 0

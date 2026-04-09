@@ -1,0 +1,22 @@
+# Verify that remove() returns Option[V]
+def main() -> int32:
+    mut m = {"a": 10, "b": 20}
+
+    # Remove existing key
+    r1 = m.remove("a")
+    match r1:
+        case Some(v):
+            print(f"removed: {v}")
+        case None:
+            print("not found")
+
+    # Remove non-existing key
+    r2 = m.remove("z")
+    match r2:
+        case Some(v):
+            print(f"removed: {v}")
+        case None:
+            print("not found")
+
+    print(m.len())
+    return 0

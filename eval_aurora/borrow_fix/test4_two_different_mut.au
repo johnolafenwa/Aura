@@ -1,0 +1,14 @@
+class Counter:
+    value: int32
+
+def swap_values(a: borrow mut Counter, b: borrow mut Counter):
+    tmp = a.value
+    a.value = b.value
+    b.value = tmp
+
+def main():
+    mut x = Counter(value=10)
+    mut y = Counter(value=20)
+    swap_values(a=x, b=y)
+    print(x.value)
+    print(y.value)

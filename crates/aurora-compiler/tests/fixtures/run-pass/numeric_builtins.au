@@ -1,0 +1,10 @@
+def main() -> int32:
+    print(abs(-7))
+    print(abs(-3.5))
+    print(min(4, 2))
+    print(max(4, 2))
+    print(sqrt(9.0))
+
+    ratio: float32 = 16.0
+    print(sqrt(ratio))
+    return 0

@@ -1,0 +1,9 @@
+copy class Point:
+    x: float64
+    y: float64
+
+def main() -> int32:
+    p = Point(x=1.5, y=2.5)
+    q = p
+    print(q.x + q.y)
+    return 0

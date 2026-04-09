@@ -1,0 +1,51 @@
+## Running sum: given a vec, produce a new vec where each element is the cumulative sum
+
+def running_sum(arr: borrow Vec[int32]) -> Vec[int32]:
+    mut result: Vec[int32] = []
+    mut sum: int32 = 0
+    mut i: int32 = 0
+    n = arr.len() as int32
+    while i < n:
+        sum += arr[i]
+        result.push(sum)
+        i += 1
+    return result
+
+def print_vec(arr: borrow Vec[int32]):
+    mut i: int32 = 0
+    n = arr.len() as int32
+    while i < n:
+        print(arr[i])
+        i += 1
+
+def main() -> int32:
+    data = [1, 2, 3, 4, 5]
+    print("Input:")
+    print_vec(data)
+
+    sums = running_sum(data)
+    print("Running sum:")
+    print_vec(sums)
+    ## Expected: 1, 3, 6, 10, 15
+
+    data2 = [10, -5, 3, -2, 7]
+    print("Input 2:")
+    print_vec(data2)
+
+    sums2 = running_sum(data2)
+    print("Running sum 2:")
+    print_vec(sums2)
+    ## Expected: 10, 5, 8, 6, 13
+
+    ## Single element
+    single = [42]
+    sums3 = running_sum(single)
+    print("Single element running sum:")
+    print_vec(sums3)
+
+    ## Empty
+    empty: Vec[int32] = []
+    sums4 = running_sum(empty)
+    print(f"Empty running sum length: {sums4.len()}")
+
+    return 0

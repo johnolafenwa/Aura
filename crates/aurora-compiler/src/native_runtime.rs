@@ -13,7 +13,7 @@ use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::interpreter::{
     cast_numeric_value, CancellationContext, ChannelValue, EnumVariantValue, InstanceValue,
-    RangeValue, TaskGroupValue, TaskValue, TryRecvResult, Value,
+    MapValue, RangeValue, SetValue, TaskGroupValue, TaskValue, TryRecvResult, Value, VecValue,
 };
 use crate::sema::Type;
 
@@ -113,6 +113,10 @@ unsafe fn value_ref<'a>(ptr: *mut OpaqueValue) -> &'a Value {
     &(*ptr).0
 }
 
+unsafe fn value_mut<'a>(ptr: *mut OpaqueValue) -> &'a mut Value {
+    &mut (*ptr).0
+}
+
 unsafe fn take_value(ptr: *mut OpaqueValue) -> Value {
     (*ptr).0.clone()
 }
@@ -161,6 +165,9 @@ fn value_type_name(value: &Value) -> String {
         Value::Float(_) => "float64".to_string(),
         Value::Bool(_) => "bool".to_string(),
         Value::String(_) => "String".to_string(),
+        Value::Vec(_) => "Vec".to_string(),
+        Value::Set(_) => "Set".to_string(),
+        Value::Map(_) => "Map".to_string(),
         Value::Duration(_) => "Duration".to_string(),
         Value::Range(_) => "Range".to_string(),
         Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
@@ -435,6 +442,351 @@ pub extern "C" fn aurora_direct_duration_literal(value: i64) -> *mut OpaqueValue
 }
 
 #[no_mangle]
+pub extern "C" fn aurora_direct_string_len(value: *mut OpaqueValue) -> i64 {
+    match unsafe { value_ref(value) } {
+        Value::String(text) => i64::try_from(text.len()).unwrap_or_else(|_| {
+            runtime_error("string length does not fit in the direct runtime range")
+        }),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_string_contains(
+    value: *mut OpaqueValue,
+    needle: *mut OpaqueValue,
+) -> i64 {
+    let Value::String(needle) = (unsafe { take_value(needle) }) else {
+        runtime_error("`contains` requires a `String` argument");
+    };
+    match unsafe { value_ref(value) } {
+        Value::String(text) => i64::from(text.contains(&needle)),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_string_starts_with(
+    value: *mut OpaqueValue,
+    prefix: *mut OpaqueValue,
+) -> i64 {
+    let Value::String(prefix) = (unsafe { take_value(prefix) }) else {
+        runtime_error("`starts_with` requires a `String` argument");
+    };
+    match unsafe { value_ref(value) } {
+        Value::String(text) => i64::from(text.starts_with(&prefix)),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_string_ends_with(
+    value: *mut OpaqueValue,
+    suffix: *mut OpaqueValue,
+) -> i64 {
+    let Value::String(suffix) = (unsafe { take_value(suffix) }) else {
+        runtime_error("`ends_with` requires a `String` argument");
+    };
+    match unsafe { value_ref(value) } {
+        Value::String(text) => i64::from(text.ends_with(&suffix)),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_string_split(
+    value: *mut OpaqueValue,
+    separator: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let Value::String(separator) = (unsafe { take_value(separator) }) else {
+        runtime_error("`split` requires a `String` argument");
+    };
+    match unsafe { value_ref(value) } {
+        Value::String(text) => boxed_value(Value::Vec(VecValue {
+            element_type: Type::named("String"),
+            elements: text
+                .split(&separator)
+                .map(|part| Value::String(part.to_string()))
+                .collect(),
+        })),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_string_replace(
+    value: *mut OpaqueValue,
+    from: *mut OpaqueValue,
+    to: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let Value::String(from) = (unsafe { take_value(from) }) else {
+        runtime_error("`replace` requires `String` for `from`");
+    };
+    let Value::String(to) = (unsafe { take_value(to) }) else {
+        runtime_error("`replace` requires `String` for `to`");
+    };
+    match unsafe { value_ref(value) } {
+        Value::String(text) => boxed_value(Value::String(text.replace(&from, &to))),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_string_to_lower(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(value) } {
+        Value::String(text) => boxed_value(Value::String(text.to_lowercase())),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_string_to_upper(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(value) } {
+        Value::String(text) => boxed_value(Value::String(text.to_uppercase())),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_string_strip_prefix(
+    value: *mut OpaqueValue,
+    prefix: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let Value::String(prefix) = (unsafe { take_value(prefix) }) else {
+        runtime_error("`strip_prefix` requires a `String` argument");
+    };
+    match unsafe { value_ref(value) } {
+        Value::String(text) => boxed_value(
+            text.strip_prefix(&prefix)
+                .map(|rest| option_some(Value::String(rest.to_string())))
+                .unwrap_or_else(option_none),
+        ),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_string_strip_suffix(
+    value: *mut OpaqueValue,
+    suffix: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let Value::String(suffix) = (unsafe { take_value(suffix) }) else {
+        runtime_error("`strip_suffix` requires a `String` argument");
+    };
+    match unsafe { value_ref(value) } {
+        Value::String(text) => boxed_value(
+            text.strip_suffix(&suffix)
+                .map(|rest| option_some(Value::String(rest.to_string())))
+                .unwrap_or_else(option_none),
+        ),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_string_trim(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(value) } {
+        Value::String(text) => boxed_value(Value::String(text.trim().to_string())),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_string_join(
+    separator: *mut OpaqueValue,
+    parts: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let Value::Vec(parts) = (unsafe { take_value(parts) }) else {
+        runtime_error("`join` requires `Vec[String]`");
+    };
+    match unsafe { value_ref(separator) } {
+        Value::String(separator) => {
+            let mut rendered_parts = Vec::new();
+            for value in parts.elements {
+                let Value::String(part) = value else {
+                    runtime_error("`join` requires `Vec[String]`");
+                };
+                rendered_parts.push(part);
+            }
+            boxed_value(Value::String(rendered_parts.join(separator)))
+        }
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_abs(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    let value = unsafe { take_value(value) };
+    match value {
+        Value::Int(IntegerValue::Signed(value)) => value
+            .checked_abs()
+            .map(IntegerValue::from_signed)
+            .map(Value::Int)
+            .map(boxed_value)
+            .unwrap_or_else(|| runtime_error("`abs(...)` overflowed the signed integer range")),
+        Value::Int(IntegerValue::Unsigned(value)) => {
+            boxed_value(Value::Int(IntegerValue::Unsigned(value)))
+        }
+        Value::Float(value) => boxed_value(Value::Float(value.abs())),
+        other => runtime_error(format!(
+            "`abs(...)` expects an integer or float value, found `{}`",
+            value_type_name(&other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_min(
+    left: *mut OpaqueValue,
+    right: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let left = unsafe { take_value(left) };
+    let right = unsafe { take_value(right) };
+    let value = match (&left, &right) {
+        (Value::Int(left_value), Value::Int(right_value)) => {
+            if left_value <= right_value {
+                left
+            } else {
+                right
+            }
+        }
+        (Value::Float(left_value), Value::Float(right_value)) => {
+            if left_value <= right_value {
+                left
+            } else {
+                right
+            }
+        }
+        _ => runtime_error("`min(...)` expects matching numeric arguments"),
+    };
+    boxed_value(value)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_max(
+    left: *mut OpaqueValue,
+    right: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let left = unsafe { take_value(left) };
+    let right = unsafe { take_value(right) };
+    let value = match (&left, &right) {
+        (Value::Int(left_value), Value::Int(right_value)) => {
+            if left_value >= right_value {
+                left
+            } else {
+                right
+            }
+        }
+        (Value::Float(left_value), Value::Float(right_value)) => {
+            if left_value >= right_value {
+                left
+            } else {
+                right
+            }
+        }
+        _ => runtime_error("`max(...)` expects matching numeric arguments"),
+    };
+    boxed_value(value)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_sqrt(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    let value = unsafe { take_value(value) };
+    match value {
+        Value::Float(value) => boxed_value(Value::Float(value.sqrt())),
+        other => runtime_error(format!(
+            "`sqrt(...)` expects `float32` or `float64`, found `{}`",
+            value_type_name(&other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_parse_int32(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    let value = unsafe { take_value(value) };
+    match value {
+        Value::String(text) => match text.parse::<i32>() {
+            Ok(value) => boxed_value(result_ok(Value::Int(IntegerValue::from_signed(
+                value as i128,
+            )))),
+            Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
+        },
+        other => runtime_error(format!(
+            "`parse_int32(...)` expects `String`, found `{}`",
+            value_type_name(&other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_parse_int64(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    let value = unsafe { take_value(value) };
+    match value {
+        Value::String(text) => match text.parse::<i64>() {
+            Ok(value) => boxed_value(result_ok(Value::Int(IntegerValue::from_signed(
+                value as i128,
+            )))),
+            Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
+        },
+        other => runtime_error(format!(
+            "`parse_int64(...)` expects `String`, found `{}`",
+            value_type_name(&other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_parse_float64(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    let value = unsafe { take_value(value) };
+    match value {
+        Value::String(text) => match text.parse::<f64>() {
+            Ok(value) => boxed_value(result_ok(Value::Float(value))),
+            Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
+        },
+        other => runtime_error(format!(
+            "`parse_float64(...)` expects `String`, found `{}`",
+            value_type_name(&other)
+        )),
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn aurora_direct_range_new(start: i64, end: i64) -> *mut OpaqueValue {
     boxed_value(Value::Range(RangeValue {
         start: start as i128,
@@ -478,6 +830,604 @@ pub extern "C" fn aurora_direct_range_advance(range: *mut OpaqueValue) -> *mut O
             value_type_name(other)
         )),
     }
+}
+
+fn vector_from_ptr<'a>(ptr: *mut OpaqueValue) -> &'a VecValue {
+    match unsafe { value_ref(ptr) } {
+        Value::Vec(vector) => vector,
+        other => runtime_error(format!(
+            "expected `Vec`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+fn vector_from_ptr_mut<'a>(ptr: *mut OpaqueValue) -> &'a mut VecValue {
+    match unsafe { value_mut(ptr) } {
+        Value::Vec(vector) => vector,
+        other => runtime_error(format!(
+            "expected `Vec`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+fn map_from_ptr<'a>(ptr: *mut OpaqueValue) -> &'a MapValue {
+    match unsafe { value_ref(ptr) } {
+        Value::Map(map) => map,
+        other => runtime_error(format!(
+            "expected `Map`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+fn map_from_ptr_mut<'a>(ptr: *mut OpaqueValue) -> &'a mut MapValue {
+    match unsafe { value_mut(ptr) } {
+        Value::Map(map) => map,
+        other => runtime_error(format!(
+            "expected `Map`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+fn set_from_ptr<'a>(ptr: *mut OpaqueValue) -> &'a SetValue {
+    match unsafe { value_ref(ptr) } {
+        Value::Set(set) => set,
+        other => runtime_error(format!(
+            "expected `Set`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+fn set_from_ptr_mut<'a>(ptr: *mut OpaqueValue) -> &'a mut SetValue {
+    match unsafe { value_mut(ptr) } {
+        Value::Set(set) => set,
+        other => runtime_error(format!(
+            "expected `Set`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+fn checked_vec_index(index: i64) -> usize {
+    if index < 0 {
+        runtime_error(format!("vector index `{}` cannot be negative", index));
+    }
+    usize::try_from(index)
+        .unwrap_or_else(|_| runtime_error("vector index does not fit in the runtime address space"))
+}
+
+fn checked_vec_index_at(index: i64, line: i64, column: i64) -> usize {
+    if index < 0 {
+        match runtime_span(line, column) {
+            Some(span) => {
+                runtime_error_at(span, format!("vector index `{}` cannot be negative", index))
+            }
+            None => runtime_error(format!("vector index `{}` cannot be negative", index)),
+        }
+    }
+    usize::try_from(index).unwrap_or_else(|_| match runtime_span(line, column) {
+        Some(span) => runtime_error_at(
+            span,
+            "vector index does not fit in the runtime address space",
+        ),
+        None => runtime_error("vector index does not fit in the runtime address space"),
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_empty() -> *mut OpaqueValue {
+    boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("Unknown"),
+        elements: Vec::new(),
+    }))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_len(vec: *mut OpaqueValue) -> i64 {
+    let vector = vector_from_ptr(vec);
+    i64::try_from(vector.elements.len())
+        .unwrap_or_else(|_| runtime_error("vector length does not fit in the direct runtime range"))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_is_empty(vec: *mut OpaqueValue) -> i64 {
+    i64::from(vector_from_ptr(vec).elements.is_empty())
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_push_in_place(
+    vec: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let value = unsafe { take_value(value) };
+    vector_from_ptr_mut(vec).elements.push(value);
+    boxed_value(Value::Unit)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_pop_in_place(vec: *mut OpaqueValue) -> *mut OpaqueValue {
+    let value = vector_from_ptr_mut(vec).elements.pop();
+    boxed_value(value.map(option_some).unwrap_or_else(option_none))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_get(vec: *mut OpaqueValue, index: i64) -> *mut OpaqueValue {
+    let index = checked_vec_index(index);
+    let value = vector_from_ptr(vec).elements.get(index).cloned();
+    boxed_value(value.map(option_some).unwrap_or_else(option_none))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_set_in_place(
+    vec: *mut OpaqueValue,
+    index: i64,
+    value: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let index = checked_vec_index(index);
+    let value = unsafe { take_value(value) };
+    let vector = vector_from_ptr_mut(vec);
+    let previous = if index < vector.elements.len() {
+        Some(std::mem::replace(&mut vector.elements[index], value))
+    } else {
+        None
+    };
+    boxed_value(previous.map(option_some).unwrap_or_else(option_none))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_remove_in_place(
+    vec: *mut OpaqueValue,
+    index: i64,
+) -> *mut OpaqueValue {
+    let index = checked_vec_index(index);
+    let vector = vector_from_ptr_mut(vec);
+    let previous = if index < vector.elements.len() {
+        Some(vector.elements.remove(index))
+    } else {
+        None
+    };
+    boxed_value(previous.map(option_some).unwrap_or_else(option_none))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_swap_in_place(
+    vec: *mut OpaqueValue,
+    first: i64,
+    second: i64,
+) -> i64 {
+    let first = checked_vec_index(first);
+    let second = checked_vec_index(second);
+    let vector = vector_from_ptr_mut(vec);
+    let swapped = first < vector.elements.len() && second < vector.elements.len();
+    if swapped {
+        vector.elements.swap(first, second);
+    }
+    i64::from(swapped)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_contains(
+    vec: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) -> i64 {
+    let needle = unsafe { take_value(value) };
+    i64::from(
+        vector_from_ptr(vec)
+            .elements
+            .iter()
+            .any(|candidate| *candidate == needle),
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_insert_in_place(
+    vec: *mut OpaqueValue,
+    index: i64,
+    value: *mut OpaqueValue,
+) -> i64 {
+    let index = checked_vec_index(index);
+    let value = unsafe { take_value(value) };
+    let vector = vector_from_ptr_mut(vec);
+    let inserted = index <= vector.elements.len();
+    if inserted {
+        vector.elements.insert(index, value);
+    }
+    i64::from(inserted)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_clear_in_place(vec: *mut OpaqueValue) -> *mut OpaqueValue {
+    vector_from_ptr_mut(vec).elements.clear();
+    boxed_value(Value::Unit)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_reverse_in_place(vec: *mut OpaqueValue) -> *mut OpaqueValue {
+    vector_from_ptr_mut(vec).elements.reverse();
+    boxed_value(Value::Unit)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_extend_in_place(
+    vec: *mut OpaqueValue,
+    other: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let other = unsafe { take_value(other) };
+    let Value::Vec(other) = other else {
+        runtime_error("`extend` requires another `Vec[T]` value");
+    };
+    vector_from_ptr_mut(vec).elements.extend(other.elements);
+    boxed_value(Value::Unit)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_index(
+    vec: *mut OpaqueValue,
+    index: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    let index = checked_vec_index_at(index, line, column);
+    let vector = vector_from_ptr(vec);
+    let Some(value) = vector.elements.get(index).cloned() else {
+        match runtime_span(line, column) {
+            Some(span) => runtime_error_at(
+                span,
+                format!(
+                    "vector index `{}` is out of bounds for length `{}`",
+                    index,
+                    vector.elements.len()
+                ),
+            ),
+            None => runtime_error(format!(
+                "vector index `{}` is out of bounds for length `{}`",
+                index,
+                vector.elements.len()
+            )),
+        }
+    };
+    boxed_value(value)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_index_option(
+    vec: *mut OpaqueValue,
+    index: i64,
+) -> *mut OpaqueValue {
+    let index = checked_vec_index(index);
+    let value = vector_from_ptr(vec).elements.get(index).cloned();
+    boxed_value(value.map(option_some).unwrap_or_else(option_none))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_vec_set_index_in_place(
+    vec: *mut OpaqueValue,
+    index: i64,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    let index = checked_vec_index_at(index, line, column);
+    let value = unsafe { take_value(value) };
+    let vector = vector_from_ptr_mut(vec);
+    if index >= vector.elements.len() {
+        match runtime_span(line, column) {
+            Some(span) => runtime_error_at(
+                span,
+                format!(
+                    "vector index `{}` is out of bounds for length `{}`",
+                    index,
+                    vector.elements.len()
+                ),
+            ),
+            None => runtime_error(format!(
+                "vector index `{}` is out of bounds for length `{}`",
+                index,
+                vector.elements.len()
+            )),
+        }
+    }
+    vector.elements[index] = value;
+    boxed_value(Value::Unit)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_empty() -> *mut OpaqueValue {
+    boxed_value(Value::Map(MapValue {
+        key_type: Type::named("Unknown"),
+        value_type: Type::named("Unknown"),
+        entries: Vec::new(),
+    }))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_len(map: *mut OpaqueValue) -> i64 {
+    let map = map_from_ptr(map);
+    i64::try_from(map.entries.len())
+        .unwrap_or_else(|_| runtime_error("map length does not fit in the direct runtime range"))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_is_empty(map: *mut OpaqueValue) -> i64 {
+    i64::from(map_from_ptr(map).entries.is_empty())
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_get(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let key = unsafe { take_value(key) };
+    let value = map_from_ptr(map)
+        .entries
+        .iter()
+        .find(|(candidate_key, _)| *candidate_key == key)
+        .map(|(_, value)| value.clone());
+    boxed_value(value.map(option_some).unwrap_or_else(option_none))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_set_in_place(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let key = unsafe { take_value(key) };
+    let value = unsafe { take_value(value) };
+    let map = map_from_ptr_mut(map);
+    let previous = if let Some(index) = map
+        .entries
+        .iter()
+        .position(|(candidate_key, _)| *candidate_key == key)
+    {
+        Some(std::mem::replace(&mut map.entries[index].1, value))
+    } else {
+        map.entries.push((key, value));
+        None
+    };
+    boxed_value(previous.map(option_some).unwrap_or_else(option_none))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_remove_in_place(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let key = unsafe { take_value(key) };
+    let map = map_from_ptr_mut(map);
+    let previous = if let Some(index) = map
+        .entries
+        .iter()
+        .position(|(candidate_key, _)| *candidate_key == key)
+    {
+        Some(map.entries.remove(index).1)
+    } else {
+        None
+    };
+    boxed_value(previous.map(option_some).unwrap_or_else(option_none))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_contains_key(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+) -> i64 {
+    let key = unsafe { take_value(key) };
+    i64::from(
+        map_from_ptr(map)
+            .entries
+            .iter()
+            .any(|(candidate_key, _)| *candidate_key == key),
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_keys(map: *mut OpaqueValue) -> *mut OpaqueValue {
+    let map = map_from_ptr(map);
+    boxed_value(Value::Vec(VecValue {
+        element_type: map.key_type.clone(),
+        elements: map.entries.iter().map(|(key, _)| key.clone()).collect(),
+    }))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_values(map: *mut OpaqueValue) -> *mut OpaqueValue {
+    let map = map_from_ptr(map);
+    boxed_value(Value::Vec(VecValue {
+        element_type: map.value_type.clone(),
+        elements: map.entries.iter().map(|(_, value)| value.clone()).collect(),
+    }))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_items(map: *mut OpaqueValue) -> *mut OpaqueValue {
+    let map = map_from_ptr(map);
+    boxed_value(Value::Vec(VecValue {
+        element_type: Type::Named(
+            "MapEntry".to_string(),
+            vec![map.key_type.clone(), map.value_type.clone()],
+        ),
+        elements: map
+            .entries
+            .iter()
+            .map(|(key, value)| {
+                Value::Instance(InstanceValue {
+                    class_name: "MapEntry".to_string(),
+                    fields: BTreeMap::from([
+                        ("key".to_string(), key.clone()),
+                        ("value".to_string(), value.clone()),
+                    ]),
+                })
+            })
+            .collect(),
+    }))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_entries(map: *mut OpaqueValue) -> *mut OpaqueValue {
+    aurora_direct_map_items(map)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_index(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    let key = unsafe { take_value(key) };
+    let map = map_from_ptr(map);
+    let Some(value) = map
+        .entries
+        .iter()
+        .find(|(candidate_key, _)| *candidate_key == key)
+        .map(|(_, value)| value.clone())
+    else {
+        match runtime_span(line, column) {
+            Some(span) => {
+                runtime_error_at(span, format!("map key `{}` was not present", key.render()))
+            }
+            None => runtime_error(format!("map key `{}` was not present", key.render())),
+        }
+    };
+    boxed_value(value)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_set_index_in_place(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+    _line: i64,
+    _column: i64,
+) -> *mut OpaqueValue {
+    let key = unsafe { take_value(key) };
+    let value = unsafe { take_value(value) };
+    let map = map_from_ptr_mut(map);
+    if let Some(index) = map
+        .entries
+        .iter()
+        .position(|(candidate_key, _)| *candidate_key == key)
+    {
+        map.entries[index].1 = value;
+    } else {
+        map.entries.push((key, value));
+    }
+    boxed_value(Value::Unit)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_clear_in_place(map: *mut OpaqueValue) -> *mut OpaqueValue {
+    map_from_ptr_mut(map).entries.clear();
+    boxed_value(Value::Unit)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_map_extend_in_place(
+    map: *mut OpaqueValue,
+    other: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let other = unsafe { take_value(other) };
+    let Value::Map(other) = other else {
+        runtime_error("`extend` requires another `Map[K, V]` value");
+    };
+    let map = map_from_ptr_mut(map);
+    for (key, value) in other.entries {
+        if let Some(index) = map
+            .entries
+            .iter()
+            .position(|(candidate_key, _)| *candidate_key == key)
+        {
+            map.entries[index].1 = value;
+        } else {
+            map.entries.push((key, value));
+        }
+    }
+    boxed_value(Value::Unit)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_set_empty() -> *mut OpaqueValue {
+    boxed_value(Value::Set(SetValue {
+        element_type: Type::named("Unknown"),
+        elements: Vec::new(),
+    }))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_set_len(set: *mut OpaqueValue) -> i64 {
+    let set = set_from_ptr(set);
+    i64::try_from(set.elements.len())
+        .unwrap_or_else(|_| runtime_error("set length does not fit in the direct runtime range"))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_set_is_empty(set: *mut OpaqueValue) -> i64 {
+    i64::from(set_from_ptr(set).elements.is_empty())
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_set_contains(
+    set: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) -> i64 {
+    let needle = unsafe { take_value(value) };
+    i64::from(
+        set_from_ptr(set)
+            .elements
+            .iter()
+            .any(|candidate| *candidate == needle),
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_set_insert_in_place(
+    set: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) -> i64 {
+    let value = unsafe { take_value(value) };
+    let set = set_from_ptr_mut(set);
+    let inserted = if set.elements.iter().any(|candidate| *candidate == value) {
+        false
+    } else {
+        set.elements.push(value);
+        true
+    };
+    i64::from(inserted)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_set_remove_in_place(
+    set: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) -> i64 {
+    let value = unsafe { take_value(value) };
+    let set = set_from_ptr_mut(set);
+    let removed = if let Some(index) = set
+        .elements
+        .iter()
+        .position(|candidate| *candidate == value)
+    {
+        set.elements.remove(index);
+        true
+    } else {
+        false
+    };
+    i64::from(removed)
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_set_index_option(
+    set: *mut OpaqueValue,
+    index: i64,
+) -> *mut OpaqueValue {
+    let index = checked_vec_index(index);
+    let value = set_from_ptr(set).elements.get(index).cloned();
+    boxed_value(value.map(option_some).unwrap_or_else(option_none))
 }
 
 #[no_mangle]
@@ -688,6 +1638,9 @@ pub extern "C" fn aurora_direct_value_type_matches(
         Value::Instance(instance) => instance.class_name == expected,
         Value::EnumVariant(variant) => variant.enum_name == expected,
         Value::String(_) => expected == "String",
+        Value::Vec(_) => expected == "Vec",
+        Value::Set(_) => expected == "Set",
+        Value::Map(_) => expected == "Map",
         Value::Channel(_) => expected == "Channel",
         Value::Task(_) => expected == "Task",
         Value::TaskGroup(_) => expected == "TaskGroup",

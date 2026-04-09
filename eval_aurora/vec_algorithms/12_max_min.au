@@ -1,0 +1,58 @@
+## Max and min: find the maximum and minimum values in a Vec[int32]
+
+def find_max(arr: borrow Vec[int32]) -> Option[int32]:
+    n = arr.len() as int32
+    if n == 0:
+        return Option.None
+    mut best = arr[0]
+    mut i: int32 = 1
+    while i < n:
+        if arr[i] > best:
+            best = arr[i]
+        i += 1
+    return Option.Some(best)
+
+def find_min(arr: borrow Vec[int32]) -> Option[int32]:
+    n = arr.len() as int32
+    if n == 0:
+        return Option.None
+    mut best = arr[0]
+    mut i: int32 = 1
+    while i < n:
+        if arr[i] < best:
+            best = arr[i]
+        i += 1
+    return Option.Some(best)
+
+def print_option(label: String, opt: Option[int32]):
+    match opt:
+        case Some(val):
+            print(f"{label}: {val}")
+        case None:
+            print(f"{label}: None")
+
+def main() -> int32:
+    data = [34, 7, 23, 99, 2, 56, 78, 1, 45]
+    print("Data: [34, 7, 23, 99, 2, 56, 78, 1, 45]")
+    print_option("Max", find_max(data))
+    print_option("Min", find_min(data))
+
+    ## All negative
+    neg = [-5, -3, -10, -1, -7]
+    print("Negatives: [-5, -3, -10, -1, -7]")
+    print_option("Max", find_max(neg))
+    print_option("Min", find_min(neg))
+
+    ## Single element
+    single = [42]
+    print("Single: [42]")
+    print_option("Max", find_max(single))
+    print_option("Min", find_min(single))
+
+    ## Empty
+    empty: Vec[int32] = []
+    print("Empty:")
+    print_option("Max", find_max(empty))
+    print_option("Min", find_min(empty))
+
+    return 0

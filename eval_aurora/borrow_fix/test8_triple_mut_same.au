@@ -1,0 +1,12 @@
+class Val:
+    n: int32
+
+def triple_mut(a: borrow mut Val, b: borrow mut Val, c: borrow mut Val):
+    a.n += 1
+    b.n += 2
+    c.n += 3
+
+def main():
+    mut v = Val(n=0)
+    triple_mut(a=v, b=v, c=v)
+    print(v.n)

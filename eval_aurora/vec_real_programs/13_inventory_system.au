@@ -1,0 +1,46 @@
+## Inventory system: Class Item, Vec[Item], borrow-safe indexing to read,
+## borrow mut to update counts, extend to merge inventories.
+## Uses: classes, borrow-safe indexing, borrow mut iteration, extend, len()
+
+class Item:
+    name: String
+    count: int32
+
+    def display(borrow self):
+        print(f"  {self.name}: {self.count}")
+
+def print_inventory(label: String, inv: borrow Vec[Item]):
+    print(f"{label}:")
+    for item in borrow inv:
+        item.display()
+
+def main() -> int32:
+    ## Build warehouse inventory
+    mut warehouse: Vec[Item] = []
+    warehouse.push(Item(name="Apples", count=50))
+    warehouse.push(Item(name="Bananas", count=30))
+    warehouse.push(Item(name="Oranges", count=20))
+
+    print_inventory("Warehouse", warehouse)
+
+    ## Read items with borrow-safe indexing (Item is non-copy)
+    print(f"First item: {warehouse[0].name}, count: {warehouse[0].count}")
+    print(f"Item count: {warehouse.len()}")
+
+    ## Update counts with borrow mut iteration: restock +10 each
+    for item in borrow mut warehouse:
+        item.count += 10
+
+    print_inventory("After restock (+10 each)", warehouse)
+
+    ## Build a shipment inventory
+    mut shipment: Vec[Item] = []
+    shipment.push(Item(name="Grapes", count=15))
+    shipment.push(Item(name="Mangoes", count=25))
+
+    ## Merge inventories using extend
+    warehouse.extend(shipment)
+    print_inventory("After merging shipment", warehouse)
+    print(f"Total items: {warehouse.len()}")
+
+    return 0

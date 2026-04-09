@@ -1,0 +1,7 @@
+def main() -> None:
+    x = Option.Some(5)
+    match x:
+        case Option.Some(v):
+            print(v)
+        case Option.None:
+            print(0)

@@ -1,0 +1,44 @@
+# Test 14: Mixed expressions - operator precedence and complex arithmetic
+
+# Basic precedence: * before +
+a = 2 + 3 * 4
+print(a)
+
+# Parentheses override
+b = (2 + 3) * 4
+print(b)
+
+# Mixed arithmetic
+c = 10 - 3 + 2 * 5 / 2
+print(c)
+
+# Nested parentheses
+d = ((2 + 3) * (4 - 1)) / 3
+print(d)
+
+# Complex expression
+e = 100 / 10 / 2
+print(e)
+
+# Left-to-right for same precedence
+f = 20 - 10 - 5
+print(f)
+
+# Modulo precedence (same as * and /)
+g = 10 + 15 % 4
+print(g)
+
+# Negative with arithmetic
+h = -3 * -4
+print(h)
+
+# Large expression
+i = (1 + 2) * (3 + 4) * (5 + 6)
+print(i)
+
+# Float and int mixed
+j = 10 / 3
+print(j)
+
+k = 10.0 / 3.0
+print(k)

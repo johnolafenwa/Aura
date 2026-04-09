@@ -1,0 +1,4 @@
+def main() -> int32:
+    m = Map[String, int32]()
+    print(m.contains_key("key"))
+    return 0

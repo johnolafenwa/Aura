@@ -1,0 +1,6 @@
+def main() -> int32:
+    s = Set{10, 20, 30}
+    print(s.contains(10))
+    print(s.contains(20))
+    print(s.contains(30))
+    return 0

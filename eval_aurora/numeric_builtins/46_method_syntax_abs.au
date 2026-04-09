@@ -1,0 +1,6 @@
+def main() -> int32:
+    x: int32 = -42
+    print(x.abs())
+    y: float64 = -3.14
+    print(y.abs())
+    return 0

@@ -1,0 +1,10 @@
+def main() -> int32:
+    s0 = Set[int32]()
+    s1 = Set{42}
+    s3 = Set{1, 2, 3}
+    s5 = Set{10, 20, 30, 40, 50}
+    print(s0.len())
+    print(s1.len())
+    print(s3.len())
+    print(s5.len())
+    return 0

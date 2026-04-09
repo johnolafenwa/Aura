@@ -1,0 +1,108 @@
+=== eval_aurora/test_1_basics.au ===
+-- check --
+ok
+-- run --
+30
+40
+-- run-mir --
+30
+40
+
+=== eval_aurora/test_2_classes.au ===
+-- check --
+ok
+-- run --
+1.0
+10
+-- run-mir --
+error: unknown MIR place `None`
+ --> eval_aurora/test_2_classes.au
+
+=== eval_aurora/test_3_enums.au ===
+-- check --
+error: strings use quoted literals; `String(...)` is not a constructor
+ --> eval_aurora/test_3_enums.au:13:25
+   |
+13 |     msg2 = Message.Text(String("hello"))
+   |                         ^
+-- run --
+error: strings use quoted literals; `String(...)` is not a constructor
+ --> eval_aurora/test_3_enums.au:13:25
+   |
+13 |     msg2 = Message.Text(String("hello"))
+   |                         ^
+-- run-mir --
+error: strings use quoted literals; `String(...)` is not a constructor
+ --> eval_aurora/test_3_enums.au:13:25
+   |
+13 |     msg2 = Message.Text(String("hello"))
+   |                         ^
+
+=== eval_aurora/test_4_generics.au ===
+-- check --
+error: call arguments cannot start with `borrow`; pass the value directly
+ --> eval_aurora/test_4_generics.au:16:15
+   |
+16 |     say_hello(borrow p)
+   |               ^
+-- run --
+error: call arguments cannot start with `borrow`; pass the value directly
+ --> eval_aurora/test_4_generics.au:16:15
+   |
+16 |     say_hello(borrow p)
+   |               ^
+-- run-mir --
+error: call arguments cannot start with `borrow`; pass the value directly
+ --> eval_aurora/test_4_generics.au:16:15
+   |
+16 |     say_hello(borrow p)
+   |               ^
+
+=== eval_aurora/test_5_concurrency.au ===
+-- check --
+ok
+-- run --
+10
+-- run-mir --
+10
+
+=== eval_aurora/test_6_strings.au ===
+-- check --
+error: strings use quoted literals; `String(...)` is not a constructor
+ --> eval_aurora/test_6_strings.au:2:9
+  |
+2 |     s = String("Aurora")
+  |         ^
+-- run --
+error: strings use quoted literals; `String(...)` is not a constructor
+ --> eval_aurora/test_6_strings.au:2:9
+  |
+2 |     s = String("Aurora")
+  |         ^
+-- run-mir --
+error: strings use quoted literals; `String(...)` is not a constructor
+ --> eval_aurora/test_6_strings.au:2:9
+  |
+2 |     s = String("Aurora")
+  |         ^
+
+=== eval_aurora/test_7_errors.au ===
+-- check --
+error: enum variants are not callable by bare name; use a qualified form such as `Result.Ok(...)`
+ --> eval_aurora/test_7_errors.au:8:12
+  |
+8 |     return Ok(res + 1)
+  |            ^
+-- run --
+error: enum variants are not callable by bare name; use a qualified form such as `Result.Ok(...)`
+ --> eval_aurora/test_7_errors.au:8:12
+  |
+8 |     return Ok(res + 1)
+  |            ^
+-- run-mir --
+error: enum variants are not callable by bare name; use a qualified form such as `Result.Ok(...)`
+ --> eval_aurora/test_7_errors.au:8:12
+  |
+8 |     return Ok(res + 1)
+  |            ^
+

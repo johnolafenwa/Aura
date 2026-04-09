@@ -1,0 +1,8 @@
+def main() -> int32:
+    mut a = [1, 2]
+    b = [3, 4, 5]
+    a.extend(b)
+    for x in borrow a:
+        print(x)
+    print(a.len())
+    return 0

@@ -1,0 +1,18 @@
+# Extra test: Continue in for loop with range
+
+def main() -> int32:
+    # Skip multiples of 3 in range(15)
+    mut sum: int32 = 0
+    mut skipped: int32 = 0
+    for i in range(15):
+        if i % 3 == 0:
+            skipped += 1
+            continue
+        sum += i
+
+    print("sum (non-multiples of 3 in 0..14):")
+    print(sum)
+    print("skipped count:")
+    print(skipped)
+
+    return 0

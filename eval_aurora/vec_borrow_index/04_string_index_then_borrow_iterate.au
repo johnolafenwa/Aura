@@ -1,0 +1,6 @@
+def main() -> int32:
+    names = ["Alice", "Bob", "Charlie"]
+    print(names[0])
+    for name in borrow names:
+        print(name)
+    return 0

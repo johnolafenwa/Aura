@@ -1,0 +1,37 @@
+## Program 3: Case-Insensitive Search
+## Given Vec[String] of names, find all matching a query using to_lower()
+
+def main() -> int32:
+    names: Vec[String] = ["Alice", "BOB", "Charlie", "alice", "ALICE", "Bob", "charlie", "Dave"]
+    query = "alice"
+    query_lower = query.to_lower()
+
+    print(f"Searching for: {query}")
+    print(f"Names to search: {names.len()}")
+
+    ## Find all case-insensitive matches
+    mut match_count = 0
+    for name in borrow names:
+        if name.to_lower() == query_lower:
+            print(f"  Match: {name}")
+            match_count += 1
+
+    print(f"Total matches: {match_count}")
+
+    ## Second search with partial match using contains
+    print("")
+    search_term = "ob"
+    print(f"Partial search (contains): {search_term}")
+    for name in borrow names:
+        if name.to_lower().contains(search_term):
+            print(f"  Contains match: {name}")
+
+    ## Search with starts_with
+    print("")
+    prefix = "cha"
+    print(f"Prefix search (starts_with): {prefix}")
+    for name in borrow names:
+        if name.to_lower().starts_with(prefix):
+            print(f"  Prefix match: {name}")
+
+    return 0

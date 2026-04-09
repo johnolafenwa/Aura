@@ -1,0 +1,7 @@
+def main() -> int32:
+    result = "a,b,c".split(",")
+    print(result.len())
+    print(result[0])
+    print(result[1])
+    print(result[2])
+    return 0

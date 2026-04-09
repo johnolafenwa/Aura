@@ -1,0 +1,61 @@
+## Program 7: Template Engine
+## Replace placeholders in a template string using a Map
+
+def render_template(template: String, vars: Map[String, String]) -> String:
+    mut result = template.clone()
+
+    ## Replace each variable placeholder
+    keys = vars.keys()
+    for key in keys:
+        placeholder = "{" + key.clone() + "}"
+        value = vars[key.clone()]
+        result = result.replace(placeholder, value)
+
+    return result
+
+def main() -> int32:
+    ## Template 1: Greeting
+    template1 = "Hello {name}, welcome to {place}!"
+    print(f"Template: {template1}")
+    mut vars1 = Map[String, String]()
+    vars1["name"] = "Alice"
+    vars1["place"] = "Aurora"
+
+    result1 = render_template(template1, vars1)
+    print(f"Result:   {result1}")
+
+    ## Verify the replacement worked
+    if result1.contains("Alice"):
+        print("Contains name: yes")
+    if result1.contains("{name}") == false:
+        print("Placeholder removed: yes")
+
+    print("")
+
+    ## Template 2: Email
+    template2 = "Dear {recipient}, Your order {order_id} has been {status}. Thanks, {sender}"
+    print(f"Template: {template2}")
+    mut vars2 = Map[String, String]()
+    vars2["recipient"] = "Bob"
+    vars2["order_id"] = "ORD-42"
+    vars2["status"] = "shipped"
+    vars2["sender"] = "Aurora Store"
+
+    result2 = render_template(template2, vars2)
+    print(f"Result:   {result2}")
+
+    print("")
+
+    ## Template 3: Code template
+    template3 = "def {fn_name}({param}: {type}) -> {return_type}:"
+    print(f"Template: {template3}")
+    mut vars3 = Map[String, String]()
+    vars3["fn_name"] = "greet"
+    vars3["param"] = "name"
+    vars3["type"] = "String"
+    vars3["return_type"] = "String"
+
+    result3 = render_template(template3, vars3)
+    print(f"Result:   {result3}")
+
+    return 0

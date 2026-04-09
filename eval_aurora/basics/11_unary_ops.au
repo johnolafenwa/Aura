@@ -1,0 +1,35 @@
+# Test 11: Unary operators
+
+# Negative numbers
+x = -10
+print(x)
+
+y = -(-5)
+print(y)
+
+# Negative float
+z = -3.14
+print(z)
+
+# Not with booleans
+a = not true
+print(a)
+
+b = not false
+print(b)
+
+# Double negation
+c = not not true
+print(c)
+
+# Negative in expressions
+d = -5 + 10
+print(d)
+
+e = 10 + -5
+print(e)
+
+# Negative variable
+f: int32 = 42
+g = -f
+print(g)

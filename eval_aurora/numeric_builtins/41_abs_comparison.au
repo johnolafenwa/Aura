@@ -1,0 +1,18 @@
+def main() -> int32:
+    a: int32 = 10
+    b: int32 = 13
+    threshold: int32 = 5
+
+    if abs(a - b) < threshold:
+        print("close")
+    else:
+        print("far")
+
+    c: int32 = 10
+    d: int32 = 100
+    if abs(c - d) < threshold:
+        print("close")
+    else:
+        print("far")
+
+    return 0

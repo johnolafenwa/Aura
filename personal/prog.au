@@ -1,0 +1,29 @@
+def run_basic():
+    yearOfBirth: int32 = 1995
+    currentYear: int32 = 2026
+    
+    age: int32 = currentYear - yearOfBirth
+    
+    print(f"Age: {age}")
+    
+def run_mutable():
+    
+    yearOfBirth: int32 = 1995
+    mut currentYear: int32 = 2026
+    
+    currentYear = 2027
+    
+    age: int32 = currentYear - yearOfBirth
+    
+    print(f"Age: {age}")
+    
+
+def main():
+    
+    # run_basic()
+    
+    run_mutable()
+    
+    
+    
+    

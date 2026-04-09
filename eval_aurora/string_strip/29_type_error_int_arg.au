@@ -1,0 +1,3 @@
+def main() -> int32:
+    result = "hello".strip_prefix(42)
+    return 0

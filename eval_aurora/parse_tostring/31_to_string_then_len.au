@@ -1,0 +1,4 @@
+def main() -> int32:
+    x: int32 = 12345
+    print(x.to_string().len())
+    return 0

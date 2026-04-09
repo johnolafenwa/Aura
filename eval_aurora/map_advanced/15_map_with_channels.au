@@ -1,0 +1,50 @@
+## Test 15: Map with channels
+## Spawn tasks, collect results into map via channel
+
+def worker(id: int32, out: Channel[int32]):
+    ## Each worker sends id then id*id
+    out.send(id)
+    out.send(id * id)
+
+def main() -> int32:
+    ch: Channel[int32] = channel()
+
+    ## Spawn 5 workers
+    t1 = spawn worker(1, ch.clone())
+    t2 = spawn worker(2, ch.clone())
+    t3 = spawn worker(3, ch.clone())
+    t4 = spawn worker(4, ch.clone())
+    t5 = spawn worker(5, ch.clone())
+
+    ## Collect results: each worker sends 2 values (id, id*id)
+    mut results = Map[int32, int32]()
+    mut collected: int32 = 0
+    while collected < 5:
+        match ch.recv():
+            case Option.Some(id):
+                match ch.recv():
+                    case Option.Some(square):
+                        results[id] = square
+                        collected += 1
+                    case Option.None:
+                        break
+            case Option.None:
+                break
+
+    ## Join all tasks
+    t1.join()
+    t2.join()
+    t3.join()
+    t4.join()
+    t5.join()
+
+    print(f"results collected: {results.len()}")
+
+    ## Print in sorted order
+    mut i: int32 = 1
+    while i <= 5:
+        val = results[i]
+        print(f"  {i}^2 = {val}")
+        i += 1
+
+    return 0

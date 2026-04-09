@@ -1,0 +1,25 @@
+# Test 9: Generic function requiring trait impl
+trait Describable:
+    def describe(borrow self) -> String
+
+class Dog:
+    name: String
+
+class Cat:
+    name: String
+
+impl Describable for Dog:
+    def describe(borrow self) -> String:
+        return "Dog: " + self.name
+
+impl Describable for Cat:
+    def describe(borrow self) -> String:
+        return "Cat: " + self.name
+
+def show_description[T: Describable](animal: T):
+    print(animal.describe())
+
+def main() -> int32:
+    show_description(animal=Dog(name="Rex"))
+    show_description(animal=Cat(name="Whiskers"))
+    return 0

@@ -1,0 +1,11 @@
+# Test 13b: Continue during borrow iteration
+def main() -> int32:
+    xs = [1, 2, 3, 4, 5]
+    mut sum: int32 = 0
+    for x in borrow xs:
+        if x % 2 == 0:
+            continue
+        sum += x
+    print(sum)
+    print(xs.len())
+    return 0

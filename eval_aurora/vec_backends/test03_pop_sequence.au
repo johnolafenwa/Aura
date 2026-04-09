@@ -1,0 +1,17 @@
+def print_option(value: Option[int32]):
+    match value:
+        case Some(inner):
+            print(inner)
+        case None:
+            print(-1)
+
+def main() -> int32:
+    mut xs: Vec[int32] = []
+    xs.push(10)
+    xs.push(20)
+    xs.push(30)
+    print_option(xs.pop())
+    print_option(xs.pop())
+    print_option(xs.pop())
+    print_option(xs.pop())
+    return 0

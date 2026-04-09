@@ -1,0 +1,4 @@
+def main() -> int32:
+    mut v = [1, 2, 3]
+    print(v[10])
+    return 0

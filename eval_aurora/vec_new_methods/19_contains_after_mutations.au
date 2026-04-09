@@ -1,0 +1,13 @@
+# Test 19: contains after mutations - push, remove, check
+def main() -> int32:
+    mut v = [1, 2, 3]
+
+    print(v.contains(4))
+    v.push(4)
+    print(v.contains(4))
+
+    v.remove(0)
+    print(v.contains(1))
+    print(v.contains(2))
+
+    return 0

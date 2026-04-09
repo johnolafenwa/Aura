@@ -1,0 +1,5 @@
+def main() -> int32:
+    s = "the quick brown fox"
+    for word in s.split(" "):
+        print(word)
+    return 0

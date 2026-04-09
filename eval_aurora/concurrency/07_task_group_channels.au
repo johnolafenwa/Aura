@@ -1,0 +1,30 @@
+# Test 7: Task group with workers communicating via channels
+def doubler(input: Channel[int32], output: Channel[int32]):
+    while true:
+        match input.recv():
+            case Option.Some(v):
+                output.send(v * 2)
+            case Option.None:
+                return
+
+def main() -> int32:
+    input: Channel[int32] = channel()
+    output: Channel[int32] = channel()
+
+    with task_group() as group:
+        group.spawn(doubler, input.clone(), output.clone())
+
+        input.send(5)
+        input.send(10)
+        input.close()
+
+        mut count: int32 = 0
+        while count < 2:
+            match output.recv():
+                case Option.Some(v):
+                    print(v)
+                    count += 1
+                case Option.None:
+                    break
+
+    return 0
