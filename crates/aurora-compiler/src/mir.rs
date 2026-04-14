@@ -5,7 +5,10 @@ use crate::ast::{
 use crate::call::{bind_call_arguments, callable_params_from_decl, CallConvention};
 use crate::diag::Span;
 use crate::integer::minimal_signed_type_for_negative_literal;
-use crate::sema::{substitute_type, ModuleNamespace, Program, Type};
+use crate::sema::{
+    binary_operator_trait, substitute_trait_bound, substitute_type, unary_operator_trait,
+    ModuleNamespace, Program, TraitBound, Type,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,6 +21,67 @@ const INTERNAL_VEC_INDEX_OPTION_FIELD: &str = "__index_option";
 const INTERNAL_VEC_SET_INDEX_FIELD: &str = "__set_index";
 const INTERNAL_MAP_INDEX_FIELD: &str = "__index";
 const INTERNAL_MAP_SET_INDEX_FIELD: &str = "__set_index";
+
+fn is_builtin_unary_operator(op: UnaryOp, ty: &Type) -> bool {
+    match op {
+        UnaryOp::Not => *ty == Type::named("bool"),
+        UnaryOp::Neg => {
+            crate::sema::integer_type_bounds(ty).is_some()
+                || matches!(ty, Type::Named(name, _) if name == "float32" || name == "float64")
+        }
+    }
+}
+
+fn is_builtin_binary_operator(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> bool {
+    if left_ty != right_ty {
+        return false;
+    }
+    match op {
+        BinaryOp::And | BinaryOp::Or => *left_ty == Type::named("bool"),
+        BinaryOp::Add => {
+            crate::sema::integer_type_bounds(left_ty).is_some()
+                || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64" || name == "String")
+        }
+        BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
+            crate::sema::integer_type_bounds(left_ty).is_some()
+                || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64")
+        }
+        BinaryOp::Eq | BinaryOp::NotEq => true,
+        BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq => {
+            crate::sema::integer_type_bounds(left_ty).is_some()
+                || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64")
+        }
+    }
+}
+
+fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
+    match ty {
+        Type::TypeParam(name) => {
+            collected.insert(name.clone());
+        }
+        Type::Named(_, args) => {
+            for arg in args {
+                collect_type_params_from_type(arg, collected);
+            }
+        }
+        Type::Unit | Type::Module(_) => {}
+    }
+}
+
+fn adjusted_binary_operand_types(
+    left_expr: &Expr,
+    mut left_ty: Type,
+    right_expr: &Expr,
+    mut right_ty: Type,
+) -> (Type, Type) {
+    if left_ty != right_ty && matches!(left_expr.kind, ExprKind::Int(_) | ExprKind::Float(_)) {
+        left_ty = right_ty.clone();
+    }
+    if left_ty != right_ty && matches!(right_expr.kind, ExprKind::Int(_) | ExprKind::Float(_)) {
+        right_ty = left_ty.clone();
+    }
+    (left_ty, right_ty)
+}
 
 fn default_return_operand(ty: &Type) -> Operand {
     match ty {
@@ -320,6 +384,7 @@ pub fn lower(program: &Program) -> MirModule {
                 &function.decl,
                 &function.signature.params,
                 &function.signature.return_type,
+                function.type_param_bounds.clone(),
             )
         })
         .collect::<Vec<_>>();
@@ -367,6 +432,7 @@ pub fn lower(program: &Program) -> MirModule {
                 &method.decl,
                 &method.signature.params,
                 &method.signature.return_type,
+                method.type_param_bounds.clone(),
             ));
             methods.push(MirMethod {
                 name: method.decl.name.clone(),
@@ -512,6 +578,7 @@ fn push_imported_module_classes_from_namespace(
                     &method.decl,
                     &method.signature.params,
                     &method.signature.return_type,
+                    method.type_param_bounds.clone(),
                 ));
             }
             methods.push(MirMethod {
@@ -594,6 +661,10 @@ fn lower_trait_impl(
                 &method.decl,
                 &method.signature.params,
                 &method.signature.return_type,
+                crate::sema::merge_trait_bounds(
+                    &trait_impl.type_param_bounds,
+                    &method.type_param_bounds,
+                ),
             ));
         }
         methods.push(MirMethod {
@@ -641,6 +712,7 @@ fn push_imported_module_functions_from_namespace(
                 &function.decl,
                 &function.signature.params,
                 &function.signature.return_type,
+                function.type_param_bounds.clone(),
             ));
         }
     }
@@ -670,6 +742,7 @@ fn lower_function(
     function: &crate::ast::FunctionDecl,
     param_types: &[Type],
     return_type: &Type,
+    type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
 ) -> MirFunction {
     let params = function
         .params
@@ -682,7 +755,13 @@ fn lower_function(
         })
         .collect::<Vec<_>>();
 
-    let mut lowerer = Lowerer::new(program, name, module_name, return_type.clone());
+    let mut lowerer = Lowerer::new(
+        program,
+        name,
+        module_name,
+        return_type.clone(),
+        type_param_bounds,
+    );
     if let Some(receiver_type) = receiver_type {
         lowerer
             .local_types
@@ -708,6 +787,7 @@ fn lower_top_level(program: &Program) -> MirFunction {
         "__script",
         &program.module_name,
         Type::named("int32"),
+        BTreeMap::new(),
     );
     lowerer.lower_stmts(&program.top_level_stmts);
     lowerer.finish(MirFunctionSpec {
@@ -734,6 +814,7 @@ struct Lowerer<'a> {
     function_name: &'a str,
     module_name: &'a str,
     return_type: Type,
+    type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
     blocks: Vec<BasicBlockBuilder>,
     current_block: usize,
     temp_counter: usize,
@@ -788,12 +869,14 @@ impl<'a> Lowerer<'a> {
         function_name: &'a str,
         module_name: &'a str,
         return_type: Type,
+        type_param_bounds: BTreeMap<String, Vec<crate::sema::TraitBound>>,
     ) -> Self {
         Self {
             program,
             function_name,
             module_name,
             return_type,
+            type_param_bounds,
             blocks: vec![BasicBlockBuilder {
                 label: "entry".to_string(),
                 instructions: Vec::new(),
@@ -2056,6 +2139,23 @@ impl<'a> Lowerer<'a> {
             ExprKind::Specialize { expr, .. } => self.lower_expr(expr),
             ExprKind::Group(inner) => self.lower_expr(inner),
             ExprKind::Unary { op, expr: value } => {
+                if let Some(field) = self.operator_field_for_unary(*op, value) {
+                    let temp = self.new_temp_for_expr(expr);
+                    let receiver_place = self.render_place_expr_option(value);
+                    let object = self.lower_expr(value);
+                    self.emit(Instruction::Assign {
+                        target: temp.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Member {
+                                object,
+                                field,
+                                receiver_place,
+                            },
+                            args: Vec::new(),
+                        },
+                    });
+                    return Operand::Place(temp);
+                }
                 let value = self.lower_expr(value);
                 let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
@@ -2094,6 +2194,28 @@ impl<'a> Lowerer<'a> {
             ExprKind::Binary { op, left, right } => {
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
                     return self.lower_logical_expr(*op, left, right);
+                }
+                if let Some(field) = self.operator_field_for_binary(*op, left, right) {
+                    let temp = self.new_temp_for_expr(expr);
+                    let receiver_place = self.render_place_expr_option(left);
+                    let object = self.lower_expr(left);
+                    let args = vec![MirArg {
+                        name: None,
+                        value: self.lower_expr(right),
+                        writeback_place: None,
+                    }];
+                    self.emit(Instruction::Assign {
+                        target: temp.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Member {
+                                object,
+                                field,
+                                receiver_place,
+                            },
+                            args,
+                        },
+                    });
+                    return Operand::Place(temp);
                 }
                 let left = self.lower_expr(left);
                 let right = self.lower_expr(right);
@@ -2823,7 +2945,14 @@ impl<'a> Lowerer<'a> {
                 UnaryOp::Not => Some(Type::named("bool")),
                 UnaryOp::Neg => match &expr.kind {
                     ExprKind::Int(value) => Some(minimal_signed_type_for_negative_literal(*value)),
-                    _ => self.infer_expr_type(expr),
+                    _ => {
+                        let value_ty = self.infer_expr_type(expr)?;
+                        if is_builtin_unary_operator(*op, &value_ty) {
+                            Some(value_ty)
+                        } else {
+                            self.operator_return_type_for_unary(&value_ty, *op)
+                        }
+                    }
                 },
             },
             ExprKind::Try(inner) => match self.infer_expr_type(inner)? {
@@ -2947,7 +3076,42 @@ impl<'a> Lowerer<'a> {
                                     .collect();
                                 substitute_type(&function.signature.return_type, &substitutions)
                             } else {
-                                function.signature.return_type.clone()
+                                let ordered_args = bind_call_arguments(
+                                    name,
+                                    &callable_params_from_decl(&function.decl.params),
+                                    args,
+                                    callee.span,
+                                    CallConvention::PositionalOrNamed,
+                                )
+                                .ok();
+                                let type_params = function
+                                    .decl
+                                    .type_params
+                                    .iter()
+                                    .cloned()
+                                    .collect::<BTreeSet<_>>();
+                                let mut substitutions = std::collections::HashMap::new();
+                                if let Some(ordered_args) = ordered_args {
+                                    for (bound_arg, expected) in ordered_args
+                                        .into_iter()
+                                        .zip(function.signature.params.iter())
+                                    {
+                                        let Some(argument) = bound_arg else {
+                                            continue;
+                                        };
+                                        let Some(actual_ty) = self.infer_expr_type(&argument.value)
+                                        else {
+                                            continue;
+                                        };
+                                        let _ = crate::sema::type_pattern_matches(
+                                            expected,
+                                            &actual_ty,
+                                            &type_params,
+                                            &mut substitutions,
+                                        );
+                                    }
+                                }
+                                substitute_type(&function.signature.return_type, &substitutions)
                             }
                         })
                     }
@@ -3082,15 +3246,31 @@ impl<'a> Lowerer<'a> {
                 }
                 let left_ty = self.infer_expr_type(left)?;
                 let right_ty = self.infer_expr_type(right)?;
-                if left_ty == Type::named("float64") || right_ty == Type::named("float64") {
-                    Some(Type::named("float64"))
-                } else if left_ty == right_ty {
+                let (left_ty, right_ty) =
+                    adjusted_binary_operand_types(left, left_ty, right, right_ty);
+                if is_builtin_binary_operator(*op, &left_ty, &right_ty) {
                     Some(left_ty)
                 } else {
-                    None
+                    self.operator_return_type_for_binary(&left_ty, &right_ty, *op)
                 }
             }
         }
+    }
+
+    fn operator_field_for_unary(&self, op: UnaryOp, value: &Expr) -> Option<String> {
+        let value_ty = self.infer_expr_type(value)?;
+        (!is_builtin_unary_operator(op, &value_ty))
+            .then(|| unary_operator_trait(op).map(|(_, field)| field.to_string()))
+            .flatten()
+    }
+
+    fn operator_field_for_binary(&self, op: BinaryOp, left: &Expr, right: &Expr) -> Option<String> {
+        let left_ty = self.infer_expr_type(left)?;
+        let right_ty = self.infer_expr_type(right)?;
+        let (left_ty, right_ty) = adjusted_binary_operand_types(left, left_ty, right, right_ty);
+        (!is_builtin_binary_operator(op, &left_ty, &right_ty))
+            .then(|| binary_operator_trait(op).map(|(_, field)| field.to_string()))
+            .flatten()
     }
 
     fn trait_impls_in_scope(&self) -> impl Iterator<Item = &crate::sema::TraitImplInfo> + '_ {
@@ -3121,7 +3301,151 @@ impl<'a> Lowerer<'a> {
         ) {
             return None;
         }
+        for (type_param, bounds) in &trait_impl.type_param_bounds {
+            let actual_ty = substitutions.get(type_param)?;
+            for bound in bounds {
+                let resolved_bound = substitute_trait_bound(bound, &substitutions);
+                if !self.type_implements_trait_bound(actual_ty, &resolved_bound) {
+                    return None;
+                }
+            }
+        }
         Some(substitutions)
+    }
+
+    fn trait_impl_substitutions_for_bound(
+        &self,
+        trait_impl: &crate::sema::TraitImplInfo,
+        actual: &Type,
+        bound: &TraitBound,
+    ) -> Option<std::collections::HashMap<String, Type>> {
+        if trait_impl.trait_name != bound.trait_name
+            || trait_impl.trait_args.len() != bound.trait_args.len()
+        {
+            return None;
+        }
+        let mut type_params = BTreeSet::new();
+        collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
+        for trait_arg in &trait_impl.trait_args {
+            collect_type_params_from_type(trait_arg, &mut type_params);
+        }
+        let mut substitutions = std::collections::HashMap::new();
+        if !crate::sema::type_pattern_matches(
+            &trait_impl.for_type,
+            actual,
+            &type_params,
+            &mut substitutions,
+        ) {
+            return None;
+        }
+        for (pattern, actual_arg) in trait_impl.trait_args.iter().zip(&bound.trait_args) {
+            if !crate::sema::type_pattern_matches(
+                pattern,
+                actual_arg,
+                &type_params,
+                &mut substitutions,
+            ) {
+                return None;
+            }
+        }
+        for (type_param, bounds) in &trait_impl.type_param_bounds {
+            let actual_ty = substitutions.get(type_param)?;
+            for impl_bound in bounds {
+                let resolved_bound = substitute_trait_bound(impl_bound, &substitutions);
+                if !self.type_implements_trait_bound(actual_ty, &resolved_bound) {
+                    return None;
+                }
+            }
+        }
+        Some(substitutions)
+    }
+
+    fn type_implements_trait_bound(&self, ty: &Type, bound: &TraitBound) -> bool {
+        self.trait_impls_in_scope().any(|trait_impl| {
+            self.trait_impl_substitutions_for_bound(trait_impl, ty, bound)
+                .or_else(|| {
+                    if bound.trait_args.is_empty() && trait_impl.trait_name == bound.trait_name {
+                        self.trait_impl_substitutions(trait_impl, ty)
+                    } else {
+                        None
+                    }
+                })
+                .is_some()
+        })
+    }
+
+    fn operator_return_type_for_unary(&self, value_ty: &Type, op: UnaryOp) -> Option<Type> {
+        let (trait_name, _field) = unary_operator_trait(op)?;
+        match value_ty {
+            Type::TypeParam(type_param) => self
+                .type_param_bounds
+                .get(type_param)
+                .into_iter()
+                .flatten()
+                .find(|bound| bound.trait_name == trait_name && bound.trait_args.len() == 1)
+                .map(|bound| bound.trait_args[0].clone()),
+            _ => self
+                .trait_impls_in_scope()
+                .filter(|trait_impl| {
+                    trait_impl.trait_name == trait_name && trait_impl.trait_args.len() == 1
+                })
+                .find_map(|trait_impl| {
+                    let substitutions = self.trait_impl_substitutions(trait_impl, value_ty)?;
+                    Some(substitute_type(&trait_impl.trait_args[0], &substitutions))
+                }),
+        }
+    }
+
+    fn operator_return_type_for_binary(
+        &self,
+        left_ty: &Type,
+        right_ty: &Type,
+        op: BinaryOp,
+    ) -> Option<Type> {
+        let (trait_name, _field) = binary_operator_trait(op)?;
+        match left_ty {
+            Type::TypeParam(type_param) => self
+                .type_param_bounds
+                .get(type_param)
+                .into_iter()
+                .flatten()
+                .find(|bound| {
+                    bound.trait_name == trait_name
+                        && bound.trait_args.len() == 2
+                        && bound.trait_args[0] == *right_ty
+                })
+                .map(|bound| bound.trait_args[1].clone()),
+            _ => self
+                .trait_impls_in_scope()
+                .filter(|trait_impl| {
+                    trait_impl.trait_name == trait_name && trait_impl.trait_args.len() == 2
+                })
+                .find_map(|trait_impl| {
+                    let mut type_params = BTreeSet::new();
+                    collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
+                    for trait_arg in &trait_impl.trait_args {
+                        collect_type_params_from_type(trait_arg, &mut type_params);
+                    }
+                    let mut substitutions = std::collections::HashMap::new();
+                    if !crate::sema::type_pattern_matches(
+                        &trait_impl.for_type,
+                        left_ty,
+                        &type_params,
+                        &mut substitutions,
+                    ) {
+                        return None;
+                    }
+                    if !crate::sema::type_pattern_matches(
+                        &trait_impl.trait_args[0],
+                        right_ty,
+                        &type_params,
+                        &mut substitutions,
+                    ) {
+                        return None;
+                    }
+                    Some(substitute_type(&trait_impl.trait_args[1], &substitutions))
+                }),
+        }
     }
 
     fn trait_method_for_receiver(

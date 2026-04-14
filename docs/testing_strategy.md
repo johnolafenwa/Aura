@@ -118,14 +118,14 @@ Current repo commands:
 Current enforced floor:
 
 - compiler
-  - lines: `65%`
-  - functions: `67%`
-  - regions: `65%`
+  - lines: `68%`
+  - functions: `74%`
+  - regions: `68%`
 - language server
-  - statements: `87%`
-  - branches: `78%`
-  - functions: `90%`
-  - lines: `87%`
+  - statements: `91%`
+  - branches: `82%`
+  - functions: `98%`
+  - lines: `91%`
 
 These are baseline non-regression gates, not the final target. The project is still moving toward enforced 100% coverage as the implementation stabilizes.
 

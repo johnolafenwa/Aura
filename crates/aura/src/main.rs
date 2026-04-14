@@ -379,7 +379,18 @@ fn build_direct_native_binary(
             error
         )
     })?;
-    fs::copy(&native_runtime.staticlib, &temp_staticlib).map_err(|error| {
+    let staticlib_bytes = fs::read(&native_runtime.staticlib).or_else(|_| {
+        resolve_static_library_path(repo_root(), current_profile()).and_then(|refreshed| {
+            fs::read(&refreshed).map_err(|error| {
+                format!(
+                    "failed to read Aurora runtime library `{}`: {}",
+                    refreshed.display(),
+                    error
+                )
+            })
+        })
+    })?;
+    fs::write(&temp_staticlib, staticlib_bytes).map_err(|error| {
         format!(
             "failed to stage Aurora runtime library `{}` as `{}`: {}",
             native_runtime.staticlib.display(),

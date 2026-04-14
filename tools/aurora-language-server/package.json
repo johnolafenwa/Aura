@@ -9,7 +9,7 @@
     "check": "node --check ./src/server.js && node --check ./src/analysis.js && node --check ./src/compiler_bridge.js",
     "test": "node --test ./test/*.test.js",
     "coverage": "c8 --reporter=text --reporter=text-summary node --test ./test/*.test.js",
-    "coverage:check": "c8 --check-coverage --lines 87 --branches 78 --functions 90 --statements 87 --reporter=text --reporter=text-summary node --test ./test/*.test.js",
+    "coverage:check": "c8 --check-coverage --lines 91 --branches 82 --functions 98 --statements 91 --reporter=text --reporter=text-summary node --test ./test/*.test.js",
     "start": "node ./src/server.js"
   },
   "devDependencies": {

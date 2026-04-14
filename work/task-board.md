@@ -1,24 +1,27 @@
 # Task Board
 
-Last updated: 2026-03-30
+Last updated: 2026-04-13
 
 ## In Progress
 
 - Expand the frontend from the current bootstrap toward the broader frozen v1 surface without breaking the working path.
-- Keep the language server and VS Code tooling aligned with compiler and proposal changes while the language surface is still moving quickly.
 - Keep the categorized example library and `tutorials/` track synchronized with the implemented language subset as the compiler evolves.
-- Move the repo onto a stricter test-first workflow with fixture-driven compiler cases and explicit coverage policy.
+- Continue ratcheting the compiler and language-server coverage floors upward toward enforced 100%, with the next focus on `native_codegen`, `analysis`, `interpreter`, `sema`, and the JS fallback branches.
 
 ## Todo
 
-- Raise the Aurora compiler library toward enforced 100% coverage now that Rust coverage is measurable.
-- Raise the Aurora language-server analysis package to enforced 100% coverage before expanding its semantic surface further.
-- Extend the trait system toward the remaining proposal surface, including generic trait bounds and operator traits.
-- Extend compiler-backed `analyze` / `complete` and the LSP from local-module diagnostics/hover/completions to fully correct cross-file definitions for imported items.
-- Narrow the JS fallback further now that completions, diagnostics, symbols, hover, and definition all have compiler-backed paths.
+- Continue shrinking the JS analysis fallback down to recovery-only cases as compiler-backed completions and invalid-buffer recovery improve further.
+- Extend the trait system beyond the current specialized generic bounds and operator-trait subset toward the remaining proposal surface.
+- Raise the compiler coverage gate beyond `68/74/68` as more direct-backend and checker paths gain focused unit coverage.
+- Raise the language-server coverage gate beyond `91/82/98/91` as the remaining fallback and server branches gain direct regression coverage.
 
 ## Done
 
+- Extended compiler-backed `analyze` / `complete` and the LSP from local-module behavior to fully correct cross-file definitions for imported items, including fields, methods, variants, and trait methods that resolve back to their defining source files.
+- Narrowed the JS fallback so hover and go-to-definition now stay compiler-owned whenever compiler analysis succeeds, using JS only when the compiler cannot analyze the buffer.
+- Extended the maintained trait surface with specialized generic trait bounds and operator traits across the checker, interpreter, MIR/runtime, direct builds, examples, tutorials, CLI coverage, and compiler/LSP regression suites.
+- Raised the enforced coverage gates after new compiler and LSP regression/unit coverage: compiler to lines `67%`, functions `74%`, regions `67%`; language server to statements `89%`, branches `78%`, functions `98%`, and lines `89%`.
+- Raised the enforced coverage gates again after additional fallback-helper, bridge, lexer, call-surface, and AST coverage work: compiler to lines `68%`, functions `74%`, regions `68%`; language server to statements `91%`, branches `82%`, functions `98%`, and lines `91%`.
 - Fixed compiler-backed `Vec.insert(...)` analysis/completion metadata so the compiler and LSP bridge now report the correct `-> bool` signature instead of the stale `-> None` detail.
 - Added practical parsing/formatting and collection-finisher support across the checker, interpreter, MIR/runtime, direct backend, compiler/LSP tooling, fixtures, examples, and tutorials: `parse_int32`, `parse_int64`, `parse_float64`, scalar and boolean `.to_string()`, `String.join(...)`, `Vec.insert(...)` / `clear()` / `reverse()`, `Map.items()` / `entries()` / `clear()` / `extend(...)`, builtin `MapEntry[K, V]`, and owned `Set[T]` collections with `Set{...}` literals, iteration, and the maintained set method surface.
 - Added literal `match` patterns over `bool`, integer, and `String` scrutinees across the parser, checker, interpreter, MIR lowering/runtime, maintained examples, CLI smoke tests, and tutorial track, while keeping wildcard exhaustiveness requirements for open-ended literal domains.

@@ -35,6 +35,8 @@ After the release build completes, run the binary directly:
 ./target/release/aura run examples/modules/simple_import.au
 ./target/release/aura run examples/traits/greeter.au
 ./target/release/aura run examples/traits/generic_trait_impl.au
+./target/release/aura run examples/traits/generic_trait_bounds.au
+./target/release/aura run examples/traits/operator_traits.au
 ./target/release/aura run examples/traits/specialized_trait_dispatch.au
 ./target/release/aura run examples/numbers/numeric_casts.au
 ./target/release/aura run examples/numbers/numeric_builtins.au
@@ -98,7 +100,7 @@ aura --version
 - `aura run <file.au>`
   - run a program
   - this now includes the maintained `pass` statement and `sleep(duration)` builtin
-  - the maintained user-facing surface now also includes the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, and `Set[T]`
+  - the maintained user-facing surface now also includes the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, `Set[T]`, specialized generic trait bounds, and the current operator-trait subset
   - local file imports and `public` module boundaries now work for file-backed programs
 - `aura run-mir <file.au>`
   - run a program through the current native MIR runtime path
@@ -121,6 +123,7 @@ aura --version
   - print machine-readable compiler analysis as JSON
   - file-backed and stdin-backed analysis now resolve local imports relative to the supplied path
   - nested package modules can now be analyzed directly without false import diagnostics
+  - compiler-backed definitions now point across files for imported symbols instead of stopping at the importing file
 - `aura complete --line <n> --character <n> [--trigger .] <file.au>`
   - print machine-readable completion items as JSON
   - `--line` and `--character` are zero-based

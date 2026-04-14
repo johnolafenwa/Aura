@@ -1,0 +1,29 @@
+trait Add[Rhs, Out]:
+    def add(borrow self, rhs: Rhs) -> Out
+
+trait Neg[Out]:
+    def neg(borrow self) -> Out
+
+class Point:
+    x: int32
+    y: int32
+
+impl Add[Point, Point] for Point:
+    def add(borrow self, rhs: Point) -> Point:
+        return Point(x=self.x + rhs.x, y=self.y + rhs.y)
+
+impl Neg[Point] for Point:
+    def neg(borrow self) -> Point:
+        return Point(x=0 - self.x, y=0 - self.y)
+
+def add_all[T: Add[T, T]](left: T, right: T) -> T:
+    return left + right
+
+def main() -> int32:
+    point = add_all(left=Point(x=2, y=3), right=Point(x=4, y=5))
+    negated = -point
+    print(point.x)
+    print(point.y)
+    print(negated.x)
+    print(negated.y)
+    return 0

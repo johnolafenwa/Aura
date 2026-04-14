@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const {
+  _testing,
   analyzeDocument,
   completionsForDocument,
   definitionForPosition,
@@ -764,4 +765,47 @@ test("fallback analysis accepts f-strings, copy classes, borrowed match, and cha
   assert.equal(diagnosticsForDocument(copyClassSource).length, 0);
   assert.equal(diagnosticsForDocument(matchBorrowSource).length, 0);
   assert.equal(diagnosticsForDocument(channelIterationSource).length, 0);
+});
+
+test("fallback analysis helpers split top-level colons through nested delimiters", () => {
+  assert.deepEqual(
+    _testing.splitTopLevelColon("\"outer\": {\"nested\": [1, 2, {\"name\": \"aurora\"}]}"),
+    ["\"outer\"", "{\"nested\": [1, 2, {\"name\": \"aurora\"}]}"]
+  );
+  assert.deepEqual(
+    _testing.splitTopLevelColon("call(coords[0]): value"),
+    ["call(coords[0])", "value"]
+  );
+  assert.deepEqual(
+    _testing.splitTopLevelColon("{\"nested\": [1, 2]}: value"),
+    ["{\"nested\": [1, 2]}", "value"]
+  );
+  assert.deepEqual(_testing.splitTopLevelColon("{\"nested\": 1}"), [null, null]);
+  assert.deepEqual(
+    _testing.splitTopLevelColon("\"escaped\\\"text\" : value"),
+    ["\"escaped\\\"text\"", "value"]
+  );
+});
+
+test("fallback analysis helper splits top-level comma-separated segments through nested brackets", () => {
+  assert.deepEqual(
+    _testing.splitTopLevelCommaSeparated("call(items[0]), values[1], plain"),
+    ["call(items[0])", "values[1]", "plain"]
+  );
+});
+
+test("fallback analysis infers nested map literals and tolerates malformed nested-only entries", () => {
+  const source = [
+    "def main():",
+    "    nested = {\"config\": {\"enabled\": true}}",
+    "    print(nested)"
+  ].join("\n");
+  const analysis = analyzeDocument(source);
+
+  assert.equal(analysis.diagnostics.length, 0);
+  const lineIndex = 2;
+  const character = source.split("\n")[lineIndex].indexOf("nested");
+  const hover = hoverForPosition(source, lineIndex, character);
+  assert.ok(hover);
+  assert.match(hover.value, /local nested: Map\[String, Map\[String, bool\]\]/);
 });

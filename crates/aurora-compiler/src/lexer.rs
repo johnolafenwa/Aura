@@ -594,3 +594,160 @@ fn simple(kind: TokenKind, line: usize, column: usize) -> Token {
         span: Span::new(line, column),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{lex, TokenKind};
+
+    fn kinds(source: &str) -> Vec<TokenKind> {
+        lex(source)
+            .unwrap()
+            .into_iter()
+            .map(|token| token.kind)
+            .collect()
+    }
+
+    #[test]
+    fn lexes_keywords_operators_and_delimiters() {
+        let tokens = kinds(
+            "class enum def trait impl import from mut borrow indirect public return if elif else and or not match case for in while break continue pass try with as select spawn detached true false name ? ( ) [ ] { } : , . = == != < <= > >= + += * *= / /= % %= - -> -=\n",
+        );
+
+        assert!(tokens.contains(&TokenKind::KwClass));
+        assert!(tokens.contains(&TokenKind::KwEnum));
+        assert!(tokens.contains(&TokenKind::KwDef));
+        assert!(tokens.contains(&TokenKind::KwTrait));
+        assert!(tokens.contains(&TokenKind::KwImpl));
+        assert!(tokens.contains(&TokenKind::KwImport));
+        assert!(tokens.contains(&TokenKind::KwFrom));
+        assert!(tokens.contains(&TokenKind::KwMut));
+        assert!(tokens.contains(&TokenKind::KwBorrow));
+        assert!(tokens.contains(&TokenKind::KwIndirect));
+        assert!(tokens.contains(&TokenKind::KwPublic));
+        assert!(tokens.contains(&TokenKind::KwReturn));
+        assert!(tokens.contains(&TokenKind::KwIf));
+        assert!(tokens.contains(&TokenKind::KwElif));
+        assert!(tokens.contains(&TokenKind::KwElse));
+        assert!(tokens.contains(&TokenKind::KwAnd));
+        assert!(tokens.contains(&TokenKind::KwOr));
+        assert!(tokens.contains(&TokenKind::KwNot));
+        assert!(tokens.contains(&TokenKind::KwMatch));
+        assert!(tokens.contains(&TokenKind::KwCase));
+        assert!(tokens.contains(&TokenKind::KwFor));
+        assert!(tokens.contains(&TokenKind::KwIn));
+        assert!(tokens.contains(&TokenKind::KwWhile));
+        assert!(tokens.contains(&TokenKind::KwBreak));
+        assert!(tokens.contains(&TokenKind::KwContinue));
+        assert!(tokens.contains(&TokenKind::KwPass));
+        assert!(tokens.contains(&TokenKind::KwTry));
+        assert!(tokens.contains(&TokenKind::KwWith));
+        assert!(tokens.contains(&TokenKind::KwAs));
+        assert!(tokens.contains(&TokenKind::KwSelect));
+        assert!(tokens.contains(&TokenKind::KwSpawn));
+        assert!(tokens.contains(&TokenKind::KwDetached));
+        assert!(tokens.contains(&TokenKind::BoolLiteral(true)));
+        assert!(tokens.contains(&TokenKind::BoolLiteral(false)));
+        assert!(tokens.contains(&TokenKind::Identifier("name".to_string())));
+        assert!(tokens.contains(&TokenKind::Question));
+        assert!(tokens.contains(&TokenKind::LParen));
+        assert!(tokens.contains(&TokenKind::RParen));
+        assert!(tokens.contains(&TokenKind::LBracket));
+        assert!(tokens.contains(&TokenKind::RBracket));
+        assert!(tokens.contains(&TokenKind::LBrace));
+        assert!(tokens.contains(&TokenKind::RBrace));
+        assert!(tokens.contains(&TokenKind::Colon));
+        assert!(tokens.contains(&TokenKind::Comma));
+        assert!(tokens.contains(&TokenKind::Dot));
+        assert!(tokens.contains(&TokenKind::Equal));
+        assert!(tokens.contains(&TokenKind::EqEq));
+        assert!(tokens.contains(&TokenKind::NotEq));
+        assert!(tokens.contains(&TokenKind::Less));
+        assert!(tokens.contains(&TokenKind::LessEq));
+        assert!(tokens.contains(&TokenKind::Greater));
+        assert!(tokens.contains(&TokenKind::GreaterEq));
+        assert!(tokens.contains(&TokenKind::Plus));
+        assert!(tokens.contains(&TokenKind::PlusEqual));
+        assert!(tokens.contains(&TokenKind::Star));
+        assert!(tokens.contains(&TokenKind::StarEqual));
+        assert!(tokens.contains(&TokenKind::Slash));
+        assert!(tokens.contains(&TokenKind::SlashEqual));
+        assert!(tokens.contains(&TokenKind::Percent));
+        assert!(tokens.contains(&TokenKind::PercentEqual));
+        assert!(tokens.contains(&TokenKind::Minus));
+        assert!(tokens.contains(&TokenKind::Arrow));
+        assert!(tokens.contains(&TokenKind::MinusEqual));
+    }
+
+    #[test]
+    fn lexes_strings_fstrings_numbers_and_durations() {
+        let tokens = kinds(
+            "value = \"line\\ntext\\t\\\"quote\\\"\\\\\"\nmessage = f\"hello {user}\"\nnums = 7 1.5 5ms 2s 1m\n",
+        );
+
+        assert!(tokens.contains(&TokenKind::StringLiteral(
+            "line\ntext\t\"quote\"\\".to_string()
+        )));
+        assert!(tokens.contains(&TokenKind::FStringLiteral("hello {user}".to_string())));
+        assert!(tokens.contains(&TokenKind::IntLiteral(7)));
+        assert!(tokens.contains(&TokenKind::FloatLiteral(1.5)));
+        assert!(tokens.contains(&TokenKind::DurationLiteral(5)));
+        assert!(tokens.contains(&TokenKind::DurationLiteral(2_000)));
+        assert!(tokens.contains(&TokenKind::DurationLiteral(60_000)));
+    }
+
+    #[test]
+    fn lexes_indentation_and_skips_blank_or_comment_lines() {
+        let tokens = kinds(
+            "def main():\n    value = 1\n\n    # comment only\n    if true:\n        print(value)\n    print(value)\n",
+        );
+
+        let indent_count = tokens
+            .iter()
+            .filter(|kind| **kind == TokenKind::Indent)
+            .count();
+        let dedent_count = tokens
+            .iter()
+            .filter(|kind| **kind == TokenKind::Dedent)
+            .count();
+        let newline_count = tokens
+            .iter()
+            .filter(|kind| **kind == TokenKind::Newline)
+            .count();
+
+        assert_eq!(indent_count, 2);
+        assert_eq!(dedent_count, 2);
+        assert_eq!(newline_count, 5);
+    }
+
+    #[test]
+    fn reports_lex_errors_for_tabs_bad_indentation_and_invalid_sequences() {
+        let tab_error = lex("def main():\n\tprint(1)\n").unwrap_err();
+        assert!(tab_error.message.contains("tabs are not supported"));
+
+        let indent_error = lex("def main():\n    print(1)\n  print(2)\n").unwrap_err();
+        assert!(indent_error.message.contains("inconsistent indentation"));
+
+        let bang_error = lex("def main():\n    value = !true\n").unwrap_err();
+        assert!(bang_error.message.contains("unexpected character `!`"));
+
+        let string_escape_error = lex("def main():\n    text = \"\\q\"\n").unwrap_err();
+        assert!(string_escape_error
+            .message
+            .contains("unsupported escape sequence `\\q`"));
+
+        let fstring_escape_error = lex("def main():\n    text = f\"\\q\"\n").unwrap_err();
+        assert!(fstring_escape_error
+            .message
+            .contains("unsupported escape sequence `\\q`"));
+
+        let unterminated_string = lex("def main():\n    text = \"unterminated\n").unwrap_err();
+        assert!(unterminated_string
+            .message
+            .contains("unterminated string literal"));
+
+        let unterminated_fstring = lex("def main():\n    text = f\"unterminated\n").unwrap_err();
+        assert!(unterminated_fstring
+            .message
+            .contains("unterminated f-string literal"));
+    }
+}

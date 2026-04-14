@@ -72,6 +72,10 @@ Current bootstrap compiler workflow:
   - execute trait declarations, `impl Trait for Type`, and bounded generic calls
 - `cargo run -p aura -- run examples/traits/generic_trait_impl.au`
   - execute generic trait declarations and generic impl headers
+- `cargo run -p aura -- run examples/traits/generic_trait_bounds.au`
+  - execute specialized generic trait bounds such as `T: Mapper[int32]`
+- `cargo run -p aura -- run examples/traits/operator_traits.au`
+  - execute operator traits through `+` and unary `-`
 - `cargo run -p aura -- run examples/traits/specialized_trait_dispatch.au`
   - execute bounded dispatch across specialized generic trait impls
 - `cargo run -p aura -- run examples/numbers/numeric_casts.au`
@@ -160,7 +164,7 @@ Development install:
 6. Press `F5` to launch an Extension Development Host.
 7. Open an `.au` file such as `examples/classes/point_distance.au` in the Extension Development Host.
 
-The language server now prefers compiler-owned analysis from `aura analyze` and `aura complete` for diagnostics, document symbols, hover, go-to-definition, and completions. That compiler path now understands local module imports for file-backed and stdin-backed buffers. It falls back to the in-repo JS analysis layer when the compiler cannot analyze the current buffer.
+The language server now prefers compiler-owned analysis from `aura analyze` and `aura complete` for diagnostics, document symbols, hover, go-to-definition, and completions. That compiler path now understands local module imports for file-backed and stdin-backed buffers, including cross-file definitions for imported symbols. It falls back to the in-repo JS analysis layer only when the compiler cannot analyze the current buffer at all.
 
 Packaged install:
 

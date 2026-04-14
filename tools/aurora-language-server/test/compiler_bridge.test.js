@@ -8,8 +8,19 @@ const path = require("node:path");
 
 const {
   analyzeWithCompiler,
+  binaryName,
   completeWithCompiler,
+  compilerDefinitionAtPosition,
+  compilerDefinitionToLspLocation,
+  compilerDiagnosticsToLsp,
+  compilerHoverAtPosition,
+  compilerSymbolsToLsp,
+  findOccurrence,
+  resolveCompilerCommand,
+  runCommand,
   setWorkspaceRoots
+  ,
+  uriToPath
 } = require("../src/compiler_bridge");
 
 const repoRoot = path.join(__dirname, "../../..");
@@ -25,6 +36,411 @@ const modulesSource = fs.readFileSync(modulesPath, "utf8");
 const namespaceTypesPath = path.join(repoRoot, "examples/modules/namespace_import_types.au");
 const namespaceTypesUri = `file://${namespaceTypesPath}`;
 const namespaceTypesSource = fs.readFileSync(namespaceTypesPath, "utf8");
+
+test("compiler bridge helper conversions cover diagnostics, symbols, and definition ranges", () => {
+  assert.deepEqual(compilerDiagnosticsToLsp({}), []);
+
+  const diagnostics = compilerDiagnosticsToLsp({
+    diagnostics: [
+      {
+        severity: 1,
+        line: 2,
+        start_character: 4,
+        end_character: 9,
+        message: "unknown name"
+      }
+    ]
+  });
+  assert.deepEqual(diagnostics, [
+    {
+      severity: 1,
+      range: {
+        start: { line: 2, character: 4 },
+        end: { line: 2, character: 9 }
+      },
+      message: "unknown name",
+      source: "aurora-compiler"
+    }
+  ]);
+
+  assert.deepEqual(compilerSymbolsToLsp({}), []);
+  const symbols = compilerSymbolsToLsp({
+    symbols: [
+      {
+        name: "Point",
+        kind: "class",
+        detail: "class Point",
+        line: 0,
+        start_character: 0,
+        end_character: 5,
+        children: [
+          {
+            name: "x",
+            kind: "field",
+            detail: "x: int32",
+            line: 1,
+            start_character: 4,
+            end_character: 5,
+            children: []
+          }
+        ]
+      },
+      {
+        name: "distance",
+        kind: "function",
+        detail: "function distance",
+        line: 2,
+        start_character: 0,
+        end_character: 8,
+        children: []
+      },
+      {
+        name: "greet",
+        kind: "method",
+        detail: "method greet",
+        line: 4,
+        start_character: 4,
+        end_character: 9,
+        children: []
+      },
+      {
+        name: "Status",
+        kind: "enum",
+        detail: "enum Status",
+        line: 6,
+        start_character: 0,
+        end_character: 6,
+        children: [
+          {
+            name: "Ready",
+            kind: "variant",
+            detail: "variant Ready",
+            line: 7,
+            start_character: 4,
+            end_character: 9,
+            children: []
+          }
+        ]
+      },
+      {
+        name: "mystery",
+        kind: "unknown",
+        detail: undefined,
+        line: 3,
+        start_character: undefined,
+        end_character: undefined,
+        children: undefined
+      }
+    ]
+  });
+  assert.equal(symbols[0].kind, 5);
+  assert.equal(symbols[0].children[0].kind, 8);
+  assert.equal(symbols[1].kind, 12);
+  assert.equal(symbols[2].kind, 6);
+  assert.equal(symbols[3].kind, 10);
+  assert.equal(symbols[3].children[0].kind, 22);
+  assert.equal(symbols[4].kind, 13);
+
+  assert.equal(
+    findOccurrence(
+      {
+        occurrences: [{ line: 1, start_character: 2, end_character: 5, hover: "hover" }]
+      },
+      1,
+      3
+    ).hover,
+    "hover"
+  );
+  assert.equal(findOccurrence({ occurrences: [] }, 0, 0), null);
+  assert.equal(findOccurrence(null, 0, 0), null);
+
+  assert.equal(compilerDefinitionToLspLocation("file:///workspace/main.au", null), null);
+  assert.deepEqual(
+    compilerDefinitionToLspLocation("file:///workspace/main.au", {
+      file_path: null,
+      line: 2,
+      start_character: 1,
+      end_character: 4
+    }),
+    {
+      uri: "file:///workspace/main.au",
+      range: {
+        start: { line: 2, character: 1 },
+        end: { line: 2, character: 4 }
+      }
+    }
+  );
+
+  assert.deepEqual(
+    compilerHoverAtPosition(
+      {
+        occurrences: [
+          {
+            line: 4,
+            start_character: 2,
+            end_character: 6,
+            hover: "```aurora\nfunction greet() -> String\n```"
+          }
+        ]
+      },
+      4,
+      3
+    ),
+    {
+      value: "```aurora\nfunction greet() -> String\n```",
+      range: {
+        start: { line: 4, character: 2 },
+        end: { line: 4, character: 6 }
+      }
+    }
+  );
+  assert.equal(compilerHoverAtPosition({ occurrences: [] }, 1, 1), null);
+
+  assert.deepEqual(
+    compilerDefinitionAtPosition(
+      "file:///workspace/main.au",
+      {
+        occurrences: [
+          {
+            line: 1,
+            start_character: 0,
+            end_character: 3,
+            hover: "hover",
+            definition: {
+              file_path: path.join(repoRoot, "examples/modules/pkg/types.au"),
+              line: 7,
+              start_character: 4,
+              end_character: 9
+            }
+          }
+        ]
+      },
+      1,
+      1
+    ),
+    {
+      uri: `file://${path.join(repoRoot, "examples/modules/pkg/types.au")}`,
+      range: {
+        start: { line: 7, character: 4 },
+        end: { line: 7, character: 9 }
+      }
+    }
+  );
+  assert.equal(
+    compilerDefinitionAtPosition(
+      "file:///workspace/main.au",
+      {
+        occurrences: [
+          {
+            line: 1,
+            start_character: 0,
+            end_character: 3,
+            hover: "hover",
+            definition: null
+          }
+        ]
+      },
+      1,
+      1
+    ),
+    null
+  );
+  assert.equal(compilerDefinitionAtPosition("file:///workspace/main.au", { occurrences: [] }, 9, 9), null);
+});
+
+test("compiler bridge resolves compiler commands across env, cargo, binaries, and fallback", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-bridge-command-"));
+  const originalEnvPath = process.env.AURORA_LSP_AURA_PATH;
+  try {
+    const fakeAura = path.join(tempRoot, binaryName());
+    fs.writeFileSync(fakeAura, "");
+    process.env.AURORA_LSP_AURA_PATH = fakeAura;
+    setWorkspaceRoots([]);
+    assert.deepEqual(resolveCompilerCommand(), { cmd: fakeAura, args: [], cwd: undefined });
+
+    delete process.env.AURORA_LSP_AURA_PATH;
+    const cargoRoot = path.join(tempRoot, "cargo-root");
+    fs.mkdirSync(path.join(cargoRoot, "crates", "aura"), { recursive: true });
+    fs.writeFileSync(path.join(cargoRoot, "Cargo.toml"), "[workspace]\n");
+    fs.writeFileSync(path.join(cargoRoot, "crates", "aura", "Cargo.toml"), "[package]\nname=\"aura\"\nversion=\"0.1.0\"\n");
+    setWorkspaceRoots([cargoRoot]);
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: "cargo",
+      args: ["run", "-q", "-p", "aura", "--"],
+      cwd: cargoRoot
+    });
+
+    const binaryRoot = path.join(tempRoot, "binary-root");
+    fs.mkdirSync(path.join(binaryRoot, "target", "debug"), { recursive: true });
+    const debugBinary = path.join(binaryRoot, "target", "debug", binaryName());
+    fs.writeFileSync(debugBinary, "");
+    setWorkspaceRoots([binaryRoot]);
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: debugBinary,
+      args: [],
+      cwd: binaryRoot
+    });
+
+    fs.rmSync(debugBinary, { force: true });
+    fs.mkdirSync(path.join(binaryRoot, "target", "release"), { recursive: true });
+    const releaseBinary = path.join(binaryRoot, "target", "release", binaryName());
+    fs.writeFileSync(releaseBinary, "");
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: releaseBinary,
+      args: [],
+      cwd: binaryRoot
+    });
+
+    setWorkspaceRoots([tempRoot]);
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: "aura",
+      args: [],
+      cwd: tempRoot
+    });
+
+    setWorkspaceRoots(null);
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: "aura",
+      args: [],
+      cwd: undefined
+    });
+  } finally {
+    if (originalEnvPath === undefined) {
+      delete process.env.AURORA_LSP_AURA_PATH;
+    } else {
+      process.env.AURORA_LSP_AURA_PATH = originalEnvPath;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge uri and command helpers handle direct utility cases", async () => {
+  const encodedPath = path.join(repoRoot, "examples/modules/simple_import.au").replace(/ /g, "%20");
+  assert.equal(uriToPath(`file://${encodedPath}`), path.join(repoRoot, "examples/modules/simple_import.au"));
+  assert.equal(uriToPath("file:///C:/aurora/examples/main.au", "win32"), "C:/aurora/examples/main.au");
+  assert.equal(uriToPath("not-a-file-uri"), null);
+  assert.equal(binaryName("win32"), "aura.exe");
+  assert.equal(binaryName("linux"), "aura");
+
+  const stdout = await runCommand(
+    process.execPath,
+    ["-e", "process.stdin.resume();let data='';process.stdin.on('data',chunk=>data+=chunk);process.stdin.on('end',()=>process.stdout.write(data.toUpperCase()))"],
+    "aurora",
+    repoRoot
+  );
+  assert.equal(stdout, "AURORA");
+
+  await assert.rejects(
+    runCommand(
+      process.execPath,
+      ["-e", "process.stderr.write('boom');process.exit(2)"],
+      "",
+      repoRoot
+    ),
+    /boom/
+  );
+});
+
+test("compiler bridge returns null when compiler output fails or is not valid JSON", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-bridge-null-"));
+  const mainPath = path.join(tempRoot, "main.au");
+  const mainUri = `file://${mainPath}`;
+  const originalEnvPath = process.env.AURORA_LSP_AURA_PATH;
+  try {
+    const failingScript = path.join(tempRoot, "fail.js");
+    fs.writeFileSync(failingScript, "process.stderr.write('nope');process.exit(1);");
+    process.env.AURORA_LSP_AURA_PATH = process.execPath;
+    setWorkspaceRoots([]);
+    assert.equal(
+      await analyzeWithCompiler(mainUri, "def main() -> int32:\n    return 0\n"),
+      null
+    );
+    assert.equal(
+      await completeWithCompiler(mainUri, "def main() -> int32:\n    value.\n    return 0\n", 1, 10, "."),
+      null
+    );
+
+    const invalidJsonScript = path.join(tempRoot, "invalid-json.js");
+    fs.writeFileSync(
+      invalidJsonScript,
+      "process.stdin.resume();process.stdin.on('end',()=>process.stdout.write('not json'));"
+    );
+    process.env.AURORA_LSP_AURA_PATH = path.join(tempRoot, "aurora-invalid-json");
+    fs.writeFileSync(
+      process.env.AURORA_LSP_AURA_PATH,
+      `#!/bin/sh\nexec "${process.execPath}" "${invalidJsonScript}" "$@"\n`
+    );
+    fs.chmodSync(process.env.AURORA_LSP_AURA_PATH, 0o755);
+    assert.equal(
+      await analyzeWithCompiler(mainUri, "def main() -> int32:\n    return 0\n"),
+      null
+    );
+  } finally {
+    if (originalEnvPath === undefined) {
+      delete process.env.AURORA_LSP_AURA_PATH;
+    } else {
+      process.env.AURORA_LSP_AURA_PATH = originalEnvPath;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge accepts non-file URIs when using the compiler subprocess helpers", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-bridge-memory-uri-"));
+  const originalEnvPath = process.env.AURORA_LSP_AURA_PATH;
+
+  try {
+    const fakeCompiler = path.join(tempRoot, "aurora-fake");
+    const fakeCompilerScript = path.join(tempRoot, "fake-compiler.js");
+    fs.writeFileSync(
+      fakeCompilerScript,
+      [
+        "const args = process.argv.slice(2);",
+        "const command = args[0];",
+        "const stdinPath = args[args.indexOf('--stdin') + 1];",
+        "if (command === 'analyze') {",
+        "  process.stdout.write(JSON.stringify({ diagnostics: [], symbols: [], occurrences: [{ line: 0, start_character: 0, end_character: 3, hover: stdinPath, definition: null }] }));",
+        "} else if (command === 'complete') {",
+        "  process.stdout.write(JSON.stringify([{ label: stdinPath }]));",
+        "} else {",
+        "  process.stderr.write('unexpected command');",
+        "  process.exit(1);",
+        "}"
+      ].join("\n")
+    );
+    fs.writeFileSync(fakeCompiler, `#!/bin/sh\nexec "${process.execPath}" "${fakeCompilerScript}" "$@"\n`);
+    fs.chmodSync(fakeCompiler, 0o755);
+
+    process.env.AURORA_LSP_AURA_PATH = fakeCompiler;
+    setWorkspaceRoots([]);
+
+    const analysis = await analyzeWithCompiler("untitled:aurora-buffer", "def main():\n    pass\n");
+    assert.equal(analysis.occurrences[0].hover, "untitled:aurora-buffer");
+
+    const completions = await completeWithCompiler(
+      "untitled:aurora-buffer",
+      "def main():\n    value.\n",
+      1,
+      10,
+      "."
+    );
+    assert.equal(completions[0].label, "untitled:aurora-buffer");
+  } finally {
+    if (originalEnvPath === undefined) {
+      delete process.env.AURORA_LSP_AURA_PATH;
+    } else {
+      process.env.AURORA_LSP_AURA_PATH = originalEnvPath;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("runCommand reports exit status when stderr is empty", async () => {
+  await assert.rejects(
+    runCommand(process.execPath, ["-e", "process.exit(7)"], "", repoRoot),
+    /status 7/
+  );
+});
 
 test("compiler bridge returns machine-readable analysis for a real example", async () => {
   setWorkspaceRoots([repoRoot]);
@@ -104,24 +520,32 @@ test("compiler bridge resolves local module imports for analysis and completions
 test("compiler bridge preserves definitions for namespace-imported symbols", async () => {
   setWorkspaceRoots([repoRoot]);
   const analysis = await analyzeWithCompiler(namespaceTypesUri, namespaceTypesSource);
+  const typesPath = path.join(repoRoot, "examples/modules/pkg/types.au");
 
   assert.ok(analysis);
   assert.equal(analysis.diagnostics.length, 0);
   assert.ok(
     analysis.occurrences.some(
       (occurrence) =>
-        occurrence.hover.includes("module pkg.types") && occurrence.definition !== null
+        occurrence.hover.includes("module pkg.types") &&
+        occurrence.definition !== null &&
+        occurrence.definition.file_path === typesPath
     )
   );
   assert.ok(
     analysis.occurrences.some(
       (occurrence) =>
-        occurrence.hover.includes("class Counter") && occurrence.definition !== null
+        occurrence.hover.includes("class Counter") &&
+        occurrence.definition !== null &&
+        occurrence.definition.file_path === typesPath
     )
   );
   assert.ok(
     analysis.occurrences.some(
-      (occurrence) => occurrence.hover.includes("enum Status") && occurrence.definition !== null
+      (occurrence) =>
+        occurrence.hover.includes("enum Status") &&
+        occurrence.definition !== null &&
+        occurrence.definition.file_path === typesPath
     )
   );
 });
@@ -202,6 +626,90 @@ test("compiler bridge includes imported trait methods in completions", async () 
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("compiler bridge preserves cross-file definitions for imported function, field, and trait method uses", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-cross-file-"));
+  try {
+    fs.mkdirSync(path.join(tempRoot, "pkg"));
+    const mathPath = path.join(tempRoot, "pkg/math.au");
+    const userPath = path.join(tempRoot, "pkg/user.au");
+    fs.writeFileSync(
+      mathPath,
+      "public def add(left: int32, right: int32) -> int32:\n    return left + right\n"
+    );
+    fs.writeFileSync(
+      path.join(tempRoot, "pkg/named.au"),
+      "public trait Named:\n    def name(borrow self) -> String\n"
+    );
+    fs.writeFileSync(
+      userPath,
+      "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.label\n"
+    );
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source = [
+      "from pkg.math import add",
+      "from pkg.user import User",
+      "",
+      "def main() -> int32:",
+      "    total = add(left=1, right=2)",
+      "    user = User(label=\"Ada\")",
+      "    print(user.label)",
+      "    print(user.name())",
+      "    return total"
+    ].join("\n");
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 0);
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover.includes("function add") &&
+          occurrence.definition?.file_path === mathPath
+      )
+    );
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover.includes("class User") &&
+          occurrence.definition?.file_path === userPath
+      )
+    );
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover.includes("field label: String") &&
+          occurrence.definition?.file_path === userPath
+      )
+    );
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover.includes("method name() -> String") &&
+          occurrence.definition?.file_path === userPath
+      )
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge maps cross-file definitions to file URIs", () => {
+  const location = compilerDefinitionToLspLocation("file:///workspace/main.au", {
+    file_path: path.join(repoRoot, "examples/modules/pkg/types.au"),
+    line: 1,
+    start_character: 4,
+    end_character: 11
+  });
+
+  assert.equal(location.uri, `file://${path.join(repoRoot, "examples/modules/pkg/types.au")}`);
+  assert.deepEqual(location.range, {
+    start: { line: 1, character: 4 },
+    end: { line: 1, character: 11 }
+  });
 });
 
 test("compiler bridge includes Vec collection members in completions", async () => {

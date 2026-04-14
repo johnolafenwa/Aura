@@ -20,6 +20,7 @@ use crate::integer::{
 pub struct Program {
     pub module: Module,
     pub module_name: String,
+    pub source_path: Option<String>,
     pub classes: BTreeMap<String, ClassInfo>,
     pub enums: BTreeMap<String, EnumInfo>,
     pub functions: BTreeMap<String, FunctionInfo>,
@@ -34,7 +35,7 @@ pub struct Program {
 pub struct ClassInfo {
     pub module_name: String,
     pub decl: ClassDecl,
-    pub type_param_bounds: BTreeMap<String, Vec<String>>,
+    pub type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
     pub fields: BTreeMap<String, FieldInfo>,
     pub methods: BTreeMap<String, MethodInfo>,
 }
@@ -43,19 +44,21 @@ pub struct ClassInfo {
 pub struct FieldInfo {
     pub public: bool,
     pub ty: Type,
+    pub span: crate::diag::Span,
 }
 
 #[derive(Clone, Debug)]
 pub struct EnumInfo {
     pub module_name: String,
     pub decl: EnumDecl,
-    pub type_param_bounds: BTreeMap<String, Vec<String>>,
+    pub type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
     pub variants: BTreeMap<String, EnumVariantInfo>,
 }
 
 #[derive(Clone, Debug)]
 pub struct EnumVariantInfo {
     pub payload: Option<Type>,
+    pub span: crate::diag::Span,
 }
 
 #[derive(Clone, Debug)]
@@ -63,14 +66,14 @@ pub struct FunctionInfo {
     pub module_name: String,
     pub decl: FunctionDecl,
     pub signature: FunctionSignature,
-    pub type_param_bounds: BTreeMap<String, Vec<String>>,
+    pub type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
 }
 
 #[derive(Clone, Debug)]
 pub struct MethodInfo {
     pub decl: FunctionDecl,
     pub signature: FunctionSignature,
-    pub type_param_bounds: BTreeMap<String, Vec<String>>,
+    pub type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
 }
 
 #[derive(Clone, Debug)]
@@ -84,14 +87,15 @@ pub struct TraitInfo {
 pub struct TraitMethodInfo {
     pub decl: FunctionDecl,
     pub signature: FunctionSignature,
-    pub type_param_bounds: BTreeMap<String, Vec<String>>,
+    pub type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
 }
 
 #[derive(Clone, Debug)]
 pub struct TraitImplInfo {
+    pub module_name: String,
     pub decl: ImplDecl,
     pub type_params: Vec<String>,
-    pub type_param_bounds: BTreeMap<String, Vec<String>>,
+    pub type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
     pub trait_name: String,
     pub trait_args: Vec<Type>,
     pub for_type: Type,
@@ -102,7 +106,57 @@ pub struct TraitImplInfo {
 pub struct TraitImplMethodInfo {
     pub decl: FunctionDecl,
     pub signature: FunctionSignature,
-    pub type_param_bounds: BTreeMap<String, Vec<String>>,
+    pub type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TraitBound {
+    pub trait_name: String,
+    pub trait_args: Vec<Type>,
+}
+
+impl fmt::Display for TraitBound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.trait_args.is_empty() {
+            write!(f, "{}", self.trait_name)
+        } else {
+            write!(
+                f,
+                "{}[{}]",
+                self.trait_name,
+                self.trait_args
+                    .iter()
+                    .map(Type::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    }
+}
+
+pub(crate) fn unary_operator_trait(op: UnaryOp) -> Option<(&'static str, &'static str)> {
+    match op {
+        UnaryOp::Neg => Some(("Neg", "neg")),
+        UnaryOp::Not => Some(("Not", "not")),
+    }
+}
+
+pub(crate) fn binary_operator_trait(op: BinaryOp) -> Option<(&'static str, &'static str)> {
+    match op {
+        BinaryOp::Add => Some(("Add", "add")),
+        BinaryOp::Sub => Some(("Sub", "sub")),
+        BinaryOp::Mul => Some(("Mul", "mul")),
+        BinaryOp::Div => Some(("Div", "div")),
+        BinaryOp::Mod => Some(("Mod", "mod")),
+        BinaryOp::And
+        | BinaryOp::Or
+        | BinaryOp::Eq
+        | BinaryOp::NotEq
+        | BinaryOp::Less
+        | BinaryOp::LessEq
+        | BinaryOp::Greater
+        | BinaryOp::GreaterEq => None,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -118,6 +172,7 @@ pub enum ImportedBinding {
 pub struct ModuleNamespace {
     pub name: String,
     pub path: String,
+    pub source_path: Option<String>,
     pub modules: BTreeMap<String, ModuleNamespace>,
     pub functions: BTreeMap<String, FunctionInfo>,
     pub classes: BTreeMap<String, ClassInfo>,
@@ -423,8 +478,13 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 &type_arities,
                 &method_type_param_scope,
             )?;
-            let type_param_bounds =
-                lower_trait_bounds(&method.type_param_bounds, &traits, method.span)?;
+            let type_param_bounds = lower_trait_bounds(
+                &method.type_param_bounds,
+                &traits,
+                &type_names,
+                &type_arities,
+                &method_type_param_scope,
+            )?;
             if methods
                 .insert(
                     method.name.clone(),
@@ -464,18 +524,31 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             continue;
         };
         validate_type_params(&enum_decl.type_params, enum_decl.span, "enum")?;
-        let type_param_bounds =
-            lower_trait_bounds(&enum_decl.type_param_bounds, &traits, enum_decl.span)?;
+        let enum_type_param_scope = type_param_scope(&enum_decl.type_params);
+        let type_param_bounds = lower_trait_bounds(
+            &enum_decl.type_param_bounds,
+            &traits,
+            &type_names,
+            &type_arities,
+            &enum_type_param_scope,
+        )?;
         let mut variants = BTreeMap::new();
-        let type_param_scope = type_param_scope(&enum_decl.type_params);
         for variant in &enum_decl.variants {
             let payload = variant
                 .payload
                 .as_ref()
-                .map(|payload| lower_type(payload, &type_names, &type_arities, &type_param_scope))
+                .map(|payload| {
+                    lower_type(payload, &type_names, &type_arities, &enum_type_param_scope)
+                })
                 .transpose()?;
             if variants
-                .insert(variant.name.clone(), EnumVariantInfo { payload })
+                .insert(
+                    variant.name.clone(),
+                    EnumVariantInfo {
+                        payload,
+                        span: variant.span,
+                    },
+                )
                 .is_some()
             {
                 return Err(Diagnostic::at(
@@ -504,11 +577,16 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             continue;
         };
         validate_type_params(&class_decl.type_params, class_decl.span, "class")?;
-        let type_param_bounds =
-            lower_trait_bounds(&class_decl.type_param_bounds, &traits, class_decl.span)?;
+        let class_type_param_scope = type_param_scope(&class_decl.type_params);
+        let type_param_bounds = lower_trait_bounds(
+            &class_decl.type_param_bounds,
+            &traits,
+            &type_names,
+            &type_arities,
+            &class_type_param_scope,
+        )?;
         let mut fields = BTreeMap::new();
         let mut methods = BTreeMap::new();
-        let class_type_param_scope = type_param_scope(&class_decl.type_params);
         for field in &class_decl.fields {
             let lowered = lower_type(
                 &field.ty,
@@ -531,6 +609,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                     FieldInfo {
                         public: field.public,
                         ty: lowered,
+                        span: field.span,
                     },
                 )
                 .is_some()
@@ -551,7 +630,13 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 merged_type_param_scope(&class_type_param_scope, &method.type_params);
             let type_param_bounds = merge_trait_bounds(
                 &type_param_bounds,
-                &lower_trait_bounds(&method.type_param_bounds, &traits, method.span)?,
+                &lower_trait_bounds(
+                    &method.type_param_bounds,
+                    &traits,
+                    &type_names,
+                    &type_arities,
+                    &method_type_param_scope,
+                )?,
             );
             let params = method
                 .params
@@ -708,7 +793,9 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         let type_param_bounds = lower_trait_bounds(
             &function_decl.type_param_bounds,
             &traits,
-            function_decl.span,
+            &type_names,
+            &type_arities,
+            &type_param_scope(&function_decl.type_params),
         )?;
         let params = function_decl
             .params
@@ -771,8 +858,13 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             }
         }
         let impl_type_param_scope = type_param_scope(&impl_type_params);
-        let impl_type_param_bounds =
-            lower_trait_bounds(&impl_decl.type_param_bounds, &traits, impl_decl.span)?;
+        let impl_type_param_bounds = lower_trait_bounds(
+            &impl_decl.type_param_bounds,
+            &traits,
+            &type_names,
+            &type_arities,
+            &type_param_scope(&impl_decl.type_params),
+        )?;
         if impl_decl.trait_args.len() != trait_info.decl.type_params.len() {
             return Err(Diagnostic::at(
                 impl_decl.span,
@@ -848,10 +940,15 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 ));
             }
             validate_type_params(&method.type_params, method.span, "impl method")?;
-            let type_param_bounds =
-                lower_trait_bounds(&method.type_param_bounds, &traits, method.span)?;
             let method_type_param_scope =
                 merged_type_param_scope(&impl_type_param_scope, &method.type_params);
+            let type_param_bounds = lower_trait_bounds(
+                &method.type_param_bounds,
+                &traits,
+                &type_names,
+                &type_arities,
+                &method_type_param_scope,
+            )?;
             let params = method
                 .params
                 .iter()
@@ -911,6 +1008,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             }
         }
         trait_impls.push(TraitImplInfo {
+            module_name: module_name.clone(),
             decl: impl_decl.clone(),
             type_params: impl_type_params,
             type_param_bounds: impl_type_param_bounds,
@@ -924,6 +1022,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
     let program = Program {
         module: module.clone(),
         module_name,
+        source_path: None,
         classes,
         enums,
         functions,
@@ -1310,35 +1409,50 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
 fn lower_trait_bounds(
     bounds: &BTreeMap<String, Vec<TypeRef>>,
     traits: &BTreeMap<String, TraitInfo>,
-    _span: crate::diag::Span,
-) -> Result<BTreeMap<String, Vec<String>>> {
+    type_names: &BTreeMap<String, crate::diag::Span>,
+    type_arities: &BTreeMap<String, usize>,
+    type_param_scope: &BTreeMap<String, ()>,
+) -> Result<BTreeMap<String, Vec<TraitBound>>> {
     let mut lowered = BTreeMap::new();
     for (type_param, trait_bounds) in bounds {
         let mut names = Vec::new();
         for bound in trait_bounds {
-            if !bound.args.is_empty() {
-                return Err(Diagnostic::at(
-                    bound.span,
-                    "generic trait bounds are not implemented yet",
-                ));
-            }
-            if !traits.contains_key(&bound.name) {
+            let Some(trait_info) = traits.get(&bound.name) else {
                 return Err(Diagnostic::at(
                     bound.span,
                     format!("unknown trait `{}`", bound.name),
                 ));
+            };
+            if bound.args.len() != trait_info.decl.type_params.len() {
+                return Err(Diagnostic::at(
+                    bound.span,
+                    format!(
+                        "trait `{}` expects {} type arguments, found {}",
+                        bound.name,
+                        trait_info.decl.type_params.len(),
+                        bound.args.len()
+                    ),
+                ));
             }
-            names.push(bound.name.clone());
+            let trait_args = bound
+                .args
+                .iter()
+                .map(|arg| lower_type(arg, type_names, type_arities, type_param_scope))
+                .collect::<Result<Vec<_>>>()?;
+            names.push(TraitBound {
+                trait_name: bound.name.clone(),
+                trait_args,
+            });
         }
         lowered.insert(type_param.clone(), names);
     }
     Ok(lowered)
 }
 
-fn merge_trait_bounds(
-    left: &BTreeMap<String, Vec<String>>,
-    right: &BTreeMap<String, Vec<String>>,
-) -> BTreeMap<String, Vec<String>> {
+pub(crate) fn merge_trait_bounds(
+    left: &BTreeMap<String, Vec<TraitBound>>,
+    right: &BTreeMap<String, Vec<TraitBound>>,
+) -> BTreeMap<String, Vec<TraitBound>> {
     let mut merged = left.clone();
     for (type_param, bounds) in right {
         merged
@@ -1412,6 +1526,52 @@ pub(crate) fn substitute_type(ty: &Type, substitutions: &HashMap<String, Type>) 
                 .map(|arg| substitute_type(arg, substitutions))
                 .collect(),
         ),
+    }
+}
+
+pub(crate) fn substitute_trait_bound(
+    bound: &TraitBound,
+    substitutions: &HashMap<String, Type>,
+) -> TraitBound {
+    TraitBound {
+        trait_name: bound.trait_name.clone(),
+        trait_args: bound
+            .trait_args
+            .iter()
+            .map(|arg| substitute_type(arg, substitutions))
+            .collect(),
+    }
+}
+
+fn substitute_trait_bounds(
+    bounds: &BTreeMap<String, Vec<TraitBound>>,
+    substitutions: &HashMap<String, Type>,
+) -> BTreeMap<String, Vec<TraitBound>> {
+    bounds
+        .iter()
+        .map(|(type_param, type_bounds)| {
+            (
+                type_param.clone(),
+                type_bounds
+                    .iter()
+                    .map(|bound| substitute_trait_bound(bound, substitutions))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
+    match ty {
+        Type::TypeParam(name) => {
+            collected.insert(name.clone());
+        }
+        Type::Named(_, args) => {
+            for arg in args {
+                collect_type_params_from_type(arg, collected);
+            }
+        }
+        Type::Unit | Type::Module(_) => {}
     }
 }
 
@@ -1664,7 +1824,14 @@ struct FunctionChecker<'a> {
     module_registry: &'a BTreeMap<String, ModuleNamespace>,
     current_return_type: Option<Type>,
     type_params: BTreeMap<String, ()>,
-    type_param_bounds: BTreeMap<String, Vec<String>>,
+    type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
+}
+
+#[derive(Clone)]
+struct ResolvedTraitMethodInfo {
+    decl: FunctionDecl,
+    signature: FunctionSignature,
+    type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1748,7 +1915,7 @@ impl<'a> FunctionChecker<'a> {
     fn with_type_params(
         &self,
         type_params: BTreeMap<String, ()>,
-        type_param_bounds: BTreeMap<String, Vec<String>>,
+        type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
     ) -> Self {
         Self {
             module_name: self.module_name,
@@ -2135,8 +2302,13 @@ impl<'a> FunctionChecker<'a> {
 
     fn check_function(&self, function: &FunctionDecl) -> Result<()> {
         let type_param_scope = type_param_scope(&function.type_params);
-        let type_param_bounds =
-            lower_trait_bounds(&function.type_param_bounds, self.traits, function.span)?;
+        let type_param_bounds = lower_trait_bounds(
+            &function.type_param_bounds,
+            self.traits,
+            self.type_names,
+            self.type_arities,
+            &type_param_scope,
+        )?;
         let return_type = lower_type(
             &function.return_type,
             self.type_names,
@@ -2191,7 +2363,13 @@ impl<'a> FunctionChecker<'a> {
             .unwrap_or_default();
         let type_param_bounds = merge_trait_bounds(
             &class_type_param_bounds,
-            &lower_trait_bounds(&method.type_param_bounds, self.traits, method.span)?,
+            &lower_trait_bounds(
+                &method.type_param_bounds,
+                self.traits,
+                self.type_names,
+                self.type_arities,
+                &method_type_param_scope,
+            )?,
         );
         let return_type = lower_type(
             &method.return_type,
@@ -2261,14 +2439,20 @@ impl<'a> FunctionChecker<'a> {
         &self,
         for_type: &Type,
         impl_type_params: &[String],
-        impl_type_param_bounds: &BTreeMap<String, Vec<String>>,
+        impl_type_param_bounds: &BTreeMap<String, Vec<TraitBound>>,
         method: &FunctionDecl,
     ) -> Result<()> {
         let impl_type_param_scope = type_param_scope(impl_type_params);
         let type_param_scope = merged_type_param_scope(&impl_type_param_scope, &method.type_params);
         let type_param_bounds = merge_trait_bounds(
             impl_type_param_bounds,
-            &lower_trait_bounds(&method.type_param_bounds, self.traits, method.span)?,
+            &lower_trait_bounds(
+                &method.type_param_bounds,
+                self.traits,
+                self.type_names,
+                self.type_arities,
+                &type_param_scope,
+            )?,
         );
         let return_type = lower_type(
             &method.return_type,
@@ -3433,13 +3617,18 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Unary { op, expr: value } => match op {
                 UnaryOp::Not => {
                     let value_ty = self.type_of_expr(value, locals)?;
-                    if value_ty != Type::named("bool") {
-                        return Err(Diagnostic::at(
+                    if value_ty == Type::named("bool") {
+                        Ok(Type::named("bool"))
+                    } else if let Some(return_ty) =
+                        self.type_of_unary_operator_via_trait(expr.span, *op, &value_ty)?
+                    {
+                        Ok(return_ty)
+                    } else {
+                        Err(Diagnostic::at(
                             expr.span,
                             format!("`not` expects `bool`, found `{}`", value_ty),
-                        ));
+                        ))
                     }
-                    Ok(Type::named("bool"))
                 }
                 UnaryOp::Neg => {
                     let value_ty = match &value.kind {
@@ -3455,6 +3644,10 @@ impl<'a> FunctionChecker<'a> {
                     };
                     if is_integer_type(&value_ty) || is_float_type(&value_ty) {
                         Ok(value_ty)
+                    } else if let Some(return_ty) =
+                        self.type_of_unary_operator_via_trait(expr.span, *op, &value_ty)?
+                    {
+                        Ok(return_ty)
                     } else {
                         Err(Diagnostic::at(
                             expr.span,
@@ -3761,44 +3954,274 @@ impl<'a> FunctionChecker<'a> {
         left_ty: Type,
         right_ty: Type,
     ) -> Result<Type> {
-        if left_ty != right_ty {
-            return Err(Diagnostic::at(
-                span,
-                format!(
-                    "binary operator operands must match, found `{}` and `{}`",
-                    left_ty, right_ty
-                ),
-            ));
-        }
-
-        match (op, &left_ty) {
-            (BinaryOp::And | BinaryOp::Or, Type::Named(name, args))
-                if args.is_empty() && name == "bool" =>
+        match (op, &left_ty, &right_ty) {
+            (BinaryOp::And | BinaryOp::Or, Type::Named(name, args), _)
+                if args.is_empty() && name == "bool" && left_ty == right_ty =>
             {
                 Ok(Type::named("bool"))
             }
-            (BinaryOp::Add, Type::Named(name, args))
+            (BinaryOp::Add, Type::Named(name, args), _)
                 if args.is_empty()
+                    && left_ty == right_ty
                     && (is_integer_type(&left_ty)
                         || is_float_type(&left_ty)
                         || name == "String") =>
             {
                 Ok(left_ty)
             }
-            (BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod, _)
-                if is_integer_type(&left_ty) || is_float_type(&left_ty) =>
+            (BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod, _, _)
+                if left_ty == right_ty
+                    && (is_integer_type(&left_ty) || is_float_type(&left_ty)) =>
             {
                 Ok(left_ty)
             }
-            (BinaryOp::Eq | BinaryOp::NotEq, _) => Ok(Type::named("bool")),
-            (BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq, _)
-                if is_integer_type(&left_ty) || is_float_type(&left_ty) =>
+            (BinaryOp::Eq | BinaryOp::NotEq, _, _) if left_ty == right_ty => {
+                Ok(Type::named("bool"))
+            }
+            (BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq, _, _)
+                if left_ty == right_ty
+                    && (is_integer_type(&left_ty) || is_float_type(&left_ty)) =>
             {
                 Ok(Type::named("bool"))
             }
+            _ => {
+                if let Some(return_ty) =
+                    self.type_of_binary_operator_via_trait(span, op, &left_ty, &right_ty)?
+                {
+                    Ok(return_ty)
+                } else if left_ty != right_ty {
+                    Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "binary operator operands must match, found `{}` and `{}`",
+                            left_ty, right_ty
+                        ),
+                    ))
+                } else {
+                    Err(Diagnostic::at(
+                        span,
+                        format!("unsupported operands for binary expression: `{}`", left_ty),
+                    ))
+                }
+            }
+        }
+    }
+
+    fn type_of_unary_operator_via_trait(
+        &self,
+        span: crate::diag::Span,
+        op: UnaryOp,
+        value_ty: &Type,
+    ) -> Result<Option<Type>> {
+        let Some((trait_name, method_name)) = unary_operator_trait(op) else {
+            return Ok(None);
+        };
+        if let Type::TypeParam(type_param_name) = value_ty {
+            return self
+                .operator_method_from_type_param(type_param_name, trait_name, method_name, None)
+                .map(|method| method.map(|method| method.signature.return_type));
+        }
+        self.operator_method_for_concrete_type(span, value_ty, trait_name, method_name, None)
+            .map(|method| {
+                method.map(|(method, substitutions)| {
+                    substitute_type(&method.signature.return_type, &substitutions)
+                })
+            })
+    }
+
+    fn type_of_binary_operator_via_trait(
+        &self,
+        span: crate::diag::Span,
+        op: BinaryOp,
+        left_ty: &Type,
+        right_ty: &Type,
+    ) -> Result<Option<Type>> {
+        let Some((trait_name, method_name)) = binary_operator_trait(op) else {
+            return Ok(None);
+        };
+        if let Type::TypeParam(type_param_name) = left_ty {
+            return self
+                .operator_method_from_type_param(
+                    type_param_name,
+                    trait_name,
+                    method_name,
+                    Some(right_ty),
+                )
+                .map(|method| method.map(|method| method.signature.return_type));
+        }
+        self.operator_method_for_concrete_type(
+            span,
+            left_ty,
+            trait_name,
+            method_name,
+            Some(right_ty),
+        )
+        .map(|method| {
+            method.map(|(method, substitutions)| {
+                substitute_type(&method.signature.return_type, &substitutions)
+            })
+        })
+    }
+
+    fn operator_method_from_type_param(
+        &self,
+        type_param_name: &str,
+        trait_name: &str,
+        method_name: &str,
+        rhs: Option<&Type>,
+    ) -> Result<Option<ResolvedTraitMethodInfo>> {
+        let Some(trait_info) = self.traits.get(trait_name) else {
+            return Ok(None);
+        };
+        let Some(method) = trait_info.methods.get(method_name) else {
+            return Err(Diagnostic::new(format!(
+                "operator trait `{}` must define method `{}`",
+                trait_name, method_name
+            )));
+        };
+        let mut matches = Vec::new();
+        for bound in self
+            .type_param_bounds
+            .get(type_param_name)
+            .into_iter()
+            .flatten()
+            .filter(|bound| bound.trait_name == trait_name)
+        {
+            match rhs {
+                Some(rhs_ty) if bound.trait_args.len() == 2 && &bound.trait_args[0] == rhs_ty => {}
+                None if bound.trait_args.len() == 1 => {}
+                _ => continue,
+            }
+            let trait_substitutions = trait_info
+                .decl
+                .type_params
+                .iter()
+                .cloned()
+                .zip(bound.trait_args.iter().cloned())
+                .collect::<HashMap<_, _>>();
+            matches.push(ResolvedTraitMethodInfo {
+                decl: method.decl.clone(),
+                signature: FunctionSignature {
+                    params: method
+                        .signature
+                        .params
+                        .iter()
+                        .map(|param| substitute_type(param, &trait_substitutions))
+                        .collect(),
+                    return_type: substitute_type(
+                        &method.signature.return_type,
+                        &trait_substitutions,
+                    ),
+                },
+                type_param_bounds: substitute_trait_bounds(
+                    &method.type_param_bounds,
+                    &trait_substitutions,
+                ),
+            });
+        }
+        match matches.len() {
+            0 => Ok(None),
+            1 => Ok(matches.pop()),
+            _ => Err(Diagnostic::new(format!(
+                "operator trait `{}` is ambiguous for type parameter `{}`",
+                trait_name, type_param_name
+            ))),
+        }
+    }
+
+    fn operator_method_for_concrete_type(
+        &self,
+        span: crate::diag::Span,
+        receiver_ty: &Type,
+        trait_name: &str,
+        method_name: &str,
+        rhs: Option<&Type>,
+    ) -> Result<Option<(ResolvedTraitMethodInfo, HashMap<String, Type>)>> {
+        let mut matches = Vec::new();
+        for trait_impl in self
+            .trait_impls_in_scope()
+            .filter(|trait_impl| trait_impl.trait_name == trait_name)
+        {
+            let Some(method) = trait_impl.methods.get(method_name) else {
+                continue;
+            };
+            let mut type_params = BTreeSet::new();
+            collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
+            for trait_arg in &trait_impl.trait_args {
+                collect_type_params_from_type(trait_arg, &mut type_params);
+            }
+            let mut substitutions = HashMap::new();
+            if !type_pattern_matches(
+                &trait_impl.for_type,
+                receiver_ty,
+                &type_params,
+                &mut substitutions,
+            ) {
+                continue;
+            }
+            match rhs {
+                Some(rhs_ty) if trait_impl.trait_args.len() == 2 => {
+                    if !type_pattern_matches(
+                        &trait_impl.trait_args[0],
+                        rhs_ty,
+                        &type_params,
+                        &mut substitutions,
+                    ) {
+                        continue;
+                    }
+                }
+                None if trait_impl.trait_args.len() == 1 => {}
+                _ => continue,
+            }
+            let mut valid = true;
+            for (type_param, bounds) in &trait_impl.type_param_bounds {
+                let Some(actual_ty) = substitutions.get(type_param) else {
+                    valid = false;
+                    break;
+                };
+                for impl_bound in bounds {
+                    let resolved_bound = substitute_trait_bound(impl_bound, &substitutions);
+                    if !self.type_implements_trait_bound(actual_ty, &resolved_bound) {
+                        valid = false;
+                        break;
+                    }
+                }
+                if !valid {
+                    break;
+                }
+            }
+            if !valid {
+                continue;
+            }
+            matches.push((
+                ResolvedTraitMethodInfo {
+                    decl: method.decl.clone(),
+                    signature: FunctionSignature {
+                        params: method
+                            .signature
+                            .params
+                            .iter()
+                            .map(|param| substitute_type(param, &substitutions))
+                            .collect(),
+                        return_type: substitute_type(&method.signature.return_type, &substitutions),
+                    },
+                    type_param_bounds: substitute_trait_bounds(
+                        &method.type_param_bounds,
+                        &substitutions,
+                    ),
+                },
+                substitutions,
+            ));
+        }
+        match matches.len() {
+            0 => Ok(None),
+            1 => Ok(matches.pop()),
             _ => Err(Diagnostic::at(
                 span,
-                format!("unsupported operands for binary expression: `{}`", left_ty),
+                format!(
+                    "operator trait `{}` is ambiguous for type `{}`",
+                    trait_name, receiver_ty
+                ),
             )),
         }
     }
@@ -4291,7 +4714,13 @@ impl<'a> FunctionChecker<'a> {
                         .position(|name| name == type_param)
                         .expect("class type parameter should exist")]
                     .clone();
-                    self.assert_type_satisfies_bounds(&resolved_ty, bounds, span)?;
+                    let substitutions =
+                        substitutions_from_decl_type_args(&class.decl.type_params, &resolved_args);
+                    let resolved_bounds = bounds
+                        .iter()
+                        .map(|bound| substitute_trait_bound(bound, &substitutions))
+                        .collect::<Vec<_>>();
+                    self.assert_type_satisfies_bounds(&resolved_ty, &resolved_bounds, span)?;
                 }
 
                 Ok(Type::Named(name.clone(), resolved_args))
@@ -4606,7 +5035,19 @@ impl<'a> FunctionChecker<'a> {
                                 .position(|name| name == type_param)
                                 .expect("enum type parameter should exist")]
                             .clone();
-                            self.assert_type_satisfies_bounds(&resolved_ty, bounds, span)?;
+                            let substitutions = substitutions_from_decl_type_args(
+                                &enum_info.decl.type_params,
+                                &resolved_args,
+                            );
+                            let resolved_bounds = bounds
+                                .iter()
+                                .map(|bound| substitute_trait_bound(bound, &substitutions))
+                                .collect::<Vec<_>>();
+                            self.assert_type_satisfies_bounds(
+                                &resolved_ty,
+                                &resolved_bounds,
+                                span,
+                            )?;
                         }
                         return Ok(Type::Named(enum_name.clone(), resolved_args));
                     }
@@ -6671,7 +7112,8 @@ impl<'a> FunctionChecker<'a> {
         for (type_param, bounds) in &trait_impl.type_param_bounds {
             let actual_ty = substitutions.get(type_param)?;
             for bound in bounds {
-                if !self.type_implements_trait(actual_ty, bound) {
+                let resolved_bound = substitute_trait_bound(bound, &substitutions);
+                if !self.type_implements_trait_bound(actual_ty, &resolved_bound) {
                     return None;
                 }
             }
@@ -6679,17 +7121,66 @@ impl<'a> FunctionChecker<'a> {
         Some(substitutions)
     }
 
-    fn type_implements_trait(&self, ty: &Type, trait_name: &str) -> bool {
+    fn trait_impl_substitutions_for_bound(
+        &self,
+        trait_impl: &TraitImplInfo,
+        actual: &Type,
+        bound: &TraitBound,
+    ) -> Option<HashMap<String, Type>> {
+        if trait_impl.trait_name != bound.trait_name
+            || trait_impl.trait_args.len() != bound.trait_args.len()
+        {
+            return None;
+        }
+        let mut type_params = BTreeSet::new();
+        collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
+        for trait_arg in &trait_impl.trait_args {
+            collect_type_params_from_type(trait_arg, &mut type_params);
+        }
+        let mut substitutions = HashMap::new();
+        if !type_pattern_matches(
+            &trait_impl.for_type,
+            actual,
+            &type_params,
+            &mut substitutions,
+        ) {
+            return None;
+        }
+        for (pattern, actual_arg) in trait_impl.trait_args.iter().zip(&bound.trait_args) {
+            if !type_pattern_matches(pattern, actual_arg, &type_params, &mut substitutions) {
+                return None;
+            }
+        }
+        for (type_param, bounds) in &trait_impl.type_param_bounds {
+            let actual_ty = substitutions.get(type_param)?;
+            for impl_bound in bounds {
+                let resolved_bound = substitute_trait_bound(impl_bound, &substitutions);
+                if !self.type_implements_trait_bound(actual_ty, &resolved_bound) {
+                    return None;
+                }
+            }
+        }
+        Some(substitutions)
+    }
+
+    fn type_implements_trait_bound(&self, ty: &Type, bound: &TraitBound) -> bool {
         self.trait_impls_in_scope().any(|trait_impl| {
-            trait_impl.trait_name == trait_name
-                && self.trait_impl_substitutions(trait_impl, ty).is_some()
+            self.trait_impl_substitutions_for_bound(trait_impl, ty, bound)
+                .or_else(|| {
+                    if bound.trait_args.is_empty() && trait_impl.trait_name == bound.trait_name {
+                        self.trait_impl_substitutions(trait_impl, ty)
+                    } else {
+                        None
+                    }
+                })
+                .is_some()
         })
     }
 
     fn assert_type_satisfies_bounds(
         &self,
         ty: &Type,
-        bounds: &[String],
+        bounds: &[TraitBound],
         span: crate::diag::Span,
     ) -> Result<()> {
         for bound in bounds {
@@ -6711,7 +7202,7 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 _ => {
-                    if !self.type_implements_trait(ty, bound) {
+                    if !self.type_implements_trait_bound(ty, bound) {
                         return Err(Diagnostic::at(
                             span,
                             format!("type `{}` does not implement trait `{}`", ty, bound),
@@ -6727,22 +7218,47 @@ impl<'a> FunctionChecker<'a> {
         &self,
         type_param_name: &str,
         method_name: &str,
-    ) -> Result<&TraitMethodInfo> {
+    ) -> Result<ResolvedTraitMethodInfo> {
         let mut matches = Vec::new();
-        for trait_name in self
+        for bound in self
             .type_param_bounds
             .get(type_param_name)
             .into_iter()
             .flatten()
         {
-            if let Some(trait_info) = self.traits.get(trait_name) {
+            if let Some(trait_info) = self.traits.get(&bound.trait_name) {
                 if let Some(method) = trait_info.methods.get(method_name) {
-                    matches.push(method);
+                    let trait_substitutions = trait_info
+                        .decl
+                        .type_params
+                        .iter()
+                        .cloned()
+                        .zip(bound.trait_args.iter().cloned())
+                        .collect::<HashMap<_, _>>();
+                    matches.push(ResolvedTraitMethodInfo {
+                        decl: method.decl.clone(),
+                        signature: FunctionSignature {
+                            params: method
+                                .signature
+                                .params
+                                .iter()
+                                .map(|param| substitute_type(param, &trait_substitutions))
+                                .collect(),
+                            return_type: substitute_type(
+                                &method.signature.return_type,
+                                &trait_substitutions,
+                            ),
+                        },
+                        type_param_bounds: substitute_trait_bounds(
+                            &method.type_param_bounds,
+                            &trait_substitutions,
+                        ),
+                    });
                 }
             }
         }
         match matches.len() {
-            1 => Ok(matches[0]),
+            1 => Ok(matches.remove(0)),
             0 => Err(Diagnostic::new(format!(
                 "type parameter `{}` has no method `{}` in its trait bounds",
                 type_param_name, method_name
@@ -6779,7 +7295,7 @@ impl<'a> FunctionChecker<'a> {
         param_decls: &[Param],
         param_types: &[Type],
         return_type: &Type,
-        callee_type_param_bounds: &BTreeMap<String, Vec<String>>,
+        callee_type_param_bounds: &BTreeMap<String, Vec<TraitBound>>,
         args: &[Argument],
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
@@ -6809,7 +7325,7 @@ impl<'a> FunctionChecker<'a> {
         param_decls: &[Param],
         param_types: &[Type],
         return_type: &Type,
-        callee_type_param_bounds: &BTreeMap<String, Vec<String>>,
+        callee_type_param_bounds: &BTreeMap<String, Vec<TraitBound>>,
         args: &[Argument],
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
@@ -6917,7 +7433,11 @@ impl<'a> FunctionChecker<'a> {
             let Some(resolved_ty) = substitutions.get(type_param) else {
                 continue;
             };
-            self.assert_type_satisfies_bounds(resolved_ty, bounds, span)?;
+            let resolved_bounds = bounds
+                .iter()
+                .map(|bound| substitute_trait_bound(bound, &substitutions))
+                .collect::<Vec<_>>();
+            self.assert_type_satisfies_bounds(resolved_ty, &resolved_bounds, span)?;
         }
 
         let mut borrowed_places = seeded_borrowed_places;

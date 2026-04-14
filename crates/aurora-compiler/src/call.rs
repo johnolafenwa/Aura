@@ -953,10 +953,13 @@ impl BuiltinMember {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{Argument, Expr, ExprKind};
+    use crate::ast::{Argument, Expr, ExprKind, Param, ReceiverKind, TypeRef};
     use crate::diag::Span;
 
-    use super::{bind_call_arguments, CallConvention, CallableParam};
+    use super::{
+        bind_call_arguments, callable_params_from_decl, BuiltinFunction, BuiltinMember,
+        CallConvention, CallableParam, ALL_BUILTIN_FUNCTIONS,
+    };
 
     fn dummy_arg(name: Option<&str>) -> Argument {
         Argument {
@@ -965,6 +968,15 @@ mod tests {
                 kind: ExprKind::Int(1),
                 span: Span::new(1, 1),
             },
+            span: Span::new(1, 1),
+        }
+    }
+
+    fn dummy_type(name: &str) -> TypeRef {
+        TypeRef {
+            name: name.to_string(),
+            args: vec![],
+            indirect: false,
             span: Span::new(1, 1),
         }
     }
@@ -1003,5 +1015,200 @@ mod tests {
         .expect_err("binding should fail");
 
         assert!(error.message.contains("must be named"));
+    }
+
+    #[test]
+    fn callable_params_follow_default_presence() {
+        let params = vec![
+            Param {
+                name: "required".to_string(),
+                passing: ReceiverKind::Value,
+                ty: dummy_type("int32"),
+                default: None,
+                span: Span::new(1, 1),
+            },
+            Param {
+                name: "optional".to_string(),
+                passing: ReceiverKind::Value,
+                ty: dummy_type("int32"),
+                default: Some(Expr {
+                    kind: ExprKind::Int(1),
+                    span: Span::new(1, 1),
+                }),
+                span: Span::new(1, 1),
+            },
+        ];
+
+        let callable = callable_params_from_decl(&params);
+        assert_eq!(callable[0], CallableParam::required("required"));
+        assert_eq!(callable[1], CallableParam::optional("optional"));
+    }
+
+    #[test]
+    fn bind_call_arguments_reports_named_binding_errors() {
+        let params = [
+            CallableParam::required("left"),
+            CallableParam::optional("right"),
+        ];
+
+        let duplicate = bind_call_arguments(
+            "function `pair`",
+            &params,
+            &[dummy_arg(Some("left")), dummy_arg(Some("left"))],
+            Span::new(1, 1),
+            CallConvention::PositionalOrNamed,
+        )
+        .unwrap_err();
+        assert!(duplicate.message.contains("provided more than once"));
+
+        let unknown = bind_call_arguments(
+            "function `pair`",
+            &params,
+            &[dummy_arg(Some("missing"))],
+            Span::new(1, 1),
+            CallConvention::PositionalOrNamed,
+        )
+        .unwrap_err();
+        assert!(unknown.message.contains("has no parameter named"));
+
+        let missing = bind_call_arguments(
+            "function `pair`",
+            &params,
+            &[],
+            Span::new(1, 1),
+            CallConvention::PositionalOrNamed,
+        )
+        .unwrap_err();
+        assert!(missing.message.contains("missing required argument"));
+
+        let positional_after_named = bind_call_arguments(
+            "function `pair`",
+            &params,
+            &[dummy_arg(Some("right")), dummy_arg(None)],
+            Span::new(1, 1),
+            CallConvention::PositionalOrNamed,
+        )
+        .unwrap_err();
+        assert!(positional_after_named
+            .message
+            .contains("positional arguments must come before named arguments"));
+
+        let positional_only_named = bind_call_arguments(
+            "builtin `channel`",
+            &[CallableParam::required("value")],
+            &[dummy_arg(Some("value"))],
+            Span::new(1, 1),
+            CallConvention::PositionalOnly,
+        )
+        .unwrap_err();
+        assert!(positional_only_named
+            .message
+            .contains("does not take keyword arguments"));
+
+        let too_many = bind_call_arguments(
+            "function `pair`",
+            &params,
+            &[dummy_arg(None), dummy_arg(None), dummy_arg(None)],
+            Span::new(1, 1),
+            CallConvention::PositionalOrNamed,
+        )
+        .unwrap_err();
+        assert!(too_many.message.contains("expects 2 arguments, found 3"));
+    }
+
+    #[test]
+    fn builtin_function_metadata_and_binding_surface_are_stable() {
+        for builtin in ALL_BUILTIN_FUNCTIONS {
+            assert_eq!(BuiltinFunction::from_name(builtin.name()), Some(*builtin));
+            assert!(!builtin.detail().is_empty());
+            assert!(!builtin.docs().is_empty());
+        }
+        assert_eq!(BuiltinFunction::from_name("missing_builtin"), None);
+
+        let range_two_args_input = [dummy_arg(Some("start")), dummy_arg(Some("stop"))];
+        let range_two_args = BuiltinFunction::Range
+            .bind_args(&range_two_args_input, Span::new(1, 1))
+            .unwrap();
+        assert_eq!(range_two_args.len(), 2);
+
+        let range_one_arg_input = [dummy_arg(None)];
+        let range_one_arg = BuiltinFunction::Range
+            .bind_args(&range_one_arg_input, Span::new(1, 1))
+            .unwrap();
+        assert_eq!(range_one_arg.len(), 1);
+
+        let range_error = BuiltinFunction::Range
+            .bind_args(
+                &[dummy_arg(None), dummy_arg(None), dummy_arg(None)],
+                Span::new(1, 1),
+            )
+            .unwrap_err();
+        assert!(range_error.message.contains("expects 1 or 2 arguments"));
+
+        let channel_error = BuiltinFunction::Channel
+            .bind_args(&[dummy_arg(None)], Span::new(1, 1))
+            .unwrap_err();
+        assert!(channel_error
+            .message
+            .contains("expects 0 arguments, found 1"));
+    }
+
+    #[test]
+    fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
+        let cases = [
+            ("float64", "sqrt", BuiltinMember::FloatSqrt),
+            ("int32", "to_string", BuiltinMember::ScalarToString),
+            ("String", "contains", BuiltinMember::StringContains),
+            ("String", "replace", BuiltinMember::StringReplace),
+            ("String", "trim", BuiltinMember::StringTrim),
+            ("Vec", "insert", BuiltinMember::VecInsert),
+            ("Vec", "reverse", BuiltinMember::VecReverse),
+            ("Map", "entries", BuiltinMember::MapEntries),
+            ("Map", "extend", BuiltinMember::MapExtend),
+            ("Set", "remove", BuiltinMember::SetRemove),
+            ("Channel", "send", BuiltinMember::ChannelSend),
+            ("Task", "join", BuiltinMember::TaskJoin),
+            ("TaskGroup", "cancel", BuiltinMember::TaskGroupCancel),
+        ];
+
+        for (receiver, name, member) in cases {
+            assert_eq!(BuiltinMember::resolve(receiver, name), Some(member));
+            assert_eq!(member.name(), name);
+            assert!(!member.detail().is_empty());
+            assert!(!member.docs().is_empty());
+        }
+        assert_eq!(BuiltinMember::resolve("Vec", "missing"), None);
+
+        let positional_only_error = BuiltinMember::VecReverse
+            .bind_args(&[dummy_arg(None)], Span::new(1, 1))
+            .unwrap_err();
+        assert!(positional_only_error
+            .message
+            .contains("expects 0 arguments, found 1"));
+
+        let contains_args_input = [dummy_arg(Some("value"))];
+        let contains_args = BuiltinMember::VecContains
+            .bind_args(&contains_args_input, Span::new(1, 1))
+            .unwrap();
+        assert_eq!(contains_args.len(), 1);
+
+        let replace_args_input = [dummy_arg(Some("from")), dummy_arg(Some("to"))];
+        let replace_args = BuiltinMember::StringReplace
+            .bind_args(&replace_args_input, Span::new(1, 1))
+            .unwrap();
+        assert_eq!(replace_args.len(), 2);
+
+        let set_error = BuiltinMember::MapSet
+            .bind_args(&[dummy_arg(Some("key"))], Span::new(1, 1))
+            .unwrap_err();
+        assert!(set_error
+            .message
+            .contains("missing required argument `value`"));
+
+        let send_args_input = [dummy_arg(Some("value"))];
+        let send_args = BuiltinMember::ChannelSend
+            .bind_args(&send_args_input, Span::new(1, 1))
+            .unwrap();
+        assert_eq!(send_args.len(), 1);
     }
 }

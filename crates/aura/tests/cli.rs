@@ -1226,6 +1226,24 @@ fn build_with_direct_backend_supports_generic_trait_impl_example() {
 }
 
 #[test]
+fn build_with_direct_backend_supports_generic_trait_bounds_example() {
+    assert_direct_backend_example_runs(
+        "examples/traits/generic_trait_bounds.au",
+        "generic-trait-bounds-direct",
+        "20\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_operator_traits_example() {
+    assert_direct_backend_example_runs(
+        "examples/traits/operator_traits.au",
+        "operator-traits-direct",
+        "6\n8\n-6\n-8\n",
+    );
+}
+
+#[test]
 fn build_with_direct_backend_supports_generic_data_example() {
     assert_direct_backend_example_runs(
         "examples/generics/box_and_wrapper.au",
@@ -1555,6 +1573,24 @@ fn default_build_supports_map_basics_example() {
         "examples/collections/map_basics.au",
         "map-basics-auto",
         "3\ntrue\n1\n1\n5\naurora\n3\n3\n3\n3\ntrue\n",
+    );
+}
+
+#[test]
+fn default_build_supports_generic_trait_bounds_example() {
+    assert_default_backend_example_runs(
+        "examples/traits/generic_trait_bounds.au",
+        "generic-trait-bounds-auto",
+        "20\n",
+    );
+}
+
+#[test]
+fn default_build_supports_operator_traits_example() {
+    assert_default_backend_example_runs(
+        "examples/traits/operator_traits.au",
+        "operator-traits-auto",
+        "6\n8\n-6\n-8\n",
     );
 }
 
@@ -2304,6 +2340,40 @@ fn run_mir_executes_map_basics_example() {
         String::from_utf8_lossy(&output.stdout),
         "3\ntrue\n1\n1\n5\naurora\n3\n3\n3\n3\ntrue\n"
     );
+}
+
+#[test]
+fn run_mir_executes_generic_trait_bounds_example() {
+    let fixture = repo_root().join("examples/traits/generic_trait_bounds.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir on generic trait bounds example");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for generic trait bounds example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "20\n");
+}
+
+#[test]
+fn run_mir_executes_operator_traits_example() {
+    let fixture = repo_root().join("examples/traits/operator_traits.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir on operator traits example");
+
+    assert!(
+        output.status.success(),
+        "run-mir should succeed for operator traits example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "6\n8\n-6\n-8\n");
 }
 
 #[test]

@@ -10,7 +10,10 @@ use crate::ast::{
 use crate::call::{BuiltinFunction, BuiltinMember, ALL_BUILTIN_FUNCTIONS};
 use crate::diag::{Diagnostic, Result, Span};
 use crate::parser;
-use crate::sema::{ClassInfo, EnumInfo, FunctionInfo, MethodInfo, Program, Type};
+use crate::sema::{
+    substitute_trait_bound, ClassInfo, EnumInfo, FunctionInfo, MethodInfo, Program, TraitBound,
+    Type,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AnalysisOutput {
@@ -50,6 +53,7 @@ pub struct AnalysisOccurrence {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AnalysisRange {
+    pub file_path: Option<String>,
     pub line: usize,
     pub start_character: usize,
     pub end_character: usize,
@@ -65,7 +69,7 @@ pub struct AnalysisCompletion {
 #[derive(Clone)]
 struct BindingInfo {
     ty: Type,
-    trait_bounds: Vec<String>,
+    trait_bounds: Vec<TraitBound>,
     definition: AnalysisRange,
     hover: String,
 }
@@ -712,7 +716,8 @@ impl<'a> AnalysisBuilder<'a> {
         for (type_param, bounds) in &trait_impl.type_param_bounds {
             let actual_ty = substitutions.get(type_param)?;
             for bound in bounds {
-                if !self.type_implements_trait(actual_ty, bound) {
+                let resolved_bound = substitute_trait_bound(bound, &substitutions);
+                if !self.type_implements_trait_bound(actual_ty, &resolved_bound) {
                     return None;
                 }
             }
@@ -720,10 +725,64 @@ impl<'a> AnalysisBuilder<'a> {
         Some(substitutions)
     }
 
-    fn type_implements_trait(&self, ty: &Type, trait_name: &str) -> bool {
+    fn trait_impl_substitutions_for_bound(
+        &self,
+        trait_impl: &crate::sema::TraitImplInfo,
+        actual: &Type,
+        bound: &TraitBound,
+    ) -> Option<std::collections::HashMap<String, Type>> {
+        if trait_impl.trait_name != bound.trait_name
+            || trait_impl.trait_args.len() != bound.trait_args.len()
+        {
+            return None;
+        }
+        let type_params = trait_impl
+            .type_params
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut substitutions = std::collections::HashMap::new();
+        if !crate::sema::type_pattern_matches(
+            &trait_impl.for_type,
+            actual,
+            &type_params,
+            &mut substitutions,
+        ) {
+            return None;
+        }
+        for (pattern, actual_arg) in trait_impl.trait_args.iter().zip(&bound.trait_args) {
+            if !crate::sema::type_pattern_matches(
+                pattern,
+                actual_arg,
+                &type_params,
+                &mut substitutions,
+            ) {
+                return None;
+            }
+        }
+        for (type_param, bounds) in &trait_impl.type_param_bounds {
+            let actual_ty = substitutions.get(type_param)?;
+            for impl_bound in bounds {
+                let resolved_bound = substitute_trait_bound(impl_bound, &substitutions);
+                if !self.type_implements_trait_bound(actual_ty, &resolved_bound) {
+                    return None;
+                }
+            }
+        }
+        Some(substitutions)
+    }
+
+    fn type_implements_trait_bound(&self, ty: &Type, bound: &TraitBound) -> bool {
         self.trait_impls_in_scope().any(|trait_impl| {
-            trait_impl.trait_name == trait_name
-                && self.trait_impl_substitutions(trait_impl, ty).is_some()
+            self.trait_impl_substitutions_for_bound(trait_impl, ty, bound)
+                .or_else(|| {
+                    if bound.trait_args.is_empty() && trait_impl.trait_name == bound.trait_name {
+                        self.trait_impl_substitutions(trait_impl, ty)
+                    } else {
+                        None
+                    }
+                })
+                .is_some()
         })
     }
 
@@ -732,6 +791,7 @@ impl<'a> AnalysisBuilder<'a> {
         receiver_type: &Type,
         field: &str,
     ) -> Option<(
+        &crate::sema::TraitImplInfo,
         &crate::sema::TraitImplMethodInfo,
         std::collections::HashMap<String, Type>,
     )> {
@@ -744,7 +804,7 @@ impl<'a> AnalysisBuilder<'a> {
                 trait_impl
                     .methods
                     .get(field)
-                    .map(|method| (method, substitutions))
+                    .map(|method| (trait_impl, method, substitutions))
             })
     }
 
@@ -758,7 +818,67 @@ impl<'a> AnalysisBuilder<'a> {
         Some(namespace)
     }
 
+    fn current_source_path(&self) -> Option<String> {
+        self.program.source_path.clone()
+    }
+
+    fn module_source_path(&self, module_name: &str) -> Option<String> {
+        if self.program.module_name == module_name {
+            return self.current_source_path();
+        }
+        self.program
+            .module_registry
+            .get(module_name)
+            .and_then(|namespace| namespace.source_path.clone())
+    }
+
+    fn definition_range(&self, module_name: &str, span: Span, len: usize) -> AnalysisRange {
+        range_from_span_with_path(span, len, self.module_source_path(module_name))
+    }
+
+    fn function_definition(&self, function: &FunctionInfo) -> AnalysisRange {
+        self.definition_range(
+            &function.module_name,
+            function.decl.span,
+            function.decl.name.len(),
+        )
+    }
+
+    fn class_definition(&self, class_info: &ClassInfo) -> AnalysisRange {
+        self.definition_range(
+            &class_info.module_name,
+            class_info.decl.span,
+            class_info.decl.name.len(),
+        )
+    }
+
+    fn enum_definition(&self, enum_info: &EnumInfo) -> AnalysisRange {
+        self.definition_range(
+            &enum_info.module_name,
+            enum_info.decl.span,
+            enum_info.decl.name.len(),
+        )
+    }
+
+    fn trait_definition(&self, trait_info: &crate::sema::TraitInfo) -> AnalysisRange {
+        self.definition_range(
+            &trait_info.module_name,
+            trait_info.decl.span,
+            trait_info.decl.name.len(),
+        )
+    }
+
     fn find_imported_module_range(&self, target_path: &str) -> Option<AnalysisRange> {
+        if let Some(namespace) = self.module_namespace(target_path) {
+            if let Some(file_path) = &namespace.source_path {
+                return Some(AnalysisRange {
+                    file_path: Some(file_path.clone()),
+                    line: 0,
+                    start_character: 0,
+                    end_character: 0,
+                });
+            }
+        }
         let target_segments = target_path.split('.').collect::<Vec<_>>();
         for import in &self.program.module.imports {
             let ImportKind::Module { path } = &import.kind else {
@@ -781,6 +901,7 @@ impl<'a> AnalysisBuilder<'a> {
             if let Some((start, end)) = line.find(&token).map(|start| (start, start + token.len()))
             {
                 return Some(AnalysisRange {
+                    file_path: self.current_source_path(),
                     line: line_index,
                     start_character: start,
                     end_character: end,
@@ -824,10 +945,7 @@ impl<'a> AnalysisBuilder<'a> {
                 .resolve_named_enum_info(enum_name)
                 .map(|enum_info| ResolvedSymbol {
                     hover: format_enum_hover(enum_info),
-                    definition: Some(range_from_span(
-                        enum_info.decl.span,
-                        enum_info.decl.name.len(),
-                    )),
+                    definition: Some(self.enum_definition(enum_info)),
                 }),
         }
     }
@@ -893,14 +1011,18 @@ impl<'a> AnalysisBuilder<'a> {
             .and_then(|variant_info| variant_info.payload.as_ref());
         Some(ResolvedSymbol {
             hover: format_variant_hover(&enum_info.decl.name, &variant.variant_name, payload),
-            definition: Some(range_from_span(variant_decl.span, variant_decl.name.len())),
+            definition: Some(self.definition_range(
+                &enum_info.module_name,
+                variant_decl.span,
+                variant_decl.name.len(),
+            )),
         })
     }
 
-    fn trait_bound_member_completions(&self, bounds: &[String]) -> Vec<AnalysisCompletion> {
+    fn trait_bound_member_completions(&self, bounds: &[TraitBound]) -> Vec<AnalysisCompletion> {
         let mut completions = Vec::new();
-        for trait_name in bounds {
-            let Some(trait_info) = self.program.traits.get(trait_name) else {
+        for bound in bounds {
+            let Some(trait_info) = self.program.traits.get(&bound.trait_name) else {
                 continue;
             };
             for method in trait_info.methods.values() {
@@ -1121,6 +1243,7 @@ impl<'a> AnalysisBuilder<'a> {
         let definition = self
             .find_identifier_range(line, name)
             .unwrap_or(AnalysisRange {
+                file_path: self.current_source_path(),
                 line: line.saturating_sub(1),
                 start_character: 0,
                 end_character: name.len(),
@@ -1219,30 +1342,21 @@ impl<'a> AnalysisBuilder<'a> {
         if let Some(function) = self.program.functions.get(name) {
             return Some(ResolvedSymbol {
                 hover: format_function_hover(&function.decl),
-                definition: Some(range_from_span(
-                    function.decl.span,
-                    function.decl.name.len(),
-                )),
+                definition: Some(self.function_definition(function)),
             });
         }
 
         if let Some(class_info) = self.program.classes.get(name) {
             return Some(ResolvedSymbol {
                 hover: format_class_hover(class_info),
-                definition: Some(range_from_span(
-                    class_info.decl.span,
-                    class_info.decl.name.len(),
-                )),
+                definition: Some(self.class_definition(class_info)),
             });
         }
 
         if let Some(enum_info) = self.program.enums.get(name) {
             return Some(ResolvedSymbol {
                 hover: format_enum_hover(enum_info),
-                definition: Some(range_from_span(
-                    enum_info.decl.span,
-                    enum_info.decl.name.len(),
-                )),
+                definition: Some(self.enum_definition(enum_info)),
             });
         }
 
@@ -1309,40 +1423,28 @@ impl<'a> AnalysisBuilder<'a> {
             if let Some(function) = namespace.functions.get(field) {
                 return Some(ResolvedMember {
                     hover: format_function_hover(&function.decl),
-                    definition: Some(range_from_span(
-                        function.decl.span,
-                        function.decl.name.len(),
-                    )),
+                    definition: Some(self.function_definition(function)),
                     ty: Some(function.signature.return_type.clone()),
                 });
             }
             if let Some(class_info) = namespace.classes.get(field) {
                 return Some(ResolvedMember {
                     hover: format_class_hover(class_info),
-                    definition: Some(range_from_span(
-                        class_info.decl.span,
-                        class_info.decl.name.len(),
-                    )),
+                    definition: Some(self.class_definition(class_info)),
                     ty: Some(Type::named(&class_info.decl.name)),
                 });
             }
             if let Some(enum_info) = namespace.enums.get(field) {
                 return Some(ResolvedMember {
                     hover: format_enum_hover(enum_info),
-                    definition: Some(range_from_span(
-                        enum_info.decl.span,
-                        enum_info.decl.name.len(),
-                    )),
+                    definition: Some(self.enum_definition(enum_info)),
                     ty: Some(Type::named(&enum_info.decl.name)),
                 });
             }
             if let Some(trait_info) = namespace.traits.get(field) {
                 return Some(ResolvedMember {
                     hover: format!("```aurora\ntrait {}\n```", trait_info.decl.name),
-                    definition: Some(range_from_span(
-                        trait_info.decl.span,
-                        trait_info.decl.name.len(),
-                    )),
+                    definition: Some(self.trait_definition(trait_info)),
                     ty: None,
                 });
             }
@@ -1354,21 +1456,19 @@ impl<'a> AnalysisBuilder<'a> {
             if let Some(field_info) = class_info.fields.get(field) {
                 return Some(ResolvedMember {
                     hover: format_value_hover("field", field, &field_info.ty),
-                    definition: self
-                        .find_identifier_range(class_info.decl.span.line, field)
-                        .or_else(|| {
-                            Some(range_from_span(
-                                class_info.decl.span,
-                                class_info.decl.name.len(),
-                            ))
-                        }),
+                    definition: Some(self.definition_range(
+                        &class_info.module_name,
+                        field_info.span,
+                        field.len(),
+                    )),
                     ty: Some(field_info.ty.clone()),
                 });
             }
             if let Some(method_info) = class_info.methods.get(field) {
                 return Some(ResolvedMember {
                     hover: format_method_hover(&method_info.decl),
-                    definition: Some(range_from_span(
+                    definition: Some(self.definition_range(
+                        &class_info.module_name,
                         method_info.decl.span,
                         method_info.decl.name.len(),
                     )),
@@ -1377,12 +1477,13 @@ impl<'a> AnalysisBuilder<'a> {
             }
         }
 
-        if let Some((trait_method, substitutions)) =
+        if let Some((trait_impl, trait_method, substitutions)) =
             self.trait_method_for_receiver(receiver_type, field)
         {
             return Some(ResolvedMember {
                 hover: format_method_hover(&trait_method.decl),
-                definition: Some(range_from_span(
+                definition: Some(self.definition_range(
+                    &trait_impl.module_name,
                     trait_method.decl.span,
                     trait_method.decl.name.len(),
                 )),
@@ -1429,7 +1530,11 @@ impl<'a> AnalysisBuilder<'a> {
             if let Some(variant_info) = enum_info.variants.get(field) {
                 return Some(ResolvedMember {
                     hover: format_variant_hover(base_name, field, variant_info.payload.as_ref()),
-                    definition: self.find_identifier_range(enum_info.decl.span.line + 1, field),
+                    definition: Some(self.definition_range(
+                        &enum_info.module_name,
+                        variant_info.span,
+                        field.len(),
+                    )),
                     ty: Some(Type::named(base_name)),
                 });
             }
@@ -1878,6 +1983,7 @@ impl<'a> AnalysisBuilder<'a> {
         let definition = self
             .find_identifier_range(line, name)
             .unwrap_or(AnalysisRange {
+                file_path: self.current_source_path(),
                 line: line.saturating_sub(1),
                 start_character: 0,
                 end_character: name.len(),
@@ -1898,6 +2004,7 @@ impl<'a> AnalysisBuilder<'a> {
         let line_index = line_number.checked_sub(1)?;
         let text = *self.source_lines.get(line_index)?;
         find_identifier_in_line(text, name).map(|(start, end)| AnalysisRange {
+            file_path: self.current_source_path(),
             line: line_index,
             start_character: start,
             end_character: end,
@@ -1908,6 +2015,7 @@ impl<'a> AnalysisBuilder<'a> {
         let line_index = line_number.checked_sub(1)?;
         let text = *self.source_lines.get(line_index)?;
         text.find(enum_name).map(|start| AnalysisRange {
+            file_path: self.current_source_path(),
             line: line_index,
             start_character: start,
             end_character: start + enum_name.len(),
@@ -1929,6 +2037,7 @@ impl<'a> AnalysisBuilder<'a> {
         let start = text.find(&token)?;
         let variant_start = start + token.len().saturating_sub(variant.variant_name.len());
         Some(AnalysisRange {
+            file_path: self.current_source_path(),
             line: line_index,
             start_character: variant_start,
             end_character: variant_start + variant.variant_name.len(),
@@ -2105,6 +2214,16 @@ fn analysis_diagnostic(error: &Diagnostic) -> AnalysisDiagnostic {
 
 fn range_from_span(span: Span, len: usize) -> AnalysisRange {
     AnalysisRange {
+        file_path: None,
+        line: span.line.saturating_sub(1),
+        start_character: span.column.saturating_sub(1),
+        end_character: span.column.saturating_sub(1) + len,
+    }
+}
+
+fn range_from_span_with_path(span: Span, len: usize, file_path: Option<String>) -> AnalysisRange {
+    AnalysisRange {
+        file_path,
         line: span.line.saturating_sub(1),
         start_character: span.column.saturating_sub(1),
         end_character: span.column.saturating_sub(1) + len,
@@ -2928,7 +3047,40 @@ fn is_identifier_char(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{analyze_path_source, analyze_source, complete_source};
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(prefix: &str) -> Self {
+            let unique = format!(
+                "{}-{}-{}",
+                prefix,
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("system time should be after unix epoch")
+                    .as_nanos()
+            );
+            let path = std::env::temp_dir().join(unique);
+            fs::create_dir_all(&path).expect("failed to create temp dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &PathBuf {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -3285,16 +3437,120 @@ mod tests {
         let path = repo_root().join("examples/modules/namespace_import_types.au");
         let source = std::fs::read_to_string(&path).expect("example should exist");
         let analysis = analyze_path_source(&path, &source);
+        let types_path = repo_root().join("examples/modules/pkg/types.au");
+        let types_path = types_path.display().to_string();
 
         assert!(analysis.diagnostics.is_empty());
         assert!(analysis.occurrences.iter().any(|occurrence| {
-            occurrence.hover.contains("module pkg.types") && occurrence.definition.is_some()
+            occurrence.hover.contains("module pkg.types")
+                && occurrence
+                    .definition
+                    .as_ref()
+                    .and_then(|definition| definition.file_path.as_deref())
+                    == Some(types_path.as_str())
         }));
         assert!(analysis.occurrences.iter().any(|occurrence| {
-            occurrence.hover.contains("class Counter") && occurrence.definition.is_some()
+            occurrence.hover.contains("class Counter")
+                && occurrence
+                    .definition
+                    .as_ref()
+                    .and_then(|definition| definition.file_path.as_deref())
+                    == Some(types_path.as_str())
         }));
         assert!(analysis.occurrences.iter().any(|occurrence| {
-            occurrence.hover.contains("enum Status") && occurrence.definition.is_some()
+            occurrence.hover.contains("enum Status")
+                && occurrence
+                    .definition
+                    .as_ref()
+                    .and_then(|definition| definition.file_path.as_deref())
+                    == Some(types_path.as_str())
+        }));
+    }
+
+    #[test]
+    fn path_aware_analysis_tracks_imported_function_field_and_trait_method_definitions() {
+        let temp_dir = TempDir::new("aurora-analysis-cross-file");
+        fs::create_dir_all(temp_dir.path().join("pkg")).expect("failed to create pkg dir");
+        let math_path = temp_dir.path().join("pkg/math.au");
+        let named_path = temp_dir.path().join("pkg/named.au");
+        let user_path = temp_dir.path().join("pkg/user.au");
+        let main_path = temp_dir.path().join("main.au");
+
+        fs::write(
+            &math_path,
+            "public def add(left: int32, right: int32) -> int32:\n    return left + right\n",
+        )
+        .expect("failed to write math module");
+        fs::write(
+            &named_path,
+            "public trait Named:\n    def name(borrow self) -> String\n",
+        )
+        .expect("failed to write named module");
+        fs::write(
+            &user_path,
+            [
+                "from pkg.named import Named",
+                "",
+                "public class User:",
+                "    public label: String",
+                "",
+                "impl Named for User:",
+                "    def name(borrow self) -> String:",
+                "        return self.label",
+            ]
+            .join("\n"),
+        )
+        .expect("failed to write user module");
+        let source = [
+            "from pkg.math import add",
+            "from pkg.user import User",
+            "",
+            "def main() -> int32:",
+            "    total = add(left=1, right=2)",
+            "    user = User(label=\"Ada\")",
+            "    print(user.label)",
+            "    print(user.name())",
+            "    return total",
+        ]
+        .join("\n");
+        fs::write(&main_path, &source).expect("failed to write main module");
+
+        let analysis = analyze_path_source(&main_path, &source);
+        let math_path = math_path.display().to_string();
+        let user_path = user_path.display().to_string();
+
+        assert!(analysis.diagnostics.is_empty());
+        assert!(analysis.occurrences.iter().any(|occurrence| {
+            occurrence.hover.contains("function add")
+                && occurrence
+                    .definition
+                    .as_ref()
+                    .and_then(|definition| definition.file_path.as_deref())
+                    == Some(math_path.as_str())
+        }));
+        assert!(analysis.occurrences.iter().any(|occurrence| {
+            occurrence.hover.contains("class User")
+                && occurrence
+                    .definition
+                    .as_ref()
+                    .and_then(|definition| definition.file_path.as_deref())
+                    == Some(user_path.as_str())
+        }));
+        assert!(analysis.occurrences.iter().any(|occurrence| {
+            occurrence.hover.contains("field label: String")
+                && occurrence
+                    .definition
+                    .as_ref()
+                    .and_then(|definition| definition.file_path.as_deref())
+                    == Some(user_path.as_str())
+        }));
+        assert!(analysis.occurrences.iter().any(|occurrence| {
+            occurrence.hover.contains("method name() -> String")
+                && occurrence
+                    .definition
+                    .as_ref()
+                    .and_then(|definition| definition.file_path.as_deref())
+                    == Some(user_path.as_str())
         }));
     }
 

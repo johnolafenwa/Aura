@@ -22,9 +22,10 @@ const {
 const {
   analyzeWithCompiler,
   completeWithCompiler,
+  compilerDefinitionAtPosition,
   compilerDiagnosticsToLsp,
+  compilerHoverAtPosition,
   compilerSymbolsToLsp,
-  findOccurrence,
   setWorkspaceRoots
 } = require("./compiler_bridge");
 
@@ -105,25 +106,21 @@ connection.onHover(async (params) => {
   }
 
   const state = await getDocumentState(document);
-  const compilerOccurrence = state.compilerAnalysis
-    ? findOccurrence(state.compilerAnalysis, params.position.line, params.position.character)
-    : null;
-  if (compilerOccurrence) {
+  if (state.compilerAnalysis) {
+    const compilerHover = compilerHoverAtPosition(
+      state.compilerAnalysis,
+      params.position.line,
+      params.position.character
+    );
+    if (!compilerHover) {
+      return null;
+    }
     return {
       contents: {
         kind: MarkupKind.Markdown,
-        value: compilerOccurrence.hover
+        value: compilerHover.value
       },
-      range: {
-        start: {
-          line: compilerOccurrence.line,
-          character: compilerOccurrence.start_character
-        },
-        end: {
-          line: compilerOccurrence.line,
-          character: compilerOccurrence.end_character
-        }
-      }
+      range: compilerHover.range
     };
   }
 
@@ -152,20 +149,17 @@ connection.onDefinition(async (params) => {
   }
 
   const state = await getDocumentState(document);
-  const compilerOccurrence = state.compilerAnalysis
-    ? findOccurrence(state.compilerAnalysis, params.position.line, params.position.character)
-    : null;
-  if (compilerOccurrence && compilerOccurrence.definition) {
-    return Location.create(params.textDocument.uri, {
-      start: {
-        line: compilerOccurrence.definition.line,
-        character: compilerOccurrence.definition.start_character
-      },
-      end: {
-        line: compilerOccurrence.definition.line,
-        character: compilerOccurrence.definition.end_character
-      }
-    });
+  if (state.compilerAnalysis) {
+    const location = compilerDefinitionAtPosition(
+      params.textDocument.uri,
+      state.compilerAnalysis,
+      params.position.line,
+      params.position.character
+    );
+    if (!location) {
+      return null;
+    }
+    return Location.create(location.uri, location.range);
   }
 
   const definition = definitionForPosition(

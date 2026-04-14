@@ -224,6 +224,9 @@ The examples are organized by topic so they can serve both as quick references a
   - prints:
     - `dog`
     - `cat`
+- `generic_trait_bounds.au`
+  - generic trait bounds such as `T: Mapper[int32]`
+  - prints `20`
 - `multiple_bounds.au`
   - bounded generic calls with `T: A + B`
   - prints `9`
@@ -241,6 +244,13 @@ The examples are organized by topic so they can serve both as quick references a
 - `generic_trait_impl.au`
   - generic trait declarations plus generic impl headers for generic classes
   - prints `11`
+- `operator_traits.au`
+  - operator traits for `+` and unary `-` through `Add[...]` and `Neg[...]`
+  - prints:
+    - `6`
+    - `8`
+    - `-6`
+    - `-8`
 - `trait_associated_factory.au`
   - associated trait methods called through the implementing type name
   - prints `7`

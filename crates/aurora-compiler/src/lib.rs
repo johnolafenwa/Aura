@@ -167,6 +167,8 @@ impl ModuleLoader {
                 module_registry,
             },
         )?;
+        let mut program = program;
+        program.source_path = Some(path.display().to_string());
 
         self.cache.insert(
             path.clone(),
@@ -691,6 +693,7 @@ fn exported_namespace(path: &[String], program: &Program) -> ModuleNamespace {
     let mut namespace = ModuleNamespace {
         name,
         path: path.join("."),
+        source_path: program.source_path.clone(),
         modules: BTreeMap::new(),
         functions: BTreeMap::new(),
         classes: BTreeMap::new(),
@@ -784,6 +787,7 @@ fn insert_namespace_import(
         ImportedBinding::Module(ModuleNamespace {
             name: root_name.clone(),
             path: root_name.clone(),
+            source_path: None,
             modules: BTreeMap::new(),
             functions: BTreeMap::new(),
             classes: BTreeMap::new(),
@@ -819,6 +823,7 @@ fn insert_namespace_import(
             .or_insert_with(|| ModuleNamespace {
                 name: segment.clone(),
                 path: prefix.clone(),
+                source_path: None,
                 modules: BTreeMap::new(),
                 functions: BTreeMap::new(),
                 classes: BTreeMap::new(),
@@ -1014,6 +1019,14 @@ mod tests {
         (
             "examples/strings/string_parsing_and_formatting.au",
             include_str!("../../../examples/strings/string_parsing_and_formatting.au"),
+        ),
+        (
+            "examples/traits/generic_trait_bounds.au",
+            include_str!("../../../examples/traits/generic_trait_bounds.au"),
+        ),
+        (
+            "examples/traits/operator_traits.au",
+            include_str!("../../../examples/traits/operator_traits.au"),
         ),
     ];
 
@@ -1552,6 +1565,16 @@ mod tests {
                 EXAMPLE_CASES[39].1,
                 "42\n-9000000000\n3.5\ntrue\naurora-lang-tests\ntrue\n12\n4\n9\n3.0\n",
             ),
+            (
+                "examples/traits/generic_trait_bounds.au",
+                EXAMPLE_CASES[40].1,
+                "20\n",
+            ),
+            (
+                "examples/traits/operator_traits.au",
+                EXAMPLE_CASES[41].1,
+                "6\n8\n-6\n-8\n",
+            ),
         ];
 
         for (path, source, expected_stdout) in cases {
@@ -1764,6 +1787,16 @@ mod tests {
                 "examples/strings/string_parsing_and_formatting.au",
                 EXAMPLE_CASES[39].1,
                 "42\n-9000000000\n3.5\ntrue\naurora-lang-tests\ntrue\n12\n4\n9\n3.0\n",
+            ),
+            (
+                "examples/traits/generic_trait_bounds.au",
+                EXAMPLE_CASES[40].1,
+                "20\n",
+            ),
+            (
+                "examples/traits/operator_traits.au",
+                EXAMPLE_CASES[41].1,
+                "6\n8\n-6\n-8\n",
             ),
         ];
 

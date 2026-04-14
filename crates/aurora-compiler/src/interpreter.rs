@@ -668,6 +668,20 @@ enum ExecFlow {
     ContinueLoop,
 }
 
+fn collect_type_params_from_type(ty: &Type, collected: &mut std::collections::BTreeSet<String>) {
+    match ty {
+        Type::TypeParam(name) => {
+            collected.insert(name.clone());
+        }
+        Type::Named(_, args) => {
+            for arg in args {
+                collect_type_params_from_type(arg, collected);
+            }
+        }
+        Type::Unit | Type::Module(_) => {}
+    }
+}
+
 #[derive(Default)]
 struct Env {
     scopes: Vec<Scope>,
@@ -1530,17 +1544,75 @@ impl Interpreter {
         for (type_param, bounds) in &trait_impl.type_param_bounds {
             let actual_ty = substitutions.get(type_param)?;
             for bound in bounds {
-                if !self.trait_impls_in_scope().any(|candidate| {
-                    candidate.trait_name == *bound
-                        && self
-                            .trait_impl_substitutions(candidate, actual_ty)
-                            .is_some()
-                }) {
+                let resolved_bound = crate::sema::substitute_trait_bound(bound, &substitutions);
+                if !self.type_implements_trait_bound(actual_ty, &resolved_bound) {
                     return None;
                 }
             }
         }
         Some(substitutions)
+    }
+
+    fn trait_impl_substitutions_for_bound(
+        &self,
+        trait_impl: &crate::sema::TraitImplInfo,
+        actual: &Type,
+        bound: &crate::sema::TraitBound,
+    ) -> Option<HashMap<String, Type>> {
+        if trait_impl.trait_name != bound.trait_name
+            || trait_impl.trait_args.len() != bound.trait_args.len()
+        {
+            return None;
+        }
+        let type_params = trait_impl
+            .type_params
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut substitutions = HashMap::new();
+        if !crate::sema::type_pattern_matches(
+            &trait_impl.for_type,
+            actual,
+            &type_params,
+            &mut substitutions,
+        ) {
+            return None;
+        }
+        for (pattern, actual_arg) in trait_impl.trait_args.iter().zip(&bound.trait_args) {
+            if !crate::sema::type_pattern_matches(
+                pattern,
+                actual_arg,
+                &type_params,
+                &mut substitutions,
+            ) {
+                return None;
+            }
+        }
+        for (type_param, bounds) in &trait_impl.type_param_bounds {
+            let actual_ty = substitutions.get(type_param)?;
+            for impl_bound in bounds {
+                let resolved_bound =
+                    crate::sema::substitute_trait_bound(impl_bound, &substitutions);
+                if !self.type_implements_trait_bound(actual_ty, &resolved_bound) {
+                    return None;
+                }
+            }
+        }
+        Some(substitutions)
+    }
+
+    fn type_implements_trait_bound(&self, ty: &Type, bound: &crate::sema::TraitBound) -> bool {
+        self.trait_impls_in_scope().any(|trait_impl| {
+            self.trait_impl_substitutions_for_bound(trait_impl, ty, bound)
+                .or_else(|| {
+                    if bound.trait_args.is_empty() && trait_impl.trait_name == bound.trait_name {
+                        self.trait_impl_substitutions(trait_impl, ty)
+                    } else {
+                        None
+                    }
+                })
+                .is_some()
+        })
     }
 
     fn find_trait_impl_method(
@@ -1560,6 +1632,136 @@ impl Interpreter {
                     .cloned()
                     .map(|method| (method, substitutions))
             })
+    }
+
+    fn find_operator_trait_impl_method(
+        &self,
+        receiver_ty: &Type,
+        trait_name: &str,
+        field: &str,
+        rhs_ty: Option<&Type>,
+    ) -> Option<(crate::sema::TraitImplMethodInfo, HashMap<String, Type>)> {
+        self.trait_impls_in_scope()
+            .filter(|trait_impl| trait_impl.trait_name == trait_name)
+            .filter_map(|trait_impl| {
+                let method = trait_impl.methods.get(field)?.clone();
+                let mut type_params = std::collections::BTreeSet::new();
+                collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
+                for trait_arg in &trait_impl.trait_args {
+                    collect_type_params_from_type(trait_arg, &mut type_params);
+                }
+                let mut substitutions = HashMap::new();
+                if !crate::sema::type_pattern_matches(
+                    &trait_impl.for_type,
+                    receiver_ty,
+                    &type_params,
+                    &mut substitutions,
+                ) {
+                    return None;
+                }
+                match rhs_ty {
+                    Some(rhs_ty) if trait_impl.trait_args.len() == 2 => {
+                        if !crate::sema::type_pattern_matches(
+                            &trait_impl.trait_args[0],
+                            rhs_ty,
+                            &type_params,
+                            &mut substitutions,
+                        ) {
+                            return None;
+                        }
+                    }
+                    None if trait_impl.trait_args.len() == 1 => {}
+                    _ => return None,
+                }
+                for (type_param, bounds) in &trait_impl.type_param_bounds {
+                    let actual_ty = substitutions.get(type_param)?;
+                    for bound in bounds {
+                        let resolved_bound =
+                            crate::sema::substitute_trait_bound(bound, &substitutions);
+                        if !self.type_implements_trait_bound(actual_ty, &resolved_bound) {
+                            return None;
+                        }
+                    }
+                }
+                Some((method, substitutions))
+            })
+            .next()
+    }
+
+    fn eval_unary_operator_via_trait(
+        &mut self,
+        span: crate::diag::Span,
+        op: UnaryOp,
+        value: Value,
+    ) -> Result<Value> {
+        let Some((trait_name, field)) = crate::sema::unary_operator_trait(op) else {
+            return Err(Diagnostic::at(
+                span,
+                format!("unsupported unary operator `{:?}`", op),
+            ));
+        };
+        let receiver_ty = self
+            .infer_runtime_value_type(&value)
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let Some((method, _)) =
+            self.find_operator_trait_impl_method(&receiver_ty, trait_name, field, None)
+        else {
+            return match op {
+                UnaryOp::Not => Err(Diagnostic::at(
+                    span,
+                    format!("`not` expects `bool`, found `{}`", value.render()),
+                )),
+                UnaryOp::Neg => Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "unary `-` expects a numeric value, found `{}`",
+                        value.render()
+                    ),
+                )),
+            };
+        };
+        let module_name = self.current_module_name().to_string();
+        Ok(self
+            .call_function(&method.decl, &module_name, vec![value])?
+            .value)
+    }
+
+    fn eval_binary_operator_via_trait(
+        &mut self,
+        span: crate::diag::Span,
+        op: BinaryOp,
+        left: Value,
+        right: Value,
+    ) -> Result<Option<Value>> {
+        let Some((trait_name, field)) = crate::sema::binary_operator_trait(op) else {
+            return Ok(None);
+        };
+        let receiver_ty = self
+            .infer_runtime_value_type(&left)
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let rhs_ty = self
+            .infer_runtime_value_type(&right)
+            .unwrap_or_else(|| Type::named("Unknown"));
+        let Some((method, _)) =
+            self.find_operator_trait_impl_method(&receiver_ty, trait_name, field, Some(&rhs_ty))
+        else {
+            return Ok(None);
+        };
+        let module_name = self.current_module_name().to_string();
+        let values = vec![left, right];
+        let outcome = self
+            .call_function(&method.decl, &module_name, values)
+            .map_err(|error| {
+                Diagnostic::at(
+                    span,
+                    error
+                        .message
+                        .lines()
+                        .next()
+                        .unwrap_or("operator trait invocation failed"),
+                )
+            })?;
+        Ok(Some(outcome.value))
     }
 
     fn find_trait_impl_method_for_class_name(
@@ -2495,20 +2697,8 @@ impl Interpreter {
                             .ok_or_else(|| Diagnostic::at(expr.span, "integer overflow"))?,
                     ),
                     (UnaryOp::Neg, Value::Float(value)) => Value::Float(-value),
-                    (UnaryOp::Not, other) => {
-                        return Err(Diagnostic::at(
-                            expr.span,
-                            format!("`not` expects `bool`, found `{}`", other.render()),
-                        ))
-                    }
-                    (UnaryOp::Neg, other) => {
-                        return Err(Diagnostic::at(
-                            expr.span,
-                            format!(
-                                "unary `-` expects a numeric value, found `{}`",
-                                other.render()
-                            ),
-                        ))
+                    (other_op, other) => {
+                        self.eval_unary_operator_via_trait(expr.span, *other_op, other)?
                     }
                 };
                 let result = if let Some(inferred_ty) = self.infer_expr_type(expr, env) {
@@ -2600,7 +2790,20 @@ impl Interpreter {
                     EvalOutcome::Value(value) => value,
                     EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
                 };
-                let result = self.eval_binary(expr.span, *op, left_value, right_value)?;
+                let result =
+                    match self.eval_binary(expr.span, *op, left_value.clone(), right_value.clone())
+                    {
+                        Ok(result) => result,
+                        Err(error) => match self.eval_binary_operator_via_trait(
+                            expr.span,
+                            *op,
+                            left_value,
+                            right_value,
+                        )? {
+                            Some(result) => result,
+                            None => return Err(error),
+                        },
+                    };
                 let result = if let Some(inferred_ty) = self.infer_expr_type(expr, env) {
                     self.coerce_value_to_type(result, &inferred_ty, expr.span)?
                 } else {

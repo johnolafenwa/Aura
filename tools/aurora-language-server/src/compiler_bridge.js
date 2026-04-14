@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 const { spawn } = require("node:child_process");
 
 let workspaceRoots = [];
@@ -12,9 +13,6 @@ function setWorkspaceRoots(roots) {
 
 async function analyzeWithCompiler(uri, text) {
   const command = resolveCompilerCommand();
-  if (!command) {
-    return null;
-  }
 
   try {
     const stdout = await runCommand(
@@ -31,9 +29,6 @@ async function analyzeWithCompiler(uri, text) {
 
 async function completeWithCompiler(uri, text, line, character, triggerCharacter) {
   const command = resolveCompilerCommand();
-  if (!command) {
-    return null;
-  }
 
   const args = [...command.args, "complete", "--line", String(line), "--character", String(character)];
   if (triggerCharacter) {
@@ -78,6 +73,52 @@ function compilerDiagnosticsToLsp(analysis) {
 
 function compilerSymbolsToLsp(analysis) {
   return (analysis.symbols || []).map(toDocumentSymbol);
+}
+
+function compilerDefinitionToLspLocation(documentUri, definition) {
+  if (!definition) {
+    return null;
+  }
+
+  const uri = definition.file_path
+    ? pathToFileURL(definition.file_path).toString()
+    : documentUri;
+  return {
+    uri,
+    range: {
+      start: { line: definition.line, character: definition.start_character },
+      end: { line: definition.line, character: definition.end_character }
+    }
+  };
+}
+
+function compilerHoverAtPosition(analysis, line, character) {
+  const occurrence = findOccurrence(analysis, line, character);
+  if (!occurrence) {
+    return null;
+  }
+
+  return {
+    value: occurrence.hover,
+    range: {
+      start: {
+        line: occurrence.line,
+        character: occurrence.start_character
+      },
+      end: {
+        line: occurrence.line,
+        character: occurrence.end_character
+      }
+    }
+  };
+}
+
+function compilerDefinitionAtPosition(documentUri, analysis, line, character) {
+  const occurrence = findOccurrence(analysis, line, character);
+  if (!occurrence) {
+    return null;
+  }
+  return compilerDefinitionToLspLocation(documentUri, occurrence.definition);
 }
 
 function toDocumentSymbol(symbol) {
@@ -145,17 +186,17 @@ function resolveCompilerCommand() {
   return { cmd: "aura", args: [], cwd: workspaceRoots[0] };
 }
 
-function binaryName() {
-  return process.platform === "win32" ? "aura.exe" : "aura";
+function binaryName(platform = process.platform) {
+  return platform === "win32" ? "aura.exe" : "aura";
 }
 
-function uriToPath(uri) {
+function uriToPath(uri, platform = process.platform) {
   if (typeof uri !== "string" || !uri.startsWith("file://")) {
     return null;
   }
 
   let value = decodeURIComponent(uri.replace("file://", ""));
-  if (process.platform === "win32" && value.startsWith("/")) {
+  if (platform === "win32" && value.startsWith("/")) {
     value = value.slice(1);
   }
   return value;
@@ -193,9 +234,16 @@ function runCommand(cmd, args, input, cwd) {
 
 module.exports = {
   analyzeWithCompiler,
+  binaryName,
   completeWithCompiler,
+  compilerDefinitionAtPosition,
+  compilerDefinitionToLspLocation,
   compilerDiagnosticsToLsp,
+  compilerHoverAtPosition,
   compilerSymbolsToLsp,
   findOccurrence,
-  setWorkspaceRoots
+  resolveCompilerCommand,
+  runCommand,
+  setWorkspaceRoots,
+  uriToPath
 };

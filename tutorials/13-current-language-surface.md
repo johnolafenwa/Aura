@@ -90,6 +90,7 @@ The current compiler supports these expression forms:
 - integer, float, string, f-string, boolean, `None`, and duration literals
 - arithmetic, comparison, and boolean operators
 - unary prefix operators `-` and `not`
+- operator-trait dispatch for `+`, binary `-`, `*`, `/`, `%`, unary `-`, and `not`
 - explicit numeric casts with `expr as Type`
 - list literals such as `[1, 2, 3]`
 - map literals such as `{"aurora": 1}`
@@ -142,6 +143,7 @@ Generic functions and methods may use inline trait bounds:
 
 - `def speak[T: Greeter](value: T): ...`
 - `def use_both[T: A + B](value: T) -> int32: ...`
+- `def apply[T: Mapper[int32]](mapper: T, value: int32) -> int32: ...`
 
 ## Builtins
 

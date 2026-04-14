@@ -1,0 +1,16 @@
+trait Mapper[T]:
+    def map(borrow self, value: T) -> T
+
+class Doubler:
+    factor: int32
+
+impl Mapper[int32] for Doubler:
+    def map(borrow self, value: int32) -> int32:
+        return value * self.factor
+
+def apply[T: Mapper[int32]](mapper: T, value: int32) -> int32:
+    return mapper.map(value=value)
+
+def main() -> int32:
+    print(apply(mapper=Doubler(factor=2), value=10))
+    return 0

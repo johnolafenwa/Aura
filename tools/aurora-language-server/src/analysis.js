@@ -2628,6 +2628,10 @@ function isIdentifierContinue(ch) {
 
 module.exports = {
   KEYWORDS,
+  _testing: {
+    splitTopLevelColon,
+    splitTopLevelCommaSeparated
+  },
   analyzeDocument,
   completionsForDocument,
   definitionForPosition,
