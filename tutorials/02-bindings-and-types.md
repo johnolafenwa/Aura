@@ -1,10 +1,10 @@
 # Bindings And Types
 
-Bindings are introduced with assignment. Aurora does not currently require a `let` keyword.
-
-The bootstrap compiler supports both inferred and annotated bindings at top level and inside functions.
+In Aurora, every value has a type known at compile time. Bindings are introduced with assignment -- no `let` keyword is needed.
 
 ## Inferred Bindings
+
+The compiler infers the type from the right-hand side:
 
 ```python
 a = 56
@@ -12,9 +12,13 @@ b = 100
 total = a + b
 ```
 
-This style is shown in [examples/basics/top_level_script.au](../examples/basics/top_level_script.au).
+Here `a`, `b`, and `total` are all `int32` because integer literals default to `int32`.
+
+See [examples/basics/top_level_script.au](../examples/basics/top_level_script.au).
 
 ## Annotated Bindings
+
+You can write the type explicitly when you want to be clear or when the compiler needs help:
 
 ```python
 a: int32 = 6
@@ -22,11 +26,18 @@ b: int32 = 10
 c: int32 = a + b
 ```
 
-This style is shown in [examples/basics/main_function.au](../examples/basics/main_function.au).
+Type annotations are required when the compiler cannot infer the type, for example with empty collections:
+
+```python
+mut names: Vec[String] = []
+mut counts: Map[String, int32] = {}
+```
+
+See [examples/basics/main_function.au](../examples/basics/main_function.au).
 
 ## Mutable Bindings
 
-Bindings are immutable unless you declare them with `mut`.
+Bindings are immutable by default. Use `mut` when you need to reassign:
 
 ```python
 mut counter: int32 = 1
@@ -34,171 +45,147 @@ counter = counter + 1
 counter += 3
 ```
 
+If you forget `mut` and try to reassign, the compiler will reject the code. This is intentional -- immutable by default makes it easy to see which values change.
+
 See [examples/basics/mutable_bindings.au](../examples/basics/mutable_bindings.au).
 
 Reusing an existing name updates that binding. The current compiler does not create a new shadowed binding in the same scope.
 
 ## `None` Is The Unit Type And Value
 
-Aurora currently supports `None` as both:
-
-- the unit type
-- the sole unit value
+Aurora uses `None` as both the unit type and the sole unit value:
 
 ```python
 status: None = None
 ```
 
-Functions that omit `-> None` still conceptually return this unit value.
+Functions that omit a return type annotation implicitly return `None`. You will see this throughout the tutorials.
 
-## Builtin Types In The Implemented Subset
+## Builtin Scalar Types
 
-The bootstrap compiler currently recognizes these builtin scalar names:
+Aurora has a rich set of numeric types. If you are not sure which to use, start with `int32` for integers and `float64` for decimals:
 
-- `bool`
-- `int8`
-- `int16`
-- `int32`
-- `int64`
-- `int128`
-- `intsize`
-- `uint8`
-- `uint16`
-- `uint32`
-- `uint64`
-- `uint128`
-- `uintsize`
-- `float32`
-- `float64`
-- `String`
-- `None`
-- `Duration`
+| Type | Description | When to use |
+|------|-------------|-------------|
+| `int32` | 32-bit signed integer | Default for most integer work |
+| `int64` | 64-bit signed integer | Large counts, timestamps |
+| `float64` | 64-bit floating point | Default for decimal math |
+| `float32` | 32-bit floating point | When memory or precision constraints require it |
+| `bool` | `true` or `false` | Conditions and flags |
+| `String` | Owned text | Any text data |
+| `Duration` | Time span | Concurrency timeouts (`5ms`, `1s`, `2m`) |
+| `None` | Unit type | Functions with no meaningful return |
 
-It also recognizes these builtin runtime or library-facing type names:
+The full set of integer types covers `int8` through `int128`, `uint8` through `uint128`, plus `intsize` and `uintsize` for platform-sized integers. Use the narrower types when you need explicit control over memory layout or value ranges.
 
-- `Range`
-- `Vec[T]`
-- `Map[K, V]`
-- `Set[T]`
-- `MapEntry[K, V]`
-- `Channel[T]`
-- `Task[T]`
-- `TaskGroup`
-- `Option[T]`
-- `Result[T, E]`
-- `SendError[T]`
+Integer literals default to `int32`. Floating-point literals default to `float64`, but adopt `float32` when the surrounding annotation or parameter type requires it:
+
+```python
+ratio: float32 = 3.25
+```
+
+## Builtin Container Types
+
+Aurora provides three owned collection types and several runtime types:
+
+| Type | Description |
+|------|-------------|
+| `Vec[T]` | Ordered, growable list |
+| `Map[K, V]` | Key-value map |
+| `Set[T]` | Unordered collection of unique values |
+| `Option[T]` | A value that may or may not be present |
+| `Result[T, E]` | Success or failure |
+| `Channel[T]` | Typed channel for concurrency |
+| `Task[T]` | Handle to a spawned task |
+| `TaskGroup` | Structured task scope |
+
+`Option[T]` and `Result[T, E]` are covered in [10-results-and-options.md](10-results-and-options.md). Channels and tasks are covered in [13-concurrency.md](13-concurrency.md).
 
 ## `Vec[T]` And List Literals
 
-Aurora now includes a built-in owned vector type, `Vec[T]`.
-
-You can introduce a vector with a list literal:
+Create a vector with a list literal:
 
 ```python
 mut numbers = [1, 2, 3]
 ```
 
-or with the explicit empty constructor:
+Or with the explicit empty constructor:
 
 ```python
 values = Vec[int32]()
 ```
 
-The element type must stay consistent inside a literal:
+The element type must be consistent:
 
 ```python
 mut ok = [1, 2, 3]
-mut bad = [1, "two"]  # rejected
+mut bad = [1, "two"]  # rejected: mixed types
 ```
 
-Empty list literals still need an expected `Vec[T]` type in the current bootstrap compiler:
+Empty list literals need a type annotation:
 
 ```python
 mut names: Vec[String] = []
 ```
 
-Current vector methods include:
+Common vector operations:
 
-- `len() -> int32`
-- `is_empty() -> bool`
-- `clone() -> Vec[T]`
-- `push(value: T) -> None`
-- `pop() -> Option[T]`
-- `get(index: int32) -> Option[T]`
-- `insert(index: int32, value: T) -> bool`
-- `set(index: int32, value: T) -> Option[T]`
-- `remove(index: int32) -> Option[T]`
-- `swap(first: int32, second: int32) -> bool`
-- `contains(value: T) -> bool`
-- `extend(other: Vec[T]) -> None`
-- `clear() -> None`
-- `reverse() -> None`
+```python
+mut items = [10, 20, 30]
+items.push(40)             # append an element
+print(items.len())         # 4
+print(items[0])            # 10 -- indexed access
+print(items.contains(20))  # true
+popped = items.pop()       # removes and returns the last element
+```
+
+The full method surface includes `len`, `is_empty`, `clone`, `push`, `pop`, `get`, `insert`, `set`, `remove`, `swap`, `contains`, `extend`, `clear`, and `reverse`.
 
 Because `len()` returns `int32`, you can use it directly with `range(...)`:
 
 ```python
-for index in range(values.len()):
-    print(values[index])
+for index in range(items.len()):
+    print(items[index])
 ```
 
-Indexed reads also stay ordinary expressions, so chains like `keys[idx].clone()` work as expected.
+Indexed reads work as ordinary expressions, so chains like `keys[idx].clone()` are supported.
 
 See [examples/collections/vec_basics.au](../examples/collections/vec_basics.au), [examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au), and [examples/collections/vec_polish.au](../examples/collections/vec_polish.au).
 
-For integer types, the current checker and runtimes both enforce the annotated width. A binding like `value: int8 = 127` is valid, but pushing that value out of range later will fail with a runtime diagnostic instead of silently widening it.
+For integer types, the runtime enforces the annotated width. A binding like `value: int8 = 127` is valid, but exceeding that range at runtime produces an error instead of silently widening the value.
 
 ## `Map[K, V]` And Map Literals
 
-Aurora also includes a built-in owned map type, `Map[K, V]`.
-
-You can introduce a map with a literal:
+Create a map with a literal:
 
 ```python
 mut counts = {"aurora": 1, "codex": 2}
 ```
 
-or with the explicit empty constructor:
+Or with the explicit empty constructor:
 
 ```python
 counts = Map[String, int32]()
 ```
 
-Empty map literals still need an expected `Map[K, V]` type in the current bootstrap compiler:
+Empty map literals need a type annotation:
 
 ```python
 mut counts: Map[String, int32] = {}
 ```
 
-Current map methods include:
-
-- `len() -> int32`
-- `is_empty() -> bool`
-- `clone() -> Map[K, V]`
-- `get(key: K) -> Option[V]`
-- `set(key: K, value: V) -> Option[V]`
-- `remove(key: K) -> Option[V]`
-- `contains_key(key: K) -> bool`
-- `keys() -> Vec[K]`
-- `values() -> Vec[V]`
-- `items() -> Vec[MapEntry[K, V]]`
-- `entries() -> Vec[MapEntry[K, V]]`
-- `clear() -> None`
-- `extend(other: Map[K, V]) -> None`
-
-Indexed reads and writes work directly on maps:
+Maps support indexed reads and writes:
 
 ```python
 counts["aurora"] = 5
 print(counts["aurora"])
 ```
 
-That also means map lookups can appear inside larger expressions such as f-strings:
+Map lookups work inside larger expressions including f-strings:
 
 ```python
 print(f"value: {counts["aurora"]}")
 ```
-
-See [examples/collections/map_basics.au](../examples/collections/map_basics.au).
 
 `items()` and `entries()` both return `Vec[MapEntry[K, V]]`, where each entry exposes `.key` and `.value`:
 
@@ -208,58 +195,48 @@ print(entries[0].key)
 print(entries[0].value)
 ```
 
+The full method surface includes `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`.
+
+See [examples/collections/map_basics.au](../examples/collections/map_basics.au).
+
 ## `Set[T]` And Set Literals
 
-Aurora also includes a built-in owned set type, `Set[T]`.
-
-You can introduce a set with a literal:
+Create a set with the `Set{...}` syntax (note: curly braces with the `Set` prefix, to distinguish from map literals):
 
 ```python
-mut seen = Set{1, 2, 2, 3}
+mut seen = Set{1, 2, 2, 3}    # duplicates are removed
+print(seen.len())              # 3
 ```
 
-or with the explicit empty constructor:
+Or with the explicit empty constructor:
 
 ```python
 names = Set[String]()
 ```
 
-Empty set literals still need an expected `Set[T]` type in the current bootstrap compiler:
+Empty set literals need a type annotation:
 
 ```python
 mut names: Set[String] = Set{}
 ```
 
-Current set methods include:
+The full method surface includes `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`.
 
-- `len() -> int32`
-- `is_empty() -> bool`
-- `clone() -> Set[T]`
-- `contains(value: T) -> bool`
-- `insert(value: T) -> bool`
-- `remove(value: T) -> bool`
-
-Sets deduplicate repeated literal or inserted values, and they can be iterated by value or through an explicit shared borrow.
+Sets deduplicate values and can be iterated by value or through a shared borrow.
 
 See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 
 ## Literal Defaults
 
-In the current compiler:
+Summary of literal type rules:
 
 - integer literals default to `int32`
 - floating-point literals default to `float64`
-- duration literals such as `5ms`, `1s`, and `2m` have type `Duration`
-
-Floating-point literals can also adopt an expected `float32` type when the surrounding annotation or signature provides it:
-
-```python
-ratio: float32 = 3.25
-```
-
-Negative literals are also supported:
+- duration literals like `5ms`, `1s`, and `2m` have type `Duration`
+- negative literals are supported: `-5`, `-3.5`
 
 ```python
 offset: int32 = -5
 temperature: float64 = -3.5
+short_wait: Duration = 5ms
 ```

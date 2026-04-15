@@ -1,22 +1,24 @@
 # Traits
 
-Aurora now supports trait declarations, generic trait declarations, explicit `impl Trait for Type` conformance blocks, generic impl headers, bounded generic calls, specialized generic trait bounds, and the current operator-trait surface.
+Traits define shared behavior that different types can implement. If you know Python's abstract base classes or Go's interfaces, traits serve a similar purpose -- they let you write code that works with any type that provides the required methods.
 
 ## Declaring A Trait
 
-Trait methods are signature-only in the current compiler, but empty marker traits are also allowed with `pass`:
+A trait lists method signatures without bodies:
 
 ```python
 trait Greeter:
     def greet(borrow self) -> String
 ```
 
+Empty marker traits use `pass`:
+
 ```python
 trait Marker:
     pass
 ```
 
-Generic traits use the same `Name[T]` header syntax as classes and enums:
+Generic traits use the same `Name[T]` syntax as classes:
 
 ```python
 trait Mapper[T]:
@@ -25,7 +27,7 @@ trait Mapper[T]:
 
 ## Implementing A Trait
 
-Use a conformance block:
+Use `impl Trait for Type:` to provide the trait's methods for a concrete type:
 
 ```python
 class User:
@@ -36,7 +38,7 @@ impl Greeter for User:
         return "hello " + self.name
 ```
 
-The current compiler also supports impls for specialized generic instances:
+You can also implement traits for specialized generic instances:
 
 ```python
 class Box[T]:
@@ -47,21 +49,7 @@ impl Greeter for Box[String]:
         return self.value.clone()
 ```
 
-Those specialized impls also dispatch correctly through bounded generic calls:
-
-```python
-trait Show:
-    def show(borrow self) -> String
-
-impl Show for Box[int32]:
-    def show(borrow self) -> String:
-        return f"{self.value}"
-
-def render[T: Show](value: T) -> None:
-    print(value.show())
-```
-
-Open generic impl headers now work too:
+Open generic impl headers work too:
 
 ```python
 impl[T] Showable for Box[T]:
@@ -69,47 +57,27 @@ impl[T] Showable for Box[T]:
         return "box"
 ```
 
-Generic traits can also be implemented for generic classes:
+And generic traits can be implemented for generic classes:
 
 ```python
-trait Mapper[T]:
-    def map(borrow self, value: T) -> T
-
 impl Mapper[T] for Box[T]:
     def map(borrow self, value: T) -> T:
         return value
 ```
 
-Traits may also declare associated methods with no receiver, and those methods are callable through the implementing type name:
+## Trait Bounds On Generic Functions
 
-```python
-trait Factory:
-    def make() -> int32
-
-class Widget:
-    value: int32
-
-impl Factory for Widget:
-    def make() -> int32:
-        return 7
-
-print(Widget.make())
-```
-
-## Calling Through A Trait Bound
-
-Generic functions can require a trait with inline bounds:
+Generic functions can require that a type parameter implements a trait using inline bounds:
 
 ```python
 def speak[T: Greeter](value: T):
     print(value.greet())
 ```
 
-Class and enum type parameters may also use trait bounds:
+At the call site, Aurora checks that the concrete type implements the required trait:
 
 ```python
-class Wrapper[T: Greeter]:
-    value: T
+speak(value=User(name="aurora"))   # User implements Greeter, so this works
 ```
 
 Multiple bounds use `+`:
@@ -119,32 +87,29 @@ def use_both[T: A + B](value: T) -> int32:
     return value.a() + value.b()
 ```
 
-At the call site, Aurora checks that the concrete type implements the required trait:
+## Trait Bounds On Classes And Enums
+
+Class and enum type parameters can also carry trait bounds:
 
 ```python
-def main() -> int32:
-    speak(value=User(name="aurora"))
-    return 0
+class Wrapper[T: Greeter]:
+    value: T
 ```
 
-Generic trait bounds also work when the bound itself is specialized:
+See [15-generics.md](15-generics.md) for more on generic type parameters.
+
+## Specialized Generic Trait Bounds
+
+Bounds can be specialized, which is useful when the trait itself is generic:
 
 ```python
-trait Mapper[T]:
-    def map(borrow self, value: T) -> T
-
-class Doubler:
-    factor: int32
-
-impl Mapper[int32] for Doubler:
-    def map(borrow self, value: int32) -> int32:
-        return value * self.factor
-
 def apply[T: Mapper[int32]](mapper: T, value: int32) -> int32:
     return mapper.map(value=value)
 ```
 
-That bounded dispatch also works across multiple different implementing types in the same program:
+This says: `T` must implement `Mapper` specifically for `int32`.
+
+Specialized dispatch works across multiple implementing types in the same program:
 
 ```python
 trait Describe:
@@ -168,33 +133,43 @@ def show[T: Describe](animal: T) -> None:
     print(animal.describe())
 ```
 
-See [examples/traits/generic_dispatch_multiple_types.au](../examples/traits/generic_dispatch_multiple_types.au) for a runnable maintained example.
+See [examples/traits/generic_dispatch_multiple_types.au](../examples/traits/generic_dispatch_multiple_types.au), [examples/traits/generic_trait_bounds.au](../examples/traits/generic_trait_bounds.au), and [examples/traits/specialized_trait_dispatch.au](../examples/traits/specialized_trait_dispatch.au).
 
-See [examples/traits/generic_trait_bounds.au](../examples/traits/generic_trait_bounds.au) for maintained specialized generic trait bounds, [examples/traits/specialized_trait_dispatch.au](../examples/traits/specialized_trait_dispatch.au) for bounded dispatch across specialized generic impls, and [examples/traits/trait_associated_factory.au](../examples/traits/trait_associated_factory.au) for trait-associated methods through the type name.
+## Associated Methods
+
+Traits can declare methods without a receiver. They are called through the implementing type name:
+
+```python
+trait Factory:
+    def make() -> int32
+
+class Widget:
+    value: int32
+
+impl Factory for Widget:
+    def make() -> int32:
+        return 7
+
+print(Widget.make())    # 7
+```
+
+See [examples/traits/trait_associated_factory.au](../examples/traits/trait_associated_factory.au).
 
 ## Operator Traits
 
-The current compiler supports operator traits for this subset:
+Aurora supports operator overloading through traits. When you implement the right trait, standard operators like `+` and `-` work with your types:
 
-- `Add[Rhs, Out]` via `+`
-- `Sub[Rhs, Out]` via binary `-`
-- `Mul[Rhs, Out]` via `*`
-- `Div[Rhs, Out]` via `/`
-- `Mod[Rhs, Out]` via `%`
-- `Neg[Out]` via unary `-`
-- `Not[Out]` via unary `not`
+| Operator | Trait | Method |
+|----------|-------|--------|
+| `a + b` | `Add[Rhs, Out]` | `add(borrow self, rhs: Rhs) -> Out` |
+| `a - b` | `Sub[Rhs, Out]` | `sub(borrow self, rhs: Rhs) -> Out` |
+| `a * b` | `Mul[Rhs, Out]` | `mul(borrow self, rhs: Rhs) -> Out` |
+| `a / b` | `Div[Rhs, Out]` | `div(borrow self, rhs: Rhs) -> Out` |
+| `a % b` | `Mod[Rhs, Out]` | `mod(borrow self, rhs: Rhs) -> Out` |
+| `-a` | `Neg[Out]` | `neg(borrow self) -> Out` |
+| `not a` | `Not[Out]` | `not(borrow self) -> Out` |
 
-The operator method must use the conventional method shape for that operator:
-
-```python
-trait Add[Rhs, Out]:
-    def add(borrow self, rhs: Rhs) -> Out
-
-trait Neg[Out]:
-    def neg(borrow self) -> Out
-```
-
-With matching impls in place, ordinary operator syntax works through trait bounds too:
+Example:
 
 ```python
 class Point:
@@ -208,29 +183,28 @@ impl Add[Point, Point] for Point:
 impl Neg[Point] for Point:
     def neg(borrow self) -> Point:
         return Point(x=0 - self.x, y=0 - self.y)
+```
 
+With these impls, you can use `+` and `-` with `Point` values, including through generic bounds:
+
+```python
 def add_all[T: Add[T, T]](left: T, right: T) -> T:
     return left + right
 ```
 
-See [examples/traits/operator_traits.au](../examples/traits/operator_traits.au) for the maintained runnable example.
+See [examples/traits/operator_traits.au](../examples/traits/operator_traits.au).
 
 ## Current Limits
 
-The implemented trait surface currently supports:
+The implemented trait surface supports:
 
-- `trait Name:` declarations
-- empty marker traits with `pass`
-- method signatures inside trait bodies
+- trait declarations (signature-only methods, marker traits with `pass`)
 - `impl Trait for Type:` blocks
-- `impl Trait for GenericType[ConcreteType]:` specialized impls
-- generic trait declarations like `trait Mapper[T]:`
-- generic impl headers such as `impl[T] Trait for Box[T]:`
-- generic trait impl headers such as `impl Mapper[T] for Box[T]:`
-- bounded generic functions and methods with `T: Trait`
-- bounded generic functions and methods with specialized bounds like `T: Mapper[int32]`
-- bounded generic classes and enums with `T: Trait`
+- specialized impls like `impl Trait for GenericType[ConcreteType]:`
+- generic trait declarations and generic impl headers
+- bounded generic functions, methods, classes, and enums
+- specialized bounds like `T: Mapper[int32]`
 - multiple bounds with `T: A + B`
-- direct trait-method calls on concrete types that implement the trait
-- associated trait methods declared without `self`
-- operator traits for `+`, binary `-`, `*`, `/`, `%`, unary `-`, and `not`
+- direct trait-method calls on concrete types
+- associated methods without `self`
+- operator traits for `+`, `-`, `*`, `/`, `%`, unary `-`, and `not`

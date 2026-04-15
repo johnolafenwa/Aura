@@ -1,24 +1,24 @@
 # Concurrency
 
-Aurora now has a bootstrap concurrency surface with typed channels, spawned tasks, detached tasks, task groups, `select`, send-result errors, and cooperative cancellation.
+Aurora provides Go-style concurrency with typed channels, spawned tasks, task groups, and `select`. This chapter walks through each primitive with inline examples.
 
 ## Channels
 
-Create a channel with an explicit annotation:
+A channel is a typed pipe for sending values between tasks. Create one with `channel()` and an explicit type annotation:
 
-```aurora
+```python
 ch: Channel[int32] = channel()
 ```
 
-In the bootstrap compiler, `channel()` needs that surrounding type context. A bare `channel()` call without an expected `Channel[T]` type is rejected.
+The bootstrap compiler requires the type annotation -- a bare `channel()` without an expected `Channel[T]` type is rejected.
 
-The current bootstrap supports:
+Send and receive:
 
-- `clone()`
-- `send(value)`
-- `recv()`
-- `close()`
-- `for value in jobs:` iteration over a channel until it closes
+```python
+ch: Channel[int32] = channel()
+ch.send(42)
+msg = ch.recv()    # returns Option[int32]
+```
 
 `recv()` returns `Option[T]`:
 
@@ -27,12 +27,24 @@ The current bootstrap supports:
 
 `send(value)` returns `Result[None, SendError[T]]`:
 
-- `Result.Ok(None)` when the value was queued successfully
-- `Result.Err(SendError.Closed(value))` when the channel was already closed
+- `Result.Ok(None)` on success
+- `Result.Err(SendError.Closed(value))` when the channel is already closed, returning the unsent value
 
-Channels can also act as `for` iterables:
+Close a channel with `ch.close()`. After closing, no more values can be sent, but existing values can still be received.
 
-```aurora
+Channels are move types (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)). To share a channel between tasks, clone it:
+
+```python
+sender = ch.clone()
+```
+
+Each clone is an independent handle to the same underlying channel. Cloning is cheap -- it does not copy messages.
+
+### Iterating Over A Channel
+
+You can iterate over a channel with `for`. The loop runs until the channel is closed and empty:
+
+```python
 jobs: Channel[int32] = channel()
 jobs.send(1)
 jobs.send(2)
@@ -44,54 +56,70 @@ for job in jobs:
 
 See [examples/concurrency/channel_iteration.au](../examples/concurrency/channel_iteration.au).
 
-## Spawning work
+## Spawning Tasks
 
-Use `spawn` with a named function call:
+Use `spawn` with a named function call to run work concurrently:
 
-```aurora
+```python
+def producer(out: Channel[int32]):
+    out.send(2)
+    out.send(4)
+    out.close()
+
+ch: Channel[int32] = channel()
 task = spawn producer(ch.clone())
 ```
 
-The result is a `Task[T]`. Call `join()` to wait for completion.
+`spawn` returns a `Task[T]`. Call `.join()` to wait for the task to complete.
 
-`Task[T]` also supports `clone()` for sharing a handle.
+`Task[T]` also supports `.clone()` for sharing a handle between multiple consumers.
 
-Use `spawn detached` for explicit fire-and-forget work that is not joined through a task handle:
+### Fire-And-Forget With `spawn detached`
 
-```aurora
+Use `spawn detached` when you do not need to join the result:
+
+```python
 spawn detached producer(ch.clone())
 ```
 
-Detached tasks do not return a `Task[T]` handle in the bootstrap runtime.
+Detached tasks do not return a `Task[T]` handle.
 
-## Structured task groups
+## Structured Task Groups
 
-Use `with task_group() as group:` to keep child tasks tied to a lexical scope:
+Task groups tie child tasks to a lexical scope using `with`:
 
-```aurora
+```python
 with task_group() as group:
     group.spawn(worker, jobs.clone(), results.clone())
+    group.spawn(worker, jobs.clone(), results.clone())
+# leaving the block joins all child tasks
 ```
 
-Leaving the `with` block joins the remaining child tasks. Call `group.cancel()` to signal cooperative cancellation early.
+When the `with` block ends, any still-running children are joined. This ensures spawned work does not outlive its parent scope.
 
-Inside spawned work, `cancelled()` reports whether the current task has been cancelled:
+### Cooperative Cancellation
 
-```aurora
+Call `group.cancel()` to signal all tasks in the group to stop. Inside a task, call `cancelled()` to check whether cancellation was requested:
+
+```python
 def worker(out: Channel[int32]):
     mut i: int32 = 0
     while i < 100:
         if cancelled():
-            return
+            return        # exit cleanly
         out.send(i)
         i += 1
 ```
 
-## Select and timeouts
+Cancellation is cooperative -- `cancelled()` returns `true` after `group.cancel()` is called, but the task must check it and decide to stop. Aurora does not forcibly kill tasks.
 
-Use `select` to wait on multiple channel receives or timer arms:
+See [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_group_cancel.au).
 
-```aurora
+## `select`
+
+`select` waits on multiple channel operations or a timer, executing whichever is ready first:
+
+```python
 select:
     case value = inbox.recv():
         match value:
@@ -100,52 +128,35 @@ select:
             case Option.None:
                 print("closed")
     case after(100ms):
-        print("waiting")
+        print("timeout")
 ```
 
-Bootstrap `select` currently supports:
+### Supported Arms
 
-- `case binding = channel.recv():`
-- `case channel.recv():`
-- `case binding = channel.send(value):`
-- `case channel.send(value):`
-- `case after(100ms):`
-- `case after(duration=100ms):`
+- `case binding = channel.recv():` -- receive and bind
+- `case channel.recv():` -- receive and discard
+- `case binding = channel.send(value):` -- send and bind the result
+- `case channel.send(value):` -- send and discard the result
+- `case after(100ms):` -- timeout after a duration
+- `case after(duration=100ms):` -- named form
 
-Duration literals currently include `ms`, `s`, and `m`.
+When a `select` mixes `recv()` arms with an `after(...)` arm, a closed-and-empty channel does not starve the timer. The timeout arm still fires as an escape path.
 
-`after(...)` is a builtin helper that turns a `Duration` into a timeout arm.
+Duration literals include `ms` (milliseconds), `s` (seconds), and `m` (minutes).
 
-When a `select` mixes `recv()` arms with at least one `after(...)` arm, a closed-and-empty channel
-does not starve the timer. The timeout arm still gets a chance to fire.
+## `sleep`
 
-Aurora also provides a simple blocking sleep helper for the current runtime:
+A simple blocking delay:
 
-```aurora
+```python
 sleep(100ms)
 ```
 
 See [examples/concurrency/sleep_builtin.au](../examples/concurrency/sleep_builtin.au).
 
-The minute suffix is fully supported in the current compiler:
+## Full Example: Producer-Consumer
 
-```aurora
-print(2m)
-```
-
-See [examples/concurrency/minute_duration.au](../examples/concurrency/minute_duration.au).
-
-The timer helper also supports a named form:
-
-```aurora
-select:
-    case after(duration=100ms):
-        print("waiting")
-```
-
-## Full example
-
-```aurora
+```python
 def producer(out: Channel[int32]):
     out.send(2)
     out.send(4)
@@ -175,9 +186,6 @@ See:
 - [examples/concurrency/task_group_select.au](../examples/concurrency/task_group_select.au)
 - [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_group_cancel.au)
 - [examples/concurrency/select_timeout.au](../examples/concurrency/select_timeout.au)
-- [examples/concurrency/select_timeout_named.au](../examples/concurrency/select_timeout_named.au)
-- [examples/concurrency/sleep_builtin.au](../examples/concurrency/sleep_builtin.au)
-- [examples/concurrency/minute_duration.au](../examples/concurrency/minute_duration.au)
 
 ## Current Limits
 

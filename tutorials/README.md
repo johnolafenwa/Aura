@@ -49,7 +49,7 @@ The current tutorial set covers:
 - user-defined generic classes, enums, and functions
 - trait declarations, trait impls, and bounded generic calls
 - local file modules with `import`, `from ... import ...`, and `public` visibility at module boundaries
-- `Aurora.toml` packages with `src/`, local path dependencies, workspaces, and local lockfiles
+- `Aurora.toml` packages with `src/`, local path dependencies, git dependencies, workspaces, and local lockfiles
 - built-in `Result[T, E]`, `Option[T]`, `SendError[T]`, and bare `None`
 - `try expr`
 - `with` using `close(borrow mut self)` and `with task_group() as group:`

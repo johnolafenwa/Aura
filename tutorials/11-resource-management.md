@@ -1,10 +1,12 @@
 # Resource Management
 
-Aurora now supports deterministic scoped cleanup and structured scope management with `with`.
+When you open a file, a network connection, or a task group, you need to ensure it gets cleaned up even if something goes wrong. Aurora's `with` statement provides deterministic scoped cleanup -- the resource is always closed when the block exits, whether by normal completion or early `return`.
 
-## `with` binds a scoped resource
+If you are coming from Python, this works like Python's `with` statement and context managers.
 
-```aurora
+## `with` Binds A Scoped Resource
+
+```python
 class FileHandle:
     name: String
 
@@ -18,50 +20,44 @@ def use_resource() -> Result[String, String]:
     with file = FileHandle(name="demo"):
         print(file.read())
         return Result.Ok("done")
+    # file.close() is called automatically here, even on early return
 ```
 
 The bound resource:
 
-- is available inside the block as a local binding
-- is mutable inside the block
+- is available inside the block as a mutable local binding
 - always runs `close(borrow mut self)` when the block exits
+- cleanup runs on normal fallthrough, on early `return`, and after `try` propagation
 
-The cleanup runs on normal fallthrough and on early `return`.
+See [examples/resources/with_resource.au](../examples/resources/with_resource.au).
 
-See:
+## The Resource Protocol
 
-- [examples/resources/with_resource.au](../examples/resources/with_resource.au)
+In the current compiler, a `with` resource must be a class that defines:
 
-## Bootstrap rule
-
-In the current compiler bootstrap, a `with` resource must be a class that defines:
-
-```aurora
-def close(borrow mut self)
+```python
+def close(borrow mut self):
 ```
 
-with no extra parameters and an implied `None` return type.
+The method must take `borrow mut self`, no extra parameters, and return `None`. Any class that defines this method can be used with `with`.
 
-## `with ... as ...` for task groups
+## `with ... as ...` For Task Groups
 
-The bootstrap compiler also supports:
+The builtin `task_group()` function returns a `TaskGroup`, which is the one non-class value that supports `with`:
 
 ```python
 with task_group() as group:
     group.spawn(worker, out.clone())
+    group.spawn(worker, out.clone())
+# leaving the block joins all spawned child tasks
 ```
 
-`TaskGroup` is the one builtin non-class value that can currently be used with `with`.
+Task groups tie child tasks to a lexical scope. When the `with` block ends, any still-running child tasks are joined. You can also cancel early with `group.cancel()`.
 
-See:
-
-- [examples/concurrency/task_group_select.au](../examples/concurrency/task_group_select.au)
-- [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_group_cancel.au)
+See [examples/concurrency/task_group_select.au](../examples/concurrency/task_group_select.au) and [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_group_cancel.au).
 
 ## Current Limits
 
-The current bootstrap `with` implementation does not yet support:
-
-- generic resource types other than `TaskGroup`
-- arbitrary enter or exit protocols
-- borrowed resource bindings
+- only class types with a `close(borrow mut self)` method and `TaskGroup` can be used with `with`
+- no arbitrary enter or exit protocols
+- no borrowed resource bindings

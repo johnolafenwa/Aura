@@ -1,6 +1,8 @@
 # Overview
 
-Aurora is aiming for Python-like readability with explicit static types, ownership-oriented design, and systems-language tooling.
+Aurora is a systems programming language with Python-like readability, explicit static types, and an ownership-based memory model that eliminates the need for a garbage collector.
+
+If you know Python, Aurora will feel familiar -- same indentation-based syntax, no semicolons, `def` for functions, `class` for types. The key differences are: every variable has a known type at compile time, values have a single owner that controls their lifetime, and the language compiles to native binaries.
 
 These tutorials teach the language as it exists in this repository today, not the full proposal surface.
 
@@ -8,19 +10,24 @@ These tutorials teach the language as it exists in this repository today, not th
 
 - top-level scripts and explicit `main`
 - bindings, mutability, `None`, and the current builtin type names
-- functions, return rules, and typed parameters
+- functions, return rules, typed parameters, and borrowed parameters
 - classes, keyword construction, defaults, receivers, and methods
-- owned `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals, indexing where applicable, and iteration
+- ownership, borrowing, move semantics, copy types, and cloning
+- owned `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals, indexing, and iteration
 - enums, exhaustive `match`, built-in `Result[T, E]`, `Option[T]`, and `SendError[T]`
 - strings, string parsing/formatting, numbers, duration literals, and the current builtin methods
 - `if`, `elif`, `else`, `while`, `for range(...)`, `break`, and `continue`
 - statement-form `match` over enum variants plus literal `bool`, integer, and `String` cases
 - `with`, `try expr`, channels, spawned tasks, detached tasks, task groups, and `select`
+- user-defined generic classes, enums, and functions
+- trait declarations, trait impls, and bounded generic calls
+- local file modules with `import`, `from ... import ...`, and `public` visibility
+- `Aurora.toml` packages with local path dependencies, git dependencies, and workspaces
 - CLI inspection commands and compiler-backed editor tooling
 
 ## What The Bootstrap Compiler Currently Supports
 
-Today’s working subset includes:
+Today's working subset includes:
 
 - `class`, `enum`, and `def`
 - `trait` plus `impl Trait for Type`
@@ -28,6 +35,7 @@ Today’s working subset includes:
 - explicit type annotations and inferred bindings
 - mutable reassignment with `mut`
 - omitted `-> None` return types
+- ownership and borrowing with `borrow T` and `borrow mut T`
 - user-defined enums plus built-in `Result`, `Option`, and `SendError`
 - user-defined generic classes, enums, and functions
 - builtin `Vec[T]`, `Map[K, V]`, and `Set[T]` collections with literals
@@ -47,4 +55,6 @@ The repository is not at the full proposal yet. Notable gaps include:
 
 ## Recommended Companion Material
 
-Keep the `examples/` tree open while reading. The categorized examples are meant to mirror these chapters and stay runnable as the language evolves.
+Keep the `examples/` tree open while reading. The categorized examples mirror these chapters and stay runnable as the language evolves.
+
+If you are coming from Python, the single most important chapter is [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md). It explains how Aurora manages memory without a garbage collector and shows you how to fix every common compiler error you will encounter.

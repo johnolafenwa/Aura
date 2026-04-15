@@ -1,85 +1,123 @@
 # Running Programs
 
-Aurora currently runs through the bootstrap CLI, `aura`.
+Aurora currently runs through the bootstrap CLI, `aura`. You invoke it from the repository root using `cargo run -p aura --`.
 
-## The Main Commands
+## Your First Program
 
-From the repository root:
+Create a file called `hello.au`:
+
+```python
+print("hello, aurora")
+```
+
+Run it:
+
+```bash
+cargo run -p aura -- run hello.au
+```
+
+You should see `hello, aurora` printed to the terminal.
+
+## The Core Commands
+
+The three commands you will use most often:
 
 ```bash
 cargo run -p aura -- check examples/classes/point_distance.au
 cargo run -p aura -- run examples/classes/point_distance.au
-cargo run -p aura -- run examples/collections/vec_basics.au
-cargo run -p aura -- run examples/collections/set_basics.au
-cargo run -p aura -- run examples/packages/local_path_dependencies/app/src/main.au
-cargo run -p aura -- run-mir examples/classes/methods.au
-cargo run -p aura -- run-mir examples/collections/vec_iteration.au
-cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au
 cargo run -p aura -- build -o ./target/aurora-point examples/point.au
-cargo run -p aura -- build --backend direct -o ./target/aurora-direct examples/basic_addition.au
+```
+
+- **`check`** -- parse and type-check the file without running it. Use this for fast feedback while editing.
+- **`run`** -- execute the program through the interpreter. This is the easiest way to test your code.
+- **`build`** -- compile to a standalone native binary. The output binary does not depend on the original `.au` source files at runtime.
+
+There is also `run-mir`, which executes through an alternate native MIR runtime. It covers the full implemented Aurora surface and is mainly useful for backend debugging or comparing execution paths:
+
+```bash
+cargo run -p aura -- run-mir examples/classes/methods.au
+```
+
+## Build Backends
+
+The `build` command accepts a `--backend` flag:
+
+- `--backend auto` (the default) -- uses the direct native backend for the maintained Aurora surface
+- `--backend direct` -- explicitly forces the direct native backend
+
+In practice, the default is what you want. The `direct` flag exists for testing and development.
+
+The current build step still requires Cargo/Rust and a host C compiler to produce the final binary. Built binaries preserve file, line, and caret context for runtime failures, so stack traces are readable.
+
+## Inspection Commands
+
+These commands are for debugging and understanding your code:
+
+- **`ast`** -- print the parsed syntax tree
+- **`ast-json`** -- print the syntax tree as machine-readable JSON
+- **`mir`** -- print the lowered MIR for the checked program
+- **`analyze`** -- print machine-readable compiler analysis (diagnostics, symbols, hover, definition)
+- **`complete`** -- print completion items for a position in the file
+
+```bash
 cargo run -p aura -- ast examples/classes/point_distance.au
-cargo run -p aura -- ast-json examples/classes/point_distance.au
 cargo run -p aura -- mir examples/control_flow/while_break_continue.au
 cargo run -p aura -- analyze examples/classes/point_distance.au
 cargo run -p aura -- complete --line 5 --character 11 --trigger . examples/point.au
+```
+
+For `complete`, `--line` and `--character` use zero-based positions. Member completion expects the cursor positioned just after `.`.
+
+Use `help` and `--version` to see CLI usage and the current version:
+
+```bash
 cargo run -p aura -- help
 cargo run -p aura -- --version
 ```
 
-- `check`
-  - parse and type check the file
-- `run`
-  - execute it through the interpreter-backed runtime
-  - when the entry file lives under a package with `Aurora.toml`, the CLI resolves local modules from `src/`, resolves local path dependencies by package name, and updates `Aurora.lock`
-- `run-mir`
-  - execute it through the current native MIR runtime path
-  - it now covers the current implemented Aurora surface, including `spawn`, `select`, channels, task groups, `try`, and `with`
-- `build`
-  - compile a standalone native binary
-  - `--backend auto` is the default
-  - `--backend direct` forces the true direct native backend for the full currently implemented Aurora language surface
-  - the generated binary does not depend on the original `.au` source file at runtime
-  - built binaries now preserve file, line, and caret context for arithmetic runtime failures
-  - the current build step still requires Cargo/Rust and a host C compiler
-- `ast`
-  - print the parsed syntax tree
-- `ast-json`
-  - print the parsed syntax tree as JSON
-- `mir`
-  - print the lowered MIR for the checked program
-- `analyze`
-  - print machine-readable compiler analysis for diagnostics, symbols, hover, and definition
-- `complete`
-  - print machine-readable completion items for a position in the file
-  - `--line` and `--character` use zero-based positions
-  - member completion expects the cursor to be positioned just after `.`
-  - the current compiler also tolerates the common incomplete-editor state where the buffer contains one or more dangling member accesses like `counter.` or `helpers.math.`, including at EOF
-- `help`
-  - print CLI usage and exit successfully
-- `--version`
-  - print the current CLI version and exit successfully
-
-The machine-readable commands support stdin for editor integration, and the ordinary `check`, `run`, `run-mir`, and `build` commands can also resolve local imports from stdin when you provide a real workspace path:
+Use `deps update` to refresh git dependencies without deleting `Aurora.lock` manually:
 
 ```bash
-cat examples/point.au | cargo run -p aura -- analyze --stdin /virtual/point.au
-cat examples/point.au | cargo run -p aura -- complete --line 5 --character 11 --trigger . --stdin /virtual/point.au
-cat examples/point.au | cargo run -p aura -- build -o ./target/aurora-point --stdin /virtual/point.au
+cargo run -p aura -- deps update
+cargo run -p aura -- deps update util
+```
+
+## Stdin Mode For Editors
+
+All commands support stdin for editor integration. Provide a virtual path so the compiler can resolve local imports:
+
+```bash
 cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin "$(pwd)/examples/modules/simple_import.au"
 ```
 
-The same manifest-aware behavior applies to package entry files under `src/`:
+This is how the VS Code language server communicates with the compiler for unsaved editor buffers.
+
+## Package-Aware Commands
+
+When a file lives under a package with `Aurora.toml`, the CLI automatically resolves local modules from `src/`, resolves path and git dependencies by package name, and updates `Aurora.lock`:
 
 ```bash
-cargo run -p aura -- check examples/packages/local_path_dependencies/app/src/main.au
+cargo run -p aura -- run examples/packages/local_path_dependencies/app/src/main.au
 cargo run -p aura -- run examples/packages/workspace/app/src/main.au
 ```
 
+Run the dependency update command from a package or workspace directory when you want to refresh moving git references:
+
+```bash
+cd examples/packages/local_path_dependencies/app
+cargo run -p aura -- deps update
+cargo run -p aura -- deps update util
+```
+
+See [18-packages-and-workspaces.md](18-packages-and-workspaces.md) for details.
+
 ## Scripts And `main`
 
-Aurora supports two entry styles in the implemented subset.
+Aurora supports two entry styles.
 
 ### Top-level script
+
+Write executable statements directly at the top level. This is the simplest way to start:
 
 ```python
 a = 56
@@ -91,6 +129,8 @@ See [examples/basics/top_level_script.au](../examples/basics/top_level_script.au
 
 ### Explicit `main`
 
+For programs that return an exit code, declare a `main` function:
+
 ```python
 def main() -> int32:
     print(5)
@@ -99,16 +139,16 @@ def main() -> int32:
 
 See [examples/classes/point_distance.au](../examples/classes/point_distance.au).
 
-If a file has top-level executable statements, it must not also declare `main`.
+Do not mix top-level executable statements with `main` in the same file. Choose one style.
 
-## Editor Tooling Uses The Compiler
+## Editor Tooling
 
-The VS Code language server now uses compiler-owned `analyze` and `complete` output when possible.
-
-That means the editor and CLI are now sharing the same semantic source for:
+The VS Code language server uses compiler-backed `analyze` and `complete` output, which means the editor and CLI share the same type-checking engine for:
 
 - diagnostics
 - symbols
 - hover
 - go-to-definition
 - completions
+
+See [08-tooling.md](08-tooling.md) for setup instructions.

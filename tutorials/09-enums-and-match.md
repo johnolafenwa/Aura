@@ -1,6 +1,6 @@
 # Enums And Match
 
-Aurora now supports enum declarations with unit variants, single-payload variants, and exhaustive statement-form `match` over both enums and a small literal subset.
+Enums let you define a type that can be one of several variants. Combined with `match`, they give you exhaustive pattern matching -- the compiler guarantees you handle every case.
 
 ## Declaring An Enum
 
@@ -11,24 +11,11 @@ enum TrafficLight:
     Green
 ```
 
-Each variant belongs to the enum's namespace.
+Each variant belongs to the enum's namespace: `TrafficLight.Red`, `TrafficLight.Yellow`, etc.
 
-Generic enums are also supported:
+## Variants With Payloads
 
-```python
-enum Wrapper[T]:
-    Item(T)
-```
-
-## Constructing Variants
-
-Unit variants are accessed directly:
-
-```python
-light = TrafficLight.Red
-```
-
-Payload variants are called like constructors:
+Variants can carry a single value:
 
 ```python
 enum ParseResult:
@@ -36,10 +23,20 @@ enum ParseResult:
     Failure(String)
 
 ok = ParseResult.Success(42)
-bad = ParseResult.Failure("bad")
+bad = ParseResult.Failure("invalid input")
 ```
 
-Generic enum constructors may also use explicit type arguments on the enum name when needed:
+## Generic Enums
+
+Enums can be generic:
+
+```python
+enum Wrapper[T]:
+    Item(T)
+    Empty
+```
+
+You can provide explicit type arguments when the compiler needs help:
 
 ```python
 wrapped = Result[int32, String].Ok(7)
@@ -47,9 +44,9 @@ wrapped = Result[int32, String].Ok(7)
 
 See [examples/enums/explicit_type_args.au](../examples/enums/explicit_type_args.au).
 
-## Matching Exhaustively
+## Exhaustive `match`
 
-Aurora's current `match` support requires coverage of every enum variant, either explicitly or through a final wildcard arm:
+Aurora's `match` requires you to handle every variant. If you miss one, the compiler reports an error:
 
 ```python
 def value_or_zero(result: ParseResult) -> int32:
@@ -61,9 +58,9 @@ def value_or_zero(result: ParseResult) -> int32:
             return 0
 ```
 
-If you leave out a variant, the checker reports a non-exhaustive match error.
+### Wildcard Arms
 
-Wildcard arms are written with `case _:`:
+Use `case _:` to match any remaining variants:
 
 ```python
 match light:
@@ -73,34 +70,63 @@ match light:
         print("not red")
 ```
 
-## Payload Bindings
+### Payload Bindings
 
-When a case matches a payload variant, the payload name becomes available inside that arm:
+When a case matches a payload variant, the payload becomes a local binding:
 
 ```python
 case ParseResult.Success(value):
-    return value
+    return value    # value is an int32 here
 ```
 
-Aurora also supports borrowed matching with `match borrow ...:` and `match borrow mut ...:`. In borrowed matches, non-copy payloads are exposed as borrowed values instead of moving the scrutinee:
+### Unqualified Variants
+
+When the scrutinee type is already known, you can omit the enum name:
+
+```python
+result: Result[String, String] = Result.Ok("ok")
+
+match result:
+    case Ok(value):       # same as Result.Ok(value)
+        print(value)
+    case Err(message):    # same as Result.Err(message)
+        print(message)
+```
+
+This is especially convenient with built-in enums like `Result` and `Option`.
+
+## Borrowed Matching
+
+By default, `match` takes ownership of the value. If you want to inspect a value without consuming it, use `match borrow`. This is important for non-copy types (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
 
 ```python
 result: Result[String, String] = Result.Ok("ok")
 
 match borrow result:
     case Ok(value):
-        print(value.clone())
+        print(value.clone())    # value is a borrowed String
     case Err(message):
         print(message)
+
+# result is still valid here
 ```
 
-Unqualified variants like `case Ok(value):` are supported when the scrutinee already determines the enum type.
+Use `match borrow mut` when you need to modify the matched value:
+
+```python
+mut result: Result[String, String] = Result.Ok("hello")
+match borrow mut result:
+    case Ok(msg):
+        pass    # msg is borrow mut String
+    case Err(e):
+        pass
+```
 
 See [examples/enums/match_borrow.au](../examples/enums/match_borrow.au).
 
 ## Literal Match Patterns
 
-Aurora also supports literal `case` arms for `bool`, integer, and `String` scrutinees:
+You can also match on literal values of `bool`, integer, and `String`:
 
 ```python
 def describe_number(value: int32) -> String:
@@ -113,7 +139,7 @@ def describe_number(value: int32) -> String:
             return "many"
 ```
 
-Boolean matches can stay fully exhaustive without a wildcard when they cover both `true` and `false`:
+Boolean matches are exhaustive when they cover both `true` and `false`:
 
 ```python
 def describe_flag(flag: bool) -> String:
@@ -124,31 +150,20 @@ def describe_flag(flag: bool) -> String:
             return "no"
 ```
 
-Open-ended literal domains like integers and strings still need a final wildcard arm.
+Integer and `String` matches always need a final wildcard arm because the domain is open-ended.
 
 See [examples/control_flow/match_literals.au](../examples/control_flow/match_literals.au).
 
 ## Current Limits
 
-The bootstrap compiler currently supports:
+Not yet supported:
 
-- non-generic and generic enums
-- zero-payload and single-payload variants
-- statement-form `match`
-- variant patterns of the form `Enum.Variant` and `Enum.Variant(name)`
-- unqualified variant patterns such as `case Ok(value):` when the scrutinee type is known
-- literal patterns over `bool`, integer, and `String` scrutinees
-- `match borrow value:` and `match borrow mut value:`
-- wildcard patterns with `case _:`
-
-It does not yet support:
-
-- nested patterns
-- expression-form `match`
+- nested patterns (e.g., matching on a variant inside a variant)
+- expression-form `match` (using match as an expression rather than a statement)
 - floating-point literal patterns
 - keyword arguments for variant payload construction
 - multi-payload variants
 
-Built-in generic enums such as `Result[T, E]`, `Option[T]`, and `SendError[T]` are covered in the next chapter.
+Built-in generic enums `Result[T, E]`, `Option[T]`, and `SendError[T]` are covered in the next chapter.
 
 See [examples/enums/result_match.au](../examples/enums/result_match.au) and [examples/enums/wildcard_match.au](../examples/enums/wildcard_match.au).

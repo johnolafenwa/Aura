@@ -1,26 +1,25 @@
 # Control Flow
 
-Aurora’s implemented control-flow subset is already large enough for useful scripts and small programs.
+Aurora supports the standard control-flow constructs: conditionals, loops, pattern matching, and early exit.
 
 ## `if`, `elif`, and `else`
 
 ```python
-def main():
-    score: int32 = 90
+score: int32 = 90
 
-    if score < 50:
-        print("low")
-    elif score < 80:
-        print("mid")
-    else:
-        print("high")
+if score < 50:
+    print("low")
+elif score < 80:
+    print("mid")
+else:
+    print("high")
 ```
+
+Conditions must evaluate to `bool`. Unlike Python, Aurora does not support truthy or falsy coercions -- you must write explicit comparisons.
 
 See [examples/control_flow/if_elif_else.au](../examples/control_flow/if_elif_else.au).
 
-Conditions must evaluate to `bool`. The bootstrap compiler does not support Python-style truthy or falsy coercions.
-
-Aurora also supports boolean operators directly in conditions and expressions:
+Aurora supports boolean operators in conditions:
 
 ```python
 if ready and not blocked:
@@ -34,27 +33,43 @@ See [examples/control_flow/boolean_logic.au](../examples/control_flow/boolean_lo
 ## `while`
 
 ```python
+mut n: int32 = 0
 while n < 10:
+    print(n)
     n += 1
+```
+
+Use `while true:` with `break` for loops with complex exit conditions:
+
+```python
+mut attempts: int32 = 0
+while true:
+    attempts += 1
+    if attempts >= 3:
+        print("giving up")
+        break
 ```
 
 ## `break` and `continue`
 
-Aurora supports both inside loops:
+Both work inside `while` and `for` loops:
 
 ```python
-if n % 2 == 0:
-    continue
-
-if n > 7:
-    break
+mut n: int32 = 0
+while n < 10:
+    n += 1
+    if n % 2 == 0:
+        continue       # skip even numbers
+    if n > 7:
+        break          # stop after 7
+    print(n)
 ```
 
 See [examples/control_flow/while_break_continue.au](../examples/control_flow/while_break_continue.au).
 
 ## `pass`
 
-Use `pass` when a block is intentionally empty:
+Use `pass` when a block must exist but has no statements. This is the same as Python:
 
 ```python
 class Empty:
@@ -66,9 +81,7 @@ def noop():
 
 See [examples/basics/pass_keyword.au](../examples/basics/pass_keyword.au).
 
-## `for`, `range`, `Vec[T]`, And `Set[T]`
-
-Aurora now supports `for` loops over `range(...)`, `Vec[T]`, and `Set[T]` values.
+## `for` Over `range`
 
 ```python
 mut total: int32 = 0
@@ -81,26 +94,44 @@ for value in range(6):
     total += value
 ```
 
+`range(stop)` counts from `0` to `stop - 1`. `range(start, stop)` counts from `start` to `stop - 1`.
+
 See [examples/control_flow/for_range.au](../examples/control_flow/for_range.au).
 
-Vectors can be iterated by value, through an explicit shared borrow, or through an explicit mutable borrow:
+## `for` Over Collections
+
+Vectors and sets can be iterated in three ways. The choice matters because of Aurora's ownership model (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)):
+
+**By value** -- consumes the collection. After the loop, the collection is no longer valid:
 
 ```python
-mut total = 0
-for value in values:
-    total += value
+names = ["Ada", "Grace"]
+for name in names:
+    print(name)
+# names is consumed -- cannot use it after this loop
+```
 
+**By shared borrow** -- reads without consuming. The collection stays valid:
+
+```python
+names = ["Ada", "Grace"]
 for name in borrow names:
     print(name)
+print(names.len())       # still usable
+```
 
+**By mutable borrow** -- modifies elements in place. Requires a `mut` binding:
+
+```python
 mut scores = [1, 2, 3]
 for item in borrow mut scores:
     item += 1
+# scores is now [2, 3, 4]
 ```
 
-See [examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au) and [examples/collections/vec_polish.au](../examples/collections/vec_polish.au).
+Use `for x in borrow collection` as the default when you want to keep the collection. Use `for x in collection` only when you are done with it. Use `for x in borrow mut collection` when you need to update elements.
 
-As with `push(...)`, `set(...)`, and other mutating vector operations, `borrow mut` iteration requires the vector place itself to be mutable.
+See [examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au) and [examples/collections/vec_polish.au](../examples/collections/vec_polish.au).
 
 Sets support by-value and shared-borrow iteration:
 
@@ -116,19 +147,13 @@ See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 
 The current compiler supports `for` over:
 
-- `range(stop)`
-- `range(start, stop)`
-- the corresponding named-argument forms
-- `Vec[T]`
-- `borrow Vec[T]`
-- `borrow mut Vec[T]`
-- `Set[T]`
-- `borrow Set[T]`
-- `Channel[T]`
+- `range(stop)` and `range(start, stop)` with named-argument forms
+- `Vec[T]`, `borrow Vec[T]`, and `borrow mut Vec[T]`
+- `Set[T]` and `borrow Set[T]`
+- `Channel[T]` (iterates until the channel closes)
 
-It does not yet support:
+Not yet supported:
 
 - user-defined iterable protocols
 - `borrow mut Set[T]`
 - custom step values for `range`
-- `range(...)` bounds outside the current signed index space

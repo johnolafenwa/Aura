@@ -1,61 +1,67 @@
 # Tooling
 
-Aurora already ships with basic compiler and editor tooling inside the monorepo.
+Aurora ships with compiler and editor tooling inside the monorepo.
 
 ## CLI
 
-Use `aura` to:
+The `aura` CLI is the primary interface for working with Aurora programs:
 
-- type check files
-- run programs
-- inspect AST
-- inspect JSON AST
-- inspect MIR
-- inspect compiler analysis
-- inspect compiler completions
+```bash
+cargo run -p aura -- check myfile.au     # type-check without running
+cargo run -p aura -- run myfile.au       # execute through the interpreter
+cargo run -p aura -- build -o out myfile.au  # compile to a native binary
+```
 
-The CLI is documented in [crates/aura/README.md](../crates/aura/README.md).
+For inspecting compiler internals:
 
-The current command set includes:
+```bash
+cargo run -p aura -- ast myfile.au       # print the syntax tree
+cargo run -p aura -- ast-json myfile.au  # syntax tree as JSON
+cargo run -p aura -- mir myfile.au       # print the lowered MIR
+cargo run -p aura -- analyze myfile.au   # diagnostics, symbols, hover info
+cargo run -p aura -- complete --line 5 --character 11 --trigger . myfile.au
+```
 
-- `check`
-- `run`
-- `ast`
-- `ast-json`
-- `mir`
-- `analyze`
-- `complete`
+See [01-running-programs.md](01-running-programs.md) for a full walkthrough of each command. The CLI is also documented in [crates/aura/README.md](../crates/aura/README.md).
 
 ## Examples
 
-The categorized example library under `examples/` is part of the development workflow, not just sample code.
-
-The compiler tests exercise both the original bootstrap examples and the categorized example set so examples stay valid as the language evolves.
+The categorized example library under `examples/` is part of the development workflow, not just sample code. Compiler tests exercise the examples, so they stay valid as the language evolves. Browse them alongside these tutorials to see runnable code for every feature.
 
 ## VS Code
 
-The repo also contains:
+The repo includes:
 
 - a VS Code extension under `tools/vscode-aurora`
 - an Aurora language server under `tools/aurora-language-server`
 
-Current editor support includes:
+### Editor Features
 
-- syntax highlighting
-- completions
-- hover
-- go-to-definition
-- diagnostics
-- document symbols
+- **Syntax highlighting** for `.au` files
+- **Completions** with member completion after `.`
+- **Hover** information showing types and signatures
+- **Go-to-definition** including cross-file definitions for imported symbols
+- **Diagnostics** from the compiler's type checker
+- **Document symbols** for navigation
 
-The editor now prefers compiler-backed analysis and completions through `aura analyze` and `aura complete`. That compiler path now resolves local imports for both file-backed programs and stdin-backed editor buffers when the supplied path points at a real workspace file, keeps imported trait methods visible in completions, tracks cross-file definitions for imported items, and recovers dangling-member buffers even when the file currently contains multiple dangling dots or the active dot is at EOF. The local JS analysis layer is kept only as a fallback when the compiler cannot analyze the current buffer at all.
+The editor uses compiler-backed analysis through `aura analyze` and `aura complete`. This means the editor and CLI share the same type-checking engine. The local JS analysis layer is kept only as a fallback when the compiler cannot analyze the current buffer.
+
+### Installation
+
+For development:
+
+1. Run `npm install` from the repo root
+2. Run `npm run build:extension`
+3. Open the repo in VS Code
+4. Press `F5` to launch an Extension Development Host
+5. Open any `.au` file
+
+For a packaged install, see [tools/vscode-aurora/INSTALL.md](../tools/vscode-aurora/INSTALL.md).
 
 ## Keeping Tutorials Current
 
-This tutorial set should track the compiler, not just the proposal.
-
-When a feature is added, changed, or removed:
+This tutorial set tracks the compiler, not the proposal. When a feature is added, changed, or removed:
 
 1. update the relevant tutorial chapter
 2. update or add an example program
-3. update the work log or task board if the change shifts the current implementation boundary
+3. update `14-current-language-surface.md` if the supported surface changed

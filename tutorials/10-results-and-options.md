@@ -1,10 +1,10 @@
 # Results And Options
 
-Aurora now supports the built-in generic enums `Result[T, E]`, `Option[T]`, and `SendError[T]`.
+Aurora provides three built-in generic enums for representing success/failure and presence/absence. These are the foundation of error handling in Aurora.
 
 ## `Result[T, E]`
 
-Use `Result[T, E]` for operations that either succeed with a value of type `T` or fail with an error of type `E`.
+Use `Result[T, E]` when an operation can succeed with a value of type `T` or fail with an error of type `E`:
 
 ```python
 def divide(a: int32, b: int32) -> Result[int32, String]:
@@ -13,72 +13,100 @@ def divide(a: int32, b: int32) -> Result[int32, String]:
     return Result.Ok(a / b)
 ```
 
-## `Option[T]`
-
-Use `Option[T]` when a value may or may not be present.
+Handle the result with `match`:
 
 ```python
-def first_value(flag: bool) -> Option[int32]:
-    if flag:
-        return Option.Some(7)
+match divide(10, 3):
+    case Ok(value):
+        print(f"result: {value}")
+    case Err(message):
+        print(f"error: {message}")
+```
+
+This is Aurora's primary error-handling pattern. Instead of exceptions (like Python's `try/except`), Aurora makes errors part of the return type so the compiler ensures you handle them.
+
+## `Option[T]`
+
+Use `Option[T]` when a value may or may not be present:
+
+```python
+def find_user(id: int32) -> Option[String]:
+    if id == 1:
+        return Option.Some("Ada")
     return Option.None
 ```
 
-## `None`
-
-Aurora also supports bare `None` as the unit value and unit type:
+Handle it with `match`:
 
 ```python
-done: None = None
+match find_user(1):
+    case Some(name):
+        print(f"found: {name}")
+    case None:
+        print("not found")
 ```
 
-This is different from `Option.None`, which is the empty variant of `Option[T]`.
+You will see `Option[T]` throughout Aurora's standard library -- `Vec.pop()`, `Vec.get()`, `Map.get()`, `String.strip_prefix()`, and `Channel.recv()` all return `Option` values.
+
+## `None` vs `Option.None`
+
+These look similar but are different:
+
+- **`None`** is the unit type and value. It means "no meaningful return value." A function with no `-> ...` returns `None`.
+- **`Option.None`** is the empty variant of `Option[T]`. It means "no value present in this optional slot."
+
+```python
+done: None = None              # the unit value
+missing: Option[int32] = Option.None   # an empty optional
+```
+
+In practice, the distinction is clear from context. When you see `Option.None` in a `match` arm, it always refers to the enum variant.
 
 ## `SendError[T]`
 
-`SendError[T]` is the built-in error type returned by channel sends:
+`SendError[T]` is the error type returned when a channel send fails because the channel is already closed. It wraps the value that could not be sent, so you can recover it:
 
 ```python
+ch: Channel[int32] = channel()
+ch.close()
+
 match ch.send(4):
-    case Result.Ok(done):
+    case Ok(done):
         print("sent")
-    case Result.Err(SendError.Closed(value)):
-        print(value)
+    case Err(SendError.Closed(value)):
+        print(f"channel closed, could not send {value}")
 ```
 
-## Matching Exhaustively
+See [examples/concurrency/send_result.au](../examples/concurrency/send_result.au) for a full example.
 
-Both built-in enums use the same `match` syntax as user-defined enums:
+## Composing Results
+
+A common pattern is chaining operations that each return `Result`. Use `match` to unwrap each step:
 
 ```python
-match result:
-    case Result.Ok(value):
-        print(value)
-    case Result.Err(message):
-        print(message)
+def process(input: String) -> Result[int32, String]:
+    match parse_int32(input):
+        case Ok(value):
+            if value < 0:
+                return Result.Err("negative value")
+            return Result.Ok(value * 2)
+        case Err(message):
+            return Result.Err(message)
 ```
 
-```python
-match maybe:
-    case Option.Some(value):
-        print(value)
-    case Option.None:
-        print(0)
-```
+For simpler cases, Aurora provides `try expr` to reduce the nesting. See [12-error-propagation.md](12-error-propagation.md).
 
 ## Current Limits
 
-The bootstrap compiler currently supports:
+The bootstrap compiler supports:
 
-- `Result[T, E]` and `Option[T]` in type positions
-- `SendError[T]` in type positions
-- constructing values with `Result.Ok(...)`, `Result.Err(...)`, `Option.Some(...)`, and `Option.None`
-- constructing values with `SendError.Closed(...)`
-- exhaustive `match` over those values
+- `Result[T, E]`, `Option[T]`, and `SendError[T]` in type positions
+- constructing values with `Result.Ok(...)`, `Result.Err(...)`, `Option.Some(...)`, `Option.None`, and `SendError.Closed(...)`
+- exhaustive `match` over all of these
+- unqualified variants (`Ok`, `Err`, `Some`, `None`) when the scrutinee type is known
 
-It does not yet support:
+Not yet supported:
 
-- user-defined generic enums
-- implicit error conversion for `try`
+- implicit error conversion for `try` (error types must match exactly)
 
 See [examples/enums/result_option.au](../examples/enums/result_option.au).

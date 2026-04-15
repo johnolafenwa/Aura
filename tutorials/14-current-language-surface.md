@@ -71,6 +71,7 @@ Aurora now supports a first local package-system milestone:
 - `Aurora.toml` package manifests with `[package]`
 - package source roots under `src/`
 - local path dependencies under `[dependencies]`
+- git dependencies under `[dependencies]`
 - workspace roots with `[workspace] members = [...]`
 - package-aware `check`, `run`, `run-mir`, `build`, `analyze`, and `complete`
 - a local `Aurora.lock` written at the package root or workspace root
@@ -85,6 +86,7 @@ edition = "2026"
 
 [dependencies]
 util = { path = "../util" }
+jsonx = { git = "https://github.com/example/jsonx.git", branch = "main" }
 ```
 
 Current workspace shape:
@@ -96,10 +98,14 @@ members = ["app", "util"]
 
 Current package-system limits:
 
-- dependency imports are local path dependencies only for now
+- dependency imports may come from local path dependencies or git dependencies
 - import roots for dependencies are package-name-prefixed, such as `import util.math`
 - version-only registry dependencies like `util = "0.1.0"` are rejected with a clear diagnostic
-- there are no registry, git, or publish/install flows yet
+- git dependencies support `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
+- git dependencies are materialized from a local cache and pinned by exact revision in `Aurora.lock`
+- `aura deps update` refreshes all branch/tag/default-main git dependencies for the current package or workspace
+- `aura deps update util` refreshes just the named git dependency
+- there are still no registry or publish/install flows yet
 
 ## Ownership And Borrowing
 
@@ -381,7 +387,7 @@ Current module/import limitations:
 - `import a.b` exposes module namespaces for calls like `a.b.func(...)`, `a.b.Type(...)`, and `a.b.Enum.Variant`
 - type annotations may use namespace-imported types such as `a.b.Type`
 - the current runtimes stop with a friendly recursion-depth diagnostic after 1024 nested Aurora calls
-- package manifests and external dependencies are still proposal-only
+- package manifests, local path dependencies, and git dependencies are now implemented
 
 Current expression/ergonomics limitations:
 
