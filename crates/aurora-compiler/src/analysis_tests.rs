@@ -1,4 +1,3 @@
-
 use super::{
     analysis_diagnostic, analyze_path_source, analyze_source, base_type_name, block_contains_line,
     builtin_enum_hover, builtin_enum_variant_completions, builtin_function_hover,

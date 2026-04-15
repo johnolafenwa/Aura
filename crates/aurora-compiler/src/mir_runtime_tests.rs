@@ -1,4 +1,3 @@
-
 use super::{
     bind_args, bind_builtin_args, build_range, collect_runtime_type_substitutions,
     collect_type_params_from_type, eval_ordering, evaluate_named_args, option_none, option_some,
@@ -2498,6 +2497,105 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     assert!(vec_missing_place
         .message
         .contains("requires a mutable vector place"));
+
+    for (field, args, expected) in [
+        (
+            "set",
+            vec![
+                mir_arg(Some("index"), Operand::Int(0)),
+                mir_arg(Some("value"), Operand::Int(1)),
+            ],
+            "`set` requires a mutable vector place",
+        ),
+        (
+            "remove",
+            vec![mir_arg(Some("index"), Operand::Int(0))],
+            "`remove` requires a mutable vector place",
+        ),
+        (
+            "swap",
+            vec![
+                mir_arg(Some("first"), Operand::Int(0)),
+                mir_arg(Some("second"), Operand::Int(1)),
+            ],
+            "`swap` requires a mutable vector place",
+        ),
+        (
+            "insert",
+            vec![
+                mir_arg(Some("index"), Operand::Int(0)),
+                mir_arg(Some("value"), Operand::Int(1)),
+            ],
+            "`insert` requires a mutable vector place",
+        ),
+        (
+            "reverse",
+            Vec::new(),
+            "`reverse` requires a mutable vector place",
+        ),
+        (
+            "extend",
+            vec![mir_arg(Some("other"), Operand::Bool(true))],
+            "`extend` requires another `Vec[T]` value",
+        ),
+    ] {
+        let error = runtime
+            .evaluate_vec_method(
+                crate::interpreter::VecValue {
+                    element_type: Type::named("int32"),
+                    elements: vec![Value::Int(IntegerValue::from_signed(1))],
+                },
+                field,
+                None,
+                &args,
+                &mut env,
+            )
+            .expect_err("vector helper edge should fail");
+        assert!(
+            error.message.contains(expected),
+            "expected `{expected}` in diagnostic, got `{}`",
+            error.message
+        );
+    }
+
+    let internal_index_oob = runtime
+        .evaluate_vec_method(
+            crate::interpreter::VecValue {
+                element_type: Type::named("int32"),
+                elements: vec![Value::Int(IntegerValue::from_signed(1))],
+            },
+            "__index",
+            Some("missing"),
+            &[
+                mir_arg(None, Operand::Int(5)),
+                mir_arg(None, Operand::Int(9)),
+                mir_arg(None, Operand::Int(2)),
+            ],
+            &mut env,
+        )
+        .expect_err("internal vector indexing should report out-of-bounds spans");
+    assert!(internal_index_oob.message.contains("out of bounds"));
+    assert_eq!(internal_index_oob.span, Some(crate::diag::Span::new(9, 2)));
+
+    let internal_set_oob = runtime
+        .evaluate_vec_method(
+            crate::interpreter::VecValue {
+                element_type: Type::named("int32"),
+                elements: vec![Value::Int(IntegerValue::from_signed(1))],
+            },
+            "__set_index",
+            Some("missing"),
+            &[
+                mir_arg(None, Operand::Int(5)),
+                mir_arg(None, Operand::Int(7)),
+                mir_arg(None, Operand::Int(4)),
+                mir_arg(None, Operand::Int(6)),
+            ],
+            &mut env,
+        )
+        .expect_err("internal indexed assignment should report out-of-bounds spans");
+    assert!(internal_set_oob.message.contains("out of bounds"));
+    assert_eq!(internal_set_oob.span, Some(crate::diag::Span::new(4, 6)));
 
     let map_missing_place = runtime
         .evaluate_map_method(

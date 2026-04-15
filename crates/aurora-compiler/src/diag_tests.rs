@@ -1,4 +1,3 @@
-
 use super::{Diagnostic, Span};
 
 #[test]

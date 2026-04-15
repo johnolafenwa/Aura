@@ -4,12 +4,12 @@ Last updated: 2026-04-15
 
 ## Active Work Session
 
-- Started: `2026-04-15 09:32 BST`
-- Elapsed: `0h 16m`
-- Target: raise compiler and language-server coverage to enforced 100%
-- Stop rule: complete the work or reach 12 continuous hours
-- Clear this section when the work completes.
-- If the session stops because of the 12-hour limit or a blocker, replace the active entry with a brief stop note here and record the details in that pass's dated note under `work/`.
+- Stopped: `2026-04-15 19:32:18 BST`
+- Total elapsed: `10h 00m`
+- Target status: incomplete
+- Latest measured compiler coverage: `92.64%` lines / `91.60%` functions / `91.83%` regions
+- Remaining work: continue dense production-file coverage in `interpreter.rs`, `native_codegen.rs`, `sema.rs`, and `mir_runtime.rs`, then clean up the last small parser/lexer gaps and keep ratcheting toward enforced 100%
+- Stop reason: reached the 10-hour continuous-work limit for this pass
 
 ## In Progress
 
@@ -18,6 +18,7 @@ Last updated: 2026-04-15
 - Continue ratcheting the compiler and language-server coverage floors upward toward enforced 100%, with the next focus on the remaining low-coverage compiler modules `interpreter`, `sema`, `native_runtime`, `mir_runtime`, and `native_codegen`, plus any remaining analyzer helper gaps and the JS fallback branches in `analysis.js`.
 - Keep the extracted `crates/aurora-compiler/src/*_tests.rs` layout green and continue pushing production-code coverage upward from the extracted-layout compiler baseline of roughly `89.96%` lines / `89.85%` functions / `90.14%` regions.
 - Resume the April 15 coverage push from the post-extraction baseline and keep driving the dense remaining production modules (`native_codegen`, `interpreter`, `sema`, `mir_runtime`, `native_runtime`) upward toward enforced 100%.
+- Resume from the latest April 15 compiler checkpoint of `92.64%` lines / `91.60%` functions / `91.83%` regions, with the main remaining drag still concentrated in `interpreter.rs`, `native_codegen.rs`, `sema.rs`, and `mir_runtime.rs`.
 
 ## Todo
 
@@ -28,6 +29,7 @@ Last updated: 2026-04-15
 
 ## Done
 
+- Added another direct checker/interpreter sweep covering empty-`select` validation, direct index/member assignment helper branches, runtime `main` parameter rejection, extra inferred builtin member types, invalid runtime `select` arms, additional loop-control branches, float-to-int cast overflow edges, map render/equality edges, and current-module namespace fallback resolution; verified the new focused tests and restarted a fresh full `cargo llvm-cov` summary from the updated source tree.
 - Extended compiler-backed `analyze` / `complete` and the LSP from local-module behavior to fully correct cross-file definitions for imported items, including fields, methods, variants, and trait methods that resolve back to their defining source files.
 - Narrowed the JS fallback so hover and go-to-definition now stay compiler-owned whenever compiler analysis succeeds, using JS only when the compiler cannot analyze the buffer.
 - Extended the maintained trait surface with specialized generic trait bounds and operator traits across the checker, interpreter, MIR/runtime, direct builds, examples, tutorials, CLI coverage, and compiler/LSP regression suites.

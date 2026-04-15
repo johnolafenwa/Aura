@@ -1,4 +1,3 @@
-
 use super::{
     cast_numeric_value, collect_type_params_from_type, option_none, option_some, render_float,
     result_err, result_ok, send_error_closed, CancellationContext, ChannelValue, EnumVariantValue,
@@ -304,6 +303,48 @@ fn runtime_identity_and_render_helpers_cover_channels_tasks_and_groups() {
             )],
         })
     );
+    assert_ne!(
+        Value::Map(MapValue {
+            key_type: Type::named("String"),
+            value_type: Type::named("int32"),
+            entries: vec![(
+                Value::String("a".to_string()),
+                Value::Int(IntegerValue::from_signed(1)),
+            )],
+        }),
+        Value::Map(MapValue {
+            key_type: Type::named("String"),
+            value_type: Type::named("int32"),
+            entries: vec![
+                (
+                    Value::String("a".to_string()),
+                    Value::Int(IntegerValue::from_signed(1)),
+                ),
+                (
+                    Value::String("b".to_string()),
+                    Value::Int(IntegerValue::from_signed(2)),
+                ),
+            ],
+        })
+    );
+    assert_eq!(
+        Value::Map(MapValue {
+            key_type: Type::named("String"),
+            value_type: Type::named("int32"),
+            entries: vec![
+                (
+                    Value::String("a".to_string()),
+                    Value::Int(IntegerValue::from_signed(1)),
+                ),
+                (
+                    Value::String("b".to_string()),
+                    Value::Int(IntegerValue::from_signed(2)),
+                ),
+            ],
+        })
+        .render(),
+        "{a: 1, b: 2}"
+    );
 }
 
 #[test]
@@ -345,6 +386,20 @@ fn cast_numeric_value_covers_success_and_error_paths() {
     let non_finite = cast_numeric_value(Value::Float(f64::INFINITY), &Type::named("int32"), None)
         .expect_err("non-finite float cast should fail");
     assert!(non_finite.message.contains("cannot cast non-finite float"));
+    let signed_overflow = cast_numeric_value(
+        Value::Float(300.0),
+        &Type::named("int8"),
+        Some(Span::new(3, 4)),
+    )
+    .expect_err("float values outside a signed target range should fail");
+    assert!(signed_overflow.message.contains("does not fit in `int8`"));
+    let unsigned_overflow = cast_numeric_value(
+        Value::Float(-1.0),
+        &Type::named("uint8"),
+        Some(Span::new(4, 5)),
+    )
+    .expect_err("negative floats should not cast to unsigned integers");
+    assert!(unsigned_overflow.message.contains("does not fit in `uint8`"));
 }
 
 #[test]
@@ -1176,6 +1231,56 @@ fn interpreter_module_seed_helpers_cover_imported_registry_paths() {
             .map(|info| info.module_name.as_str()),
         Some("helpers.math")
     );
+
+    let helpers_namespace = interpreter
+        .program
+        .module_registry
+        .get("helpers")
+        .expect("helpers namespace should exist")
+        .clone();
+    let nested_math = interpreter
+        .program
+        .module_registry
+        .get("helpers.math")
+        .expect("helpers.math namespace should exist")
+        .clone();
+    let program = Arc::get_mut(&mut interpreter.program)
+        .expect("interpreter program should still be uniquely owned in tests");
+    program.module_registry.remove("helpers.math");
+    program.module_registry.insert(
+        "consumer".to_string(),
+        ModuleNamespace {
+            name: "consumer".to_string(),
+            path: "consumer".to_string(),
+            source_path: None,
+            modules: BTreeMap::new(),
+            functions: BTreeMap::new(),
+            classes: BTreeMap::new(),
+            enums: BTreeMap::new(),
+            traits: BTreeMap::new(),
+            trait_impls: Vec::new(),
+            all_functions: BTreeMap::new(),
+            all_classes: BTreeMap::new(),
+            all_enums: BTreeMap::new(),
+            all_traits: BTreeMap::new(),
+            imported_modules: BTreeMap::from([
+                ("helpers".to_string(), helpers_namespace),
+                ("math".to_string(), nested_math),
+            ]),
+        },
+    );
+
+    interpreter.module_stack.push("consumer".to_string());
+    assert_eq!(
+        interpreter
+            .current_module_namespace()
+            .map(|namespace| namespace.path.as_str()),
+        Some("consumer")
+    );
+    assert_eq!(
+        interpreter.infer_module_path(&expr(ExprKind::Name("math".to_string()))),
+        Some("helpers.math".to_string())
+    );
 }
 
 #[test]
@@ -1530,6 +1635,218 @@ fn interpreter_operator_trait_helpers_cover_trait_dispatch_and_fallbacks() {
         .expect("Point neg trait method should resolve");
     assert_eq!(method.decl.name, "neg");
     assert!(interpreter.trait_impls_in_scope().count() >= 2);
+
+    let ambiguous = test_interpreter(
+        "trait Show:\n    def ping(self) -> int32\n\ntrait Debug:\n    def ping(self) -> int32\n\nclass Marker:\n    value: int32\n\nimpl Show for Marker:\n    def ping(self) -> int32:\n        return 1\n\nimpl Debug for Marker:\n    def ping(self) -> int32:\n        return 2\n\ndef main():\n    pass\n",
+    );
+    assert!(
+        ambiguous
+            .find_trait_impl_method_for_class_name("Marker", "ping")
+            .is_none(),
+        "duplicate trait methods on the same class should be treated as ambiguous",
+    );
+
+    let mut runtime_failure = test_interpreter(
+        "trait Add[Rhs, Out]:\n    def add(borrow self, rhs: Rhs) -> Out\n\nclass Bad:\n    value: int32\n\nimpl Add[Bad, Bad] for Bad:\n    def add(borrow self, rhs: Bad) -> Bad:\n        value = 1 / 0\n        return Bad(value=rhs.value)\n\ndef main():\n    pass\n",
+    );
+    let runtime_failure_error = runtime_failure
+        .eval_binary_operator_via_trait(
+            span,
+            BinaryOp::Add,
+            Value::Instance(InstanceValue {
+                class_name: "Bad".to_string(),
+                fields: BTreeMap::from([(
+                    "value".to_string(),
+                    Value::Int(IntegerValue::from_signed(1)),
+                )]),
+            }),
+            Value::Instance(InstanceValue {
+                class_name: "Bad".to_string(),
+                fields: BTreeMap::from([(
+                    "value".to_string(),
+                    Value::Int(IntegerValue::from_signed(2)),
+                )]),
+            }),
+        )
+        .expect_err("operator trait runtime failures should be surfaced cleanly");
+    assert!(runtime_failure_error.message.contains("division by zero"));
+}
+
+#[test]
+fn interpreter_binary_and_ordering_helpers_cover_remaining_numeric_and_error_branches() {
+    let interpreter = test_interpreter("def main():\n    pass\n");
+    let span = Span::new(1, 1);
+
+    assert_eq!(
+        interpreter
+            .eval_binary(span, BinaryOp::And, Value::Bool(true), Value::Bool(false),)
+            .expect("bool and should evaluate"),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        interpreter
+            .eval_binary(span, BinaryOp::Or, Value::Bool(false), Value::Bool(true),)
+            .expect("bool or should evaluate"),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        interpreter
+            .eval_binary(
+                span,
+                BinaryOp::Eq,
+                Value::String("aurora".to_string()),
+                Value::String("aurora".to_string()),
+            )
+            .expect("string equality should evaluate"),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        interpreter
+            .eval_binary(
+                span,
+                BinaryOp::NotEq,
+                Value::Int(IntegerValue::from_signed(1)),
+                Value::Int(IntegerValue::from_signed(2)),
+            )
+            .expect("integer inequality should evaluate"),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        interpreter
+            .eval_binary(
+                span,
+                BinaryOp::Add,
+                Value::String("au".to_string()),
+                Value::String("rora".to_string()),
+            )
+            .expect("string concatenation should evaluate"),
+        Value::String("aurora".to_string())
+    );
+    assert_eq!(
+        interpreter
+            .eval_binary(span, BinaryOp::Sub, Value::Float(4.5), Value::Float(1.25),)
+            .expect("float subtraction should evaluate"),
+        Value::Float(3.25)
+    );
+    assert_eq!(
+        interpreter
+            .eval_binary(
+                span,
+                BinaryOp::Mul,
+                Value::Int(IntegerValue::from_signed(3)),
+                Value::Int(IntegerValue::from_signed(4)),
+            )
+            .expect("integer multiplication should evaluate"),
+        Value::Int(IntegerValue::from_signed(12))
+    );
+    assert_eq!(
+        interpreter
+            .eval_binary(span, BinaryOp::Div, Value::Float(9.0), Value::Float(3.0),)
+            .expect("float division should evaluate"),
+        Value::Float(3.0)
+    );
+    assert_eq!(
+        interpreter
+            .eval_binary(span, BinaryOp::Mod, Value::Float(7.5), Value::Float(2.0),)
+            .expect("float remainder should evaluate"),
+        Value::Float(1.5)
+    );
+    assert_eq!(
+        interpreter
+            .eval_ordering(
+                span,
+                BinaryOp::LessEq,
+                Value::Int(IntegerValue::from_signed(2)),
+                Value::Int(IntegerValue::from_signed(2)),
+            )
+            .expect("integer ordering should evaluate"),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        interpreter
+            .eval_ordering(
+                span,
+                BinaryOp::Greater,
+                Value::Float(3.5),
+                Value::Float(1.0)
+            )
+            .expect("float ordering should evaluate"),
+        Value::Bool(true)
+    );
+
+    for (op, left, right, message) in [
+        (
+            BinaryOp::And,
+            Value::Int(IntegerValue::from_signed(1)),
+            Value::Bool(true),
+            "logical operands must both have type `bool`",
+        ),
+        (
+            BinaryOp::Add,
+            Value::Int(IntegerValue::from_signed(1)),
+            Value::Float(1.0),
+            "binary operands must have matching supported types",
+        ),
+        (
+            BinaryOp::Sub,
+            Value::Bool(true),
+            Value::Bool(false),
+            "binary operands must have matching numeric types",
+        ),
+        (
+            BinaryOp::Mul,
+            Value::String("a".to_string()),
+            Value::String("b".to_string()),
+            "binary operands must have matching numeric types",
+        ),
+        (
+            BinaryOp::Div,
+            Value::Int(IntegerValue::from_signed(4)),
+            Value::Int(IntegerValue::from_signed(0)),
+            "division by zero",
+        ),
+        (
+            BinaryOp::Mod,
+            Value::Int(IntegerValue::from_signed(4)),
+            Value::Int(IntegerValue::from_signed(0)),
+            "division by zero",
+        ),
+    ] {
+        let error = interpreter
+            .eval_binary(span, op, left, right)
+            .expect_err("binary helper should reject invalid operands");
+        assert!(error.message.contains(message), "got `{}`", error.message);
+    }
+
+    for (op, left, right) in [
+        (
+            BinaryOp::Add,
+            Value::Int(IntegerValue::from_literal(u128::MAX)),
+            Value::Int(IntegerValue::from_signed(1)),
+        ),
+        (
+            BinaryOp::Sub,
+            Value::Int(IntegerValue::from_signed(i128::MIN)),
+            Value::Int(IntegerValue::from_signed(1)),
+        ),
+        (
+            BinaryOp::Mul,
+            Value::Int(IntegerValue::from_literal(u128::MAX)),
+            Value::Int(IntegerValue::from_signed(2)),
+        ),
+    ] {
+        let error = interpreter
+            .eval_binary(span, op, left, right)
+            .expect_err("integer overflow branches should report cleanly");
+        assert!(error.message.contains("integer overflow"));
+    }
+
+    let ordering_error = interpreter
+        .eval_ordering(span, BinaryOp::Less, Value::Bool(true), Value::Bool(false))
+        .expect_err("ordering should reject non-numeric operands");
+    assert!(ordering_error
+        .message
+        .contains("ordering comparisons require matching numeric operands"));
 }
 
 #[test]
@@ -3203,6 +3520,48 @@ fn interpreter_collection_string_and_task_helpers_cover_remaining_runtime_paths(
         "string split should reject non-strings",
     );
     assert!(split_error.message.contains("requires a `String`"));
+    let starts_with_error = expect_eval_error(
+        interpreter.eval_string_method(
+            "aurora".to_string(),
+            "starts_with",
+            &[positional_arg(expr(ExprKind::Bool(true)))],
+            &mut env,
+            span,
+        ),
+        "string starts_with should reject non-strings",
+    );
+    assert!(starts_with_error
+        .message
+        .contains("`starts_with` requires a `String`"));
+    let ends_with_error = expect_eval_error(
+        interpreter.eval_string_method(
+            "aurora".to_string(),
+            "ends_with",
+            &[positional_arg(expr(ExprKind::Bool(true)))],
+            &mut env,
+            span,
+        ),
+        "string ends_with should reject non-strings",
+    );
+    assert!(ends_with_error
+        .message
+        .contains("`ends_with` requires a `String`"));
+    let replace_from_error = expect_eval_error(
+        interpreter.eval_string_method(
+            "aurora".to_string(),
+            "replace",
+            &[
+                positional_arg(expr(ExprKind::Bool(true))),
+                positional_arg(expr(ExprKind::String("x".to_string()))),
+            ],
+            &mut env,
+            span,
+        ),
+        "string replace should reject non-string search values",
+    );
+    assert!(replace_from_error
+        .message
+        .contains("`replace` requires `String` for `from`"));
     let replace_error = expect_eval_error(
         interpreter.eval_string_method(
             "aurora".to_string(),
@@ -3244,6 +3603,32 @@ fn interpreter_collection_string_and_task_helpers_cover_remaining_runtime_paths(
     assert!(join_element_error
         .message
         .contains("requires `Vec[String]`"));
+    let strip_prefix_error = expect_eval_error(
+        interpreter.eval_string_method(
+            "aurora".to_string(),
+            "strip_prefix",
+            &[positional_arg(expr(ExprKind::Bool(true)))],
+            &mut env,
+            span,
+        ),
+        "string strip_prefix should reject non-strings",
+    );
+    assert!(strip_prefix_error
+        .message
+        .contains("`strip_prefix` requires a `String`"));
+    let strip_suffix_error = expect_eval_error(
+        interpreter.eval_string_method(
+            "aurora".to_string(),
+            "strip_suffix",
+            &[positional_arg(expr(ExprKind::Bool(true)))],
+            &mut env,
+            span,
+        ),
+        "string strip_suffix should reject non-strings",
+    );
+    assert!(strip_suffix_error
+        .message
+        .contains("`strip_suffix` requires a `String`"));
 
     let shared_task = TaskValue::from_handle(thread::spawn(|| Ok(Value::Bool(true))));
     let task_clone = interpreter
@@ -3318,6 +3703,202 @@ fn interpreter_collection_string_and_task_helpers_cover_remaining_runtime_paths(
     assert!(unknown_target
         .message
         .contains("unknown function `missing`"));
+
+    let channel = ChannelValue::new();
+    let channel_clone = interpreter
+        .eval_channel_method(channel.clone(), "clone", &[], &mut env, span)
+        .expect("channel clone should succeed");
+    match expect_value_outcome(channel_clone) {
+        Value::Channel(cloned) => assert_eq!(cloned, channel),
+        other => panic!("expected channel, found {other:?}"),
+    }
+
+    let send_result = interpreter
+        .eval_channel_method(
+            channel.clone(),
+            "send",
+            &[positional_arg(expr(ExprKind::String("job".to_string())))],
+            &mut env,
+            span,
+        )
+        .expect("channel send should succeed");
+    assert_eq!(expect_value_outcome(send_result), result_ok(Value::Unit));
+
+    let recv_result = interpreter
+        .eval_channel_method(channel.clone(), "recv", &[], &mut env, span)
+        .expect("channel recv should succeed");
+    assert_eq!(
+        expect_value_outcome(recv_result),
+        option_some(Value::String("job".to_string()))
+    );
+
+    let close_result = interpreter
+        .eval_channel_method(channel.clone(), "close", &[], &mut env, span)
+        .expect("channel close should succeed");
+    assert_eq!(expect_value_outcome(close_result), Value::Unit);
+
+    let closed_send = interpreter
+        .eval_channel_method(
+            channel.clone(),
+            "send",
+            &[positional_arg(expr(ExprKind::Bool(true)))],
+            &mut env,
+            span,
+        )
+        .expect("closed channel sends should return SendError.Closed");
+    assert_eq!(
+        expect_value_outcome(closed_send),
+        result_err(send_error_closed(Value::Bool(true)))
+    );
+
+    let closed_recv = interpreter
+        .eval_channel_method(channel.clone(), "recv", &[], &mut env, span)
+        .expect("closed channel recv should return Option.None");
+    assert_eq!(expect_value_outcome(closed_recv), option_none());
+
+    let channel_error = expect_eval_error(
+        interpreter.eval_channel_method(channel, "mystery", &[], &mut env, span),
+        "unsupported channel method should fail",
+    );
+    assert!(channel_error
+        .message
+        .contains("unsupported channel method `mystery`"));
+
+    let supported_group = TaskGroupValue::new(&CancellationContext::default());
+    let spawned_task = interpreter
+        .eval_task_group_method(
+            supported_group.clone(),
+            "spawn",
+            &[positional_arg(expr(ExprKind::Name("helper".to_string())))],
+            &mut env,
+            span,
+        )
+        .expect("task-group spawn should succeed for named functions");
+    let Value::Task(spawned_task) = expect_value_outcome(spawned_task) else {
+        panic!("expected spawned task result");
+    };
+    assert_eq!(
+        interpreter
+            .join_task(spawned_task, span)
+            .expect("spawned task should join"),
+        Value::Int(IntegerValue::from_signed(7))
+    );
+
+    let group_error = expect_eval_error(
+        interpreter.eval_task_group_method(supported_group, "close", &[], &mut env, span),
+        "unsupported task-group method should fail",
+    );
+    assert!(group_error
+        .message
+        .contains("unsupported task group method `close`"));
+}
+
+#[test]
+fn interpreter_entrypoint_and_inference_helpers_cover_remaining_member_and_unknown_paths() {
+    let mut interpreter = test_interpreter("def main():\n    pass\n");
+    {
+        let program =
+            Arc::get_mut(&mut interpreter.program).expect("interpreter program should be unique");
+        let main = program
+            .functions
+            .get_mut("main")
+            .expect("main function should exist");
+        main.signature.params.push(Type::named("int32"));
+    }
+    let main_error = interpreter
+        .run_main()
+        .expect_err("parameterized main should fail at runtime entry validation");
+    assert!(main_error
+        .message
+        .contains("`main` must not take parameters in the bootstrap runtime"));
+
+    let interpreter =
+        test_interpreter("def helper() -> int32:\n    return 7\n\ndef main():\n    pass\n");
+    let mut env = Env::with_root();
+    let channel = ChannelValue::new();
+    env.define_typed(
+        "jobs".to_string(),
+        Type::Named("Channel".to_string(), vec![Type::named("int32")]),
+        Value::Channel(channel),
+    );
+    env.define_typed(
+        "task".to_string(),
+        Type::Named("Task".to_string(), vec![Type::named("int32")]),
+        Value::Task(TaskValue::from_handle(thread::spawn(|| {
+            Ok(Value::Int(IntegerValue::from_signed(1)))
+        }))),
+    );
+    env.define_typed(
+        "group".to_string(),
+        Type::named("TaskGroup"),
+        Value::TaskGroup(TaskGroupValue::new(&CancellationContext::default())),
+    );
+
+    assert_eq!(
+        Interpreter::infer_value_type(&Value::EnumVariant(EnumVariantValue {
+            enum_name: "Result".to_string(),
+            variant_name: "Pending".to_string(),
+            payload: None,
+        })),
+        None
+    );
+    assert_eq!(
+        interpreter.infer_runtime_value_type(&Value::EnumVariant(EnumVariantValue {
+            enum_name: "Result".to_string(),
+            variant_name: "Pending".to_string(),
+            payload: None,
+        })),
+        None
+    );
+
+    for (expr, expected) in [
+        (expr(ExprKind::Name("missing".to_string())), None),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("jobs".to_string()))),
+                field: "close".to_string(),
+            }),
+            Some(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("jobs".to_string()))),
+                field: "mystery".to_string(),
+            }),
+            None,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("task".to_string()))),
+                field: "join".to_string(),
+            }),
+            Some(Type::named("int32")),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("task".to_string()))),
+                field: "cancel".to_string(),
+            }),
+            None,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("group".to_string()))),
+                field: "close".to_string(),
+            }),
+            Some(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("group".to_string()))),
+                field: "mystery".to_string(),
+            }),
+            None,
+        ),
+    ] {
+        interpreter.expr_type_cache.borrow_mut().clear();
+        assert_eq!(interpreter.infer_expr_type(&expr, &env), expected);
+    }
 }
 
 #[test]
@@ -3348,11 +3929,42 @@ fn interpreter_index_and_assign_helpers_cover_error_paths() {
             )],
         }),
     );
+    env.define(
+        "negative".to_string(),
+        Value::Int(IntegerValue::from_signed(-1)),
+    );
+    env.define_typed("flag".to_string(), Type::named("bool"), Value::Bool(true));
+    env.define(
+        "too_large".to_string(),
+        Value::Int(IntegerValue::from_signed(i128::MAX)),
+    );
+    env.define(
+        "failed".to_string(),
+        result_err(Value::String("bad".to_string())),
+    );
 
     let negative = interpreter
         .evaluate_index_expr(&expr(ExprKind::Int(u128::MAX)), &mut env, span)
         .expect_err("out-of-range integer literal should fail as an index");
     assert!(negative.message.contains("supported signed range"));
+
+    let negative_value = interpreter
+        .evaluate_index_expr(
+            &expr(ExprKind::Name("negative".to_string())),
+            &mut env,
+            span,
+        )
+        .expect_err("negative indices should fail");
+    assert!(negative_value.message.contains("cannot be negative"));
+
+    let oversized = interpreter
+        .evaluate_index_expr(
+            &expr(ExprKind::Name("too_large".to_string())),
+            &mut env,
+            span,
+        )
+        .expect_err("address-space-sized indices should fail when they exceed usize");
+    assert!(oversized.message.contains("runtime address space"));
 
     let non_integer = interpreter
         .evaluate_index_expr(&expr(ExprKind::Bool(true)), &mut env, span)
@@ -3360,6 +3972,32 @@ fn interpreter_index_and_assign_helpers_cover_error_paths() {
     assert!(non_integer
         .message
         .contains("vector indices must be integers"));
+
+    let early_return_index = interpreter
+        .evaluate_index_expr(
+            &expr(ExprKind::Try(Box::new(expr(ExprKind::Name(
+                "failed".to_string(),
+            ))))),
+            &mut env,
+            span,
+        )
+        .expect_err("index evaluation should reject early returns");
+    assert!(early_return_index
+        .message
+        .contains("cannot early-return while evaluating an index"));
+
+    let early_return_key = interpreter
+        .evaluate_map_key_expr(
+            &expr(ExprKind::Try(Box::new(expr(ExprKind::Name(
+                "failed".to_string(),
+            ))))),
+            &mut env,
+            span,
+        )
+        .expect_err("map key evaluation should reject early returns");
+    assert!(early_return_key
+        .message
+        .contains("cannot early-return while evaluating a map key"));
 
     let missing_vec = interpreter
         .read_vector_element(
@@ -3391,6 +4029,13 @@ fn interpreter_index_and_assign_helpers_cover_error_paths() {
         .message
         .contains("map key `missing` was not present"));
 
+    let unknown_name = interpreter
+        .read_assign_target(&AssignTarget::Name("missing".to_string()), &mut env, span)
+        .expect_err("unknown compound-assignment bindings should fail");
+    assert!(unknown_name
+        .message
+        .contains("unknown name `missing` in compound assignment"));
+
     let wrong_target = interpreter
         .read_assign_target(
             &AssignTarget::Index {
@@ -3404,6 +4049,276 @@ fn interpreter_index_and_assign_helpers_cover_error_paths() {
     assert!(wrong_target
         .message
         .contains("expression is not a mutable place"));
+
+    let member_non_instance = interpreter
+        .read_assign_target(
+            &AssignTarget::Member {
+                object: Box::new(expr(ExprKind::Name("flag".to_string()))),
+                field: "value".to_string(),
+            },
+            &mut env,
+            span,
+        )
+        .expect_err("member compound assignment should reject non-instances");
+    assert!(member_non_instance
+        .message
+        .contains("cannot assign member `value` on non-instance value"));
+
+    env.define_typed(
+        "counter".to_string(),
+        Type::named("Counter"),
+        Value::Instance(InstanceValue {
+            class_name: "Counter".to_string(),
+            fields: BTreeMap::from([(
+                "value".to_string(),
+                Value::Int(IntegerValue::from_signed(5)),
+            )]),
+        }),
+    );
+    let missing_member = interpreter
+        .read_assign_target(
+            &AssignTarget::Member {
+                object: Box::new(expr(ExprKind::Name("counter".to_string()))),
+                field: "missing".to_string(),
+            },
+            &mut env,
+            span,
+        )
+        .expect_err("member compound assignment should reject missing fields");
+    assert!(missing_member
+        .message
+        .contains("class `Counter` has no field `missing`"));
+
+    let write_member_non_instance = interpreter
+        .write_assign_target(
+            &AssignTarget::Member {
+                object: Box::new(expr(ExprKind::Name("flag".to_string()))),
+                field: "value".to_string(),
+            },
+            &mut env,
+            Value::Int(IntegerValue::from_signed(1)),
+            span,
+        )
+        .expect_err("member assignment should reject non-instances");
+    assert!(write_member_non_instance
+        .message
+        .contains("cannot assign member `value` on non-instance value"));
+
+    let write_missing_member = interpreter
+        .write_assign_target(
+            &AssignTarget::Member {
+                object: Box::new(expr(ExprKind::Name("counter".to_string()))),
+                field: "missing".to_string(),
+            },
+            &mut env,
+            Value::Int(IntegerValue::from_signed(1)),
+            span,
+        )
+        .expect_err("member assignment should reject unknown fields");
+    assert!(write_missing_member
+        .message
+        .contains("class `Counter` has no field `missing`"));
+
+    interpreter
+        .write_assign_target(
+            &AssignTarget::Index {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                index: Box::new(expr(ExprKind::String("extra".to_string()))),
+            },
+            &mut env,
+            Value::Int(IntegerValue::from_signed(8)),
+            span,
+        )
+        .expect("map indexed assignment should insert missing keys");
+    match env.get("mapping") {
+        Some(Value::Map(map)) => assert!(map.entries.iter().any(|(key, value)| {
+            *key == Value::String("extra".to_string())
+                && *value == Value::Int(IntegerValue::from_signed(8))
+        })),
+        other => panic!("expected updated map, found {other:?}"),
+    }
+}
+
+#[test]
+fn interpreter_exec_stmt_direct_helpers_cover_remaining_assignment_select_and_loop_edges() {
+    let mut interpreter = test_interpreter(
+        "class Resource:\n    closed: bool = false\n\n    def close(borrow mut self):\n        self.closed = true\n\ndef main():\n    pass\n",
+    );
+    let span = Span::new(1, 1);
+    let mut env = Env::with_root();
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    env.define("task_group".to_string(), Value::TaskGroup(group));
+    env.define(
+        "task".to_string(),
+        Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)))),
+    );
+    env.define(
+        "shared_values".to_string(),
+        Value::Vec(VecValue {
+            element_type: Type::named("int32"),
+            elements: vec![Value::Int(IntegerValue::from_signed(5))],
+        }),
+    );
+    env.define(
+        "owned_values".to_string(),
+        Value::Vec(VecValue {
+            element_type: Type::named("int32"),
+            elements: vec![Value::Int(IntegerValue::from_signed(7))],
+        }),
+    );
+    env.define(
+        "mutable_values".to_string(),
+        Value::Vec(VecValue {
+            element_type: Type::named("int32"),
+            elements: vec![Value::Int(IntegerValue::from_signed(9))],
+        }),
+    );
+    env.define(
+        "items".to_string(),
+        Value::Set(SetValue {
+            element_type: Type::named("int32"),
+            elements: vec![Value::Int(IntegerValue::from_signed(4))],
+        }),
+    );
+    let jobs = ChannelValue::new();
+    let _ = jobs.send(Value::Int(IntegerValue::from_signed(3)));
+    jobs.close();
+    env.define("jobs".to_string(), Value::Channel(jobs));
+
+    assert!(matches!(
+        interpreter
+            .exec_stmt(
+                &Stmt::Assign(AssignStmt {
+                    mutable: false,
+                    target: AssignTarget::Name("mirror".to_string()),
+                    annotation: None,
+                    op: None,
+                    value: expr(ExprKind::Name("task".to_string())),
+                    span,
+                }),
+                &mut env,
+            )
+            .expect("untyped task assignment should execute"),
+        ExecFlow::Continue
+    ));
+    match env.get("mirror") {
+        Some(Value::Task(_)) => {}
+        other => panic!("expected mirrored task binding, found {other:?}"),
+    }
+
+    let invalid_select = match interpreter.exec_stmt(
+        &Stmt::Select(crate::ast::SelectStmt {
+            arms: vec![SelectArm {
+                binding: None,
+                expr: expr(ExprKind::Bool(true)),
+                body: vec![Stmt::Pass(PassStmt { span })],
+                span,
+            }],
+            span,
+        }),
+        &mut env,
+    ) {
+        Ok(_) => panic!("invalid select expressions should fail"),
+        Err(error) => error,
+    };
+    assert!(invalid_select
+        .message
+        .contains("`select` currently supports `recv()`, `send(...)`, and `after(...)` arms"));
+
+    assert!(matches!(
+        interpreter
+            .exec_stmt(
+                &Stmt::With(WithStmt {
+                    binding: "group_binding".to_string(),
+                    value: expr(ExprKind::Name("task_group".to_string())),
+                    body: vec![Stmt::Pass(PassStmt { span })],
+                    span,
+                }),
+                &mut env,
+            )
+            .expect("with task-group should execute"),
+        ExecFlow::Continue
+    ));
+
+    assert!(matches!(
+        interpreter
+            .exec_stmt(
+                &Stmt::For(ForStmt {
+                    binding: "job".to_string(),
+                    iterable: expr(ExprKind::Name("jobs".to_string())),
+                    borrow_mode: None,
+                    body: vec![Stmt::Break(BreakStmt { span })],
+                    span,
+                }),
+                &mut env,
+            )
+            .expect("channel break loop should execute"),
+        ExecFlow::Continue
+    ));
+
+    assert!(matches!(
+        interpreter
+            .exec_stmt(
+                &Stmt::For(ForStmt {
+                    binding: "item".to_string(),
+                    iterable: expr(ExprKind::Name("shared_values".to_string())),
+                    borrow_mode: Some(ReceiverKind::Borrow),
+                    body: vec![Stmt::Continue(ContinueStmt { span })],
+                    span,
+                }),
+                &mut env,
+            )
+            .expect("shared vec continue loop should execute"),
+        ExecFlow::Continue
+    ));
+
+    assert!(matches!(
+        interpreter
+            .exec_stmt(
+                &Stmt::For(ForStmt {
+                    binding: "item".to_string(),
+                    iterable: expr(ExprKind::Name("owned_values".to_string())),
+                    borrow_mode: None,
+                    body: vec![Stmt::Continue(ContinueStmt { span })],
+                    span,
+                }),
+                &mut env,
+            )
+            .expect("owned vec continue loop should execute"),
+        ExecFlow::Continue
+    ));
+
+    assert!(matches!(
+        interpreter
+            .exec_stmt(
+                &Stmt::For(ForStmt {
+                    binding: "item".to_string(),
+                    iterable: expr(ExprKind::Name("items".to_string())),
+                    borrow_mode: Some(ReceiverKind::Borrow),
+                    body: vec![Stmt::Continue(ContinueStmt { span })],
+                    span,
+                }),
+                &mut env,
+            )
+            .expect("set continue loop should execute"),
+        ExecFlow::Continue
+    ));
+
+    assert!(matches!(
+        interpreter
+            .exec_stmt(
+                &Stmt::For(ForStmt {
+                    binding: "item".to_string(),
+                    iterable: expr(ExprKind::Name("mutable_values".to_string())),
+                    borrow_mode: Some(ReceiverKind::BorrowMut),
+                    body: vec![Stmt::Break(BreakStmt { span })],
+                    span,
+                }),
+                &mut env,
+            )
+            .expect("borrow-mut vec break loop should execute"),
+        ExecFlow::Continue
+    ));
 }
 
 #[test]
@@ -3476,6 +4391,25 @@ fn interpreter_cleanup_and_writeback_helpers_cover_resource_and_borrow_paths() {
     assert!(child.is_cancelled());
     assert!(group.drain_tasks().is_empty());
 
+    let missing_binding = interpreter
+        .run_with_cleanup("missing", &mut env, span, false)
+        .expect_err("missing with bindings should fail");
+    assert!(missing_binding
+        .message
+        .contains("with binding `missing` was not available for cleanup"));
+
+    let failing_cancellation = CancellationContext::default();
+    let failing_group = TaskGroupValue::new(&failing_cancellation);
+    let failing_child = failing_group.child_cancellation();
+    failing_group.register_task(TaskValue::from_handle(thread::spawn(|| {
+        Err("cleanup failed".to_string())
+    })));
+    let cleanup_error = interpreter
+        .close_task_group(failing_group, true, span)
+        .expect_err("task-group cleanup should surface the first join error");
+    assert!(cleanup_error.message.contains("cleanup failed"));
+    assert!(failing_child.is_cancelled());
+
     env.define_typed(
         "target".to_string(),
         Type::named("int32"),
@@ -3545,6 +4479,280 @@ fn interpreter_cleanup_and_writeback_helpers_cover_resource_and_borrow_paths() {
     assert!(missing_explicit_argument
         .message
         .contains("mutable borrowed parameter `target` requires an explicit argument"));
+}
+
+#[test]
+fn interpreter_script_and_assign_target_helpers_cover_remaining_place_paths() {
+    let mut script_interpreter = test_interpreter("value = 1\n");
+    assert_eq!(
+        script_interpreter
+            .run_top_level_script()
+            .expect("top-level scripts should run"),
+        Value::Int(IntegerValue::zero())
+    );
+
+    let mut interpreter =
+        test_interpreter("class Counter:\n    value: int32\n\ndef main():\n    pass\n");
+    let span = Span::new(3, 4);
+    let mut env = Env::with_root();
+    env.define_typed(
+        "count".to_string(),
+        Type::named("int32"),
+        Value::Int(IntegerValue::from_signed(1)),
+    );
+    env.define_typed(
+        "boxed".to_string(),
+        Type::named("Counter"),
+        Value::Instance(InstanceValue {
+            class_name: "Counter".to_string(),
+            fields: BTreeMap::from([(
+                "value".to_string(),
+                Value::Int(IntegerValue::from_signed(7)),
+            )]),
+        }),
+    );
+    env.define_typed(
+        "values".to_string(),
+        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Value::Vec(VecValue {
+            element_type: Type::named("int32"),
+            elements: vec![Value::Int(IntegerValue::from_signed(5))],
+        }),
+    );
+    env.define_typed(
+        "mapping".to_string(),
+        Type::Named(
+            "Map".to_string(),
+            vec![Type::named("String"), Type::named("int32")],
+        ),
+        Value::Map(MapValue {
+            key_type: Type::named("String"),
+            value_type: Type::named("int32"),
+            entries: vec![(
+                Value::String("count".to_string()),
+                Value::Int(IntegerValue::from_signed(1)),
+            )],
+        }),
+    );
+
+    assert_eq!(
+        interpreter
+            .read_place_expr(
+                &expr(ExprKind::Group(Box::new(expr(ExprKind::Name(
+                    "count".to_string(),
+                ))))),
+                &mut env
+            )
+            .expect("grouped names should be readable places"),
+        Value::Int(IntegerValue::from_signed(1))
+    );
+    let missing_name = interpreter
+        .read_place_expr(&expr(ExprKind::Name("missing".to_string())), &mut env)
+        .expect_err("missing place names should fail");
+    assert!(missing_name.message.contains("unknown name `missing`"));
+
+    let member_non_instance = interpreter
+        .read_place_expr(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("count".to_string()))),
+                field: "value".to_string(),
+            }),
+            &mut env,
+        )
+        .expect_err("member reads should reject non-instance values");
+    assert!(member_non_instance
+        .message
+        .contains("cannot access field `value` on non-instance value"));
+
+    let missing_field = interpreter
+        .read_place_expr(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("boxed".to_string()))),
+                field: "missing".to_string(),
+            }),
+            &mut env,
+        )
+        .expect_err("missing instance fields should fail");
+    assert!(missing_field
+        .message
+        .contains("class `Counter` has no field `missing`"));
+
+    let bad_index_place = interpreter
+        .read_place_expr(
+            &expr(ExprKind::Index {
+                object: Box::new(expr(ExprKind::Name("count".to_string()))),
+                index: Box::new(expr(ExprKind::Int(0))),
+            }),
+            &mut env,
+        )
+        .expect_err("non-indexable places should fail");
+    assert!(bad_index_place
+        .message
+        .contains("cannot index non-vector-or-map value"));
+
+    let non_place = interpreter
+        .read_place_expr(&expr(ExprKind::Bool(true)), &mut env)
+        .expect_err("non-place expressions should be rejected");
+    assert!(non_place
+        .message
+        .contains("expression is not a mutable place"));
+
+    interpreter
+        .write_assign_target(
+            &AssignTarget::Name("count".to_string()),
+            &mut env,
+            Value::Float(4.0),
+            span,
+        )
+        .expect("typed name writes should coerce to the binding type");
+    assert_eq!(
+        env.get("count"),
+        Some(&Value::Int(IntegerValue::from_signed(4)))
+    );
+
+    interpreter
+        .write_assign_target(
+            &AssignTarget::Index {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                index: Box::new(expr(ExprKind::String("next".to_string()))),
+            },
+            &mut env,
+            Value::Int(IntegerValue::from_signed(9)),
+            span,
+        )
+        .expect("map indexed assignment should insert new keys");
+    match env.get("mapping") {
+        Some(Value::Map(map)) => {
+            assert!(map.entries.iter().any(|(key, value)| {
+                *key == Value::String("next".to_string())
+                    && *value == Value::Int(IntegerValue::from_signed(9))
+            }));
+        }
+        other => panic!("expected updated map binding, found {other:?}"),
+    }
+
+    let member_assign_error = interpreter
+        .write_assign_target(
+            &AssignTarget::Member {
+                object: Box::new(expr(ExprKind::Name("count".to_string()))),
+                field: "value".to_string(),
+            },
+            &mut env,
+            Value::Int(IntegerValue::from_signed(2)),
+            span,
+        )
+        .expect_err("member assignment should reject non-instance receivers");
+    assert!(member_assign_error
+        .message
+        .contains("cannot assign member `value` on non-instance value"));
+
+    let missing_member_assign = interpreter
+        .write_assign_target(
+            &AssignTarget::Member {
+                object: Box::new(expr(ExprKind::Name("boxed".to_string()))),
+                field: "missing".to_string(),
+            },
+            &mut env,
+            Value::Int(IntegerValue::from_signed(2)),
+            span,
+        )
+        .expect_err("member assignment should reject unknown fields");
+    assert!(missing_member_assign
+        .message
+        .contains("class `Counter` has no field `missing`"));
+
+    let vec_oob_assign = interpreter
+        .write_assign_target(
+            &AssignTarget::Index {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                index: Box::new(expr(ExprKind::Int(3))),
+            },
+            &mut env,
+            Value::Int(IntegerValue::from_signed(2)),
+            span,
+        )
+        .expect_err("vector assignment should reject out-of-bounds writes");
+    assert!(vec_oob_assign.message.contains("out of bounds"));
+
+    let non_index_assign = interpreter
+        .write_assign_target(
+            &AssignTarget::Index {
+                object: Box::new(expr(ExprKind::Name("count".to_string()))),
+                index: Box::new(expr(ExprKind::Int(0))),
+            },
+            &mut env,
+            Value::Int(IntegerValue::from_signed(2)),
+            span,
+        )
+        .expect_err("indexed assignment should reject non-indexable receivers");
+    assert!(non_index_assign
+        .message
+        .contains("cannot assign through an index on a non-vector-or-map value"));
+
+    let write_place_non_instance = interpreter
+        .write_place_expr(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("count".to_string()))),
+                field: "value".to_string(),
+            }),
+            &mut env,
+            Value::Int(IntegerValue::from_signed(3)),
+        )
+        .expect_err("member place writes should reject non-instance receivers");
+    assert!(write_place_non_instance
+        .message
+        .contains("cannot assign field `value` on non-instance value"));
+
+    let write_place_missing_field = interpreter
+        .write_place_expr(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("boxed".to_string()))),
+                field: "missing".to_string(),
+            }),
+            &mut env,
+            Value::Int(IntegerValue::from_signed(3)),
+        )
+        .expect_err("member place writes should reject unknown fields");
+    assert!(write_place_missing_field
+        .message
+        .contains("class `Counter` has no field `missing`"));
+
+    let write_place_vec_oob = interpreter
+        .write_place_expr(
+            &expr(ExprKind::Index {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                index: Box::new(expr(ExprKind::Int(5))),
+            }),
+            &mut env,
+            Value::Int(IntegerValue::from_signed(8)),
+        )
+        .expect_err("vector place writes should reject out-of-bounds indices");
+    assert!(write_place_vec_oob.message.contains("out of bounds"));
+
+    let write_place_non_index = interpreter
+        .write_place_expr(
+            &expr(ExprKind::Index {
+                object: Box::new(expr(ExprKind::Name("count".to_string()))),
+                index: Box::new(expr(ExprKind::Int(0))),
+            }),
+            &mut env,
+            Value::Int(IntegerValue::from_signed(8)),
+        )
+        .expect_err("indexed place writes should reject non-indexable values");
+    assert!(write_place_non_index
+        .message
+        .contains("cannot assign through an index on a non-vector-or-map value"));
+
+    let write_place_non_place = interpreter
+        .write_place_expr(
+            &expr(ExprKind::Bool(true)),
+            &mut env,
+            Value::Int(IntegerValue::from_signed(8)),
+        )
+        .expect_err("non-place writes should be rejected");
+    assert!(write_place_non_place
+        .message
+        .contains("expression is not a mutable place"));
 }
 
 #[test]
@@ -4982,6 +6190,38 @@ def main():
         .message
         .contains("variant `Some` of enum `Option` expects exactly one payload argument"));
 
+    assert_eq!(
+        expect_value_outcome(
+            interpreter
+                .eval_expr(
+                    &expr(ExprKind::Member {
+                        object: Box::new(expr(ExprKind::Name("Status".to_string()))),
+                        field: "Ready".to_string(),
+                    }),
+                    &mut env,
+                )
+                .expect("payload-free enum variants should evaluate without a call"),
+        ),
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "Status".to_string(),
+            variant_name: "Ready".to_string(),
+            payload: None,
+        })
+    );
+    let direct_payload_variant = expect_eval_error(
+        interpreter.eval_expr(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("Status".to_string()))),
+                field: "Done".to_string(),
+            }),
+            &mut env,
+        ),
+        "payload variants should reject bare member access",
+    );
+    assert!(direct_payload_variant
+        .message
+        .contains("variant `Done` of enum `Status` requires a payload"));
+
     match interpreter
         .eval_expr(
             &expr(ExprKind::Call {
@@ -5335,6 +6575,207 @@ def main():
         "unsupported members should fail cleanly",
     );
     assert!(unsupported.message.contains("unsupported call target"));
+}
+
+#[test]
+fn interpreter_module_call_dispatch_covers_function_constructor_and_missing_member_paths() {
+    let root = unique_temp_dir("aurora-interpreter-module-calls");
+    let main_path = root.join("main.au");
+    write_file(&main_path, "import pkg.tools\n\ndef main():\n    pass\n");
+    write_file(
+        &root.join("pkg/tools.au"),
+        "public def add_one(value: int32) -> int32:\n    return value + 1\n\npublic class Counter:\n    value: int32\n    label: String = \"count\"\n\n    public def read(borrow self) -> int32:\n        return self.value\n\npublic enum Status:\n    Ready\n    Done(int32)\n",
+    );
+
+    let mut interpreter = path_interpreter(&main_path);
+    let mut env = Env::with_root();
+    interpreter.seed_imported_modules(&mut env);
+
+    assert_eq!(
+        expect_value_outcome(
+            interpreter
+                .eval_call(
+                    &expr(ExprKind::Member {
+                        object: Box::new(expr(ExprKind::Member {
+                            object: Box::new(expr(ExprKind::Name("pkg".to_string()))),
+                            field: "tools".to_string(),
+                        })),
+                        field: "add_one".to_string(),
+                    }),
+                    &[positional_arg(expr(ExprKind::Int(4)))],
+                    &mut env,
+                )
+                .expect("module functions should be callable through namespaces")
+        ),
+        Value::Int(IntegerValue::from_signed(5))
+    );
+
+    let constructed = expect_value_outcome(
+        interpreter
+            .eval_call(
+                &expr(ExprKind::Member {
+                    object: Box::new(expr(ExprKind::Member {
+                        object: Box::new(expr(ExprKind::Name("pkg".to_string()))),
+                        field: "tools".to_string(),
+                    })),
+                    field: "Counter".to_string(),
+                }),
+                &[named_arg("value", expr(ExprKind::Int(9)))],
+                &mut env,
+            )
+            .expect("module class constructors should be callable through namespaces"),
+    );
+    match constructed {
+        Value::Instance(instance) => {
+            assert_eq!(instance.class_name, "Counter");
+            assert_eq!(
+                instance.fields.get("value"),
+                Some(&Value::Int(IntegerValue::from_signed(9)))
+            );
+            assert_eq!(
+                instance.fields.get("label"),
+                Some(&Value::String("count".to_string()))
+            );
+        }
+        other => panic!("expected Counter instance, found {other:?}"),
+    }
+
+    let missing_callable = expect_eval_error(
+        interpreter.eval_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Member {
+                    object: Box::new(expr(ExprKind::Name("pkg".to_string()))),
+                    field: "tools".to_string(),
+                })),
+                field: "missing".to_string(),
+            }),
+            &[],
+            &mut env,
+        ),
+        "missing module callables should report a specific namespace error",
+    );
+    assert!(missing_callable
+        .message
+        .contains("module `pkg.tools` has no callable member `missing`"));
+
+    let positional_ctor = expect_eval_error(
+        interpreter.eval_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Member {
+                    object: Box::new(expr(ExprKind::Name("pkg".to_string()))),
+                    field: "tools".to_string(),
+                })),
+                field: "Counter".to_string(),
+            }),
+            &[positional_arg(expr(ExprKind::Int(1)))],
+            &mut env,
+        ),
+        "module constructors should still require keyword arguments",
+    );
+    assert!(positional_ctor
+        .message
+        .contains("constructor `Counter` requires keyword arguments"));
+
+    let missing_field = expect_eval_error(
+        interpreter.eval_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Member {
+                    object: Box::new(expr(ExprKind::Name("pkg".to_string()))),
+                    field: "tools".to_string(),
+                })),
+                field: "Counter".to_string(),
+            }),
+            &[],
+            &mut env,
+        ),
+        "module constructors should report missing required fields",
+    );
+    assert!(missing_field
+        .message
+        .contains("missing required field `value` for `Counter`"));
+
+    let unknown_constructor_field = expect_eval_error(
+        interpreter.eval_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Member {
+                    object: Box::new(expr(ExprKind::Name("pkg".to_string()))),
+                    field: "tools".to_string(),
+                })),
+                field: "Counter".to_string(),
+            }),
+            &[named_arg("missing", expr(ExprKind::Int(1)))],
+            &mut env,
+        ),
+        "module constructors should reject unknown field names",
+    );
+    assert!(unknown_constructor_field
+        .message
+        .contains("class `Counter` has no field named `missing`"));
+
+    assert_eq!(
+        expect_value_outcome(
+            interpreter
+                .eval_expr(
+                    &expr(ExprKind::Member {
+                        object: Box::new(expr(ExprKind::Member {
+                            object: Box::new(expr(ExprKind::Member {
+                                object: Box::new(expr(ExprKind::Name("pkg".to_string()))),
+                                field: "tools".to_string(),
+                            })),
+                            field: "Status".to_string(),
+                        })),
+                        field: "Ready".to_string(),
+                    }),
+                    &mut env,
+                )
+                .expect("namespace-qualified payload-free enum variants should evaluate"),
+        ),
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "Status".to_string(),
+            variant_name: "Ready".to_string(),
+            payload: None,
+        })
+    );
+
+    let namespace_payload_variant = expect_eval_error(
+        interpreter.eval_expr(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Member {
+                    object: Box::new(expr(ExprKind::Member {
+                        object: Box::new(expr(ExprKind::Name("pkg".to_string()))),
+                        field: "tools".to_string(),
+                    })),
+                    field: "Status".to_string(),
+                })),
+                field: "Done".to_string(),
+            }),
+            &mut env,
+        ),
+        "namespace-qualified payload variants should require a payload",
+    );
+    assert!(namespace_payload_variant
+        .message
+        .contains("variant `Done` of enum `Status` requires a payload"));
+
+    let namespace_missing_variant = expect_eval_error(
+        interpreter.eval_expr(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Member {
+                    object: Box::new(expr(ExprKind::Member {
+                        object: Box::new(expr(ExprKind::Name("pkg".to_string()))),
+                        field: "tools".to_string(),
+                    })),
+                    field: "Status".to_string(),
+                })),
+                field: "Missing".to_string(),
+            }),
+            &mut env,
+        ),
+        "namespace-qualified missing enum variants should be reported",
+    );
+    assert!(namespace_missing_variant
+        .message
+        .contains("enum `Status` has no variant `Missing`"));
 }
 
 #[test]

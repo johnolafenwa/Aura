@@ -1,6 +1,6 @@
-
 use super::{
-    integer_type_bounds, minimal_signed_type_for_negative_literal, IntegerBounds, IntegerValue,
+    integer_type_bounds, minimal_signed_type_for_negative_literal, IntegerBounds, IntegerSign,
+    IntegerValue,
 };
 use crate::sema::Type;
 use std::cmp::Ordering;
@@ -78,5 +78,51 @@ fn integer_value_helpers_cover_division_remainder_comparisons_and_bounds() {
             min: isize::MIN as i128,
             max: isize::MAX as i128,
         })
+    );
+
+    assert_eq!(IntegerValue::zero().checked_neg(), Some(IntegerValue::zero()));
+    assert_eq!(
+        IntegerValue::from_signed(3).checked_neg(),
+        Some(IntegerValue::from_signed(-3))
+    );
+    assert_eq!(
+        IntegerValue::from_signed(-3).checked_neg(),
+        Some(IntegerValue::from_signed(3))
+    );
+    assert_eq!(
+        IntegerValue::from_signed(4).checked_add(IntegerValue::from_signed(-4)),
+        Some(IntegerValue::zero())
+    );
+    assert_eq!(
+        IntegerValue::from_signed(-4).checked_add(IntegerValue::from_signed(-5)),
+        Some(IntegerValue::from_signed(-9))
+    );
+    assert_eq!(
+        IntegerValue::from_signed(9).checked_sub(IntegerValue::from_signed(4)),
+        Some(IntegerValue::from_signed(5))
+    );
+    assert_eq!(
+        IntegerValue::from_literal(3).checked_mul(IntegerValue::zero()),
+        Some(IntegerValue::zero())
+    );
+    assert_eq!(
+        IntegerValue::from_sign_and_magnitude(IntegerSign::Zero, 9),
+        Some(IntegerValue::zero())
+    );
+    assert_eq!(
+        IntegerValue::from_sign_and_magnitude(IntegerSign::Positive, 9),
+        Some(IntegerValue::from_literal(9))
+    );
+    assert_eq!(
+        IntegerValue::from_sign_and_magnitude(IntegerSign::Negative, 9),
+        Some(IntegerValue::from_signed(-9))
+    );
+    assert_eq!(
+        IntegerValue::from_sign_and_magnitude(IntegerSign::Negative, 1u128 << 127),
+        Some(IntegerValue::Signed(i128::MIN))
+    );
+    assert_eq!(
+        IntegerValue::from_sign_and_magnitude(IntegerSign::Negative, (1u128 << 127) + 1),
+        None
     );
 }

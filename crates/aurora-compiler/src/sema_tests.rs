@@ -1,6 +1,7 @@
-
 use super::*;
-use crate::ast::{FieldDecl, FormatPart, MapEntryExpr};
+use crate::ast::{
+    BreakStmt, ContinueStmt, FieldDecl, FormatPart, MapEntryExpr, PassStmt, ReturnStmt,
+};
 use crate::diag::Span;
 use crate::integer::IntegerValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -1715,7 +1716,17 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
     assert!(!typed.moved);
     assert!(typed.moved_fields.is_empty());
 
-    let mut locals = HashMap::new();
+    let mut locals = HashMap::from([(
+        "pkg".to_string(),
+        local_binding(
+            Type::Module("pkg".to_string()),
+            false,
+            false,
+            ReceiverKind::Value,
+            false,
+            &[],
+        ),
+    )]);
     assert!(checker
         .check_assign(
             &assign_stmt(
@@ -2950,6 +2961,17 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             local_binding(vec_int.clone(), true, true, ReceiverKind::Value, false, &[]),
         ),
         (
+            "immutable_values".to_string(),
+            local_binding(
+                vec_int.clone(),
+                true,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
             "mapping".to_string(),
             local_binding(map_ty.clone(), true, true, ReceiverKind::Value, false, &[]),
         ),
@@ -3273,6 +3295,131 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             expected
         );
     }
+
+    for field in [
+        "push", "pop", "set", "remove", "swap", "extend", "insert", "clear", "reverse",
+    ] {
+        let args = match field {
+            "push" => vec![arg(expr(ExprKind::Int(1)))],
+            "pop" | "clear" | "reverse" => Vec::new(),
+            "set" => vec![
+                named_arg("index", expr(ExprKind::Int(0))),
+                named_arg("value", expr(ExprKind::Int(1))),
+            ],
+            "remove" => vec![arg(expr(ExprKind::Int(0)))],
+            "swap" => vec![arg(expr(ExprKind::Int(0))), arg(expr(ExprKind::Int(1)))],
+            "extend" => vec![arg(expr(ExprKind::Name("values".to_string())))],
+            "insert" => vec![arg(expr(ExprKind::Int(0))), arg(expr(ExprKind::Int(1)))],
+            _ => unreachable!(),
+        };
+        assert!(checker
+            .type_of_call(
+                &expr(ExprKind::Member {
+                    object: Box::new(expr(ExprKind::Name("immutable_values".to_string()))),
+                    field: field.to_string(),
+                }),
+                &args,
+                span,
+                &mut locals,
+                None,
+            )
+            .expect_err("mutable vector methods should reject immutable receivers")
+            .message
+            .contains("requires a mutable receiver"));
+    }
+
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "set".to_string(),
+            }),
+            &[
+                named_arg("index", expr(ExprKind::Int(0))),
+                named_arg("value", expr(ExprKind::Bool(true))),
+            ],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("vec.set() should enforce element types")
+        .message
+        .contains("`set` expects `int32`"));
+
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "remove".to_string(),
+            }),
+            &[arg(expr(ExprKind::Bool(true)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("vec.remove() should enforce integer indices")
+        .message
+        .contains("vector indices must be integers"));
+
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "swap".to_string(),
+            }),
+            &[arg(expr(ExprKind::Int(0))), arg(expr(ExprKind::Bool(true)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("vec.swap() should enforce integer indices")
+        .message
+        .contains("vector indices must be integers"));
+
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "contains".to_string(),
+            }),
+            &[arg(expr(ExprKind::Bool(true)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("vec.contains() should enforce element types")
+        .message
+        .contains("`contains` expects `int32`"));
+
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "extend".to_string(),
+            }),
+            &[arg(expr(ExprKind::Bool(true)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("vec.extend() should enforce vector types")
+        .message
+        .contains("`extend` expects `Vec[int32]`"));
+
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "insert".to_string(),
+            }),
+            &[arg(expr(ExprKind::Int(0))), arg(expr(ExprKind::Bool(true)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("vec.insert() should enforce element types")
+        .message
+        .contains("`insert` expects `int32`"));
 }
 
 #[test]
@@ -4414,6 +4561,10 @@ fn checker_function_default_loop_and_resource_validation_cover_additional_branch
                 "`for value in borrow mut ...:` is not supported for `Set[T]`; use `insert`/`remove` on the set directly",
             ),
             (
+                "def main() -> None:\n    values = [1]\n    for value in borrow mut values:\n        pass\n",
+                "`for value in borrow mut ...:` requires a mutable `Vec[T]` place",
+            ),
+            (
                 "def main() -> None:\n    flag = true\n    for value in flag:\n        pass\n",
                 "`for` currently requires a `Range`, `Channel[T]`, `Vec[T]`, or `Set[T]` iterable, found `bool`",
             ),
@@ -4433,6 +4584,456 @@ fn checker_function_default_loop_and_resource_validation_cover_additional_branch
                 error.message
             );
         }
+}
+
+#[test]
+fn checker_loop_move_helper_reports_full_and_partial_repeated_moves() {
+    let program = crate::check_source(
+        "class Name:\n    value: String\n\ndef main():\n    pass\n",
+    )
+    .expect("helper program should type check");
+    let (type_names, type_arities) = type_maps_from_program(&program);
+    let checker = FunctionChecker::new(
+        &program.module_name,
+        &type_names,
+        &type_arities,
+        &program.classes,
+        &program.enums,
+        &program.functions,
+        &program.traits,
+        &program.trait_impls,
+        &program.imported_modules,
+        &program.module_registry,
+    );
+    let span = Span::new(2, 3);
+
+    let locals = HashMap::from([(
+        "name".to_string(),
+        local_binding(
+            Type::named("Name"),
+            true,
+            true,
+            ReceiverKind::Value,
+            false,
+            &[],
+        ),
+    )]);
+    let moved_body = HashMap::from([(
+        "name".to_string(),
+        local_binding(
+            Type::named("Name"),
+            true,
+            true,
+            ReceiverKind::Value,
+            true,
+            &[],
+        ),
+    )]);
+    let moved_error = checker
+        .reject_loop_carried_moves(&locals, &moved_body, "while", span)
+        .expect_err("repeated full moves from a loop body should be rejected");
+    assert!(moved_error
+        .message
+        .contains("`while` loop body moves `name` and may execute more than once"));
+
+    let partial_body = HashMap::from([(
+        "name".to_string(),
+        local_binding(
+            Type::named("Name"),
+            true,
+            true,
+            ReceiverKind::Value,
+            false,
+            &["value"],
+        ),
+    )]);
+    let partial_error = checker
+        .reject_loop_carried_moves(&locals, &partial_body, "for", span)
+        .expect_err("repeated partial moves from a loop body should be rejected");
+    assert!(partial_error
+        .message
+        .contains("`for` loop body partially moves `name` and may execute more than once"));
+}
+
+#[test]
+fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
+    let classes = BTreeMap::from([(
+        "Counter".to_string(),
+        class_info(
+            "Counter",
+            false,
+            vec![("value", Type::named("int32"), false)],
+        ),
+    )]);
+    let type_names = BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]);
+    let type_arities = BTreeMap::from([("Counter".to_string(), 0usize)]);
+    let enums = BTreeMap::new();
+    let functions = BTreeMap::new();
+    let traits = BTreeMap::new();
+    let imported_modules = BTreeMap::new();
+    let module_registry = BTreeMap::new();
+    let checker = checker(
+        "<main>",
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &functions,
+        &traits,
+        &[],
+        &imported_modules,
+        &module_registry,
+    );
+    let span = Span::new(1, 1);
+
+    checker
+        .check_top_level(&[Stmt::Pass(PassStmt { span })])
+        .expect("top-level pass should be allowed");
+
+    let top_level_return = checker
+        .check_top_level(&[Stmt::Return(ReturnStmt {
+            value: Some(expr(ExprKind::Int(1))),
+            span,
+        })])
+        .expect_err("top-level return should be rejected");
+    assert!(top_level_return
+        .message
+        .contains("`return` is only allowed inside a function body"));
+
+    let top_level_break = checker
+        .check_top_level(&[Stmt::Break(BreakStmt { span })])
+        .expect_err("top-level break should be rejected");
+    assert!(top_level_break
+        .message
+        .contains("`break` is only allowed inside a loop"));
+
+    let top_level_continue = checker
+        .check_top_level(&[Stmt::Continue(ContinueStmt { span })])
+        .expect_err("top-level continue should be rejected");
+    assert!(top_level_continue
+        .message
+        .contains("`continue` is only allowed inside a loop"));
+
+    let mut function_ok = function_decl("helper");
+    function_ok.return_type = type_ref("int32");
+    function_ok.body = vec![Stmt::Return(ReturnStmt {
+        value: Some(expr(ExprKind::Int(7))),
+        span,
+    })];
+    checker
+        .check_function(&function_ok)
+        .expect("ordinary functions with matching returns should pass");
+
+    let mut function_missing_return = function_decl("missing");
+    function_missing_return.return_type = type_ref("int32");
+    function_missing_return.body = vec![Stmt::Pass(PassStmt { span })];
+    let function_error = checker
+        .check_function(&function_missing_return)
+        .expect_err("non-unit functions without returns should fail");
+    assert!(function_error
+        .message
+        .contains("function `missing` is missing a return"));
+
+    let class_decl = classes
+        .get("Counter")
+        .expect("Counter class info should exist")
+        .decl
+        .clone();
+    let mut method_ok = function_decl("read");
+    method_ok.receiver = Some(ReceiverKind::Borrow);
+    method_ok.return_type = type_ref("int32");
+    method_ok.body = vec![Stmt::Return(ReturnStmt {
+        value: Some(expr(ExprKind::Member {
+            object: Box::new(expr(ExprKind::Name("self".to_string()))),
+            field: "value".to_string(),
+        })),
+        span,
+    })];
+    checker
+        .check_method(&class_decl, &method_ok)
+        .expect("class methods should be checked with an implicit self binding");
+
+    let mut method_missing_return = function_decl("stuck");
+    method_missing_return.receiver = Some(ReceiverKind::Borrow);
+    method_missing_return.return_type = type_ref("int32");
+    method_missing_return.body = vec![Stmt::Pass(PassStmt { span })];
+    let method_error = checker
+        .check_method(&class_decl, &method_missing_return)
+        .expect_err("non-unit methods without returns should fail");
+    assert!(method_error
+        .message
+        .contains("method `stuck` is missing a return"));
+
+    let mut impl_method_ok = function_decl("touch");
+    impl_method_ok.receiver = Some(ReceiverKind::Borrow);
+    impl_method_ok.return_type = type_ref("int32");
+    impl_method_ok.body = vec![Stmt::Return(ReturnStmt {
+        value: Some(expr(ExprKind::Int(1))),
+        span,
+    })];
+    checker
+        .check_trait_impl_method(
+            &Type::named("Counter"),
+            &[],
+            &BTreeMap::new(),
+            &impl_method_ok,
+        )
+        .expect("impl methods without defaults should type check");
+
+    let mut impl_method_with_default = function_decl("touch");
+    impl_method_with_default.receiver = Some(ReceiverKind::Borrow);
+    impl_method_with_default.return_type = type_ref("int32");
+    impl_method_with_default.params = vec![Param {
+        name: "value".to_string(),
+        ty: type_ref("int32"),
+        passing: ReceiverKind::Value,
+        default: Some(expr(ExprKind::Int(1))),
+        span,
+    }];
+    impl_method_with_default.body = vec![Stmt::Return(ReturnStmt {
+        value: Some(expr(ExprKind::Int(1))),
+        span,
+    })];
+    let impl_default_error = checker
+        .check_trait_impl_method(
+            &Type::named("Counter"),
+            &[],
+            &BTreeMap::new(),
+            &impl_method_with_default,
+        )
+        .expect_err("impl methods should still reject default arguments");
+    assert!(impl_default_error
+        .message
+        .contains("default arguments are not allowed in impl method declarations"));
+}
+
+#[test]
+fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_success_paths() {
+    let classes = BTreeMap::from([(
+        "Counter".to_string(),
+        class_info(
+            "Counter",
+            false,
+            vec![("value", Type::named("int32"), false)],
+        ),
+    )]);
+    let type_names = BTreeMap::from([("Counter".to_string(), Span::new(1, 1))]);
+    let type_arities = BTreeMap::from([("Counter".to_string(), 0usize)]);
+    let enums = BTreeMap::new();
+    let functions = BTreeMap::new();
+    let traits = BTreeMap::new();
+    let imported_modules = BTreeMap::new();
+    let module_registry = BTreeMap::new();
+    let checker = checker(
+        "<main>",
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &functions,
+        &traits,
+        &[],
+        &imported_modules,
+        &module_registry,
+    );
+    let span = Span::new(1, 1);
+
+    let mut locals = HashMap::from([
+        (
+            "values".to_string(),
+            local_binding(
+                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "mapping".to_string(),
+            local_binding(
+                Type::Named(
+                    "Map".to_string(),
+                    vec![Type::named("String"), Type::named("int32")],
+                ),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "counter".to_string(),
+            local_binding(
+                Type::named("Counter"),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "jobs".to_string(),
+            local_binding(
+                Type::Named("Channel".to_string(), vec![Type::named("int32")]),
+                false,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+    ]);
+
+    let empty_select = checker
+        .check_select(
+            &SelectStmt {
+                arms: Vec::new(),
+                span,
+            },
+            &mut locals,
+            &Type::Unit,
+            0,
+            false,
+        )
+        .expect_err("select without arms should fail");
+    assert!(empty_select
+        .message
+        .contains("`select` requires at least one `case` arm"));
+
+    let invalid_select_arm = checker
+        .select_arm_binding_type(&expr(ExprKind::Bool(true)), &mut locals)
+        .expect_err("select helper should reject non-call expressions");
+    assert!(invalid_select_arm
+        .message
+        .contains("`select` currently supports `recv()`, `send(...)`, and `after(...)` arms"));
+
+    let index_mut_error = checker
+        .check_assign(
+            &assign_stmt(
+                AssignTarget::Index {
+                    object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                    index: Box::new(expr(ExprKind::Int(0))),
+                },
+                true,
+                None,
+                None,
+                expr(ExprKind::Int(1)),
+            ),
+            &mut locals,
+        )
+        .expect_err("index assignments should reject `mut`");
+    assert!(index_mut_error
+        .message
+        .contains("`mut` can only be used when introducing a new binding"));
+
+    let index_annotation_error = checker
+        .check_assign(
+            &assign_stmt(
+                AssignTarget::Index {
+                    object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                    index: Box::new(expr(ExprKind::Int(0))),
+                },
+                false,
+                Some(type_ref("int32")),
+                None,
+                expr(ExprKind::Int(1)),
+            ),
+            &mut locals,
+        )
+        .expect_err("index assignments should reject annotations");
+    assert!(index_annotation_error
+        .message
+        .contains("index assignment cannot include a type annotation"));
+
+    checker
+        .check_assign(
+            &assign_stmt(
+                AssignTarget::Index {
+                    object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                    index: Box::new(expr(ExprKind::Int(0))),
+                },
+                false,
+                None,
+                Some(BinaryOp::Add),
+                expr(ExprKind::Int(4)),
+            ),
+            &mut locals,
+        )
+        .expect("compound vector assignment should type check");
+
+    checker
+        .check_assign(
+            &assign_stmt(
+                AssignTarget::Index {
+                    object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                    index: Box::new(expr(ExprKind::String("count".to_string()))),
+                },
+                false,
+                None,
+                Some(BinaryOp::Add),
+                expr(ExprKind::Int(4)),
+            ),
+            &mut locals,
+        )
+        .expect("compound map assignment should type check");
+
+    let member_mut_error = checker
+        .check_assign(
+            &assign_stmt(
+                AssignTarget::Member {
+                    object: Box::new(expr(ExprKind::Name("counter".to_string()))),
+                    field: "value".to_string(),
+                },
+                true,
+                None,
+                None,
+                expr(ExprKind::Int(1)),
+            ),
+            &mut locals,
+        )
+        .expect_err("member assignments should reject `mut`");
+    assert!(member_mut_error
+        .message
+        .contains("`mut` can only be used when introducing a new binding"));
+
+    let member_annotation_error = checker
+        .check_assign(
+            &assign_stmt(
+                AssignTarget::Member {
+                    object: Box::new(expr(ExprKind::Name("counter".to_string()))),
+                    field: "value".to_string(),
+                },
+                false,
+                Some(type_ref("int32")),
+                None,
+                expr(ExprKind::Int(1)),
+            ),
+            &mut locals,
+        )
+        .expect_err("member assignments should reject annotations");
+    assert!(member_annotation_error
+        .message
+        .contains("member assignment cannot include a type annotation"));
+
+    checker
+        .check_assign(
+            &assign_stmt(
+                AssignTarget::Member {
+                    object: Box::new(expr(ExprKind::Name("counter".to_string()))),
+                    field: "value".to_string(),
+                },
+                false,
+                None,
+                Some(BinaryOp::Add),
+                expr(ExprKind::Int(4)),
+            ),
+            &mut locals,
+        )
+        .expect("compound member assignment should type check");
 }
 
 #[test]
@@ -4689,12 +5290,20 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "literal pattern `true` does not match scrutinee type `int32`",
             ),
             (
+                "def main() -> int32:\n    match 1:\n        case \"aurora\":\n            return 1\n        case _:\n            return 0\n",
+                "literal pattern \"aurora\" does not match scrutinee type `int32`",
+            ),
+            (
                 "def main() -> int32:\n    match true:\n        case true:\n            return 1\n",
                 "non-exhaustive match over `bool`: missing `false`",
             ),
             (
                 "def main() -> int32:\n    match 1:\n        case 1:\n            return 1\n",
                 "`match` over `int32` with literal patterns requires a final `case _:` arm",
+            ),
+            (
+                "def main() -> int32:\n    value: int8 = 1\n    match value:\n        case 200:\n            return 1\n        case _:\n            return 0\n",
+                "literal pattern `200` does not fit scrutinee type `int8`",
             ),
             (
                 "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    match status:\n        case 1:\n            return 1\n        case _:\n            return 0\n",
@@ -5085,6 +5694,111 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         &imported_modules,
         &module_registry,
     );
+    let mut locals = HashMap::from([(
+        "tools_module".to_string(),
+        local_binding(
+            Type::Module("pkg.tools".to_string()),
+            false,
+            false,
+            ReceiverKind::Value,
+            false,
+            &[],
+        ),
+    )]);
+    let tools_expr = expr(ExprKind::Name("tools_module".to_string()));
+    let module_function = expr(ExprKind::Member {
+        object: Box::new(tools_expr.clone()),
+        field: "work".to_string(),
+    });
+    let module_widget = expr(ExprKind::Member {
+        object: Box::new(tools_expr.clone()),
+        field: "Widget".to_string(),
+    });
+
+    assert_eq!(
+        checker
+            .type_of_call(&module_function, &[], span, &mut locals, None)
+            .expect("module function calls should resolve"),
+        Type::Unit
+    );
+    assert_eq!(
+        checker
+            .type_of_call(
+                &module_widget,
+                &[named_arg("value", expr(ExprKind::Int(1)))],
+                span,
+                &mut locals,
+                None,
+            )
+            .expect("module class constructors should resolve"),
+        Type::named("Widget")
+    );
+    assert!(checker
+        .type_of_call(
+            &module_widget,
+            &[arg(expr(ExprKind::Int(1)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("module constructors currently require keyword arguments")
+        .message
+        .contains("requires keyword arguments"));
+    assert!(checker
+        .type_of_call(
+            &module_widget,
+            &[named_arg("missing", expr(ExprKind::Int(1)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("module constructors should reject unknown fields")
+        .message
+        .contains("has no field named `missing`"));
+    assert!(checker
+        .type_of_call(
+            &module_widget,
+            &[
+                named_arg("value", expr(ExprKind::Int(1))),
+                named_arg("value", expr(ExprKind::Int(2))),
+            ],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("module constructors should reject duplicate fields")
+        .message
+        .contains("provided more than once"));
+    assert!(checker
+        .type_of_call(
+            &module_widget,
+            &[named_arg("value", expr(ExprKind::Bool(true)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("module constructors should enforce field types")
+        .message
+        .contains("field `value` expects `int32`, found `bool`"));
+    assert!(checker
+        .type_of_call(&module_widget, &[], span, &mut locals, None)
+        .expect_err("module constructors should require all required fields")
+        .message
+        .contains("missing required field `value`"));
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Member {
+                object: Box::new(tools_expr.clone()),
+                field: "missing".to_string(),
+            }),
+            &[],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("unknown module callable members should fail")
+        .message
+        .contains("module `pkg.tools` has no callable member `missing`"));
 
     assert_eq!(
         checker

@@ -1,4 +1,3 @@
-
 use crate::ast::{Argument, Expr, ExprKind, Param, ReceiverKind, TypeRef};
 use crate::diag::Span;
 

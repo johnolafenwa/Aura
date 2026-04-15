@@ -1,4 +1,3 @@
-
 use super::{lex, TokenKind};
 use crate::diag::Span;
 
@@ -219,12 +218,14 @@ fn lexer_covers_successful_escape_decoding_and_signed_duration_range_failures() 
     let tokens = kinds(concat!(
         "text = \"\\n\\t\\\"\\\\\"\n",
         "value = f\"prefix {call(text=\"W\\\"orld\")} suffix\"\n",
+        "escaped = f\"\\n\\t\\\"\\\\\"\n",
         "keep = 1ms\n",
     ));
     assert!(tokens.contains(&TokenKind::StringLiteral("\n\t\"\\".to_string())));
     assert!(tokens.contains(&TokenKind::FStringLiteral(
         "prefix {call(text=\"W\\\"orld\")} suffix".to_string()
     )));
+    assert!(tokens.contains(&TokenKind::FStringLiteral("\n\t\"\\".to_string())));
     assert!(tokens.contains(&TokenKind::DurationLiteral(1)));
 
     let invalid_ms = lex(&format!("value = {}ms\n", (i128::MAX as u128) + 1))
@@ -238,6 +239,18 @@ fn lexer_covers_successful_escape_decoding_and_signed_duration_range_failures() 
     let invalid_m = lex(&format!("value = {}m\n", (i128::MAX as u128 / 60_000) + 1))
         .expect_err("minute duration outside signed range should fail");
     assert!(invalid_m.message.contains("invalid duration literal"));
+
+    let checked_mul_overflow_s =
+        lex(&format!("value = {}s\n", u128::MAX)).expect_err("second duration multiply overflow");
+    assert!(checked_mul_overflow_s
+        .message
+        .contains("invalid duration literal"));
+
+    let checked_mul_overflow_m =
+        lex(&format!("value = {}m\n", u128::MAX)).expect_err("minute duration multiply overflow");
+    assert!(checked_mul_overflow_m
+        .message
+        .contains("invalid duration literal"));
 
     let invalid_int =
         lex(&format!("value = {}0\n", u128::MAX)).expect_err("oversized integers should fail");

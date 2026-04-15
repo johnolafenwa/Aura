@@ -1,4 +1,3 @@
-
 use super::{
     ClassDecl, EnumDecl, FieldDecl, FunctionDecl, ImplDecl, Item, ReceiverKind, TraitDecl, TypeRef,
 };

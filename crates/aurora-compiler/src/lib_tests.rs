@@ -1,4 +1,3 @@
-
 use super::{
     absolutize, analyze_path_source, check_path, check_path_with_source, check_source,
     emit_host_native_object, exported_binding, exported_namespace, find_type_namespace_path,

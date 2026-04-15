@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn parse_item_from(source: &str) -> Result<Item> {
@@ -787,4 +786,285 @@ fn parser_covers_blank_lines_empty_literals_and_specialization_offsets() {
     };
     assert_eq!(inner.span.line, 9);
     assert_eq!(type_args[0].span.line, 9);
+}
+
+#[test]
+fn parser_additional_blank_line_and_pattern_overflow_edges_are_covered() {
+    let class_item = parse_item_from("class Box:\n\n\n    pass\n")
+        .expect("class with repeated blank lines should parse");
+    assert_eq!(class_item.name(), "Box");
+
+    let enum_item = parse_item_from("enum Flag:\n\n\n    On\n")
+        .expect("enum with repeated blank lines should parse");
+    assert_eq!(enum_item.name(), "Flag");
+
+    let while_stmt = parse_stmt_from("while true:\n\n    pass\n")
+        .expect("while body should tolerate leading blank lines");
+    assert!(matches!(while_stmt, Stmt::While(_)));
+
+    let expr_stmt = parse_stmt_from("value\n").expect("plain expression statements should parse");
+    assert!(matches!(expr_stmt, Stmt::Expr(_)));
+
+    let overflow = parse_stmt_from(
+        "match value:\n    case -170141183460469231731687303715884105729:\n        pass\n",
+    )
+    .expect_err("negative pattern literals outside the signed range should fail");
+    assert!(overflow.message.contains("outside the supported range"));
+}
+
+#[test]
+fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
+    let class_item = parse_item_from(
+        [
+            "class Box:",
+            "    value: int32",
+            "",
+            "    pass",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("class with blank lines between members should parse");
+    assert_eq!(class_item.name(), "Box");
+
+    let enum_item = parse_item_from(
+        [
+            "enum Flag:",
+            "    On",
+            "",
+            "    Off",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("enum with blank lines between variants should parse");
+    assert_eq!(enum_item.name(), "Flag");
+
+    let trait_item = parse_item_from(
+        [
+            "trait Mapper[T]:",
+            "    def map(value: T)",
+            "",
+            "    pass",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("trait with repeated blank lines should parse");
+    match trait_item {
+        Item::Trait(trait_decl) => {
+            assert_eq!(trait_decl.type_params, vec!["T"]);
+            assert_eq!(trait_decl.methods.len(), 1);
+        }
+        other => panic!("expected trait item, found {other:?}"),
+    }
+
+    let impl_item = parse_item_from(
+        [
+            "impl Mapper[T] for Box[T]:",
+            "    def map(self):",
+            "        pass",
+            "",
+            "    pass",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("impl with trait args and repeated blank lines should parse");
+    match impl_item {
+        Item::Impl(impl_decl) => {
+            assert_eq!(impl_decl.trait_name, "Mapper");
+            assert_eq!(impl_decl.trait_args.len(), 1);
+            assert_eq!(impl_decl.methods.len(), 1);
+        }
+        other => panic!("expected impl item, found {other:?}"),
+    }
+
+    let match_stmt = parse_stmt_from(
+        [
+            "match borrow value:",
+            "    case _:",
+            "        pass",
+            "",
+            "    case _:",
+            "        pass",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("match with blank lines should parse");
+    let Stmt::Match(match_stmt) = match_stmt else {
+        panic!("expected match statement");
+    };
+    assert_eq!(match_stmt.borrow_mode, Some(ReceiverKind::Borrow));
+    assert_eq!(match_stmt.arms.len(), 2);
+
+    let for_stmt = parse_stmt_from("for item in borrow values:\n    pass\n")
+        .expect("borrowed for-loop should parse");
+    let Stmt::For(for_stmt) = for_stmt else {
+        panic!("expected for statement");
+    };
+    assert_eq!(for_stmt.borrow_mode, Some(ReceiverKind::Borrow));
+
+    let with_stmt = parse_stmt_from("with resource as handle:\n    pass\n")
+        .expect("with/as form should parse");
+    let Stmt::With(with_stmt) = with_stmt else {
+        panic!("expected with statement");
+    };
+    assert_eq!(with_stmt.binding, "handle");
+
+    let select_stmt = parse_stmt_from(
+        [
+            "select:",
+            "    case after(1ms):",
+            "        pass",
+            "",
+            "    case after(2ms):",
+            "        pass",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("select with blank lines should parse");
+    let Stmt::Select(select_stmt) = select_stmt else {
+        panic!("expected select statement");
+    };
+    assert_eq!(select_stmt.arms.len(), 2);
+
+    let whitespace_heavy_item = parse_item_from(
+        [
+            "class Holder:",
+            "    value: int32",
+            "    ",
+            "    def read(self) -> int32:",
+            "        return self.value",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("class with whitespace-only blank lines should parse");
+    let Item::Class(class_decl) = whitespace_heavy_item else {
+        panic!("expected class item");
+    };
+    assert_eq!(class_decl.methods.len(), 1);
+
+    let whitespace_heavy_enum = parse_item_from(
+        [
+            "enum State:",
+            "    Ready",
+            "    ",
+            "    Waiting",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("enum with whitespace-only blank lines should parse");
+    let Item::Enum(enum_decl) = whitespace_heavy_enum else {
+        panic!("expected enum item");
+    };
+    assert_eq!(enum_decl.variants.len(), 2);
+
+    let whitespace_heavy_trait = parse_item_from(
+        [
+            "trait Show:",
+            "    def show(self) -> String",
+            "    ",
+            "    pass",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("trait with whitespace-only blank lines should parse");
+    let Item::Trait(trait_decl) = whitespace_heavy_trait else {
+        panic!("expected trait item");
+    };
+    assert_eq!(trait_decl.methods.len(), 1);
+
+    let whitespace_heavy_impl = parse_item_from(
+        [
+            "impl Show for Holder:",
+            "    def show(self) -> String:",
+            "        return \"ok\"",
+            "    ",
+            "    pass",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("impl with whitespace-only blank lines should parse");
+    let Item::Impl(impl_decl) = whitespace_heavy_impl else {
+        panic!("expected impl item");
+    };
+    assert_eq!(impl_decl.methods.len(), 1);
+
+    let if_stmt = parse_stmt_from(
+        [
+            "if true:",
+            "    pass",
+            "",
+            "    pass",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("if block with blank lines should parse");
+    assert!(matches!(if_stmt, Stmt::If(_)));
+
+    let match_with_whitespace_only_gap = parse_stmt_from(
+        [
+            "match borrow value:",
+            "    case _:",
+            "        pass",
+            "    ",
+            "    case _:",
+            "        pass",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("match should tolerate whitespace-only blank lines between arms");
+    assert!(matches!(match_with_whitespace_only_gap, Stmt::Match(_)));
+
+    let select_with_whitespace_only_gap = parse_stmt_from(
+        [
+            "select:",
+            "    case after(1ms):",
+            "        pass",
+            "    ",
+            "    case after(2ms):",
+            "        pass",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("select should tolerate whitespace-only blank lines between arms");
+    assert!(matches!(select_with_whitespace_only_gap, Stmt::Select(_)));
+
+    let with_binding_equals_stmt = parse_stmt_from("with handle = open():\n    pass\n")
+        .expect("with binding=value form should parse");
+    let Stmt::With(with_binding_equals_stmt) = with_binding_equals_stmt else {
+        panic!("expected with statement");
+    };
+    assert_eq!(with_binding_equals_stmt.binding, "handle");
+
+    let whitespace_only_block_stmt =
+        parse_stmt_from(["if true:", "    ", "    pass"].join("\n").as_str())
+            .expect("blocks should tolerate whitespace-only blank lines");
+    assert!(matches!(whitespace_only_block_stmt, Stmt::If(_)));
+
+    let tokens = lex("value[\n").expect("tokens");
+    let parser = Parser { tokens, index: 0 };
+    assert!(!parser.is_assignment_stmt());
+
+    let tokens = lex("indirect Value\n").expect("tokens");
+    let parser = Parser { tokens, index: 0 };
+    assert_eq!(parser.skip_type_tokens(0), 2);
+
+    let tokens = lex("[[value]]\n").expect("tokens");
+    let parser = Parser { tokens, index: 0 };
+    assert_eq!(parser.skip_bracketed_tokens(0), Some(5));
+
+    let fstring = parse_expression("f\"{Set{1}}\"")
+        .expect("f-string interpolation with nested set braces should parse");
+    assert!(matches!(fstring.kind, ExprKind::FString(_)));
 }
