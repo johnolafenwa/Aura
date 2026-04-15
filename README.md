@@ -68,6 +68,10 @@ Current bootstrap compiler workflow:
   - execute the `pass` no-op statement in intentionally empty blocks
 - `cargo run -p aura -- run examples/modules/simple_import.au`
   - execute local file modules with `import`, `from ... import ...`, and `public` module boundaries
+- `cargo run -p aura -- run examples/packages/local_path_dependencies/app/src/main.au`
+  - execute a manifest-rooted package with `src/`, a sibling path dependency, and package-local helpers
+- `cargo run -p aura -- run examples/packages/workspace/app/src/main.au`
+  - execute a workspace member package with a workspace-root `Aurora.toml`
 - `cargo run -p aura -- run examples/traits/greeter.au`
   - execute trait declarations, `impl Trait for Type`, and bounded generic calls
 - `cargo run -p aura -- run examples/traits/generic_trait_impl.au`
@@ -122,6 +126,12 @@ Current bootstrap compiler workflow:
   - stdin-backed completion now also resolves local imported modules relative to the supplied file path, including imported trait methods
 - `cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin "$(pwd)/examples/modules/simple_import.au"`
   - execute an editor-style buffer while still resolving local imports relative to the supplied path
+- `cargo run -p aura -- check examples/packages/local_path_dependencies/app/src/main.au`
+  - type-check a package entrypoint using `Aurora.toml`, `src/`, local path dependencies, and git dependencies
+- `cargo run -p aura -- deps update`
+  - refresh all branch/tag/default-main git dependencies for the current package or workspace and rewrite `Aurora.lock`
+- `cargo run -p aura -- deps update util`
+  - refresh only the `util` git dependency for the current package or workspace
 - `cat examples/modules/simple_import.au | cargo run -p aura -- run-mir --stdin "$(pwd)/examples/modules/simple_import.au"`
   - run the MIR path against stdin-backed source while still resolving local imports relative to the supplied path
 - `cat examples/modules/simple_import.au | cargo run -p aura -- check --stdin "$(pwd)/examples/modules/simple_import.au"`
@@ -145,6 +155,9 @@ Current `build` status:
 - the built binary no longer depends on the original `.au` source files at runtime
 - built binaries now render arithmetic runtime failures with file, line, and caret context from embedded source
 - the current build path still requires Cargo/Rust plus a host C compiler when producing artifacts
+- manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aurora.toml`
+- git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
+- the current package-system milestone writes a local `Aurora.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
 
 Current `run-mir` status:
 

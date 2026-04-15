@@ -33,6 +33,8 @@ After the release build completes, run the binary directly:
 ./target/release/aura run examples/collections/set_basics.au
 ./target/release/aura run examples/basics/pass_keyword.au
 ./target/release/aura run examples/modules/simple_import.au
+./target/release/aura run examples/packages/local_path_dependencies/app/src/main.au
+./target/release/aura run examples/packages/workspace/app/src/main.au
 ./target/release/aura run examples/traits/greeter.au
 ./target/release/aura run examples/traits/generic_trait_impl.au
 ./target/release/aura run examples/traits/generic_trait_bounds.au
@@ -86,6 +88,8 @@ Then run:
 aura run examples/classes/point_distance.au
 aura help
 aura --version
+aura deps update
+aura deps update util
 ```
 
 ## Command Summary
@@ -97,11 +101,17 @@ aura --version
 - `aura check <file.au>`
   - parse and type check a program
   - nested package modules can now be checked directly, with the CLI inferring the nearest package root that satisfies their imports
+  - package entrypoints under `src/` now also resolve `Aurora.toml`, local path dependencies, git dependencies, workspaces, and `Aurora.lock`
+- `aura deps update [package]`
+  - refresh git dependencies for the current package or workspace and rewrite `Aurora.lock`
+  - with no package name, all branch/tag/default-main git dependencies are refreshed
+  - with a package name such as `util`, only that dependency is refreshed
 - `aura run <file.au>`
   - run a program
   - this now includes the maintained `pass` statement and `sleep(duration)` builtin
   - the maintained user-facing surface now also includes the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, `Set[T]`, specialized generic trait bounds, and the current operator-trait subset
   - local file imports and `public` module boundaries now work for file-backed programs
+  - manifest-rooted packages now also resolve sibling path dependencies, git dependencies, and workspace members when the entry file lives under a package `src/`
 - `aura run-mir <file.au>`
   - run a program through the current native MIR runtime path
   - this now includes the current explicit numeric cast surface with `expr as Type`
@@ -112,7 +122,7 @@ aura --version
   - `auto` is the default and uses the direct native backend for the maintained Aurora surface
   - `direct` forces the new low-level native backend for the full currently implemented Aurora language surface
   - it relies on Cargo/Rust and a host C compiler for the current build step
-  - file-backed and stdin-backed programs with local module imports now build correctly through this path
+  - file-backed and stdin-backed programs with local module imports and package dependencies now build correctly through this path
 - `aura ast <file.au>`
   - print the parsed syntax tree
 - `aura ast-json <file.au>`
@@ -147,6 +157,8 @@ cat examples/modules/simple_import.au | ./target/release/aura analyze --stdin "$
 cat examples/modules/simple_import.au | ./target/release/aura check --stdin "$(pwd)/examples/modules/simple_import.au"
 cat examples/modules/simple_import.au | ./target/release/aura run --stdin "$(pwd)/examples/modules/simple_import.au"
 cat examples/modules/simple_import.au | ./target/release/aura run-mir --stdin "$(pwd)/examples/modules/simple_import.au"
+./target/release/aura check examples/packages/local_path_dependencies/app/src/main.au
+./target/release/aura run examples/packages/workspace/app/src/main.au
 ```
 
 ## Diagnostics

@@ -4588,10 +4588,8 @@ fn checker_function_default_loop_and_resource_validation_cover_additional_branch
 
 #[test]
 fn checker_loop_move_helper_reports_full_and_partial_repeated_moves() {
-    let program = crate::check_source(
-        "class Name:\n    value: String\n\ndef main():\n    pass\n",
-    )
-    .expect("helper program should type check");
+    let program = crate::check_source("class Name:\n    value: String\n\ndef main():\n    pass\n")
+        .expect("helper program should type check");
     let (type_names, type_arities) = type_maps_from_program(&program);
     let checker = FunctionChecker::new(
         &program.module_name,

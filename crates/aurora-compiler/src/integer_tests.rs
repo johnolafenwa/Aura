@@ -80,7 +80,10 @@ fn integer_value_helpers_cover_division_remainder_comparisons_and_bounds() {
         })
     );
 
-    assert_eq!(IntegerValue::zero().checked_neg(), Some(IntegerValue::zero()));
+    assert_eq!(
+        IntegerValue::zero().checked_neg(),
+        Some(IntegerValue::zero())
+    );
     assert_eq!(
         IntegerValue::from_signed(3).checked_neg(),
         Some(IntegerValue::from_signed(-3))

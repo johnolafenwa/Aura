@@ -558,7 +558,10 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
         .unwrap_or(&pkg_dir)
         .join("user.au");
     assert!(absolutize(&relative_path).is_absolute());
-    assert_eq!(absolutize(&user_path), user_path);
+    assert_eq!(
+        absolutize(&user_path),
+        fs::canonicalize(&user_path).expect("user path should canonicalize")
+    );
 
     let inferred_root =
         infer_package_root(&user_path, Some(&fs::read_to_string(&user_path).unwrap()))

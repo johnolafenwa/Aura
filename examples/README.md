@@ -276,6 +276,23 @@ The examples are organized by topic so they can serve both as quick references a
 
 Helper modules under `modules/pkg/` support the maintained module examples above and are not standalone entrypoints.
 
+### `packages/`
+
+- `local_path_dependencies/app/`
+  - `Aurora.toml`, `src/`, a sibling path dependency, and a package-local helper module
+  - run it with:
+    - `cargo run -p aura -- run examples/packages/local_path_dependencies/app/src/main.au`
+  - prints `12`
+- `workspace/app/`
+  - a workspace-root `Aurora.toml`, member packages, and a sibling path dependency resolved through the member package manifest
+  - run it with:
+    - `cargo run -p aura -- run examples/packages/workspace/app/src/main.au`
+  - prints `8`
+
+Package examples are multi-file package trees rather than standalone single-file entrypoints. Their committed `Aurora.lock` files are part of the maintained surface.
+
+Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, or `branch`, defaulting to `main`. Those are covered by compiler, CLI, and language-server regression tests rather than a committed runnable example tree, because they resolve through cached git checkouts instead of a static in-repo package directory.
+
 ### `error_handling/`
 
 - `try_result.au`

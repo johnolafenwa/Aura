@@ -4,12 +4,7 @@ Last updated: 2026-04-15
 
 ## Active Work Session
 
-- Stopped: `2026-04-15 19:32:18 BST`
-- Total elapsed: `10h 00m`
-- Target status: incomplete
-- Latest measured compiler coverage: `92.64%` lines / `91.60%` functions / `91.83%` regions
-- Remaining work: continue dense production-file coverage in `interpreter.rs`, `native_codegen.rs`, `sema.rs`, and `mir_runtime.rs`, then clean up the last small parser/lexer gaps and keep ratcheting toward enforced 100%
-- Stop reason: reached the 10-hour continuous-work limit for this pass
+None.
 
 ## In Progress
 
@@ -29,6 +24,9 @@ Last updated: 2026-04-15
 
 ## Done
 
+- Added `aura deps update` and `aura deps update <package>` so branch/tag/default-main git dependencies can be refreshed without deleting `Aurora.lock`, with direct compiler coverage, CLI product tests, and maintained README/tutorial updates for the new workflow.
+- Extended the Aurora package system from local path dependencies to git-backed dependencies, with manifest support for `git`, `rev`, `tag`, and `branch`, default `main` branch fallback, lockfile-pinned git revisions, compiler/CLI/LSP regression coverage, and README/tutorial updates for the maintained package surface.
+- Implemented the first Aurora package-system milestone with `Aurora.toml` manifests, manifest-rooted `src/` packages, local path dependencies, workspace roots, manifest-aware CLI/compiler entrypoints, relative `Aurora.lock` generation, maintained package examples, tutorial/README coverage, compiler/CLI regression tests, and an LSP compiler-bridge regression for package-aware analysis/completion.
 - Added another direct checker/interpreter sweep covering empty-`select` validation, direct index/member assignment helper branches, runtime `main` parameter rejection, extra inferred builtin member types, invalid runtime `select` arms, additional loop-control branches, float-to-int cast overflow edges, map render/equality edges, and current-module namespace fallback resolution; verified the new focused tests and restarted a fresh full `cargo llvm-cov` summary from the updated source tree.
 - Extended compiler-backed `analyze` / `complete` and the LSP from local-module behavior to fully correct cross-file definitions for imported items, including fields, methods, variants, and trait methods that resolve back to their defining source files.
 - Narrowed the JS fallback so hover and go-to-definition now stay compiler-owned whenever compiler analysis succeeds, using JS only when the compiler cannot analyze the buffer.

@@ -1,0 +1,5 @@
+import util.math
+
+def main() -> int32:
+    print(util.math.double(value=4))
+    return 0

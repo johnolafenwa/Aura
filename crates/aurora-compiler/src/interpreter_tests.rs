@@ -399,7 +399,9 @@ fn cast_numeric_value_covers_success_and_error_paths() {
         Some(Span::new(4, 5)),
     )
     .expect_err("negative floats should not cast to unsigned integers");
-    assert!(unsigned_overflow.message.contains("does not fit in `uint8`"));
+    assert!(unsigned_overflow
+        .message
+        .contains("does not fit in `uint8`"));
 }
 
 #[test]

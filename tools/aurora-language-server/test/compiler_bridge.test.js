@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -634,6 +635,12 @@ test("compiler bridge preserves cross-file definitions for imported function, fi
     fs.mkdirSync(path.join(tempRoot, "pkg"));
     const mathPath = path.join(tempRoot, "pkg/math.au");
     const userPath = path.join(tempRoot, "pkg/user.au");
+    const canonicalMathPath = fs.realpathSync.native(path.dirname(mathPath))
+      ? path.join(fs.realpathSync.native(path.dirname(mathPath)), path.basename(mathPath))
+      : mathPath;
+    const canonicalUserPath = fs.realpathSync.native(path.dirname(userPath))
+      ? path.join(fs.realpathSync.native(path.dirname(userPath)), path.basename(userPath))
+      : userPath;
     fs.writeFileSync(
       mathPath,
       "public def add(left: int32, right: int32) -> int32:\n    return left + right\n"
@@ -668,30 +675,175 @@ test("compiler bridge preserves cross-file definitions for imported function, fi
       analysis.occurrences.some(
         (occurrence) =>
           occurrence.hover.includes("function add") &&
-          occurrence.definition?.file_path === mathPath
+          occurrence.definition?.file_path === canonicalMathPath
       )
     );
     assert.ok(
       analysis.occurrences.some(
         (occurrence) =>
           occurrence.hover.includes("class User") &&
-          occurrence.definition?.file_path === userPath
+          occurrence.definition?.file_path === canonicalUserPath
       )
     );
     assert.ok(
       analysis.occurrences.some(
         (occurrence) =>
           occurrence.hover.includes("field label: String") &&
-          occurrence.definition?.file_path === userPath
+          occurrence.definition?.file_path === canonicalUserPath
       )
     );
     assert.ok(
       analysis.occurrences.some(
         (occurrence) =>
           occurrence.hover.includes("method name() -> String") &&
-          occurrence.definition?.file_path === userPath
+          occurrence.definition?.file_path === canonicalUserPath
       )
     );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge analyzes and completes manifest-rooted path dependencies", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-packages-"));
+  try {
+    fs.mkdirSync(path.join(tempRoot, "app", "src", "helpers"), { recursive: true });
+    fs.mkdirSync(path.join(tempRoot, "util", "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tempRoot, "app", "Aurora.toml"),
+      [
+        "[package]",
+        'name = "app"',
+        'version = "0.1.0"',
+        'edition = "2026"',
+        "",
+        "[dependencies]",
+        'util = { path = "../util" }'
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(tempRoot, "app", "src", "helpers", "math.au"),
+      "public def triple(value: int32) -> int32:\n    return value * 3\n"
+    );
+    fs.writeFileSync(
+      path.join(tempRoot, "util", "Aurora.toml"),
+      ['[package]', 'name = "util"', 'version = "0.1.0"', 'edition = "2026"'].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(tempRoot, "util", "src", "math.au"),
+      "public def double(value: int32) -> int32:\n    return value * 2\n"
+    );
+    const canonicalUtilMathPath = path.join(
+      fs.realpathSync.native(path.join(tempRoot, "util", "src")),
+      "math.au"
+    );
+
+    const mainPath = path.join(tempRoot, "app", "src", "main.au");
+    const mainUri = `file://${mainPath}`;
+    const validSource = [
+      "import util.math",
+      "import helpers.math",
+      "",
+      "def main() -> int32:",
+      "    print(util.math.double(value=helpers.math.triple(value=2)))",
+      "    return 0"
+    ].join("\n");
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, validSource);
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 0);
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover.includes("function double") &&
+          occurrence.definition?.file_path === canonicalUtilMathPath
+      )
+    );
+
+    const completionSource = [
+      "import util.math",
+      "import helpers.math",
+      "",
+      "def main() -> int32:",
+      "    util.math.",
+      "    return helpers.math.triple(value=2)"
+    ].join("\n");
+    const completions = await completeWithCompiler(mainUri, completionSource, 4, 14, ".");
+    assert.ok(completions);
+    assert.ok(completions.some((item) => item.name === "double"));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge analyzes and completes manifest-rooted git dependencies", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-git-packages-"));
+  try {
+    const appRoot = path.join(tempRoot, "app");
+    const repoRootPath = path.join(tempRoot, "util-repo");
+    fs.mkdirSync(path.join(appRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(repoRootPath, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(appRoot, "Aurora.toml"),
+      [
+        "[package]",
+        'name = "app"',
+        'version = "0.1.0"',
+        'edition = "2026"',
+        "",
+        "[dependencies]",
+        'util = { git = "../util-repo" }'
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(repoRootPath, "Aurora.toml"),
+      ['[package]', 'name = "util"', 'version = "0.1.0"', 'edition = "2026"'].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(repoRootPath, "src", "math.au"),
+      "public def double(value: int32) -> int32:\n    return value * 2\n"
+    );
+    childProcess.execFileSync("git", ["init", "-b", "main"], { cwd: repoRootPath });
+    childProcess.execFileSync("git", ["config", "user.name", "Aurora Tests"], { cwd: repoRootPath });
+    childProcess.execFileSync("git", ["config", "user.email", "aurora-tests@example.com"], {
+      cwd: repoRootPath
+    });
+    childProcess.execFileSync("git", ["add", "."], { cwd: repoRootPath });
+    childProcess.execFileSync("git", ["commit", "-m", "initial"], { cwd: repoRootPath });
+    const mainPath = path.join(appRoot, "src", "main.au");
+    const mainUri = `file://${mainPath}`;
+    const validSource = [
+      "import util.math",
+      "",
+      "def main() -> int32:",
+      "    print(util.math.double(value=2))",
+      "    return 0"
+    ].join("\n");
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, validSource);
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 0);
+    assert.ok(
+      analysis.occurrences.some(
+        (occurrence) =>
+          occurrence.hover.includes("function double") &&
+          occurrence.definition?.file_path &&
+          occurrence.definition.file_path.endsWith(`${path.sep}src${path.sep}math.au`)
+      )
+    );
+
+    const completionSource = [
+      "import util.math",
+      "",
+      "def main() -> int32:",
+      "    util.math.",
+      "    return 0"
+    ].join("\n");
+    const completions = await completeWithCompiler(mainUri, completionSource, 3, 14, ".");
+    assert.ok(completions);
+    assert.ok(completions.some((item) => item.name === "double"));
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

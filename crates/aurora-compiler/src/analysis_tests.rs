@@ -1365,8 +1365,10 @@ fn path_aware_analysis_tracks_definitions_for_namespace_imported_symbols() {
     let path = repo_root().join("examples/modules/namespace_import_types.au");
     let source = std::fs::read_to_string(&path).expect("example should exist");
     let analysis = analyze_path_source(&path, &source);
-    let types_path = repo_root().join("examples/modules/pkg/types.au");
-    let types_path = types_path.display().to_string();
+    let types_path = fs::canonicalize(repo_root().join("examples/modules/pkg/types.au"))
+        .expect("types path should canonicalize")
+        .display()
+        .to_string();
 
     assert!(analysis.diagnostics.is_empty());
     assert!(analysis.occurrences.iter().any(|occurrence| {
@@ -1444,8 +1446,14 @@ fn path_aware_analysis_tracks_imported_function_field_and_trait_method_definitio
     fs::write(&main_path, &source).expect("failed to write main module");
 
     let analysis = analyze_path_source(&main_path, &source);
-    let math_path = math_path.display().to_string();
-    let user_path = user_path.display().to_string();
+    let math_path = fs::canonicalize(&math_path)
+        .expect("math path should canonicalize")
+        .display()
+        .to_string();
+    let user_path = fs::canonicalize(&user_path)
+        .expect("user path should canonicalize")
+        .display()
+        .to_string();
 
     assert!(analysis.diagnostics.is_empty());
     assert!(analysis.occurrences.iter().any(|occurrence| {

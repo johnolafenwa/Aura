@@ -8,7 +8,7 @@ use aurora_compiler::{
     analyze_path_source, check_path, check_path_with_source, complete_path_source,
     emit_host_native_object_with_metadata, lower_path_to_mir, lower_path_with_source_to_mir,
     parse_source, run_path, run_path_via_mir, run_path_with_source, run_path_with_source_via_mir,
-    Diagnostic, MirModule, Value,
+    update_git_dependencies_in_working_dir, Diagnostic, MirModule, Value,
 };
 
 struct Input {
@@ -31,6 +31,10 @@ fn main() {
     match command.as_str() {
         "help" | "--help" | "-h" => print_usage_and_exit(0),
         "version" | "--version" | "-V" => print_version_and_exit(),
+        "deps" => {
+            let remaining = args.collect::<Vec<_>>();
+            handle_deps_command(remaining);
+        }
         "check" => {
             let input = read_input(&mut args);
             let result = if input.from_stdin {
@@ -197,6 +201,38 @@ fn main() {
             }
         }
         _ => print_usage_and_exit(2),
+    }
+}
+
+fn handle_deps_command(args: Vec<String>) -> ! {
+    let Some(subcommand) = args.first() else {
+        print_usage_and_exit(2);
+    };
+    if subcommand != "update" || args.len() > 2 {
+        print_usage_and_exit(2);
+    }
+
+    let target_package = args.get(1).map(String::as_str);
+    let current_dir = std::env::current_dir().unwrap_or_else(|error| {
+        eprintln!("failed to determine current directory: {}", error);
+        process::exit(1);
+    });
+
+    match update_git_dependencies_in_working_dir(&current_dir, target_package) {
+        Ok(result) => {
+            if result.updated_packages.is_empty() {
+                write_stdout("Aurora.lock is already up to date\n");
+            } else {
+                for package in result.updated_packages {
+                    write_stdout(&format!("updated {}\n", package));
+                }
+            }
+            process::exit(0);
+        }
+        Err(error) => {
+            eprintln!("error: {}", error.message);
+            process::exit(1);
+        }
     }
 }
 
@@ -607,6 +643,7 @@ fn usage_text() -> &'static str {
        or: aura build [-o <output>] [--backend auto|direct] --stdin <virtual-path>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
+       or: aura deps update [package]\n\
        or: aura help\n\
        or: aura version"
 }

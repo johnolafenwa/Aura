@@ -1,0 +1,6 @@
+import util.math
+import helpers.math
+
+def main() -> int32:
+    print(util.math.double(value=helpers.math.triple(value=2)))
+    return 0

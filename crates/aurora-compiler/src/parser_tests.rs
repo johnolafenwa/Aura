@@ -815,40 +815,21 @@ fn parser_additional_blank_line_and_pattern_overflow_edges_are_covered() {
 #[test]
 fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
     let class_item = parse_item_from(
-        [
-            "class Box:",
-            "    value: int32",
-            "",
-            "    pass",
-        ]
-        .join("\n")
-        .as_str(),
+        ["class Box:", "    value: int32", "", "    pass"]
+            .join("\n")
+            .as_str(),
     )
     .expect("class with blank lines between members should parse");
     assert_eq!(class_item.name(), "Box");
 
-    let enum_item = parse_item_from(
-        [
-            "enum Flag:",
-            "    On",
-            "",
-            "    Off",
-        ]
-        .join("\n")
-        .as_str(),
-    )
-    .expect("enum with blank lines between variants should parse");
+    let enum_item = parse_item_from(["enum Flag:", "    On", "", "    Off"].join("\n").as_str())
+        .expect("enum with blank lines between variants should parse");
     assert_eq!(enum_item.name(), "Flag");
 
     let trait_item = parse_item_from(
-        [
-            "trait Mapper[T]:",
-            "    def map(value: T)",
-            "",
-            "    pass",
-        ]
-        .join("\n")
-        .as_str(),
+        ["trait Mapper[T]:", "    def map(value: T)", "", "    pass"]
+            .join("\n")
+            .as_str(),
     )
     .expect("trait with repeated blank lines should parse");
     match trait_item {
@@ -906,8 +887,8 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
     };
     assert_eq!(for_stmt.borrow_mode, Some(ReceiverKind::Borrow));
 
-    let with_stmt = parse_stmt_from("with resource as handle:\n    pass\n")
-        .expect("with/as form should parse");
+    let with_stmt =
+        parse_stmt_from("with resource as handle:\n    pass\n").expect("with/as form should parse");
     let Stmt::With(with_stmt) = with_stmt else {
         panic!("expected with statement");
     };
@@ -949,14 +930,9 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
     assert_eq!(class_decl.methods.len(), 1);
 
     let whitespace_heavy_enum = parse_item_from(
-        [
-            "enum State:",
-            "    Ready",
-            "    ",
-            "    Waiting",
-        ]
-        .join("\n")
-        .as_str(),
+        ["enum State:", "    Ready", "    ", "    Waiting"]
+            .join("\n")
+            .as_str(),
     )
     .expect("enum with whitespace-only blank lines should parse");
     let Item::Enum(enum_decl) = whitespace_heavy_enum else {
@@ -997,17 +973,8 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
     };
     assert_eq!(impl_decl.methods.len(), 1);
 
-    let if_stmt = parse_stmt_from(
-        [
-            "if true:",
-            "    pass",
-            "",
-            "    pass",
-        ]
-        .join("\n")
-        .as_str(),
-    )
-    .expect("if block with blank lines should parse");
+    let if_stmt = parse_stmt_from(["if true:", "    pass", "", "    pass"].join("\n").as_str())
+        .expect("if block with blank lines should parse");
     assert!(matches!(if_stmt, Stmt::If(_)));
 
     let match_with_whitespace_only_gap = parse_stmt_from(

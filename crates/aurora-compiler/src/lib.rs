@@ -9,12 +9,13 @@ pub mod mir;
 pub mod mir_runtime;
 mod native_codegen;
 mod native_runtime;
+mod package;
 pub mod parser;
 pub mod sema;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::{collections::BTreeMap, collections::HashMap};
+use std::{collections::BTreeMap, collections::BTreeSet, collections::HashMap};
 
 pub use analysis::{
     analyze_path_source, analyze_program, analyze_source, complete_path_source, complete_source,
@@ -31,6 +32,8 @@ pub use native_codegen::{
 pub use sema::{ImportedBinding, ModuleContext, ModuleNamespace, Program};
 
 use ast::{ImportKind, Item};
+pub use package::DependencyUpdateResult;
+use package::PackageGraph;
 pub fn parse_source(source: &str) -> Result<ast::Module> {
     parser::parse(source)
 }
@@ -73,11 +76,17 @@ pub fn lower_path_with_source_to_mir(path: &Path, source: &str) -> Result<MirMod
 }
 
 pub fn check_path(path: &Path) -> Result<Program> {
-    ModuleLoader::new(path)?.load_program(path)
+    let mut loader = ModuleLoader::new(path)?;
+    let program = loader.load_program(path)?;
+    loader.write_lockfile()?;
+    Ok(program)
 }
 
 pub fn check_path_with_source(path: &Path, source: &str) -> Result<Program> {
-    ModuleLoader::new_with_source(path, Some(source))?.load_program_with_source(path, source)
+    let mut loader = ModuleLoader::new_with_source(path, Some(source))?;
+    let program = loader.load_program_with_source(path, source)?;
+    loader.write_lockfile()?;
+    Ok(program)
 }
 
 pub fn run_path(path: &Path) -> Result<RunOutput> {
@@ -96,6 +105,13 @@ pub fn lower_path_to_mir(path: &Path) -> Result<MirModule> {
     Ok(lower_to_mir(&program))
 }
 
+pub fn update_git_dependencies_in_working_dir(
+    path: &Path,
+    target_package: Option<&str>,
+) -> Result<DependencyUpdateResult> {
+    package::update_git_dependencies_in_working_dir(path, target_package)
+}
+
 #[derive(Clone)]
 struct LoadedModule {
     program: Program,
@@ -103,6 +119,7 @@ struct LoadedModule {
 
 struct ModuleLoader {
     package_root: PathBuf,
+    package_graph: Option<PackageGraph>,
     cache: HashMap<PathBuf, LoadedModule>,
     stack: Vec<PathBuf>,
 }
@@ -114,9 +131,15 @@ impl ModuleLoader {
 
     fn new_with_source(entry_path: &Path, source_override: Option<&str>) -> Result<Self> {
         let absolute_entry = absolutize(entry_path);
-        let package_root = infer_package_root(&absolute_entry, source_override)?;
+        let package_graph = PackageGraph::discover_for_entry(&absolute_entry)?;
+        let package_root = if let Some(graph) = &package_graph {
+            graph.root_source_root.clone()
+        } else {
+            infer_package_root(&absolute_entry, source_override)?
+        };
         Ok(Self {
             package_root,
+            package_graph,
             cache: HashMap::new(),
             stack: Vec::new(),
         })
@@ -156,8 +179,8 @@ impl ModuleLoader {
             })?
         };
         let module = parse_source(&source)?;
-        let module_name = logical_module_name(&self.package_root, &path);
-        let imported_bindings = self.resolve_imports(&module)?;
+        let module_name = self.module_name_for_path(&path);
+        let imported_bindings = self.resolve_imports(&module, &path)?;
         let module_registry = self.build_module_registry();
         let program = sema::check_with_context(
             module,
@@ -168,6 +191,7 @@ impl ModuleLoader {
             },
         )?;
         let mut program = program;
+        self.qualify_program_imported_modules(&path, &mut program);
         program.source_path = Some(path.display().to_string());
 
         self.cache.insert(
@@ -183,12 +207,14 @@ impl ModuleLoader {
     fn resolve_imports(
         &mut self,
         module: &ast::Module,
+        current_path: &Path,
     ) -> Result<BTreeMap<String, ImportedBinding>> {
         let mut bindings = BTreeMap::new();
         for import in &module.imports {
             match &import.kind {
                 ImportKind::From { module_path, names } => {
-                    let imported = self.load_imported_module(module_path, import.span)?;
+                    let imported =
+                        self.load_imported_module(current_path, module_path, import.span)?;
                     for name in names {
                         let binding = exported_binding(&imported, name).ok_or_else(|| {
                             let logical_name = module_path.join(".");
@@ -219,7 +245,7 @@ impl ModuleLoader {
                     }
                 }
                 ImportKind::Module { path } => {
-                    let imported = self.load_imported_module(path, import.span)?;
+                    let imported = self.load_imported_module(current_path, path, import.span)?;
                     let leaf = exported_namespace(path, &imported);
                     insert_namespace_import(&mut bindings, path, leaf, import.span)?;
                 }
@@ -246,12 +272,13 @@ impl ModuleLoader {
             .collect()
     }
 
-    fn load_imported_module(&mut self, module_path: &[String], span: Span) -> Result<Program> {
-        let mut path = self.package_root.clone();
-        for segment in module_path {
-            path.push(segment);
-        }
-        path.set_extension("au");
+    fn load_imported_module(
+        &mut self,
+        current_path: &Path,
+        module_path: &[String],
+        span: Span,
+    ) -> Result<Program> {
+        let path = self.resolve_import_path(current_path, module_path)?;
         if !path.exists() {
             return Err(Diagnostic::at(
                 span,
@@ -264,15 +291,82 @@ impl ModuleLoader {
         }
         self.load_program(&path)
     }
+
+    fn resolve_import_path(&self, current_path: &Path, module_path: &[String]) -> Result<PathBuf> {
+        if let Some(graph) = &self.package_graph {
+            return graph.resolve_import_path(current_path, module_path);
+        }
+        let mut path = self.package_root.clone();
+        for segment in module_path {
+            path.push(segment);
+        }
+        path.set_extension("au");
+        Ok(path)
+    }
+
+    fn module_name_for_path(&self, path: &Path) -> String {
+        self.package_graph
+            .as_ref()
+            .and_then(|graph| graph.module_name_for_path(path))
+            .unwrap_or_else(|| logical_module_name(&self.package_root, path))
+    }
+
+    fn qualify_program_imported_modules(&self, path: &Path, program: &mut Program) {
+        let Some(graph) = &self.package_graph else {
+            return;
+        };
+        let Some(package) = graph.source_for_path(path) else {
+            return;
+        };
+        let Some(prefix) = package.external_prefix.as_deref() else {
+            return;
+        };
+        let dependency_aliases = graph.dependency_aliases_for_path(path);
+        qualify_imported_module_namespaces(
+            &mut program.imported_modules,
+            prefix,
+            &dependency_aliases,
+        );
+    }
+
+    fn write_lockfile(&self) -> Result<()> {
+        if let Some(graph) = &self.package_graph {
+            graph.write_lockfile()?;
+        }
+        Ok(())
+    }
 }
 
 fn absolutize(path: &Path) -> PathBuf {
-    if path.is_absolute() {
+    let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir()
             .expect("current directory should be available")
             .join(path)
+    };
+    if let Ok(canonical) = fs::canonicalize(&absolute) {
+        return canonical;
+    }
+
+    let mut existing_ancestor = absolute.as_path();
+    while !existing_ancestor.exists() {
+        let Some(parent) = existing_ancestor.parent() else {
+            return absolute;
+        };
+        existing_ancestor = parent;
+    }
+
+    let Ok(canonical_ancestor) = fs::canonicalize(existing_ancestor) else {
+        return absolute;
+    };
+    let Ok(suffix) = absolute.strip_prefix(existing_ancestor) else {
+        return absolute;
+    };
+    if suffix.as_os_str().is_empty() {
+        canonical_ancestor
+    } else {
+        canonical_ancestor.join(suffix)
     }
 }
 
@@ -327,6 +421,26 @@ fn logical_module_name(package_root: &Path, path: &Path) -> String {
         .map(|segment| segment.to_string_lossy().to_string())
         .collect::<Vec<_>>()
         .join(".")
+}
+
+fn qualify_imported_module_namespaces(
+    modules: &mut BTreeMap<String, ModuleNamespace>,
+    prefix: &str,
+    dependency_aliases: &BTreeSet<String>,
+) {
+    for (name, namespace) in modules.iter_mut() {
+        if dependency_aliases.contains(name) {
+            continue;
+        }
+        qualify_namespace_path(namespace, prefix);
+    }
+}
+
+fn qualify_namespace_path(namespace: &mut ModuleNamespace, prefix: &str) {
+    namespace.path = format!("{}.{}", prefix, namespace.path);
+    for module in namespace.modules.values_mut() {
+        qualify_namespace_path(module, prefix);
+    }
 }
 
 fn local_item_exists(program: &Program, name: &str) -> bool {
