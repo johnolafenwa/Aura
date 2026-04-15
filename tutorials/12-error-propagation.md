@@ -30,4 +30,4 @@ def add_one_after_divide(a: int32, b: int32) -> Result[int32, String]:
 See:
 
 - [examples/error_handling/try_result.au](../examples/error_handling/try_result.au)
-- [tutorials/09-results-and-options.md](./09-results-and-options.md)
+- [tutorials/10-results-and-options.md](./10-results-and-options.md)

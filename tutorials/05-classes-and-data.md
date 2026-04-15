@@ -45,7 +45,8 @@ dx = a.x - b.x
 
 Reading a non-copy field from an owned value moves that field out of the instance. You can still
 read other untouched fields, but you cannot read the moved field again until you assign a new value
-back into it.
+back into it. See [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for a full
+explanation of move semantics, copy types, and common patterns for working with fields.
 
 ## Default Field Values
 
@@ -115,16 +116,16 @@ class Counter:
 
 ## Receiver Forms
 
-The current compiler accepts these receiver forms:
+The current compiler accepts these receiver forms. For a full explanation of how borrowing works and why these distinctions matter, see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md).
 
 - `self`
-  - by-value receiver
+  - by-value receiver; consumes ownership of the instance
 - `borrow self`
-  - shared receiver
+  - shared receiver; read-only access, the most common choice
 - `borrow mut self`
-  - mutable receiver
+  - mutable receiver; exclusive access, can modify fields in place
 - no receiver
-  - associated method
+  - associated method; called on the class, not an instance
 
 Example:
 

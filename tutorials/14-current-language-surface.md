@@ -64,6 +64,67 @@ Builtin generic or runtime-facing types currently accepted:
 
 These built-in type names are reserved and cannot be reused for user-defined classes, enums, or traits.
 
+## Packages And Workspaces
+
+Aurora now supports a first local package-system milestone:
+
+- `Aurora.toml` package manifests with `[package]`
+- package source roots under `src/`
+- local path dependencies under `[dependencies]`
+- workspace roots with `[workspace] members = [...]`
+- package-aware `check`, `run`, `run-mir`, `build`, `analyze`, and `complete`
+- a local `Aurora.lock` written at the package root or workspace root
+
+Current manifest shape:
+
+```toml
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+util = { path = "../util" }
+```
+
+Current workspace shape:
+
+```toml
+[workspace]
+members = ["app", "util"]
+```
+
+Current package-system limits:
+
+- dependency imports are local path dependencies only for now
+- import roots for dependencies are package-name-prefixed, such as `import util.math`
+- version-only registry dependencies like `util = "0.1.0"` are rejected with a clear diagnostic
+- there are no registry, git, or publish/install flows yet
+
+## Ownership And Borrowing
+
+Aurora uses an ownership model with no garbage collector. See [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for the full tutorial.
+
+Copy types (all numeric types, `bool`, `Duration`) are duplicated on assignment. Move types (`String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `Channel[T]`, `Task[T]`, `TaskGroup`, and user-defined classes) transfer ownership on assignment.
+
+`copy class` declarations are allowed when all fields are copy types.
+
+Borrowing forms:
+
+- `borrow T` -- shared, read-only parameter
+- `borrow mut T` -- exclusive, mutable parameter
+- `borrow self` -- shared receiver
+- `borrow mut self` -- mutable receiver
+- `self` -- by-value (consuming) receiver
+- `for x in borrow collection:` -- shared borrow iteration
+- `for x in borrow mut collection:` -- mutable borrow iteration
+- `match borrow value:` -- shared borrow pattern matching
+- `match borrow mut value:` -- mutable borrow pattern matching
+
+Mutable borrow arguments must be mutable places. Overlapping `borrow mut` arguments with other borrows of the same value are rejected. Non-copy fields cannot be moved out of borrowed values.
+
+`.clone()` produces an explicit independent copy of a move type.
+
 ## Statements
 
 The current compiler supports these statement forms:

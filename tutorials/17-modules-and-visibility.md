@@ -68,6 +68,38 @@ Across module boundaries:
 
 Within the same module, private members remain usable.
 
+## Packages And Dependency Imports
+
+When a file lives under a package with `Aurora.toml`, Aurora now treats the package's `src/` directory as the source root.
+
+Local imports still look the same inside the package:
+
+```python
+import helpers.math
+```
+
+Local path dependencies are mounted by package name:
+
+```toml
+[dependencies]
+util = { path = "../util" }
+```
+
+```python
+import util.math
+```
+
+The manifest directory owns dependency-path resolution, so `path = "../util"` is resolved relative to the package's own `Aurora.toml`.
+
+Workspace roots are also supported:
+
+```toml
+[workspace]
+members = ["app", "util"]
+```
+
+The current CLI writes `Aurora.lock` beside the active package manifest, or at the workspace root when the current package is part of a workspace.
+
 ## Maintained Examples
 
 See [examples/modules/simple_import.au](../examples/modules/simple_import.au) with its helper modules under [examples/modules/helpers](../examples/modules/helpers).
@@ -76,7 +108,11 @@ See [examples/modules/namespace_import_types.au](../examples/modules/namespace_i
 
 See [examples/modules/trait_impl_imports.au](../examples/modules/trait_impl_imports.au) with helper modules under [examples/modules/pkg](../examples/modules/pkg).
 
+See [examples/packages/local_path_dependencies/app/src/main.au](../examples/packages/local_path_dependencies/app/src/main.au) with its sibling dependency package under [examples/packages/local_path_dependencies/util](../examples/packages/local_path_dependencies/util).
+
+See [examples/packages/workspace/app/src/main.au](../examples/packages/workspace/app/src/main.au) with its workspace root under [examples/packages/workspace/Aurora.toml](../examples/packages/workspace/Aurora.toml).
+
 ## Current Limits
 
-- module resolution is local-file based for now
-- package manifests and external dependency resolution are still proposal-only
+- module resolution is local-file based plus local path dependencies
+- registry-style version resolution, git dependencies, and publishing are not implemented yet

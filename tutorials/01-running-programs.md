@@ -11,6 +11,7 @@ cargo run -p aura -- check examples/classes/point_distance.au
 cargo run -p aura -- run examples/classes/point_distance.au
 cargo run -p aura -- run examples/collections/vec_basics.au
 cargo run -p aura -- run examples/collections/set_basics.au
+cargo run -p aura -- run examples/packages/local_path_dependencies/app/src/main.au
 cargo run -p aura -- run-mir examples/classes/methods.au
 cargo run -p aura -- run-mir examples/collections/vec_iteration.au
 cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au
@@ -29,6 +30,7 @@ cargo run -p aura -- --version
   - parse and type check the file
 - `run`
   - execute it through the interpreter-backed runtime
+  - when the entry file lives under a package with `Aurora.toml`, the CLI resolves local modules from `src/`, resolves local path dependencies by package name, and updates `Aurora.lock`
 - `run-mir`
   - execute it through the current native MIR runtime path
   - it now covers the current implemented Aurora surface, including `spawn`, `select`, channels, task groups, `try`, and `with`
@@ -64,6 +66,13 @@ cat examples/point.au | cargo run -p aura -- analyze --stdin /virtual/point.au
 cat examples/point.au | cargo run -p aura -- complete --line 5 --character 11 --trigger . --stdin /virtual/point.au
 cat examples/point.au | cargo run -p aura -- build -o ./target/aurora-point --stdin /virtual/point.au
 cat examples/modules/simple_import.au | cargo run -p aura -- run --stdin "$(pwd)/examples/modules/simple_import.au"
+```
+
+The same manifest-aware behavior applies to package entry files under `src/`:
+
+```bash
+cargo run -p aura -- check examples/packages/local_path_dependencies/app/src/main.au
+cargo run -p aura -- run examples/packages/workspace/app/src/main.au
 ```
 
 ## Scripts And `main`
