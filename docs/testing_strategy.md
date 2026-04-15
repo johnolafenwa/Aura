@@ -118,16 +118,18 @@ Current repo commands:
 Current enforced floor:
 
 - compiler
-  - lines: `68%`
-  - functions: `74%`
-  - regions: `68%`
+  - lines: `89%`
+  - functions: `89%`
+  - regions: `90%`
 - language server
   - statements: `91%`
-  - branches: `82%`
-  - functions: `98%`
+  - branches: `83%`
+  - functions: `100%`
   - lines: `91%`
 
 These are baseline non-regression gates, not the final target. The project is still moving toward enforced 100% coverage as the implementation stabilizes.
+
+Compiler coverage now ignores sibling `crates/aurora-compiler/src/*_tests.rs` files that exist only to hold extracted unit-test scaffolding. The compiler gate is intended to measure production compiler code, not relocated test harness modules.
 
 ## Workflow For A New Feature
 

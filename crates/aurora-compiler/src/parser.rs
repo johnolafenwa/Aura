@@ -434,13 +434,7 @@ impl Parser {
                     } else {
                         ReceiverKind::Borrow
                     };
-                    let self_name = self.expect_identifier()?;
-                    if self_name != "self" {
-                        return Err(Diagnostic::at(
-                            self.current_span(),
-                            "expected `self` after receiver modifier",
-                        ));
-                    }
+                    self.expect_identifier()?;
                     receiver = Some(receiver_kind);
                     if self.eat_simple(&TokenKind::Comma).is_none() {
                         break;
@@ -1933,3 +1927,7 @@ fn offset_type_ref_span(type_ref: &mut TypeRef, line: usize, column_offset: usiz
         offset_type_ref_span(arg, line, column_offset);
     }
 }
+
+#[cfg(test)]
+#[path = "parser_tests.rs"]
+mod tests;

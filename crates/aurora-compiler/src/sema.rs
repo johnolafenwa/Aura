@@ -318,7 +318,6 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
     };
     let mut type_names = BTreeMap::<String, crate::diag::Span>::new();
     let mut type_arities = BTreeMap::<String, usize>::new();
-    let mut function_names = BTreeMap::<String, crate::diag::Span>::new();
     let mut item_names = BTreeMap::<String, (&'static str, crate::diag::Span)>::new();
     let mut imported_modules = BTreeMap::new();
 
@@ -330,7 +329,6 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
     for (name, binding) in &context.imported_bindings {
         match binding {
             ImportedBinding::Function(function) => {
-                function_names.insert(name.clone(), function.decl.span);
                 item_names.insert(name.clone(), ("function", function.decl.span));
                 if let Some(namespace) = context.module_registry.get(&function.module_name) {
                     register_module_namespace_types(namespace, &mut type_names, &mut type_arities);
@@ -415,17 +413,6 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                         format!(
                             "duplicate item `{}` (previously declared as {} at {})",
                             function_decl.name, kind, existing
-                        ),
-                    ));
-                }
-                if let Some(existing) =
-                    function_names.insert(function_decl.name.clone(), function_decl.span)
-                {
-                    return Err(Diagnostic::at(
-                        function_decl.span,
-                        format!(
-                            "duplicate function `{}` (previously declared at {})",
-                            function_decl.name, existing
                         ),
                     ));
                 }
@@ -1718,6 +1705,8 @@ fn is_builtin_type(name: &str) -> bool {
             | "Range"
             | "Channel"
             | "Task"
+            | "Option"
+            | "Result"
             | "SendError"
             | "TaskGroup"
             | "Duration"
@@ -7753,3 +7742,7 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "sema_tests.rs"]
+mod tests;

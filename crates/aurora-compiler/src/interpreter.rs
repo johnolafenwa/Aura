@@ -141,8 +141,9 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
 
     fn render_source_type(value: &Value) -> String {
         match value {
-            Value::Int(_) => "integer".to_string(),
-            Value::Float(_) => "float64".to_string(),
+            Value::Int(_) | Value::Float(_) => {
+                unreachable!("numeric source types are handled before render_source_type")
+            }
             Value::Bool(_) => "bool".to_string(),
             Value::String(_) => "String".to_string(),
             Value::Vec(_) => "Vec".to_string(),
@@ -160,20 +161,6 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
         }
     }
 
-    let cast_float = |value: f64| match target {
-        Type::Named(name, args) if args.is_empty() && name == "float32" => {
-            Ok(Value::Float((value as f32) as f64))
-        }
-        Type::Named(name, args) if args.is_empty() && name == "float64" => Ok(Value::Float(value)),
-        _ => Err(render_target_error(
-            span,
-            format!(
-                "casts are only supported between numeric types, found `float64` and `{}`",
-                target
-            ),
-        )),
-    };
-
     match value {
         Value::Int(value) => {
             if let Some(bounds) = crate::sema::integer_type_bounds(target) {
@@ -185,7 +172,21 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
                 }
                 return Ok(Value::Int(value));
             }
-            cast_float(value.to_f64())
+            match target {
+                Type::Named(name, args) if args.is_empty() && name == "float32" => {
+                    Ok(Value::Float((value.to_f64() as f32) as f64))
+                }
+                Type::Named(name, args) if args.is_empty() && name == "float64" => {
+                    Ok(Value::Float(value.to_f64()))
+                }
+                _ => Err(render_target_error(
+                    span,
+                    format!(
+                        "casts are only supported between numeric types, found `float64` and `{}`",
+                        target
+                    ),
+                )),
+            }
         }
         Value::Float(value) => {
             if let Some(bounds) = crate::sema::integer_type_bounds(target) {
@@ -230,7 +231,21 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
                 }
                 return Ok(Value::Int(coerced));
             }
-            cast_float(value)
+            match target {
+                Type::Named(name, args) if args.is_empty() && name == "float32" => {
+                    Ok(Value::Float((value as f32) as f64))
+                }
+                Type::Named(name, args) if args.is_empty() && name == "float64" => {
+                    Ok(Value::Float(value))
+                }
+                _ => Err(render_target_error(
+                    span,
+                    format!(
+                        "casts are only supported between numeric types, found `float64` and `{}`",
+                        target
+                    ),
+                )),
+            }
         }
         other => Err(render_target_error(
             span,
@@ -290,9 +305,19 @@ impl PartialEq for SetValue {
         if self.elements.len() != other.elements.len() {
             return false;
         }
-        self.elements
-            .iter()
-            .all(|element| other.elements.iter().any(|candidate| candidate == element))
+        for element in &self.elements {
+            let mut found = false;
+            for candidate in &other.elements {
+                if candidate == element {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -301,13 +326,19 @@ impl PartialEq for MapValue {
         if self.entries.len() != other.entries.len() {
             return false;
         }
-        self.entries.iter().all(|(key, value)| {
-            other
-                .entries
-                .iter()
-                .find(|(candidate_key, _)| candidate_key == key)
-                .is_some_and(|(_, candidate_value)| candidate_value == value)
-        })
+        for (key, value) in &self.entries {
+            let mut matched = false;
+            for (candidate_key, candidate_value) in &other.entries {
+                if candidate_key == key {
+                    matched = candidate_value == value;
+                    break;
+                }
+            }
+            if !matched {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -420,9 +451,6 @@ fn render_float(value: f64) -> String {
     } else {
         value.to_string()
     };
-    if !value.is_finite() {
-        return rendered;
-    }
     if !rendered.contains(['.', 'e', 'E']) {
         rendered.push_str(".0");
     }
@@ -605,7 +633,7 @@ const MAX_CALL_DEPTH: usize = 1024;
 
 pub fn run(program: &Program) -> Result<RunOutput> {
     let program = program.clone();
-    std::thread::Builder::new()
+    let handle = match std::thread::Builder::new()
         .name("aurora-interpreter".to_string())
         // Keep enough headroom for the explicit Aurora recursion limit in debug builds.
         .stack_size(256 * 1024 * 1024)
@@ -625,15 +653,21 @@ pub fn run(program: &Program) -> Result<RunOutput> {
                 value,
                 stdout: rendered_stdout,
             })
-        })
-        .map_err(|error| {
-            Diagnostic::new(format!(
+        }) {
+        Ok(handle) => handle,
+        Err(error) => {
+            return Err(Diagnostic::new(format!(
                 "failed to start Aurora interpreter thread: {}",
                 error
-            ))
-        })?
-        .join()
-        .map_err(|_| Diagnostic::new("Aurora interpreter panicked while executing the program"))?
+            )))
+        }
+    };
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err(Diagnostic::new(
+            "Aurora interpreter panicked while executing the program",
+        )),
+    }
 }
 
 struct Interpreter {
@@ -784,10 +818,10 @@ impl Interpreter {
     }
 
     fn current_module_name(&self) -> &str {
-        self.module_stack
-            .last()
-            .map(String::as_str)
-            .unwrap_or(self.program.module_name.as_str())
+        match self.module_stack.last() {
+            Some(name) => name.as_str(),
+            None => self.program.module_name.as_str(),
+        }
     }
 
     fn current_module_namespace(&self) -> Option<&ModuleNamespace> {
@@ -795,26 +829,35 @@ impl Interpreter {
         if module_name == self.program.module_name {
             None
         } else {
-            self.program
-                .module_registry
-                .get(module_name)
-                .or_else(|| self.module_namespace(module_name))
+            match self.program.module_registry.get(module_name) {
+                Some(namespace) => Some(namespace),
+                None => self.module_namespace(module_name),
+            }
         }
     }
 
     fn resolve_function_info(&self, name: &str) -> Option<&crate::sema::FunctionInfo> {
-        self.current_module_namespace()
-            .and_then(|namespace| namespace.all_functions.get(name))
-            .or_else(|| self.program.functions.get(name))
+        if let Some(namespace) = self.current_module_namespace() {
+            if let Some(function) = namespace.all_functions.get(name) {
+                return Some(function);
+            }
+        }
+        self.program.functions.get(name)
     }
 
     fn infer_module_path(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
-            ExprKind::Name(name) => self
-                .current_module_namespace()
-                .and_then(|namespace| namespace.imported_modules.get(name))
-                .or_else(|| self.program.imported_modules.get(name))
-                .map(|namespace| namespace.path.clone()),
+            ExprKind::Name(name) => {
+                if let Some(namespace) = self.current_module_namespace() {
+                    if let Some(imported) = namespace.imported_modules.get(name) {
+                        return Some(imported.path.clone());
+                    }
+                }
+                self.program
+                    .imported_modules
+                    .get(name)
+                    .map(|namespace| namespace.path.clone())
+            }
             ExprKind::Specialize { expr, .. } => self.infer_module_path(expr),
             ExprKind::Member { object, field } => {
                 let module_path = self.infer_module_path(object)?;
@@ -1045,24 +1088,34 @@ impl Interpreter {
             Value::Instance(instance) => Some(Type::named(&instance.class_name)),
             Value::EnumVariant(variant) => match variant.enum_name.as_str() {
                 "Option" => match &variant.payload {
-                    Some(payload) => Self::infer_value_type(payload)
-                        .map(|inner| Type::Named("Option".to_string(), vec![inner])),
+                    Some(payload) => {
+                        let inner = Self::infer_value_type(payload)?;
+                        Some(Type::Named("Option".to_string(), vec![inner]))
+                    }
                     None => None,
                 },
                 "Result" => match (variant.variant_name.as_str(), &variant.payload) {
-                    ("Ok", Some(payload)) => Self::infer_value_type(payload).map(|ok| {
-                        Type::Named("Result".to_string(), vec![ok, Type::named("Unknown")])
-                    }),
-                    ("Err", Some(payload)) => Self::infer_value_type(payload).map(|err| {
-                        Type::Named("Result".to_string(), vec![Type::named("Unknown"), err])
-                    }),
+                    ("Ok", Some(payload)) => {
+                        let ok = Self::infer_value_type(payload)?;
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![ok, Type::named("Unknown")],
+                        ))
+                    }
+                    ("Err", Some(payload)) => {
+                        let err = Self::infer_value_type(payload)?;
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![Type::named("Unknown"), err],
+                        ))
+                    }
                     _ => None,
                 },
-                "SendError" => variant
-                    .payload
-                    .as_ref()
-                    .and_then(|payload| Self::infer_value_type(payload))
-                    .map(|value| Type::Named("SendError".to_string(), vec![value])),
+                "SendError" => {
+                    let payload = variant.payload.as_ref()?;
+                    let value = Self::infer_value_type(payload)?;
+                    Some(Type::Named("SendError".to_string(), vec![value]))
+                }
                 other => Some(Type::named(other)),
             },
             Value::Channel(_) | Value::Task(_) | Value::TaskGroup(_) => None,
@@ -1086,17 +1139,14 @@ impl Interpreter {
             );
         }
 
-        let resolved_args = class_info
-            .decl
-            .type_params
-            .iter()
-            .map(|type_param| {
-                substitutions
-                    .get(type_param)
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))
-            })
-            .collect();
+        let mut resolved_args = Vec::new();
+        for type_param in &class_info.decl.type_params {
+            if let Some(ty) = substitutions.get(type_param).cloned() {
+                resolved_args.push(ty);
+            } else {
+                resolved_args.push(Type::named("Unknown"));
+            }
+        }
         Some(Type::Named(instance.class_name.clone(), resolved_args))
     }
 
@@ -1105,28 +1155,37 @@ impl Interpreter {
             Value::Instance(instance) => self.infer_instance_type(instance),
             Value::EnumVariant(variant) => match variant.enum_name.as_str() {
                 "Option" => match &variant.payload {
-                    Some(payload) => self
-                        .infer_runtime_value_type(payload)
-                        .map(|inner| Type::Named("Option".to_string(), vec![inner])),
+                    Some(payload) => {
+                        let inner = self.infer_runtime_value_type(payload)?;
+                        Some(Type::Named("Option".to_string(), vec![inner]))
+                    }
                     None => Some(Type::Named(
                         "Option".to_string(),
                         vec![Type::named("Unknown")],
                     )),
                 },
                 "Result" => match (variant.variant_name.as_str(), &variant.payload) {
-                    ("Ok", Some(payload)) => self.infer_runtime_value_type(payload).map(|ok| {
-                        Type::Named("Result".to_string(), vec![ok, Type::named("Unknown")])
-                    }),
-                    ("Err", Some(payload)) => self.infer_runtime_value_type(payload).map(|err| {
-                        Type::Named("Result".to_string(), vec![Type::named("Unknown"), err])
-                    }),
+                    ("Ok", Some(payload)) => {
+                        let ok = self.infer_runtime_value_type(payload)?;
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![ok, Type::named("Unknown")],
+                        ))
+                    }
+                    ("Err", Some(payload)) => {
+                        let err = self.infer_runtime_value_type(payload)?;
+                        Some(Type::Named(
+                            "Result".to_string(),
+                            vec![Type::named("Unknown"), err],
+                        ))
+                    }
                     _ => Self::infer_value_type(value),
                 },
-                "SendError" => variant
-                    .payload
-                    .as_ref()
-                    .and_then(|payload| self.infer_runtime_value_type(payload))
-                    .map(|inner| Type::Named("SendError".to_string(), vec![inner])),
+                "SendError" => {
+                    let payload = variant.payload.as_ref()?;
+                    let inner = self.infer_runtime_value_type(payload)?;
+                    Some(Type::Named("SendError".to_string(), vec![inner]))
+                }
                 _ => Self::infer_value_type(value),
             },
             _ => Self::infer_value_type(value),
@@ -1141,28 +1200,21 @@ impl Interpreter {
 
         let inferred = match &expr.kind {
             ExprKind::Name(name) if name == "None" => Some(Type::Unit),
-            ExprKind::Name(name) => env
-                .get_type(name)
-                .cloned()
-                .or_else(|| {
-                    env.get(name)
-                        .and_then(|value| self.infer_runtime_value_type(value))
-                })
-                .or_else(|| {
-                    self.current_module_namespace()
-                        .and_then(|namespace| namespace.all_functions.get(name))
-                        .map(|function| function.signature.return_type.clone())
-                })
-                .or_else(|| {
-                    self.current_module_namespace()
-                        .and_then(|namespace| namespace.all_classes.get(name))
-                        .map(|class| Type::named(class.decl.name.clone()))
-                })
-                .or_else(|| {
-                    self.current_module_namespace()
-                        .and_then(|namespace| namespace.all_enums.get(name))
-                        .map(|enum_info| Type::named(enum_info.decl.name.clone()))
-                }),
+            ExprKind::Name(name) => {
+                if let Some(ty) = env.get_type(name).cloned() {
+                    Some(ty)
+                } else if let Some(value) = env.get(name) {
+                    self.infer_runtime_value_type(value)
+                } else if let Some(function) = self.resolve_function_info(name) {
+                    Some(function.signature.return_type.clone())
+                } else if let Some(class) = self.resolve_class_info(name) {
+                    Some(Type::named(class.decl.name.clone()))
+                } else if let Some(enum_info) = self.resolve_enum_info(name) {
+                    Some(Type::named(enum_info.decl.name.clone()))
+                } else {
+                    None
+                }
+            }
             ExprKind::Int(_) => Some(Type::named("int32")),
             ExprKind::DurationMillis(_) => Some(Type::named("Duration")),
             ExprKind::Float(_) => Some(Type::named("float64")),
@@ -1602,17 +1654,21 @@ impl Interpreter {
     }
 
     fn type_implements_trait_bound(&self, ty: &Type, bound: &crate::sema::TraitBound) -> bool {
-        self.trait_impls_in_scope().any(|trait_impl| {
-            self.trait_impl_substitutions_for_bound(trait_impl, ty, bound)
-                .or_else(|| {
-                    if bound.trait_args.is_empty() && trait_impl.trait_name == bound.trait_name {
-                        self.trait_impl_substitutions(trait_impl, ty)
-                    } else {
-                        None
-                    }
-                })
+        for trait_impl in self.trait_impls_in_scope() {
+            if self
+                .trait_impl_substitutions_for_bound(trait_impl, ty, bound)
                 .is_some()
-        })
+            {
+                return true;
+            }
+            if bound.trait_args.is_empty()
+                && trait_impl.trait_name == bound.trait_name
+                && self.trait_impl_substitutions(trait_impl, ty).is_some()
+            {
+                return true;
+            }
+        }
+        false
     }
 
     fn find_trait_impl_method(
@@ -1620,18 +1676,16 @@ impl Interpreter {
         receiver_ty: &Type,
         field: &str,
     ) -> Option<(crate::sema::TraitImplMethodInfo, HashMap<String, Type>)> {
-        self.trait_impls_in_scope()
-            .filter_map(|trait_impl| {
-                self.trait_impl_substitutions(trait_impl, receiver_ty)
-                    .map(|substitutions| (trait_impl, substitutions))
-            })
-            .find_map(|(trait_impl, substitutions)| {
-                trait_impl
-                    .methods
-                    .get(field)
-                    .cloned()
-                    .map(|method| (method, substitutions))
-            })
+        for trait_impl in self.trait_impls_in_scope() {
+            let Some(substitutions) = self.trait_impl_substitutions(trait_impl, receiver_ty) else {
+                continue;
+            };
+            let Some(method) = trait_impl.methods.get(field).cloned() else {
+                continue;
+            };
+            return Some((method, substitutions));
+        }
+        None
     }
 
     fn find_operator_trait_impl_method(
@@ -1641,51 +1695,63 @@ impl Interpreter {
         field: &str,
         rhs_ty: Option<&Type>,
     ) -> Option<(crate::sema::TraitImplMethodInfo, HashMap<String, Type>)> {
-        self.trait_impls_in_scope()
-            .filter(|trait_impl| trait_impl.trait_name == trait_name)
-            .filter_map(|trait_impl| {
-                let method = trait_impl.methods.get(field)?.clone();
-                let mut type_params = std::collections::BTreeSet::new();
-                collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
-                for trait_arg in &trait_impl.trait_args {
-                    collect_type_params_from_type(trait_arg, &mut type_params);
-                }
-                let mut substitutions = HashMap::new();
-                if !crate::sema::type_pattern_matches(
-                    &trait_impl.for_type,
-                    receiver_ty,
-                    &type_params,
-                    &mut substitutions,
-                ) {
-                    return None;
-                }
-                match rhs_ty {
-                    Some(rhs_ty) if trait_impl.trait_args.len() == 2 => {
-                        if !crate::sema::type_pattern_matches(
-                            &trait_impl.trait_args[0],
-                            rhs_ty,
-                            &type_params,
-                            &mut substitutions,
-                        ) {
-                            return None;
-                        }
-                    }
-                    None if trait_impl.trait_args.len() == 1 => {}
-                    _ => return None,
-                }
-                for (type_param, bounds) in &trait_impl.type_param_bounds {
-                    let actual_ty = substitutions.get(type_param)?;
-                    for bound in bounds {
-                        let resolved_bound =
-                            crate::sema::substitute_trait_bound(bound, &substitutions);
-                        if !self.type_implements_trait_bound(actual_ty, &resolved_bound) {
-                            return None;
-                        }
+        for trait_impl in self.trait_impls_in_scope() {
+            if trait_impl.trait_name != trait_name {
+                continue;
+            }
+            let Some(method) = trait_impl.methods.get(field).cloned() else {
+                continue;
+            };
+            let mut type_params = std::collections::BTreeSet::new();
+            collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
+            for trait_arg in &trait_impl.trait_args {
+                collect_type_params_from_type(trait_arg, &mut type_params);
+            }
+            let mut substitutions = HashMap::new();
+            if !crate::sema::type_pattern_matches(
+                &trait_impl.for_type,
+                receiver_ty,
+                &type_params,
+                &mut substitutions,
+            ) {
+                continue;
+            }
+            match rhs_ty {
+                Some(rhs_ty) if trait_impl.trait_args.len() == 2 => {
+                    if !crate::sema::type_pattern_matches(
+                        &trait_impl.trait_args[0],
+                        rhs_ty,
+                        &type_params,
+                        &mut substitutions,
+                    ) {
+                        continue;
                     }
                 }
-                Some((method, substitutions))
-            })
-            .next()
+                None if trait_impl.trait_args.len() == 1 => {}
+                _ => continue,
+            }
+            let mut valid_bounds = true;
+            for (type_param, bounds) in &trait_impl.type_param_bounds {
+                let Some(actual_ty) = substitutions.get(type_param) else {
+                    valid_bounds = false;
+                    break;
+                };
+                for bound in bounds {
+                    let resolved_bound = crate::sema::substitute_trait_bound(bound, &substitutions);
+                    if !self.type_implements_trait_bound(actual_ty, &resolved_bound) {
+                        valid_bounds = false;
+                        break;
+                    }
+                }
+                if !valid_bounds {
+                    break;
+                }
+            }
+            if valid_bounds {
+                return Some((method, substitutions));
+            }
+        }
+        None
     }
 
     fn eval_unary_operator_via_trait(
@@ -4057,10 +4123,10 @@ impl Interpreter {
             BinaryOp::Eq => Ok(Value::Bool(left == right)),
             BinaryOp::NotEq => Ok(Value::Bool(left != right)),
             BinaryOp::Add => match (left, right) {
-                (Value::Int(left), Value::Int(right)) => left
-                    .checked_add(right)
-                    .map(Value::Int)
-                    .ok_or_else(|| Diagnostic::at(span, "integer overflow")),
+                (Value::Int(left), Value::Int(right)) => match left.checked_add(right) {
+                    Some(value) => Ok(Value::Int(value)),
+                    None => Err(Diagnostic::at(span, "integer overflow")),
+                },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + right)),
                 (Value::String(left), Value::String(right)) => Ok(Value::String(left + &right)),
                 _ => Err(Diagnostic::at(
@@ -4069,10 +4135,10 @@ impl Interpreter {
                 )),
             },
             BinaryOp::Sub => match (left, right) {
-                (Value::Int(left), Value::Int(right)) => left
-                    .checked_sub(right)
-                    .map(Value::Int)
-                    .ok_or_else(|| Diagnostic::at(span, "integer overflow")),
+                (Value::Int(left), Value::Int(right)) => match left.checked_sub(right) {
+                    Some(value) => Ok(Value::Int(value)),
+                    None => Err(Diagnostic::at(span, "integer overflow")),
+                },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left - right)),
                 _ => Err(Diagnostic::at(
                     span,
@@ -4080,10 +4146,10 @@ impl Interpreter {
                 )),
             },
             BinaryOp::Mul => match (left, right) {
-                (Value::Int(left), Value::Int(right)) => left
-                    .checked_mul(right)
-                    .map(Value::Int)
-                    .ok_or_else(|| Diagnostic::at(span, "integer overflow")),
+                (Value::Int(left), Value::Int(right)) => match left.checked_mul(right) {
+                    Some(value) => Ok(Value::Int(value)),
+                    None => Err(Diagnostic::at(span, "integer overflow")),
+                },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left * right)),
                 _ => Err(Diagnostic::at(
                     span,
@@ -4094,10 +4160,10 @@ impl Interpreter {
                 (Value::Int(_left), Value::Int(right)) if right.is_zero() => {
                     Err(Diagnostic::at(span, "division by zero"))
                 }
-                (Value::Int(left), Value::Int(right)) => left
-                    .checked_div(right)
-                    .map(Value::Int)
-                    .ok_or_else(|| Diagnostic::at(span, "integer overflow")),
+                (Value::Int(left), Value::Int(right)) => match left.checked_div(right) {
+                    Some(value) => Ok(Value::Int(value)),
+                    None => Err(Diagnostic::at(span, "integer overflow")),
+                },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left / right)),
                 _ => Err(Diagnostic::at(
                     span,
@@ -4108,60 +4174,44 @@ impl Interpreter {
                 (Value::Int(_left), Value::Int(right)) if right.is_zero() => {
                     Err(Diagnostic::at(span, "division by zero"))
                 }
-                (Value::Int(left), Value::Int(right)) => left
-                    .checked_rem(right)
-                    .map(Value::Int)
-                    .ok_or_else(|| Diagnostic::at(span, "integer overflow")),
+                (Value::Int(left), Value::Int(right)) => match left.checked_rem(right) {
+                    Some(value) => Ok(Value::Int(value)),
+                    None => Err(Diagnostic::at(span, "integer overflow")),
+                },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left % right)),
                 _ => Err(Diagnostic::at(
                     span,
                     "binary operands must have matching numeric types",
                 )),
             },
-            BinaryOp::Less => self.eval_ordering(
-                span,
-                left,
-                right,
-                |left, right| left < right,
-                |left, right| left < right,
-            ),
-            BinaryOp::LessEq => self.eval_ordering(
-                span,
-                left,
-                right,
-                |left, right| left <= right,
-                |left, right| left <= right,
-            ),
-            BinaryOp::Greater => self.eval_ordering(
-                span,
-                left,
-                right,
-                |left, right| left > right,
-                |left, right| left > right,
-            ),
-            BinaryOp::GreaterEq => self.eval_ordering(
-                span,
-                left,
-                right,
-                |left, right| left >= right,
-                |left, right| left >= right,
-            ),
+            BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq => {
+                self.eval_ordering(span, op, left, right)
+            }
         }
     }
 
     fn eval_ordering(
         &self,
         span: crate::diag::Span,
+        op: BinaryOp,
         left: Value,
         right: Value,
-        compare_int: impl FnOnce(IntegerValue, IntegerValue) -> bool + Copy,
-        compare_float: impl FnOnce(f64, f64) -> bool + Copy,
     ) -> Result<Value> {
         match (left, right) {
-            (Value::Int(left), Value::Int(right)) => Ok(Value::Bool(compare_int(left, right))),
-            (Value::Float(left), Value::Float(right)) => {
-                Ok(Value::Bool(compare_float(left, right)))
-            }
+            (Value::Int(left), Value::Int(right)) => Ok(Value::Bool(match op {
+                BinaryOp::Less => left < right,
+                BinaryOp::LessEq => left <= right,
+                BinaryOp::Greater => left > right,
+                BinaryOp::GreaterEq => left >= right,
+                _ => unreachable!("non-ordering op passed to eval_ordering"),
+            })),
+            (Value::Float(left), Value::Float(right)) => Ok(Value::Bool(match op {
+                BinaryOp::Less => left < right,
+                BinaryOp::LessEq => left <= right,
+                BinaryOp::Greater => left > right,
+                BinaryOp::GreaterEq => left >= right,
+                _ => unreachable!("non-ordering op passed to eval_ordering"),
+            })),
             _ => Err(Diagnostic::at(
                 span,
                 "ordering comparisons require matching numeric operands",
@@ -4637,24 +4687,35 @@ impl Interpreter {
                     EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
                 };
                 let key = self.coerce_value_to_type(key, &map.key_type, span)?;
-                Ok(EvalOutcome::Value(Value::Bool(
-                    map.entries
-                        .iter()
-                        .any(|(candidate_key, _)| *candidate_key == key),
-                )))
+                let mut found = false;
+                for (candidate_key, _) in &map.entries {
+                    if *candidate_key == key {
+                        found = true;
+                        break;
+                    }
+                }
+                Ok(EvalOutcome::Value(Value::Bool(found)))
             }
             "keys" => {
                 BuiltinMember::MapKeys.bind_args(args, span)?;
+                let mut elements = Vec::new();
+                for (key, _) in &map.entries {
+                    elements.push(key.clone());
+                }
                 Ok(EvalOutcome::Value(Value::Vec(VecValue {
                     element_type: map.key_type.clone(),
-                    elements: map.entries.iter().map(|(key, _)| key.clone()).collect(),
+                    elements,
                 })))
             }
             "values" => {
                 BuiltinMember::MapValues.bind_args(args, span)?;
+                let mut elements = Vec::new();
+                for (_, value) in &map.entries {
+                    elements.push(value.clone());
+                }
                 Ok(EvalOutcome::Value(Value::Vec(VecValue {
                     element_type: map.value_type.clone(),
-                    elements: map.entries.iter().map(|(_, value)| value.clone()).collect(),
+                    elements,
                 })))
             }
             "items" | "entries" => {
@@ -4664,24 +4725,22 @@ impl Interpreter {
                     BuiltinMember::MapEntries
                 };
                 builtin.bind_args(args, span)?;
+                let mut elements = Vec::new();
+                for (key, value) in &map.entries {
+                    elements.push(Value::Instance(InstanceValue {
+                        class_name: "MapEntry".to_string(),
+                        fields: BTreeMap::from([
+                            ("key".to_string(), key.clone()),
+                            ("value".to_string(), value.clone()),
+                        ]),
+                    }));
+                }
                 Ok(EvalOutcome::Value(Value::Vec(VecValue {
                     element_type: Type::Named(
                         "MapEntry".to_string(),
                         vec![map.key_type.clone(), map.value_type.clone()],
                     ),
-                    elements: map
-                        .entries
-                        .iter()
-                        .map(|(key, value)| {
-                            Value::Instance(InstanceValue {
-                                class_name: "MapEntry".to_string(),
-                                fields: BTreeMap::from([
-                                    ("key".to_string(), key.clone()),
-                                    ("value".to_string(), value.clone()),
-                                ]),
-                            })
-                        })
-                        .collect(),
+                    elements,
                 })))
             }
             "clear" => {
@@ -4710,11 +4769,14 @@ impl Interpreter {
                 };
                 let mut updated = map;
                 for (key, value) in other.entries {
-                    if let Some(index) = updated
-                        .entries
-                        .iter()
-                        .position(|(candidate_key, _)| *candidate_key == key)
-                    {
+                    let mut existing_index = None;
+                    for (index, (candidate_key, _)) in updated.entries.iter().enumerate() {
+                        if *candidate_key == key {
+                            existing_index = Some(index);
+                            break;
+                        }
+                    }
+                    if let Some(index) = existing_index {
                         updated.entries[index].1 = value;
                     } else {
                         updated.entries.push((key, value));
@@ -5011,12 +5073,16 @@ impl Interpreter {
                     EvalOutcome::Return(value) => return Ok(EvalOutcome::Return(value)),
                 };
                 let mut updated = set;
-                let inserted = if updated.elements.iter().any(|candidate| *candidate == value) {
-                    false
-                } else {
+                let mut inserted = true;
+                for candidate in &updated.elements {
+                    if *candidate == value {
+                        inserted = false;
+                        break;
+                    }
+                }
+                if inserted {
                     updated.elements.push(value);
-                    true
-                };
+                }
                 self.write_place_expr(receiver_expr, env, Value::Set(updated))?;
                 Ok(EvalOutcome::Value(Value::Bool(inserted)))
             }
@@ -5116,10 +5182,10 @@ impl Interpreter {
                     env,
                     span,
                 )?;
-                let values = evaluated_args
-                    .iter()
-                    .map(|argument| argument.value.clone())
-                    .collect();
+                let mut values = Vec::new();
+                for argument in &evaluated_args {
+                    values.push(argument.value.clone());
+                }
 
                 let program = self.program.clone();
                 let stdout = self.stdout.clone();
@@ -5133,10 +5199,10 @@ impl Interpreter {
                         call_depth: 0,
                         expr_type_cache: RefCell::new(HashMap::new()),
                     };
-                    interpreter
-                        .call_function(&function, &function_info.module_name, values)
-                        .map(|outcome| outcome.value)
-                        .map_err(|error| error.to_string())
+                    match interpreter.call_function(&function, &function_info.module_name, values) {
+                        Ok(outcome) => Ok(outcome.value),
+                        Err(error) => Err(error.to_string()),
+                    }
                 });
                 let task = TaskValue {
                     inner: Arc::new(TaskState {
@@ -5403,10 +5469,13 @@ impl Interpreter {
 
     fn read_place_expr(&mut self, expr: &Expr, env: &mut Env) -> Result<Value> {
         match &expr.kind {
-            ExprKind::Name(name) => env
-                .get(name)
-                .cloned()
-                .ok_or_else(|| Diagnostic::at(expr.span, format!("unknown name `{}`", name))),
+            ExprKind::Name(name) => match env.get(name).cloned() {
+                Some(value) => Ok(value),
+                None => Err(Diagnostic::at(
+                    expr.span,
+                    format!("unknown name `{}`", name),
+                )),
+            },
             ExprKind::Group(inner) => self.read_place_expr(inner, env),
             ExprKind::Member { object, field } => {
                 let object_value = self.read_place_expr(object, env)?;
@@ -5416,12 +5485,13 @@ impl Interpreter {
                         format!("cannot access field `{}` on non-instance value", field),
                     ));
                 };
-                instance.fields.get(field).cloned().ok_or_else(|| {
-                    Diagnostic::at(
+                match instance.fields.get(field).cloned() {
+                    Some(value) => Ok(value),
+                    None => Err(Diagnostic::at(
                         expr.span,
                         format!("class `{}` has no field `{}`", instance.class_name, field),
-                    )
-                })
+                    )),
+                }
             }
             ExprKind::Index { object, index } => {
                 let object_value = self.read_place_expr(object, env)?;
@@ -5526,12 +5596,15 @@ impl Interpreter {
         span: crate::diag::Span,
         cancel_before_cleanup: bool,
     ) -> Result<()> {
-        let resource = env.get(binding).cloned().ok_or_else(|| {
-            Diagnostic::at(
-                span,
-                format!("with binding `{}` was not available for cleanup", binding),
-            )
-        })?;
+        let resource = match env.get(binding).cloned() {
+            Some(resource) => resource,
+            None => {
+                return Err(Diagnostic::at(
+                    span,
+                    format!("with binding `{}` was not available for cleanup", binding),
+                ));
+            }
+        };
         if let Value::TaskGroup(group) = resource {
             return self.close_task_group(group, cancel_before_cleanup, span);
         }
@@ -5541,23 +5614,26 @@ impl Interpreter {
                 format!("with binding `{}` is not a resource instance", binding),
             ));
         };
-        let method = self
+        let method = match self
             .resolve_class_info(&instance.class_name)
             .and_then(|class_info| class_info.methods.get("close"))
             .cloned()
-            .ok_or_else(|| {
-                Diagnostic::at(
+        {
+            Some(method) => method,
+            None => {
+                return Err(Diagnostic::at(
                     span,
                     format!(
                         "class `{}` cannot be used with `with` because it has no `close` method",
                         instance.class_name
                     ),
-                )
-            })?;
-        let module_name = self
-            .resolve_class_info(&instance.class_name)
-            .map(|class_info| class_info.module_name.clone())
-            .unwrap_or_else(|| self.current_module_name().to_string());
+                ));
+            }
+        };
+        let module_name = match self.resolve_class_info(&instance.class_name) {
+            Some(class_info) => class_info.module_name.clone(),
+            None => self.current_module_name().to_string(),
+        };
         let outcome =
             self.call_function(&method.decl, &module_name, vec![Value::Instance(instance)])?;
         if let Some(updated_receiver) = outcome.updated_receiver {
@@ -5682,19 +5758,5 @@ impl Interpreter {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{render_float, Value};
-
-    #[test]
-    fn render_float_preserves_whole_number_fraction() {
-        assert_eq!(render_float(42.0), "42.0");
-        assert_eq!(Value::Float(0.0).render(), "0.0");
-    }
-
-    #[test]
-    fn render_float_hides_float32_roundtrip_noise() {
-        let float32_value = (3.14f32) as f64;
-        assert_eq!(render_float(float32_value), "3.14");
-        assert_eq!(Value::Float(float32_value).render(), "3.14");
-    }
-}
+#[path = "interpreter_tests.rs"]
+mod tests;

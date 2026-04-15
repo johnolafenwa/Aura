@@ -792,6 +792,10 @@ test("fallback analysis helper splits top-level comma-separated segments through
     _testing.splitTopLevelCommaSeparated("call(items[0]), values[1], plain"),
     ["call(items[0])", "values[1]", "plain"]
   );
+  assert.deepEqual(
+    _testing.splitTopLevelCommaSeparated("\"a\\\",b\", plain, nested[items[0]]"),
+    ["\"a\\\",b\"", "plain", "nested[items[0]]"]
+  );
 });
 
 test("fallback analysis infers nested map literals and tolerates malformed nested-only entries", () => {
@@ -808,4 +812,380 @@ test("fallback analysis infers nested map literals and tolerates malformed neste
   const hover = hoverForPosition(source, lineIndex, character);
   assert.ok(hover);
   assert.match(hover.value, /local nested: Map\[String, Map\[String, bool\]\]/);
+});
+
+test("fallback analysis helper parses callable parameter types through borrow and generics", () => {
+  assert.deepEqual(
+    _testing.parseParamTypes(
+      "count: int32, text: borrow String, values: borrow mut Vec[int32], cfg: Map[String, Vec[int32]]"
+    ),
+    ["int32", "String", "Vec[int32]", "Map[String, Vec[int32]]"]
+  );
+  assert.deepEqual(
+    _testing.parseParamTypes(
+      "items: Vec[int32] = build(defaults[0], {\"seed\": 1}), enabled: bool = true"
+    ),
+    ["Vec[int32]", "bool"]
+  );
+  assert.equal(
+    _testing.stripTopLevelDefaultValue("Vec[int32] = build(defaults[0], {\"seed\": 1})"),
+    "Vec[int32]"
+  );
+  assert.equal(
+    _testing.stripTopLevelDefaultValue("Map[String, int32]) = call()"),
+    "Map[String, int32])"
+  );
+  assert.equal(
+    _testing.stripTopLevelDefaultValue("Result[int32, String]} = wrap()"),
+    "Result[int32, String]}"
+  );
+  assert.equal(
+    _testing.stripTopLevelDefaultValue("Tuple{value} = make()"),
+    "Tuple{value}"
+  );
+  assert.equal(
+    _testing.stripTopLevelDefaultValue("String = say(\"aurora\\\"repo\")"),
+    "String"
+  );
+  assert.equal(
+    _testing.stripTopLevelDefaultValue("Vec[String] = wrap((\"a\", \"b\"), [\"c\"])"),
+    "Vec[String]"
+  );
+  assert.equal(
+    _testing.stripTopLevelDefaultValue("Call(\"aurora\\\\repo\")"),
+    "Call(\"aurora\\\\repo\")"
+  );
+  assert.equal(
+    _testing.stripTopLevelDefaultValue("Call(\"aurora\\\"repo\")"),
+    "Call(\"aurora\\\"repo\")"
+  );
+  assert.equal(
+    _testing.stripTopLevelDefaultValue("Wrapper(call(\"aurora\"), Vec[String])"),
+    "Wrapper(call(\"aurora\"), Vec[String])"
+  );
+});
+
+test("fallback analysis helper deduplicates identical diagnostics", () => {
+  const moduleInfo = { diagnostics: [] };
+  const diagnostic = {
+    line: 3,
+    startCharacter: 4,
+    endCharacter: 9,
+    message: "unknown name `value`"
+  };
+
+  _testing.pushDiagnosticIfNew(moduleInfo, diagnostic);
+  _testing.pushDiagnosticIfNew(moduleInfo, { ...diagnostic });
+  _testing.pushDiagnosticIfNew(moduleInfo, { ...diagnostic, endCharacter: 10 });
+
+  assert.deepEqual(moduleInfo.diagnostics, [
+    diagnostic,
+    { ...diagnostic, endCharacter: 10 }
+  ]);
+});
+
+test("fallback analysis helper infers loop binding types for vec, set, range, and unknown iterables", () => {
+  const source = [
+    "def main():",
+    "    values = [1, 2, 3]",
+    "    seen = Set{true, false}",
+    "    for value in values:",
+    "        print(value)",
+    "    for flag in seen:",
+    "        print(flag)"
+  ].join("\n");
+  const moduleInfo = analyzeDocument(source);
+  const functionInfo = moduleInfo.functions.get("main");
+
+  assert.equal(_testing.inferForBindingType("values", moduleInfo, functionInfo), "int32");
+  assert.equal(_testing.inferForBindingType("seen", moduleInfo, functionInfo), "bool");
+  assert.equal(_testing.inferForBindingType("range(3)", moduleInfo, functionInfo), "int32");
+  assert.equal(_testing.inferForBindingType("missing", moduleInfo, functionInfo), null);
+});
+
+test("fallback analysis helper infers enum payload bindings from qualified and unqualified match arms", () => {
+  const moduleInfo = analyzeDocument([
+    "enum Status:",
+    "    Ready(code: int32)",
+    "    Waiting",
+    "",
+    "def main(status: Status):",
+    "    match status:",
+    "        case Status.Ready(code):",
+    "            print(code)",
+    "        case Ready(other):",
+    "            print(other)",
+    "        case Option.Some(value):",
+    "            print(value)",
+    "        case Nope(value):",
+    "            print(value)"
+  ].join("\n"));
+
+  assert.equal(
+    _testing.inferCaseBindingType("case Status.Ready(code):", moduleInfo),
+    "code: int32"
+  );
+  assert.equal(
+    _testing.inferCaseBindingType("case Ready(other):", moduleInfo),
+    "code: int32"
+  );
+  assert.equal(
+    _testing.inferCaseBindingType("case Option.Some(value):", moduleInfo),
+    "T"
+  );
+  assert.equal(
+    _testing.inferCaseBindingType("case Nope(value):", moduleInfo),
+    null
+  );
+  assert.equal(
+    _testing.inferCaseBindingType("case Missing.Some(value):", moduleInfo),
+    null
+  );
+  assert.equal(
+    _testing.inferCaseBindingType("case _:", moduleInfo),
+    null
+  );
+});
+
+test("fallback analysis helper specializes builtin member return types and unresolved type params", () => {
+  const moduleInfo = analyzeDocument([
+    "class Widget:",
+    "    value: int32",
+    "",
+    "enum Status:",
+    "    Ready",
+    "",
+    "def main():",
+    "    pass"
+  ].join("\n"));
+  const byName = (group) =>
+    new Map(_testing.builtinMembersFor(group).map((item) => [item.name, item]));
+
+  const channelMembers = byName("Channel");
+  const mapMembers = byName("Map");
+  const vecMembers = byName("Vec");
+  assert.equal(
+    _testing.specializeMemberReturnType("Vec[String]", vecMembers.get("clone")),
+    "Vec[String]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Vec[String]", vecMembers.get("get")),
+    "Option[String]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Vec[String]", { name: "push", detail: "push(value) -> None" }),
+    "None"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Vec", vecMembers.get("remove")),
+    "Option[T]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Map[String, int32]", mapMembers.get("keys")),
+    "Vec[String]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Map[String, int32]", mapMembers.get("values")),
+    "Vec[int32]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Map[String, int32]", mapMembers.get("items")),
+    "Vec[MapEntry[String, int32]]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Map[String, int32]", mapMembers.get("clone")),
+    "Map[String, int32]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Map[String, int32]", mapMembers.get("get")),
+    "Option[int32]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Map[String, int32]", mapMembers.get("set")),
+    "Option[int32]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Map[String, int32]", mapMembers.get("remove")),
+    "Option[int32]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Map", mapMembers.get("clone")),
+    "Map[K, V]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Map[String, int32]", { name: "mystery", detail: "mystery() -> bool" }),
+    "bool"
+  );
+
+  const setMembers = byName("Set");
+  assert.equal(
+    _testing.specializeMemberReturnType("Set[String]", setMembers.get("clone")),
+    "Set[String]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Set[String]", setMembers.get("contains")),
+    "bool"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Set[String]", setMembers.get("len")),
+    "int32"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Set[String]", setMembers.get("remove")),
+    "bool"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Set", setMembers.get("contains")),
+    "bool"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Set", { name: "mystery", detail: "mystery() -> Option[String]" }),
+    "Option[String]"
+  );
+
+  const mapEntryMembers = byName("MapEntry");
+  assert.equal(
+    _testing.specializeMemberReturnType("MapEntry[String, int32]", mapEntryMembers.get("key")),
+    "String"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("MapEntry[String, int32]", mapEntryMembers.get("value")),
+    "int32"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("MapEntry", { name: "key", detail: "key: K", type: "K" }),
+    "K"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType(
+      "MapEntry[String, int32]",
+      { name: "debug", detail: "debug() -> bool", type: "bool" }
+    ),
+    "bool"
+  );
+
+  assert.equal(
+    _testing.specializeMemberReturnType("Channel[int32]", channelMembers.get("clone")),
+    "Channel[int32]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Channel[int32]", channelMembers.get("recv")),
+    "Option[int32]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Channel[int32]", channelMembers.get("send")),
+    "Result[None, SendError[int32]]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Channel[int32]", channelMembers.get("close")),
+    "None"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Channel", channelMembers.get("recv")),
+    "Option[T]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Channel[int32]", { name: "close", detail: "close() -> None" }),
+    "None"
+  );
+
+  const taskMembers = byName("Task");
+  assert.equal(
+    _testing.specializeMemberReturnType("Task[int32]", taskMembers.get("clone")),
+    "Task[int32]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Task[int32]", taskMembers.get("join")),
+    "int32"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Task", taskMembers.get("join")),
+    "T"
+  );
+
+  const taskGroupMembers = byName("TaskGroup");
+  assert.equal(
+    _testing.specializeMemberReturnType("TaskGroup", taskGroupMembers.get("cancel")),
+    "None"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("TaskGroup", taskGroupMembers.get("spawn")),
+    "Task[T]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("UnknownType", { name: "value", detail: "value() -> Result[int32, String]" }),
+    "Result[int32, String]"
+  );
+
+  assert.equal(_testing.baseTypeName("Map[String, int32]"), "Map");
+  assert.equal(_testing.isUnresolvedTypeParamType(moduleInfo, "T"), true);
+  assert.equal(_testing.isUnresolvedTypeParamType(moduleInfo, "int32"), false);
+  assert.equal(_testing.isUnresolvedTypeParamType(moduleInfo, "Widget"), false);
+  assert.equal(_testing.isUnresolvedTypeParamType(moduleInfo, "Status"), false);
+  assert.equal(_testing.isUnresolvedTypeParamType(moduleInfo, "widget"), false);
+  assert.equal(
+    _testing.parseBuiltinDetailReturnType("spawn(function, ...) -> Task[T]"),
+    "Task[T]"
+  );
+});
+
+test("fallback analysis testing helpers expose builtin metadata and utility helpers", () => {
+  const builtinMemberGroups = ["float64", "String", "Vec", "Map", "Set", "MapEntry", "Channel", "Task", "TaskGroup"];
+  for (const group of builtinMemberGroups) {
+    const items = _testing.builtinMembersFor(group);
+    assert.ok(items.length > 0, `expected builtin members for ${group}`);
+    for (const item of items) {
+      assert.equal(typeof item.name, "string");
+      assert.equal(typeof item.detail, "string");
+      assert.equal(typeof item.documentation, "string");
+      assert.ok(item.documentation.length > 0);
+    }
+  }
+
+  for (const item of _testing.builtinFunctions()) {
+    assert.equal(typeof item.name, "string");
+    assert.equal(typeof item.detail, "string");
+    assert.equal(typeof item.documentation, "string");
+  }
+
+  for (const enumInfo of _testing.builtinEnums()) {
+    assert.equal(typeof enumInfo.name, "string");
+    assert.equal(typeof enumInfo.detail, "string");
+    assert.equal(typeof enumInfo.documentation, "string");
+    assert.ok(Array.isArray(enumInfo.variants));
+    assert.ok(enumInfo.variants.length > 0);
+  }
+
+  assert.equal(_testing.countIndent("    value"), 4);
+  assert.equal(_testing.countIndent("value"), 0);
+  assert.equal(_testing.isIdentifierStart("a"), true);
+  assert.equal(_testing.isIdentifierStart("_"), true);
+  assert.equal(_testing.isIdentifierStart("1"), false);
+  assert.equal(_testing.isIdentifierContinue("a"), true);
+  assert.equal(_testing.isIdentifierContinue("1"), true);
+  assert.equal(_testing.isIdentifierContinue("-"), false);
+  assert.equal(_testing.findReceiverStart("value", -1), -1);
+  assert.equal(_testing.findReceiverStart("call(value)", "call(value)".length - 1), 4);
+  assert.equal(
+    _testing.findReceiverStart("outer(inner(value))", "outer(inner(value))".length - 1),
+    5
+  );
+  assert.equal(_testing.findReceiverStart("value)", "value)".length - 1), -1);
+  assert.equal(_testing.findReceiverStart("value+", "value+".length - 1), -1);
+  assert.equal(_testing.extractReceiverEndingBefore("value).", "value).".length), null);
+  assert.equal(
+    _testing.formatVariantHover({ name: "Ready", payloadType: null, returnType: "Status" }, "Status"),
+    "```aurora\nvariant Ready -> Status\n```"
+  );
+
+  const callableModule = analyzeDocument([
+    "def helper(value: int32) -> int32:",
+    "    return value",
+    "",
+    "class Box:",
+    "    value: int32",
+    "    def read(borrow self) -> int32:",
+    "        return self.value"
+  ].join("\n"));
+  assert.equal(_testing.allCallableInfos(callableModule).length, 2);
 });

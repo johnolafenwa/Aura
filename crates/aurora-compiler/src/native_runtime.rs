@@ -19,10 +19,13 @@ use crate::sema::Type;
 
 fn write_stdout(text: &str) {
     let mut stdout = io::stdout().lock();
-    if let Err(error) = stdout
-        .write_all(text.as_bytes())
-        .and_then(|_| stdout.flush())
-    {
+    let write_result = stdout.write_all(text.as_bytes());
+    let flush_result = if write_result.is_ok() {
+        stdout.flush()
+    } else {
+        Ok(())
+    };
+    if let Some(error) = write_result.err().or_else(|| flush_result.err()) {
         if error.kind() == io::ErrorKind::BrokenPipe {
             process::exit(0);
         }
@@ -94,9 +97,12 @@ fn with_cancellation_scope<T>(cancellation: CancellationContext, work: impl FnOn
 
 fn extract_duration_millis(value: &Value) -> i128 {
     match value {
-        Value::Int(value) => value.as_i128().unwrap_or_else(|| {
-            runtime_error("expected `Duration`, found an integer outside signed timer range")
-        }),
+        Value::Int(value) => match value.as_i128() {
+            Some(value) => value,
+            None => {
+                runtime_error("expected `Duration`, found an integer outside signed timer range")
+            }
+        },
         Value::Duration(value) => *value,
         other => runtime_error(format!(
             "expected `Duration`, found `{}`",
@@ -229,13 +235,6 @@ fn compare_values(
                 )))
             }
         })),
-        (left, right) if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) => {
-            Ok(Value::Bool(match op {
-                BinaryOp::Eq => left == right,
-                BinaryOp::NotEq => left != right,
-                _ => unreachable!("guarded to equality operators"),
-            }))
-        }
         (left, right) => Err(Diagnostic::new(format!(
             "unsupported comparison between `{}` and `{}`",
             value_type_name(&left),
@@ -273,10 +272,10 @@ fn eval_binary_value(
         | BinaryOp::Greater
         | BinaryOp::GreaterEq => compare_values(left, right, op),
         BinaryOp::Add => match (left, right) {
-            (Value::Int(left), Value::Int(right)) => left
-                .checked_add(right)
-                .map(Value::Int)
-                .ok_or_else(|| Diagnostic::new("integer overflow")),
+            (Value::Int(left), Value::Int(right)) => match left.checked_add(right) {
+                Some(value) => Ok(Value::Int(value)),
+                None => Err(Diagnostic::new("integer overflow")),
+            },
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + right)),
             (Value::String(left), Value::String(right)) => Ok(Value::String(left + &right)),
             (left, right) => Err(Diagnostic::new(format!(
@@ -286,10 +285,10 @@ fn eval_binary_value(
             ))),
         },
         BinaryOp::Sub => match (left, right) {
-            (Value::Int(left), Value::Int(right)) => left
-                .checked_sub(right)
-                .map(Value::Int)
-                .ok_or_else(|| Diagnostic::new("integer overflow")),
+            (Value::Int(left), Value::Int(right)) => match left.checked_sub(right) {
+                Some(value) => Ok(Value::Int(value)),
+                None => Err(Diagnostic::new("integer overflow")),
+            },
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left - right)),
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `-` operands `{}` and `{}`",
@@ -298,10 +297,10 @@ fn eval_binary_value(
             ))),
         },
         BinaryOp::Mul => match (left, right) {
-            (Value::Int(left), Value::Int(right)) => left
-                .checked_mul(right)
-                .map(Value::Int)
-                .ok_or_else(|| Diagnostic::new("integer overflow")),
+            (Value::Int(left), Value::Int(right)) => match left.checked_mul(right) {
+                Some(value) => Ok(Value::Int(value)),
+                None => Err(Diagnostic::new("integer overflow")),
+            },
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left * right)),
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `*` operands `{}` and `{}`",
@@ -313,10 +312,10 @@ fn eval_binary_value(
             (Value::Int(_), Value::Int(right)) if right.is_zero() => {
                 Err(Diagnostic::new("division by zero"))
             }
-            (Value::Int(left), Value::Int(right)) => left
-                .checked_div(right)
-                .map(Value::Int)
-                .ok_or_else(|| Diagnostic::new("integer overflow")),
+            (Value::Int(left), Value::Int(right)) => match left.checked_div(right) {
+                Some(value) => Ok(Value::Int(value)),
+                None => Err(Diagnostic::new("integer overflow")),
+            },
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left / right)),
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `/` operands `{}` and `{}`",
@@ -328,10 +327,10 @@ fn eval_binary_value(
             (Value::Int(_), Value::Int(right)) if right.is_zero() => {
                 Err(Diagnostic::new("division by zero"))
             }
-            (Value::Int(left), Value::Int(right)) => left
-                .checked_rem(right)
-                .map(Value::Int)
-                .ok_or_else(|| Diagnostic::new("integer overflow")),
+            (Value::Int(left), Value::Int(right)) => match left.checked_rem(right) {
+                Some(value) => Ok(Value::Int(value)),
+                None => Err(Diagnostic::new("integer overflow")),
+            },
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left % right)),
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `%` operands `{}` and `{}`",
@@ -345,10 +344,10 @@ fn eval_binary_value(
 fn eval_unary_value(value: Value, op: UnaryOp) -> std::result::Result<Value, Diagnostic> {
     match (op, value) {
         (UnaryOp::Not, Value::Bool(value)) => Ok(Value::Bool(!value)),
-        (UnaryOp::Neg, Value::Int(value)) => value
-            .checked_neg()
-            .map(Value::Int)
-            .ok_or_else(|| Diagnostic::new("integer overflow")),
+        (UnaryOp::Neg, Value::Int(value)) => match value.checked_neg() {
+            Some(value) => Ok(Value::Int(value)),
+            None => Err(Diagnostic::new("integer overflow")),
+        },
         (UnaryOp::Neg, Value::Float(value)) => Ok(Value::Float(-value)),
         (UnaryOp::Not, other) => Err(Diagnostic::new(format!(
             "`not` expects `bool`, found `{}`",
@@ -404,9 +403,10 @@ pub extern "C" fn aurora_direct_box_i64(value: i64) -> *mut OpaqueValue {
 #[no_mangle]
 pub extern "C" fn aurora_direct_box_uint_literal(ptr: *const u8, len: usize) -> *mut OpaqueValue {
     let text = decode_bytes(ptr, len);
-    let value = text
-        .parse::<u128>()
-        .unwrap_or_else(|_| runtime_error(format!("invalid embedded uint literal `{}`", text)));
+    let value = match text.parse::<u128>() {
+        Ok(value) => value,
+        Err(_) => runtime_error(format!("invalid embedded uint literal `{}`", text)),
+    };
     boxed_value(Value::Int(IntegerValue::from_literal(value)))
 }
 
@@ -444,9 +444,10 @@ pub extern "C" fn aurora_direct_duration_literal(value: i64) -> *mut OpaqueValue
 #[no_mangle]
 pub extern "C" fn aurora_direct_string_len(value: *mut OpaqueValue) -> i64 {
     match unsafe { value_ref(value) } {
-        Value::String(text) => i64::try_from(text.len()).unwrap_or_else(|_| {
-            runtime_error("string length does not fit in the direct runtime range")
-        }),
+        Value::String(text) => match i64::try_from(text.len()) {
+            Ok(length) => length,
+            Err(_) => runtime_error("string length does not fit in the direct runtime range"),
+        },
         other => runtime_error(format!(
             "expected `String`, found `{}`",
             value_type_name(other)
@@ -797,8 +798,10 @@ pub extern "C" fn aurora_direct_range_new(start: i64, end: i64) -> *mut OpaqueVa
 #[no_mangle]
 pub extern "C" fn aurora_direct_range_current(range: *mut OpaqueValue) -> i64 {
     match unsafe { value_ref(range) } {
-        Value::Range(range) => i64::try_from(range.start)
-            .unwrap_or_else(|_| runtime_error("range start is outside host i64 bounds")),
+        Value::Range(range) => match i64::try_from(range.start) {
+            Ok(start) => start,
+            Err(_) => runtime_error("range start is outside host i64 bounds"),
+        },
         other => runtime_error(format!(
             "expected `Range`, found `{}`",
             value_type_name(other)
@@ -809,8 +812,10 @@ pub extern "C" fn aurora_direct_range_current(range: *mut OpaqueValue) -> i64 {
 #[no_mangle]
 pub extern "C" fn aurora_direct_range_end(range: *mut OpaqueValue) -> i64 {
     match unsafe { value_ref(range) } {
-        Value::Range(range) => i64::try_from(range.end)
-            .unwrap_or_else(|_| runtime_error("range end is outside host i64 bounds")),
+        Value::Range(range) => match i64::try_from(range.end) {
+            Ok(end) => end,
+            Err(_) => runtime_error("range end is outside host i64 bounds"),
+        },
         other => runtime_error(format!(
             "expected `Range`, found `{}`",
             value_type_name(other)
@@ -896,8 +901,10 @@ fn checked_vec_index(index: i64) -> usize {
     if index < 0 {
         runtime_error(format!("vector index `{}` cannot be negative", index));
     }
-    usize::try_from(index)
-        .unwrap_or_else(|_| runtime_error("vector index does not fit in the runtime address space"))
+    match usize::try_from(index) {
+        Ok(index) => index,
+        Err(_) => runtime_error("vector index does not fit in the runtime address space"),
+    }
 }
 
 fn checked_vec_index_at(index: i64, line: i64, column: i64) -> usize {
@@ -909,13 +916,16 @@ fn checked_vec_index_at(index: i64, line: i64, column: i64) -> usize {
             None => runtime_error(format!("vector index `{}` cannot be negative", index)),
         }
     }
-    usize::try_from(index).unwrap_or_else(|_| match runtime_span(line, column) {
-        Some(span) => runtime_error_at(
-            span,
-            "vector index does not fit in the runtime address space",
-        ),
-        None => runtime_error("vector index does not fit in the runtime address space"),
-    })
+    match usize::try_from(index) {
+        Ok(index) => index,
+        Err(_) => match runtime_span(line, column) {
+            Some(span) => runtime_error_at(
+                span,
+                "vector index does not fit in the runtime address space",
+            ),
+            None => runtime_error("vector index does not fit in the runtime address space"),
+        },
+    }
 }
 
 #[no_mangle]
@@ -929,8 +939,10 @@ pub extern "C" fn aurora_direct_vec_empty() -> *mut OpaqueValue {
 #[no_mangle]
 pub extern "C" fn aurora_direct_vec_len(vec: *mut OpaqueValue) -> i64 {
     let vector = vector_from_ptr(vec);
-    i64::try_from(vector.elements.len())
-        .unwrap_or_else(|_| runtime_error("vector length does not fit in the direct runtime range"))
+    match i64::try_from(vector.elements.len()) {
+        Ok(length) => length,
+        Err(_) => runtime_error("vector length does not fit in the direct runtime range"),
+    }
 }
 
 #[no_mangle]
@@ -951,7 +963,10 @@ pub extern "C" fn aurora_direct_vec_push_in_place(
 #[no_mangle]
 pub extern "C" fn aurora_direct_vec_pop_in_place(vec: *mut OpaqueValue) -> *mut OpaqueValue {
     let value = vector_from_ptr_mut(vec).elements.pop();
-    boxed_value(value.map(option_some).unwrap_or_else(option_none))
+    match value {
+        Some(value) => boxed_value(option_some(value)),
+        None => boxed_value(option_none()),
+    }
 }
 
 #[no_mangle]
@@ -1147,8 +1162,10 @@ pub extern "C" fn aurora_direct_map_empty() -> *mut OpaqueValue {
 #[no_mangle]
 pub extern "C" fn aurora_direct_map_len(map: *mut OpaqueValue) -> i64 {
     let map = map_from_ptr(map);
-    i64::try_from(map.entries.len())
-        .unwrap_or_else(|_| runtime_error("map length does not fit in the direct runtime range"))
+    match i64::try_from(map.entries.len()) {
+        Ok(length) => length,
+        Err(_) => runtime_error("map length does not fit in the direct runtime range"),
+    }
 }
 
 #[no_mangle]
@@ -1361,8 +1378,10 @@ pub extern "C" fn aurora_direct_set_empty() -> *mut OpaqueValue {
 #[no_mangle]
 pub extern "C" fn aurora_direct_set_len(set: *mut OpaqueValue) -> i64 {
     let set = set_from_ptr(set);
-    i64::try_from(set.elements.len())
-        .unwrap_or_else(|_| runtime_error("set length does not fit in the direct runtime range"))
+    match i64::try_from(set.elements.len()) {
+        Ok(length) => length,
+        Err(_) => runtime_error("set length does not fit in the direct runtime range"),
+    }
 }
 
 #[no_mangle]
@@ -1438,12 +1457,10 @@ pub extern "C" fn aurora_direct_clone_value(value: *mut OpaqueValue) -> *mut Opa
 #[no_mangle]
 pub extern "C" fn aurora_direct_unbox_i64(value: *mut OpaqueValue) -> i64 {
     match unsafe { value_ref(value) } {
-        Value::Int(value) => value
-            .as_i128()
-            .and_then(|value| i64::try_from(value).ok())
-            .unwrap_or_else(|| {
-                runtime_error("direct backend expected an integer that fits in host i64")
-            }),
+        Value::Int(value) => match value.as_i128().and_then(|value| i64::try_from(value).ok()) {
+            Some(value) => value,
+            None => runtime_error("direct backend expected an integer that fits in host i64"),
+        },
         other => runtime_error(format!(
             "direct backend expected `int32`, found `{}`",
             value_type_name(other)
@@ -1794,7 +1811,10 @@ pub extern "C" fn aurora_direct_instance_set_field(
 
 #[no_mangle]
 pub extern "C" fn aurora_direct_arg_buffer_new(count: i64) -> *mut i64 {
-    let count = usize::try_from(count).unwrap_or_else(|_| runtime_error("invalid arg buffer size"));
+    let count = match usize::try_from(count) {
+        Ok(count) => count,
+        Err(_) => runtime_error("invalid arg buffer size"),
+    };
     let mut values = vec![0i64; count].into_boxed_slice();
     let ptr = values.as_mut_ptr();
     Box::leak(values);
@@ -1803,7 +1823,10 @@ pub extern "C" fn aurora_direct_arg_buffer_new(count: i64) -> *mut i64 {
 
 #[no_mangle]
 pub extern "C" fn aurora_direct_arg_buffer_store(buffer: *mut i64, index: i64, value: i64) {
-    let index = usize::try_from(index).unwrap_or_else(|_| runtime_error("invalid arg index"));
+    let index = match usize::try_from(index) {
+        Ok(index) => index,
+        Err(_) => runtime_error("invalid arg index"),
+    };
     unsafe {
         *buffer.add(index) = value;
     }
@@ -1992,12 +2015,15 @@ pub extern "C" fn aurora_direct_task_group_close(
 #[no_mangle]
 pub extern "C" fn aurora_direct_deadline_new(duration: *mut OpaqueValue) -> i64 {
     let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis =
-        u64::try_from(millis).unwrap_or_else(|_| runtime_error("invalid deadline duration"));
+    let millis = match u64::try_from(millis) {
+        Ok(millis) => millis,
+        Err(_) => runtime_error("invalid deadline duration"),
+    };
     let deadline = Deadline(
-        Instant::now()
-            .checked_add(StdDuration::from_millis(millis))
-            .unwrap_or_else(Instant::now),
+        match Instant::now().checked_add(StdDuration::from_millis(millis)) {
+            Some(deadline) => deadline,
+            None => Instant::now(),
+        },
     );
     Box::into_raw(Box::new(deadline)) as usize as i64
 }
@@ -2018,15 +2044,20 @@ pub extern "C" fn aurora_direct_deadline_ready(deadline: i64) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn aurora_direct_sleep_ms(duration: i64) {
-    let millis =
-        u64::try_from(duration).unwrap_or_else(|_| runtime_error("invalid sleep duration"));
+    let millis = match u64::try_from(duration) {
+        Ok(millis) => millis,
+        Err(_) => runtime_error("invalid sleep duration"),
+    };
     thread::sleep(StdDuration::from_millis(millis));
 }
 
 #[no_mangle]
 pub extern "C" fn aurora_direct_sleep_value(duration: *mut OpaqueValue) -> *mut OpaqueValue {
     let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis = u64::try_from(millis).unwrap_or_else(|_| runtime_error("invalid sleep duration"));
+    let millis = match u64::try_from(millis) {
+        Ok(millis) => millis,
+        Err(_) => runtime_error("invalid sleep duration"),
+    };
     thread::sleep(StdDuration::from_millis(millis));
     boxed_value(Value::Unit)
 }
@@ -2040,8 +2071,10 @@ pub extern "C" fn aurora_direct_spawn_call(
     task_group: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
-    let arg_count =
-        usize::try_from(arg_count).unwrap_or_else(|_| runtime_error("invalid spawn arg count"));
+    let arg_count = match usize::try_from(arg_count) {
+        Ok(arg_count) => arg_count,
+        Err(_) => runtime_error("invalid spawn arg count"),
+    };
     let args = unsafe { slice::from_raw_parts(args_ptr, arg_count) }.to_vec();
     let group = if task_group.is_null() {
         None
@@ -2103,780 +2136,5 @@ pub extern "C" fn aurora_direct_fail_int32_overflow(value: i64, line: i64, colum
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{int32_overflow_message, render_bool, render_float, OpaqueValue};
-    use crate::integer::IntegerValue;
-    use crate::interpreter::Value;
-    use std::process::Command;
-
-    fn string_value(text: &str) -> *mut OpaqueValue {
-        super::aurora_direct_string_literal(text.as_ptr(), text.len())
-    }
-
-    fn int_value(value: i64) -> *mut OpaqueValue {
-        super::aurora_direct_box_i64(value)
-    }
-
-    fn float_value(value: f64) -> *mut OpaqueValue {
-        super::aurora_direct_box_f64(value)
-    }
-
-    fn bool_value(value: bool) -> *mut OpaqueValue {
-        super::aurora_direct_box_bool(i64::from(value))
-    }
-
-    fn duration_value(value: i64) -> *mut OpaqueValue {
-        super::aurora_direct_duration_literal(value)
-    }
-
-    fn string_vec(values: &[&str]) -> *mut OpaqueValue {
-        let vec = super::aurora_direct_vec_empty();
-        for value in values {
-            super::aurora_direct_vec_push_in_place(vec, string_value(value));
-        }
-        vec
-    }
-
-    fn int_vec(values: &[i64]) -> *mut OpaqueValue {
-        let vec = super::aurora_direct_vec_empty();
-        for value in values {
-            super::aurora_direct_vec_push_in_place(vec, int_value(*value));
-        }
-        vec
-    }
-
-    unsafe fn take_value(ptr: *mut OpaqueValue) -> Value {
-        super::take_value(ptr)
-    }
-
-    fn expect_unit(ptr: *mut OpaqueValue) {
-        match unsafe { take_value(ptr) } {
-            Value::Unit => {}
-            other => panic!("expected unit, found {:?}", other),
-        }
-    }
-
-    fn expect_string(ptr: *mut OpaqueValue) -> String {
-        match unsafe { take_value(ptr) } {
-            Value::String(text) => text,
-            other => panic!("expected string, found {:?}", other),
-        }
-    }
-
-    fn expect_int(ptr: *mut OpaqueValue) -> i128 {
-        match unsafe { take_value(ptr) } {
-            Value::Int(value) => value.as_i128().expect("expected signed integer"),
-            other => panic!("expected int, found {:?}", other),
-        }
-    }
-
-    fn expect_float(ptr: *mut OpaqueValue) -> f64 {
-        match unsafe { take_value(ptr) } {
-            Value::Float(value) => value,
-            other => panic!("expected float, found {:?}", other),
-        }
-    }
-
-    fn expect_bool_boxed(ptr: *mut OpaqueValue) -> bool {
-        match unsafe { take_value(ptr) } {
-            Value::Bool(value) => value,
-            other => panic!("expected bool, found {:?}", other),
-        }
-    }
-
-    fn expect_vec_ints(ptr: *mut OpaqueValue) -> Vec<i128> {
-        match unsafe { take_value(ptr) } {
-            Value::Vec(values) => values
-                .elements
-                .into_iter()
-                .map(|value| match value {
-                    Value::Int(value) => value.as_i128().expect("expected signed integer"),
-                    other => panic!("expected int element, found {:?}", other),
-                })
-                .collect(),
-            other => panic!("expected vec, found {:?}", other),
-        }
-    }
-
-    fn expect_vec_strings(ptr: *mut OpaqueValue) -> Vec<String> {
-        match unsafe { take_value(ptr) } {
-            Value::Vec(values) => values
-                .elements
-                .into_iter()
-                .map(|value| match value {
-                    Value::String(text) => text,
-                    other => panic!("expected string element, found {:?}", other),
-                })
-                .collect(),
-            other => panic!("expected vec, found {:?}", other),
-        }
-    }
-
-    fn expect_option_some_int(ptr: *mut OpaqueValue) -> i128 {
-        match unsafe { take_value(ptr) } {
-            Value::EnumVariant(variant)
-                if variant.enum_name == "Option" && variant.variant_name == "Some" =>
-            {
-                match *variant.payload.expect("expected option payload") {
-                    Value::Int(value) => value.as_i128().expect("expected signed integer"),
-                    other => panic!("expected int payload, found {:?}", other),
-                }
-            }
-            other => panic!("expected Option.Some(int), found {:?}", other),
-        }
-    }
-
-    fn expect_option_some_string(ptr: *mut OpaqueValue) -> String {
-        match unsafe { take_value(ptr) } {
-            Value::EnumVariant(variant)
-                if variant.enum_name == "Option" && variant.variant_name == "Some" =>
-            {
-                match *variant.payload.expect("expected option payload") {
-                    Value::String(text) => text,
-                    other => panic!("expected string payload, found {:?}", other),
-                }
-            }
-            other => panic!("expected Option.Some(String), found {:?}", other),
-        }
-    }
-
-    fn expect_option_none(ptr: *mut OpaqueValue) {
-        match unsafe { take_value(ptr) } {
-            Value::EnumVariant(variant)
-                if variant.enum_name == "Option" && variant.variant_name == "None" => {}
-            other => panic!("expected Option.None, found {:?}", other),
-        }
-    }
-
-    fn expect_result_ok_int(ptr: *mut OpaqueValue) -> i128 {
-        match unsafe { take_value(ptr) } {
-            Value::EnumVariant(variant)
-                if variant.enum_name == "Result" && variant.variant_name == "Ok" =>
-            {
-                match *variant.payload.expect("expected result payload") {
-                    Value::Int(value) => value.as_i128().expect("expected signed integer"),
-                    other => panic!("expected int payload, found {:?}", other),
-                }
-            }
-            other => panic!("expected Result.Ok(int), found {:?}", other),
-        }
-    }
-
-    fn expect_result_ok_float(ptr: *mut OpaqueValue) -> f64 {
-        match unsafe { take_value(ptr) } {
-            Value::EnumVariant(variant)
-                if variant.enum_name == "Result" && variant.variant_name == "Ok" =>
-            {
-                match *variant.payload.expect("expected result payload") {
-                    Value::Float(value) => value,
-                    other => panic!("expected float payload, found {:?}", other),
-                }
-            }
-            other => panic!("expected Result.Ok(float), found {:?}", other),
-        }
-    }
-
-    fn expect_result_err_string(ptr: *mut OpaqueValue) -> String {
-        match unsafe { take_value(ptr) } {
-            Value::EnumVariant(variant)
-                if variant.enum_name == "Result" && variant.variant_name == "Err" =>
-            {
-                match *variant.payload.expect("expected result payload") {
-                    Value::String(text) => text,
-                    other => panic!("expected string payload, found {:?}", other),
-                }
-            }
-            other => panic!("expected Result.Err(String), found {:?}", other),
-        }
-    }
-
-    #[test]
-    fn render_bool_uses_aurora_boolean_strings() {
-        assert_eq!(render_bool(0), "false");
-        assert_eq!(render_bool(1), "true");
-        assert_eq!(render_bool(99), "true");
-    }
-
-    #[test]
-    fn int32_overflow_message_mentions_value_and_type() {
-        assert_eq!(
-            int32_overflow_message(123),
-            "integer value `123` does not fit in `int32`"
-        );
-    }
-
-    #[test]
-    fn render_float_preserves_whole_number_fraction() {
-        assert_eq!(render_float(42.0), "42.0");
-        assert_eq!(render_float(3.5), "3.5");
-    }
-
-    #[test]
-    fn render_float_hides_float32_roundtrip_noise() {
-        let float32_value = (834.5999755859375_f64 as f32) as f64;
-        assert_eq!(render_float(float32_value), "834.6");
-    }
-
-    #[test]
-    fn runtime_init_is_callable() {
-        super::aurora_direct_runtime_init(
-            b"/virtual/test.au".as_ptr(),
-            b"/virtual/test.au".len(),
-            b"def main() -> int32:\n    return 0\n".as_ptr(),
-            b"def main() -> int32:\n    return 0\n".len(),
-        );
-    }
-
-    #[test]
-    fn direct_print_helpers_are_callable() {
-        super::aurora_direct_print_i64(7);
-        super::aurora_direct_print_f64(7.0);
-        super::aurora_direct_print_bool(0);
-        super::aurora_direct_print_bool(1);
-    }
-
-    #[test]
-    fn sqrt_helper_matches_standard_library() {
-        assert_eq!(super::aurora_direct_sqrt_f64(25.0), 5.0);
-    }
-
-    #[test]
-    fn direct_runtime_string_and_numeric_helpers_cover_builtin_surface() {
-        assert_eq!(
-            super::aurora_direct_string_len(string_value("  Aurora Repo  ")),
-            15
-        );
-        assert_eq!(
-            super::aurora_direct_string_contains(
-                string_value("  Aurora Repo  "),
-                string_value("Repo"),
-            ),
-            1
-        );
-        assert_eq!(
-            super::aurora_direct_string_starts_with(
-                string_value("  Aurora Repo  "),
-                string_value("  A"),
-            ),
-            1
-        );
-        assert_eq!(
-            super::aurora_direct_string_ends_with(
-                string_value("  Aurora Repo  "),
-                string_value("o  "),
-            ),
-            1
-        );
-        assert_eq!(
-            expect_vec_strings(super::aurora_direct_string_split(
-                string_value("a,b,c"),
-                string_value(","),
-            )),
-            vec!["a".to_string(), "b".to_string(), "c".to_string()]
-        );
-        assert_eq!(
-            expect_string(super::aurora_direct_string_replace(
-                string_value("Aurora compiler"),
-                string_value("compiler"),
-                string_value("runtime"),
-            )),
-            "Aurora runtime"
-        );
-        assert_eq!(
-            expect_string(super::aurora_direct_string_to_lower(string_value("AuRoRa"))),
-            "aurora"
-        );
-        assert_eq!(
-            expect_string(super::aurora_direct_string_to_upper(string_value("AuRoRa"))),
-            "AURORA"
-        );
-        assert_eq!(
-            expect_option_some_string(super::aurora_direct_string_strip_prefix(
-                string_value("prefix-core"),
-                string_value("prefix-"),
-            )),
-            "core"
-        );
-        expect_option_none(super::aurora_direct_string_strip_prefix(
-            string_value("prefix-core"),
-            string_value("core"),
-        ));
-        assert_eq!(
-            expect_option_some_string(super::aurora_direct_string_strip_suffix(
-                string_value("core-suffix"),
-                string_value("-suffix"),
-            )),
-            "core"
-        );
-        assert_eq!(
-            expect_string(super::aurora_direct_string_trim(string_value(
-                " \tAurora\n"
-            ))),
-            "Aurora"
-        );
-        assert_eq!(
-            expect_string(super::aurora_direct_string_join(
-                string_value(", "),
-                string_vec(&["Ada", "Linus", "Grace"]),
-            )),
-            "Ada, Linus, Grace"
-        );
-        assert_eq!(expect_int(super::aurora_direct_abs(int_value(-7))), 7);
-        assert_eq!(expect_int(super::aurora_direct_abs(int_value(7))), 7);
-        assert_eq!(
-            expect_float(super::aurora_direct_abs(float_value(-3.5))),
-            3.5
-        );
-        assert_eq!(
-            expect_int(super::aurora_direct_min(int_value(4), int_value(9))),
-            4
-        );
-        assert_eq!(
-            expect_float(super::aurora_direct_min(float_value(4.5), float_value(9.5))),
-            4.5
-        );
-        assert_eq!(
-            expect_int(super::aurora_direct_max(int_value(4), int_value(9))),
-            9
-        );
-        assert_eq!(
-            expect_float(super::aurora_direct_max(float_value(4.5), float_value(9.5))),
-            9.5
-        );
-        assert_eq!(
-            expect_float(super::aurora_direct_sqrt(float_value(81.0))),
-            9.0
-        );
-        assert_eq!(
-            expect_result_ok_int(super::aurora_direct_parse_int32(string_value("123"))),
-            123
-        );
-        assert_eq!(
-            expect_result_ok_int(super::aurora_direct_parse_int64(string_value("-456"))),
-            -456
-        );
-        assert_eq!(
-            expect_result_ok_float(super::aurora_direct_parse_float64(string_value("1.5e2"))),
-            150.0
-        );
-        assert!(
-            expect_result_err_string(super::aurora_direct_parse_int32(string_value("oops")))
-                .contains("invalid")
-        );
-        assert_eq!(
-            expect_string(super::aurora_direct_stringify_value(bool_value(true))),
-            "true"
-        );
-    }
-
-    #[test]
-    fn direct_runtime_vec_helpers_cover_collection_surface() {
-        let vec = super::aurora_direct_vec_empty();
-        assert_eq!(super::aurora_direct_vec_len(vec), 0);
-        assert_eq!(super::aurora_direct_vec_is_empty(vec), 1);
-
-        expect_unit(super::aurora_direct_vec_push_in_place(vec, int_value(1)));
-        expect_unit(super::aurora_direct_vec_push_in_place(vec, int_value(2)));
-        expect_unit(super::aurora_direct_vec_push_in_place(vec, int_value(3)));
-        assert_eq!(super::aurora_direct_vec_len(vec), 3);
-        assert_eq!(
-            expect_option_some_int(super::aurora_direct_vec_pop_in_place(vec)),
-            3
-        );
-        assert_eq!(
-            expect_option_some_int(super::aurora_direct_vec_get(vec, 1)),
-            2
-        );
-        assert_eq!(
-            expect_option_some_int(super::aurora_direct_vec_set_in_place(vec, 1, int_value(5))),
-            2
-        );
-        assert_eq!(
-            expect_option_some_int(super::aurora_direct_vec_remove_in_place(vec, 0)),
-            1
-        );
-        assert_eq!(super::aurora_direct_vec_contains(vec, int_value(5)), 1);
-        assert_eq!(
-            super::aurora_direct_vec_insert_in_place(vec, 1, int_value(8)),
-            1
-        );
-        assert_eq!(super::aurora_direct_vec_swap_in_place(vec, 0, 1), 1);
-        expect_unit(super::aurora_direct_vec_reverse_in_place(vec));
-        assert_eq!(expect_int(super::aurora_direct_vec_index(vec, 0, 1, 1)), 5);
-        assert_eq!(
-            expect_option_some_int(super::aurora_direct_vec_index_option(vec, 1)),
-            8
-        );
-        expect_unit(super::aurora_direct_vec_set_index_in_place(
-            vec,
-            1,
-            int_value(42),
-            1,
-            1,
-        ));
-        expect_unit(super::aurora_direct_vec_extend_in_place(
-            vec,
-            int_vec(&[7, 9]),
-        ));
-        assert_eq!(
-            expect_vec_ints(super::aurora_direct_clone_value(vec)),
-            vec![5, 42, 7, 9]
-        );
-        expect_unit(super::aurora_direct_vec_clear_in_place(vec));
-        assert_eq!(super::aurora_direct_vec_len(vec), 0);
-    }
-
-    #[test]
-    fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
-        let map = super::aurora_direct_map_empty();
-        assert_eq!(super::aurora_direct_map_len(map), 0);
-        assert_eq!(super::aurora_direct_map_is_empty(map), 1);
-        expect_option_none(super::aurora_direct_map_set_in_place(
-            map,
-            string_value("name"),
-            int_value(1),
-        ));
-        assert_eq!(
-            expect_option_some_int(super::aurora_direct_map_set_in_place(
-                map,
-                string_value("name"),
-                int_value(2),
-            )),
-            1
-        );
-        expect_option_none(super::aurora_direct_map_set_in_place(
-            map,
-            string_value("count"),
-            int_value(3),
-        ));
-        assert_eq!(
-            expect_option_some_int(super::aurora_direct_map_get(map, string_value("name"))),
-            2
-        );
-        assert_eq!(
-            super::aurora_direct_map_contains_key(map, string_value("count")),
-            1
-        );
-        assert_eq!(
-            expect_option_some_int(super::aurora_direct_map_remove_in_place(
-                map,
-                string_value("count"),
-            )),
-            3
-        );
-        assert_eq!(
-            expect_vec_strings(super::aurora_direct_map_keys(map)),
-            vec!["name".to_string()]
-        );
-        assert_eq!(
-            expect_vec_ints(super::aurora_direct_map_values(map)),
-            vec![2]
-        );
-
-        let entries = unsafe { take_value(super::aurora_direct_map_items(map)) };
-        match entries {
-            Value::Vec(values) => {
-                assert_eq!(values.elements.len(), 1);
-                let Value::Instance(entry) = &values.elements[0] else {
-                    panic!("expected map entry instance");
-                };
-                assert_eq!(entry.class_name, "MapEntry");
-                assert_eq!(
-                    entry.fields.get("key"),
-                    Some(&Value::String("name".to_string()))
-                );
-                assert_eq!(
-                    entry.fields.get("value"),
-                    Some(&Value::Int(IntegerValue::from_signed(2)))
-                );
-            }
-            other => panic!("expected vec of map entries, found {:?}", other),
-        }
-        assert_eq!(
-            expect_int(super::aurora_direct_map_index(
-                map,
-                string_value("name"),
-                1,
-                1,
-            )),
-            2
-        );
-        expect_unit(super::aurora_direct_map_set_index_in_place(
-            map,
-            string_value("status"),
-            int_value(7),
-            1,
-            1,
-        ));
-        expect_unit(super::aurora_direct_map_extend_in_place(map, {
-            let other = super::aurora_direct_map_empty();
-            expect_option_none(super::aurora_direct_map_set_in_place(
-                other,
-                string_value("status"),
-                int_value(9),
-            ));
-            other
-        }));
-        assert_eq!(
-            expect_vec_ints(super::aurora_direct_map_values(map)),
-            vec![2, 9]
-        );
-        expect_unit(super::aurora_direct_map_clear_in_place(map));
-        assert_eq!(super::aurora_direct_map_len(map), 0);
-
-        let set = super::aurora_direct_set_empty();
-        assert_eq!(super::aurora_direct_set_len(set), 0);
-        assert_eq!(super::aurora_direct_set_is_empty(set), 1);
-        assert_eq!(
-            super::aurora_direct_set_insert_in_place(set, int_value(3)),
-            1
-        );
-        assert_eq!(
-            super::aurora_direct_set_insert_in_place(set, int_value(3)),
-            0
-        );
-        assert_eq!(super::aurora_direct_set_contains(set, int_value(3)), 1);
-        assert_eq!(
-            expect_option_some_int(super::aurora_direct_set_index_option(set, 0)),
-            3
-        );
-        assert_eq!(
-            super::aurora_direct_set_remove_in_place(set, int_value(3)),
-            1
-        );
-        expect_option_none(super::aurora_direct_set_index_option(set, 0));
-    }
-
-    unsafe extern "C" fn test_native_thunk(args: *const i64, len: usize) -> *mut OpaqueValue {
-        let args = std::slice::from_raw_parts(args, len);
-        super::aurora_direct_box_i64(args.iter().copied().sum())
-    }
-
-    #[test]
-    fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
-        assert_eq!(super::aurora_direct_unbox_i64(int_value(17)), 17);
-        assert_eq!(super::aurora_direct_unbox_f64(float_value(2.5)), 2.5);
-        assert_eq!(super::aurora_direct_unbox_bool(bool_value(true)), 1);
-        assert_eq!(super::aurora_direct_value_as_condition(bool_value(true)), 1);
-        assert_eq!(
-            expect_int(super::aurora_direct_unary_value(0, int_value(-7))),
-            7
-        );
-        assert_eq!(
-            expect_bool_boxed(super::aurora_direct_unary_value_at(
-                1,
-                bool_value(false),
-                1,
-                1
-            )),
-            true
-        );
-        assert_eq!(
-            expect_int(super::aurora_direct_binary_value(
-                0,
-                int_value(4),
-                int_value(5)
-            )),
-            9
-        );
-        assert_eq!(
-            expect_string(super::aurora_direct_binary_value_at(
-                0,
-                string_value("aurora"),
-                string_value(" repo"),
-                1,
-                1,
-            )),
-            "aurora repo"
-        );
-        assert_eq!(
-            expect_float(super::aurora_direct_cast_value(
-                int_value(9),
-                b"float64".as_ptr(),
-                "float64".len(),
-            )),
-            9.0
-        );
-        assert_eq!(
-            expect_int(super::aurora_direct_cast_value_at(
-                float_value(9.8),
-                b"int32".as_ptr(),
-                "int32".len(),
-                1,
-                1,
-            )),
-            9
-        );
-        assert_eq!(
-            super::aurora_direct_value_type_matches(
-                string_value("aurora"),
-                b"String".as_ptr(),
-                "String".len(),
-            ),
-            1
-        );
-
-        let ready = super::aurora_direct_enum_variant(
-            b"Status".as_ptr(),
-            "Status".len(),
-            b"Ready".as_ptr(),
-            "Ready".len(),
-            std::ptr::null_mut(),
-        );
-        assert_eq!(
-            super::aurora_direct_variant_matches(
-                ready,
-                b"Status".as_ptr(),
-                "Status".len(),
-                b"Ready".as_ptr(),
-                "Ready".len(),
-            ),
-            1
-        );
-        let boxed_payload = super::aurora_direct_enum_variant(
-            b"Option".as_ptr(),
-            "Option".len(),
-            b"Some".as_ptr(),
-            "Some".len(),
-            string_value("payload"),
-        );
-        assert_eq!(
-            expect_string(super::aurora_direct_variant_payload(boxed_payload)),
-            "payload"
-        );
-
-        let field_names = [b"value".as_ptr()];
-        let field_name_lengths = ["value".len()];
-        let field_values = [int_value(11)];
-        let instance = super::aurora_direct_instance_new(
-            b"Counter".as_ptr(),
-            "Counter".len(),
-            field_names.as_ptr(),
-            field_name_lengths.as_ptr(),
-            field_values.as_ptr(),
-            1,
-        );
-        assert_eq!(
-            expect_int(super::aurora_direct_instance_get_field(
-                instance,
-                b"value".as_ptr(),
-                "value".len(),
-            )),
-            11
-        );
-        let empty_instance =
-            super::aurora_direct_instance_empty(b"Counter".as_ptr(), "Counter".len());
-        assert_eq!(
-            expect_int(super::aurora_direct_instance_get_field(
-                super::aurora_direct_instance_set_field(
-                    empty_instance,
-                    b"value".as_ptr(),
-                    "value".len(),
-                    int_value(13),
-                ),
-                b"value".as_ptr(),
-                "value".len(),
-            )),
-            13
-        );
-
-        let buffer = super::aurora_direct_arg_buffer_new(2);
-        super::aurora_direct_arg_buffer_store(buffer, 0, 20);
-        super::aurora_direct_arg_buffer_store(buffer, 1, 22);
-        let task = super::aurora_direct_spawn_call(
-            test_native_thunk as usize as i64,
-            buffer,
-            2,
-            0,
-            std::ptr::null_mut(),
-        );
-        assert_eq!(expect_int(super::aurora_direct_task_join(task)), 42);
-
-        let channel = super::aurora_direct_channel_new();
-        let send_ok =
-            unsafe { take_value(super::aurora_direct_channel_send(channel, int_value(9))) };
-        match send_ok {
-            Value::EnumVariant(variant)
-                if variant.enum_name == "Result" && variant.variant_name == "Ok" => {}
-            other => panic!("expected Result.Ok(Unit), found {:?}", other),
-        }
-        assert_eq!(
-            expect_option_some_int(super::aurora_direct_channel_recv(channel)),
-            9
-        );
-        assert_eq!(super::aurora_direct_channel_try_recv(channel), 0);
-        expect_unit(super::aurora_direct_channel_close(channel));
-        assert_eq!(super::aurora_direct_channel_try_recv(channel), 1);
-
-        let group = super::aurora_direct_task_group_new();
-        expect_unit(super::aurora_direct_task_group_cancel(group));
-        assert_eq!(super::aurora_direct_cancelled(), 0);
-        expect_unit(super::aurora_direct_task_group_close(group, 0));
-
-        let deadline = super::aurora_direct_deadline_new(duration_value(0));
-        assert_eq!(super::aurora_direct_deadline_ready(deadline), 1);
-        super::aurora_direct_sleep_ms(0);
-        expect_unit(super::aurora_direct_sleep_value(duration_value(0)));
-    }
-
-    #[test]
-    fn division_by_zero_helper_exits_with_error() {
-        if std::env::var("AURORA_DIRECT_RUNTIME_HELPER").as_deref() == Ok("divzero") {
-            super::aurora_direct_runtime_init(
-                b"/virtual/test.au".as_ptr(),
-                b"/virtual/test.au".len(),
-                b"def main() -> int32:\n    print(1 / 0)\n".as_ptr(),
-                b"def main() -> int32:\n    print(1 / 0)\n".len(),
-            );
-            super::aurora_direct_fail_division_by_zero(2, 11);
-        }
-
-        let output = Command::new(std::env::current_exe().expect("test binary should exist"))
-            .arg("--exact")
-            .arg("native_runtime::tests::division_by_zero_helper_exits_with_error")
-            .arg("--nocapture")
-            .env("AURORA_DIRECT_RUNTIME_HELPER", "divzero")
-            .output()
-            .expect("child test process should run");
-
-        assert!(
-            !output.status.success(),
-            "division helper should exit with failure"
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("division by zero"),
-            "division helper stderr should mention division by zero"
-        );
-    }
-
-    #[test]
-    fn int32_overflow_helper_exits_with_error() {
-        if std::env::var("AURORA_DIRECT_RUNTIME_HELPER").as_deref() == Ok("overflow") {
-            super::aurora_direct_runtime_init(
-                b"/virtual/test.au".as_ptr(),
-                b"/virtual/test.au".len(),
-                b"def main() -> int32:\n    value: int32 = 999\n".as_ptr(),
-                b"def main() -> int32:\n    value: int32 = 999\n".len(),
-            );
-            super::aurora_direct_fail_int32_overflow(999, 2, 20);
-        }
-
-        let output = Command::new(std::env::current_exe().expect("test binary should exist"))
-            .arg("--exact")
-            .arg("native_runtime::tests::int32_overflow_helper_exits_with_error")
-            .arg("--nocapture")
-            .env("AURORA_DIRECT_RUNTIME_HELPER", "overflow")
-            .output()
-            .expect("child test process should run");
-
-        assert!(
-            !output.status.success(),
-            "overflow helper should exit with failure"
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("integer value `999` does not fit in `int32`"),
-            "overflow helper stderr should mention the failing int32 value"
-        );
-    }
-}
+#[path = "native_runtime_tests.rs"]
+mod tests;

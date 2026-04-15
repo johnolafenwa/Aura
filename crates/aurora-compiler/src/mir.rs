@@ -3753,3 +3753,7 @@ fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
         type_ref.args.iter().map(lower_type_ref).collect(),
     )
 }
+
+#[cfg(test)]
+#[path = "mir_tests.rs"]
+mod tests;

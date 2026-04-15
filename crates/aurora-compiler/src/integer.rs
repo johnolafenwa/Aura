@@ -152,13 +152,12 @@ impl IntegerValue {
         let (left_sign, left_mag) = self.sign_magnitude();
         let (right_sign, right_mag) = rhs.sign_magnitude();
         let magnitude = left_mag.checked_div(right_mag)?;
-        let sign = match (left_sign, right_sign) {
-            (IntegerSign::Zero, _) => IntegerSign::Zero,
-            (IntegerSign::Positive, IntegerSign::Positive)
-            | (IntegerSign::Negative, IntegerSign::Negative) => IntegerSign::Positive,
-            (IntegerSign::Positive, IntegerSign::Negative)
-            | (IntegerSign::Negative, IntegerSign::Positive) => IntegerSign::Negative,
-            (_, IntegerSign::Zero) => IntegerSign::Zero,
+        let sign = if magnitude == 0 {
+            IntegerSign::Zero
+        } else if left_sign == right_sign {
+            IntegerSign::Positive
+        } else {
+            IntegerSign::Negative
         };
         Self::from_sign_and_magnitude(sign, magnitude)
     }
@@ -291,13 +290,19 @@ pub fn minimal_signed_type_for_negative_literal(value: u128) -> Type {
     let negative = IntegerValue::from_literal(value)
         .checked_neg()
         .expect("negative literal magnitude should fit into signed inference");
-    for name in ["int32", "int64", "int128"] {
-        let ty = Type::named(name);
-        if let Some(bounds) = integer_type_bounds(&ty) {
-            if negative.fits_bounds(bounds) {
-                return ty;
-            }
-        }
+    let int32 = Type::named("int32");
+    if negative.fits_bounds(integer_type_bounds(&int32).expect("int32 bounds should exist")) {
+        return int32;
     }
+
+    let int64 = Type::named("int64");
+    if negative.fits_bounds(integer_type_bounds(&int64).expect("int64 bounds should exist")) {
+        return int64;
+    }
+
     Type::named("int128")
 }
+
+#[cfg(test)]
+#[path = "integer_tests.rs"]
+mod tests;

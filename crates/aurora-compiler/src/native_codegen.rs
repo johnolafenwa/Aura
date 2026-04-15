@@ -90,11 +90,13 @@ impl DirectType {
     fn abi_types(&self) -> Vec<cranelift_codegen::ir::Type> {
         match self {
             DirectType::Scalar(kind) => vec![kind.signature_type()],
-            DirectType::PlainClass(class) => class
-                .fields
-                .iter()
-                .flat_map(|field| field.ty.abi_types())
-                .collect(),
+            DirectType::PlainClass(class) => {
+                let mut types = Vec::new();
+                for field in &class.fields {
+                    types.extend(field.ty.abi_types());
+                }
+                types
+            }
             DirectType::Opaque(_) => vec![types::I64],
         }
     }
@@ -113,11 +115,13 @@ impl DirectType {
     fn zero_values(&self, builder: &mut FunctionBuilder<'_>) -> Vec<Value> {
         match self {
             DirectType::Scalar(kind) => vec![kind.zero_value(builder)],
-            DirectType::PlainClass(class) => class
-                .fields
-                .iter()
-                .flat_map(|field| field.ty.zero_values(builder))
-                .collect(),
+            DirectType::PlainClass(class) => {
+                let mut values = Vec::new();
+                for field in &class.fields {
+                    values.extend(field.ty.zero_values(builder));
+                }
+                values
+            }
             DirectType::Opaque(_) => vec![builder.ins().iconst(types::I64, 0)],
         }
     }
@@ -271,6 +275,23 @@ struct NativeCodegen<'a> {
     string_data: HashMap<Vec<u8>, DataId>,
 }
 
+macro_rules! declare_runtime_functions {
+    ($object:expr, $( $var:ident => ($name:literal, [$($param:expr),* $(,)?], $ret:expr) ),+ $(,)?) => {
+        $(
+            let $var = declare_runtime_function($object, $name, &[$($param),*], $ret)?;
+        )+
+    };
+}
+
+macro_rules! try_or_string_error {
+    ($expr:expr, $($fmt:tt)+) => {
+        match $expr {
+            Ok(value) => value,
+            Err(error) => return Err(format!($($fmt)+, error)),
+        }
+    };
+}
+
 impl<'a> NativeCodegen<'a> {
     fn new(
         module: &'a MirModule,
@@ -278,669 +299,141 @@ impl<'a> NativeCodegen<'a> {
         program_source: &str,
     ) -> std::result::Result<Self, String> {
         validate_module(module)?;
-        let classes = module
-            .classes
-            .iter()
-            .cloned()
-            .map(|class| (class.name.clone(), class))
-            .collect::<HashMap<_, _>>();
+        let mut classes = HashMap::new();
+        for class in &module.classes {
+            classes.insert(class.name.clone(), class.clone());
+        }
         let trait_impls = module.trait_impls.clone();
 
         let mut flag_builder = settings::builder();
-        flag_builder
-            .set("is_pic", "true")
-            .map_err(|error| format!("failed to configure native backend: {}", error))?;
+        try_or_string_error!(
+            flag_builder.set("is_pic", "true"),
+            "failed to configure native backend: {}"
+        );
         let flags = settings::Flags::new(flag_builder);
-        let isa_builder = cranelift_native::builder()
-            .map_err(|error| format!("failed to detect host ISA: {}", error))?;
-        let isa = isa_builder
-            .finish(flags)
-            .map_err(|error| format!("failed to build host ISA: {}", error))?;
+        let isa_builder =
+            try_or_string_error!(cranelift_native::builder(), "failed to detect host ISA: {}");
+        let isa = try_or_string_error!(isa_builder.finish(flags), "failed to build host ISA: {}");
         let call_conv = isa.default_call_conv();
-        let builder = ObjectBuilder::new(isa, "aurora_direct".to_string(), default_libcall_names())
-            .map_err(|error| format!("failed to initialize object builder: {}", error))?;
+        let builder = try_or_string_error!(
+            ObjectBuilder::new(isa, "aurora_direct".to_string(), default_libcall_names()),
+            "failed to initialize object builder: {}"
+        );
         let mut object = ObjectModule::new(builder);
 
-        let runtime_init = declare_runtime_function(
-            &mut object,
-            "aurora_direct_runtime_init",
-            &[types::I64, types::I64, types::I64, types::I64],
-            None,
-        )?;
-        let print_i64 =
-            declare_runtime_function(&mut object, "aurora_direct_print_i64", &[types::I64], None)?;
-        let print_f64 =
-            declare_runtime_function(&mut object, "aurora_direct_print_f64", &[types::F64], None)?;
-        let print_bool =
-            declare_runtime_function(&mut object, "aurora_direct_print_bool", &[types::I64], None)?;
-        let print_value = declare_runtime_function(
-            &mut object,
-            "aurora_direct_print_value",
-            &[types::I64],
-            None,
-        )?;
-        let sqrt_f64 = declare_runtime_function(
-            &mut object,
-            "aurora_direct_sqrt_f64",
-            &[types::F64],
-            Some(types::F64),
-        )?;
-        let fail_division_by_zero = declare_runtime_function(
-            &mut object,
-            "aurora_direct_fail_division_by_zero",
-            &[types::I64, types::I64],
-            None,
-        )?;
-        let fail_int32_overflow = declare_runtime_function(
-            &mut object,
-            "aurora_direct_fail_int32_overflow",
-            &[types::I64, types::I64, types::I64],
-            None,
-        )?;
-        let box_i64 = declare_runtime_function(
-            &mut object,
-            "aurora_direct_box_i64",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let box_uint_literal = declare_runtime_function(
-            &mut object,
-            "aurora_direct_box_uint_literal",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let box_f64 = declare_runtime_function(
-            &mut object,
-            "aurora_direct_box_f64",
-            &[types::F64],
-            Some(types::I64),
-        )?;
-        let box_bool = declare_runtime_function(
-            &mut object,
-            "aurora_direct_box_bool",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let box_unit =
-            declare_runtime_function(&mut object, "aurora_direct_box_unit", &[], Some(types::I64))?;
-        let string_literal = declare_runtime_function(
-            &mut object,
-            "aurora_direct_string_literal",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let string_len = declare_runtime_function(
-            &mut object,
-            "aurora_direct_string_len",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let string_contains = declare_runtime_function(
-            &mut object,
-            "aurora_direct_string_contains",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let string_starts_with = declare_runtime_function(
-            &mut object,
-            "aurora_direct_string_starts_with",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let string_ends_with = declare_runtime_function(
-            &mut object,
-            "aurora_direct_string_ends_with",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let string_split = declare_runtime_function(
-            &mut object,
-            "aurora_direct_string_split",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let string_replace = declare_runtime_function(
-            &mut object,
-            "aurora_direct_string_replace",
-            &[types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let string_to_lower = declare_runtime_function(
-            &mut object,
-            "aurora_direct_string_to_lower",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let string_to_upper = declare_runtime_function(
-            &mut object,
-            "aurora_direct_string_to_upper",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let string_strip_prefix = declare_runtime_function(
-            &mut object,
-            "aurora_direct_string_strip_prefix",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let string_strip_suffix = declare_runtime_function(
-            &mut object,
-            "aurora_direct_string_strip_suffix",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let string_trim = declare_runtime_function(
-            &mut object,
-            "aurora_direct_string_trim",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let string_join = declare_runtime_function(
-            &mut object,
-            "aurora_direct_string_join",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let stringify_value = declare_runtime_function(
-            &mut object,
-            "aurora_direct_stringify_value",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let abs_value = declare_runtime_function(
-            &mut object,
-            "aurora_direct_abs",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let min_value = declare_runtime_function(
-            &mut object,
-            "aurora_direct_min",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let max_value = declare_runtime_function(
-            &mut object,
-            "aurora_direct_max",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let sqrt_value = declare_runtime_function(
-            &mut object,
-            "aurora_direct_sqrt",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let parse_int32 = declare_runtime_function(
-            &mut object,
-            "aurora_direct_parse_int32",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let parse_int64 = declare_runtime_function(
-            &mut object,
-            "aurora_direct_parse_int64",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let parse_float64 = declare_runtime_function(
-            &mut object,
-            "aurora_direct_parse_float64",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let duration_literal = declare_runtime_function(
-            &mut object,
-            "aurora_direct_duration_literal",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let range_new = declare_runtime_function(
-            &mut object,
-            "aurora_direct_range_new",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let range_current = declare_runtime_function(
-            &mut object,
-            "aurora_direct_range_current",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let range_end = declare_runtime_function(
-            &mut object,
-            "aurora_direct_range_end",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let range_advance = declare_runtime_function(
-            &mut object,
-            "aurora_direct_range_advance",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let vec_empty = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_empty",
-            &[],
-            Some(types::I64),
-        )?;
-        let vec_len = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_len",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let vec_is_empty = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_is_empty",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let vec_push_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_push_in_place",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let vec_pop_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_pop_in_place",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let vec_get = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_get",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let vec_set_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_set_in_place",
-            &[types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let vec_remove_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_remove_in_place",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let vec_swap_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_swap_in_place",
-            &[types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let vec_contains = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_contains",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let vec_extend_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_extend_in_place",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let vec_insert_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_insert_in_place",
-            &[types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let vec_clear_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_clear_in_place",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let vec_reverse_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_reverse_in_place",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let vec_index = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_index",
-            &[types::I64, types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let vec_index_option = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_index_option",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let vec_set_index_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_vec_set_index_in_place",
-            &[types::I64, types::I64, types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let map_empty = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_empty",
-            &[],
-            Some(types::I64),
-        )?;
-        let map_len = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_len",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let map_is_empty = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_is_empty",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let map_get = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_get",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let map_set_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_set_in_place",
-            &[types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let map_remove_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_remove_in_place",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let map_contains_key = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_contains_key",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let map_keys = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_keys",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let map_values = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_values",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let map_items = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_items",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let map_entries = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_entries",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let map_clear_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_clear_in_place",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let map_extend_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_extend_in_place",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let map_index = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_index",
-            &[types::I64, types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let map_set_index_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_map_set_index_in_place",
-            &[types::I64, types::I64, types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let set_empty = declare_runtime_function(
-            &mut object,
-            "aurora_direct_set_empty",
-            &[],
-            Some(types::I64),
-        )?;
-        let set_len = declare_runtime_function(
-            &mut object,
-            "aurora_direct_set_len",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let set_is_empty = declare_runtime_function(
-            &mut object,
-            "aurora_direct_set_is_empty",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let set_contains = declare_runtime_function(
-            &mut object,
-            "aurora_direct_set_contains",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let set_insert_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_set_insert_in_place",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let set_remove_in_place = declare_runtime_function(
-            &mut object,
-            "aurora_direct_set_remove_in_place",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let set_index_option = declare_runtime_function(
-            &mut object,
-            "aurora_direct_set_index_option",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let clone_value = declare_runtime_function(
-            &mut object,
-            "aurora_direct_clone_value",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let unbox_i64 = declare_runtime_function(
-            &mut object,
-            "aurora_direct_unbox_i64",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let unbox_f64 = declare_runtime_function(
-            &mut object,
-            "aurora_direct_unbox_f64",
-            &[types::I64],
-            Some(types::F64),
-        )?;
-        let unbox_bool = declare_runtime_function(
-            &mut object,
-            "aurora_direct_unbox_bool",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let value_as_condition = declare_runtime_function(
-            &mut object,
-            "aurora_direct_value_as_condition",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let unary_value = declare_runtime_function(
-            &mut object,
-            "aurora_direct_unary_value_at",
-            &[types::I64, types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let binary_value = declare_runtime_function(
-            &mut object,
-            "aurora_direct_binary_value_at",
-            &[types::I64, types::I64, types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let cast_value = declare_runtime_function(
-            &mut object,
-            "aurora_direct_cast_value_at",
-            &[types::I64, types::I64, types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let value_type_matches = declare_runtime_function(
-            &mut object,
-            "aurora_direct_value_type_matches",
-            &[types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let enum_variant = declare_runtime_function(
-            &mut object,
-            "aurora_direct_enum_variant",
-            &[types::I64, types::I64, types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let variant_matches = declare_runtime_function(
-            &mut object,
-            "aurora_direct_variant_matches",
-            &[types::I64, types::I64, types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let variant_payload = declare_runtime_function(
-            &mut object,
-            "aurora_direct_variant_payload",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let instance_empty = declare_runtime_function(
-            &mut object,
-            "aurora_direct_instance_empty",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let instance_get_field = declare_runtime_function(
-            &mut object,
-            "aurora_direct_instance_get_field",
-            &[types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let instance_set_field = declare_runtime_function(
-            &mut object,
-            "aurora_direct_instance_set_field",
-            &[types::I64, types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let arg_buffer_new = declare_runtime_function(
-            &mut object,
-            "aurora_direct_arg_buffer_new",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let arg_buffer_store = declare_runtime_function(
-            &mut object,
-            "aurora_direct_arg_buffer_store",
-            &[types::I64, types::I64, types::I64],
-            None,
-        )?;
-        let channel_new = declare_runtime_function(
-            &mut object,
-            "aurora_direct_channel_new",
-            &[],
-            Some(types::I64),
-        )?;
-        let channel_send = declare_runtime_function(
-            &mut object,
-            "aurora_direct_channel_send",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let channel_recv = declare_runtime_function(
-            &mut object,
-            "aurora_direct_channel_recv",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let channel_try_recv = declare_runtime_function(
-            &mut object,
-            "aurora_direct_channel_try_recv",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let channel_close = declare_runtime_function(
-            &mut object,
-            "aurora_direct_channel_close",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let task_group_new = declare_runtime_function(
-            &mut object,
-            "aurora_direct_task_group_new",
-            &[],
-            Some(types::I64),
-        )?;
-        let task_group_cancel = declare_runtime_function(
-            &mut object,
-            "aurora_direct_task_group_cancel",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let task_group_close = declare_runtime_function(
-            &mut object,
-            "aurora_direct_task_group_close",
-            &[types::I64, types::I64],
-            Some(types::I64),
-        )?;
-        let task_join = declare_runtime_function(
-            &mut object,
-            "aurora_direct_task_join",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let cancelled = declare_runtime_function(
-            &mut object,
-            "aurora_direct_cancelled",
-            &[],
-            Some(types::I64),
-        )?;
-        let deadline_new = declare_runtime_function(
-            &mut object,
-            "aurora_direct_deadline_new",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let deadline_ready = declare_runtime_function(
-            &mut object,
-            "aurora_direct_deadline_ready",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let sleep_ms =
-            declare_runtime_function(&mut object, "aurora_direct_sleep_ms", &[types::I64], None)?;
-        let sleep_value = declare_runtime_function(
-            &mut object,
-            "aurora_direct_sleep_value",
-            &[types::I64],
-            Some(types::I64),
-        )?;
-        let spawn_call = declare_runtime_function(
-            &mut object,
-            "aurora_direct_spawn_call",
-            &[types::I64, types::I64, types::I64, types::I64, types::I64],
-            Some(types::I64),
-        )?;
+        declare_runtime_functions!(
+            &mut object,
+            runtime_init => ("aurora_direct_runtime_init", [types::I64, types::I64, types::I64, types::I64], None),
+            print_i64 => ("aurora_direct_print_i64", [types::I64], None),
+            print_f64 => ("aurora_direct_print_f64", [types::F64], None),
+            print_bool => ("aurora_direct_print_bool", [types::I64], None),
+            print_value => ("aurora_direct_print_value", [types::I64], None),
+            sqrt_f64 => ("aurora_direct_sqrt_f64", [types::F64], Some(types::F64)),
+            fail_division_by_zero => ("aurora_direct_fail_division_by_zero", [types::I64, types::I64], None),
+            fail_int32_overflow => ("aurora_direct_fail_int32_overflow", [types::I64, types::I64, types::I64], None),
+            box_i64 => ("aurora_direct_box_i64", [types::I64], Some(types::I64)),
+            box_uint_literal => ("aurora_direct_box_uint_literal", [types::I64, types::I64], Some(types::I64)),
+            box_f64 => ("aurora_direct_box_f64", [types::F64], Some(types::I64)),
+            box_bool => ("aurora_direct_box_bool", [types::I64], Some(types::I64)),
+            box_unit => ("aurora_direct_box_unit", [], Some(types::I64)),
+            string_literal => ("aurora_direct_string_literal", [types::I64, types::I64], Some(types::I64)),
+            string_len => ("aurora_direct_string_len", [types::I64], Some(types::I64)),
+            string_contains => ("aurora_direct_string_contains", [types::I64, types::I64], Some(types::I64)),
+            string_starts_with => ("aurora_direct_string_starts_with", [types::I64, types::I64], Some(types::I64)),
+            string_ends_with => ("aurora_direct_string_ends_with", [types::I64, types::I64], Some(types::I64)),
+            string_split => ("aurora_direct_string_split", [types::I64, types::I64], Some(types::I64)),
+            string_replace => ("aurora_direct_string_replace", [types::I64, types::I64, types::I64], Some(types::I64)),
+            string_to_lower => ("aurora_direct_string_to_lower", [types::I64], Some(types::I64)),
+            string_to_upper => ("aurora_direct_string_to_upper", [types::I64], Some(types::I64)),
+            string_strip_prefix => ("aurora_direct_string_strip_prefix", [types::I64, types::I64], Some(types::I64)),
+            string_strip_suffix => ("aurora_direct_string_strip_suffix", [types::I64, types::I64], Some(types::I64)),
+            string_trim => ("aurora_direct_string_trim", [types::I64], Some(types::I64)),
+            string_join => ("aurora_direct_string_join", [types::I64, types::I64], Some(types::I64)),
+            stringify_value => ("aurora_direct_stringify_value", [types::I64], Some(types::I64)),
+            abs_value => ("aurora_direct_abs", [types::I64], Some(types::I64)),
+            min_value => ("aurora_direct_min", [types::I64, types::I64], Some(types::I64)),
+            max_value => ("aurora_direct_max", [types::I64, types::I64], Some(types::I64)),
+            sqrt_value => ("aurora_direct_sqrt", [types::I64], Some(types::I64)),
+            parse_int32 => ("aurora_direct_parse_int32", [types::I64], Some(types::I64)),
+            parse_int64 => ("aurora_direct_parse_int64", [types::I64], Some(types::I64)),
+            parse_float64 => ("aurora_direct_parse_float64", [types::I64], Some(types::I64)),
+            duration_literal => ("aurora_direct_duration_literal", [types::I64], Some(types::I64)),
+            range_new => ("aurora_direct_range_new", [types::I64, types::I64], Some(types::I64)),
+            range_current => ("aurora_direct_range_current", [types::I64], Some(types::I64)),
+            range_end => ("aurora_direct_range_end", [types::I64], Some(types::I64)),
+            range_advance => ("aurora_direct_range_advance", [types::I64], Some(types::I64)),
+            vec_empty => ("aurora_direct_vec_empty", [], Some(types::I64)),
+            vec_len => ("aurora_direct_vec_len", [types::I64], Some(types::I64)),
+            vec_is_empty => ("aurora_direct_vec_is_empty", [types::I64], Some(types::I64)),
+            vec_push_in_place => ("aurora_direct_vec_push_in_place", [types::I64, types::I64], Some(types::I64)),
+            vec_pop_in_place => ("aurora_direct_vec_pop_in_place", [types::I64], Some(types::I64)),
+            vec_get => ("aurora_direct_vec_get", [types::I64, types::I64], Some(types::I64)),
+            vec_set_in_place => ("aurora_direct_vec_set_in_place", [types::I64, types::I64, types::I64], Some(types::I64)),
+            vec_remove_in_place => ("aurora_direct_vec_remove_in_place", [types::I64, types::I64], Some(types::I64)),
+            vec_swap_in_place => ("aurora_direct_vec_swap_in_place", [types::I64, types::I64, types::I64], Some(types::I64)),
+            vec_contains => ("aurora_direct_vec_contains", [types::I64, types::I64], Some(types::I64)),
+            vec_extend_in_place => ("aurora_direct_vec_extend_in_place", [types::I64, types::I64], Some(types::I64)),
+            vec_insert_in_place => ("aurora_direct_vec_insert_in_place", [types::I64, types::I64, types::I64], Some(types::I64)),
+            vec_clear_in_place => ("aurora_direct_vec_clear_in_place", [types::I64], Some(types::I64)),
+            vec_reverse_in_place => ("aurora_direct_vec_reverse_in_place", [types::I64], Some(types::I64)),
+            vec_index => ("aurora_direct_vec_index", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            vec_index_option => ("aurora_direct_vec_index_option", [types::I64, types::I64], Some(types::I64)),
+            vec_set_index_in_place => ("aurora_direct_vec_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            map_empty => ("aurora_direct_map_empty", [], Some(types::I64)),
+            map_len => ("aurora_direct_map_len", [types::I64], Some(types::I64)),
+            map_is_empty => ("aurora_direct_map_is_empty", [types::I64], Some(types::I64)),
+            map_get => ("aurora_direct_map_get", [types::I64, types::I64], Some(types::I64)),
+            map_set_in_place => ("aurora_direct_map_set_in_place", [types::I64, types::I64, types::I64], Some(types::I64)),
+            map_remove_in_place => ("aurora_direct_map_remove_in_place", [types::I64, types::I64], Some(types::I64)),
+            map_contains_key => ("aurora_direct_map_contains_key", [types::I64, types::I64], Some(types::I64)),
+            map_keys => ("aurora_direct_map_keys", [types::I64], Some(types::I64)),
+            map_values => ("aurora_direct_map_values", [types::I64], Some(types::I64)),
+            map_items => ("aurora_direct_map_items", [types::I64], Some(types::I64)),
+            map_entries => ("aurora_direct_map_entries", [types::I64], Some(types::I64)),
+            map_clear_in_place => ("aurora_direct_map_clear_in_place", [types::I64], Some(types::I64)),
+            map_extend_in_place => ("aurora_direct_map_extend_in_place", [types::I64, types::I64], Some(types::I64)),
+            map_index => ("aurora_direct_map_index", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            map_set_index_in_place => ("aurora_direct_map_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            set_empty => ("aurora_direct_set_empty", [], Some(types::I64)),
+            set_len => ("aurora_direct_set_len", [types::I64], Some(types::I64)),
+            set_is_empty => ("aurora_direct_set_is_empty", [types::I64], Some(types::I64)),
+            set_contains => ("aurora_direct_set_contains", [types::I64, types::I64], Some(types::I64)),
+            set_insert_in_place => ("aurora_direct_set_insert_in_place", [types::I64, types::I64], Some(types::I64)),
+            set_remove_in_place => ("aurora_direct_set_remove_in_place", [types::I64, types::I64], Some(types::I64)),
+            set_index_option => ("aurora_direct_set_index_option", [types::I64, types::I64], Some(types::I64)),
+            clone_value => ("aurora_direct_clone_value", [types::I64], Some(types::I64)),
+            unbox_i64 => ("aurora_direct_unbox_i64", [types::I64], Some(types::I64)),
+            unbox_f64 => ("aurora_direct_unbox_f64", [types::I64], Some(types::F64)),
+            unbox_bool => ("aurora_direct_unbox_bool", [types::I64], Some(types::I64)),
+            value_as_condition => ("aurora_direct_value_as_condition", [types::I64], Some(types::I64)),
+            unary_value => ("aurora_direct_unary_value_at", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            binary_value => ("aurora_direct_binary_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            cast_value => ("aurora_direct_cast_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            value_type_matches => ("aurora_direct_value_type_matches", [types::I64, types::I64, types::I64], Some(types::I64)),
+            enum_variant => ("aurora_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            variant_matches => ("aurora_direct_variant_matches", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            variant_payload => ("aurora_direct_variant_payload", [types::I64], Some(types::I64)),
+            instance_empty => ("aurora_direct_instance_empty", [types::I64, types::I64], Some(types::I64)),
+            instance_get_field => ("aurora_direct_instance_get_field", [types::I64, types::I64, types::I64], Some(types::I64)),
+            instance_set_field => ("aurora_direct_instance_set_field", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            arg_buffer_new => ("aurora_direct_arg_buffer_new", [types::I64], Some(types::I64)),
+            arg_buffer_store => ("aurora_direct_arg_buffer_store", [types::I64, types::I64, types::I64], None),
+            channel_new => ("aurora_direct_channel_new", [], Some(types::I64)),
+            channel_send => ("aurora_direct_channel_send", [types::I64, types::I64], Some(types::I64)),
+            channel_recv => ("aurora_direct_channel_recv", [types::I64], Some(types::I64)),
+            channel_try_recv => ("aurora_direct_channel_try_recv", [types::I64], Some(types::I64)),
+            channel_close => ("aurora_direct_channel_close", [types::I64], Some(types::I64)),
+            task_group_new => ("aurora_direct_task_group_new", [], Some(types::I64)),
+            task_group_cancel => ("aurora_direct_task_group_cancel", [types::I64], Some(types::I64)),
+            task_group_close => ("aurora_direct_task_group_close", [types::I64, types::I64], Some(types::I64)),
+            task_join => ("aurora_direct_task_join", [types::I64], Some(types::I64)),
+            cancelled => ("aurora_direct_cancelled", [], Some(types::I64)),
+            deadline_new => ("aurora_direct_deadline_new", [types::I64], Some(types::I64)),
+            deadline_ready => ("aurora_direct_deadline_ready", [types::I64], Some(types::I64)),
+            sleep_ms => ("aurora_direct_sleep_ms", [types::I64], None),
+            sleep_value => ("aurora_direct_sleep_value", [types::I64], Some(types::I64)),
+            spawn_call => ("aurora_direct_spawn_call", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+        );
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
@@ -949,25 +442,22 @@ impl<'a> NativeCodegen<'a> {
         let mut function_writeback_types = HashMap::new();
         for function in module.functions.iter().chain(module.top_level.iter()) {
             let signature = signature_for(function, &classes, call_conv)?;
-            let func_id = object
-                .declare_function(&mangle_symbol(&function.name), Linkage::Local, &signature)
-                .map_err(|error| {
-                    format!("failed to declare function `{}`: {}", function.name, error)
-                })?;
+            let func_id = try_or_string_error!(
+                object.declare_function(&mangle_symbol(&function.name), Linkage::Local, &signature),
+                "failed to declare function `{}`: {}",
+                function.name
+            );
             functions.insert(function.name.clone(), func_id);
             let thunk_signature = thunk_signature(call_conv);
-            let thunk_id = object
-                .declare_function(
+            let thunk_id = try_or_string_error!(
+                object.declare_function(
                     &mangle_thunk_symbol(&function.name),
                     Linkage::Local,
                     &thunk_signature,
-                )
-                .map_err(|error| {
-                    format!(
-                        "failed to declare function thunk `{}`: {}",
-                        function.name, error
-                    )
-                })?;
+                ),
+                "failed to declare function thunk `{}`: {}",
+                function.name
+            );
             function_thunks.insert(function.name.clone(), thunk_id);
             function_return_types.insert(
                 function.name.clone(),
@@ -1145,9 +635,10 @@ impl<'a> NativeCodegen<'a> {
         }
         self.define_main_wrapper()?;
         let product = self.object.finish();
-        product
-            .emit()
-            .map_err(|error| format!("failed to emit direct backend object: {}", error))
+        match product.emit() {
+            Ok(bytes) => Ok(bytes),
+            Err(error) => Err(format!("failed to emit direct backend object: {}", error)),
+        }
     }
 
     fn define_function(&mut self, function: &MirFunction) -> std::result::Result<(), String> {
@@ -1164,12 +655,15 @@ impl<'a> NativeCodegen<'a> {
             blocks.insert(block.label.clone(), builder.create_block());
         }
 
-        let entry = *blocks.get(&function.entry).ok_or_else(|| {
-            format!(
-                "direct backend could not find entry block `{}`",
-                function.entry
-            )
-        })?;
+        let entry = match blocks.get(&function.entry) {
+            Some(entry) => *entry,
+            None => {
+                return Err(format!(
+                    "direct backend could not find entry block `{}`",
+                    function.entry
+                ));
+            }
+        };
         builder.append_block_params_for_function_params(entry);
         builder.switch_to_block(entry);
 
@@ -1242,18 +736,20 @@ impl<'a> NativeCodegen<'a> {
                     if variables.contains_key(target) {
                         continue;
                     }
-                    let ty = infer_rvalue_type(
+                    let ty = match infer_rvalue_type(
                         value,
                         &variable_types,
                         &self.function_return_types,
                         &self.classes,
-                    )
-                    .ok_or_else(|| {
-                        format!(
-                            "direct backend could not infer direct type for temporary `{}` in `{}`",
-                            target, function.name
-                        )
-                    })?;
+                    ) {
+                        Some(ty) => ty,
+                        None => {
+                            return Err(format!(
+                                "direct backend could not infer direct type for temporary `{}` in `{}`",
+                                target, function.name
+                            ));
+                        }
+                    };
                     declare_root_variables(
                         &mut builder,
                         &mut variable_index,
@@ -1273,17 +769,15 @@ impl<'a> NativeCodegen<'a> {
                     if variables.contains_key(binding) {
                         continue;
                     }
-                    let ty = infer_select_binding_type(
-                        arm,
-                        &variable_types,
-                        &self.classes,
-                    )
-                    .ok_or_else(|| {
-                        format!(
-                            "direct backend could not infer direct type for select binding `{}` in `{}`",
-                            binding, function.name
-                        )
-                    })?;
+                    let ty = match infer_select_binding_type(arm, &variable_types, &self.classes) {
+                        Some(ty) => ty,
+                        None => {
+                            return Err(format!(
+                                "direct backend could not infer direct type for select binding `{}` in `{}`",
+                                binding, function.name
+                            ));
+                        }
+                    };
                     declare_root_variables(
                         &mut builder,
                         &mut variable_index,
@@ -1310,20 +804,17 @@ impl<'a> NativeCodegen<'a> {
             }
         }
 
-        let cleanup_places = function
-            .blocks
-            .iter()
-            .flat_map(|block| block.instructions.iter())
-            .filter_map(|instruction| match instruction {
-                Instruction::PushCleanup { place } => Some(place.clone()),
-                _ => None,
-            })
-            .fold(Vec::<String>::new(), |mut places, place| {
-                if !places.contains(&place) {
-                    places.push(place);
+        let mut cleanup_places = Vec::<String>::new();
+        for block in &function.blocks {
+            for instruction in &block.instructions {
+                let Instruction::PushCleanup { place } = instruction else {
+                    continue;
+                };
+                if !cleanup_places.contains(place) {
+                    cleanup_places.push(place.clone());
                 }
-                places
-            });
+            }
+        }
         let mut cleanup_active_vars = HashMap::new();
         for place in &cleanup_places {
             let variable = Variable::from_u32(variable_index as u32);
@@ -1680,6 +1171,7 @@ impl<'a> NativeCodegen<'a> {
             blocks,
             variables,
             variable_types,
+            next_variable_index: variable_index,
             function_refs,
             function_thunk_refs,
             function_return_types: self.function_return_types.clone(),
@@ -1814,22 +1306,17 @@ impl<'a> NativeCodegen<'a> {
 
         compiler.builder.seal_all_blocks();
         compiler.builder.finalize();
-        ctx.verify(self.object.isa()).map_err(|error| {
-            format!(
-                "failed to define direct function `{}`: {}\n{}",
-                function.name,
-                error,
-                ctx.func.display()
-            )
-        })?;
-        self.object
-            .define_function(func_id, &mut ctx)
-            .map_err(|error| {
-                format!(
-                    "failed to define direct function `{}`: {}",
-                    function.name, error
-                )
-            })?;
+        try_or_string_error!(
+            ctx.verify(self.object.isa()),
+            "failed to define direct function `{}`: {}\n{}",
+            function.name,
+            ctx.func.display()
+        );
+        try_or_string_error!(
+            self.object.define_function(func_id, &mut ctx),
+            "failed to define direct function `{}`: {}",
+            function.name
+        );
         Ok(())
     }
 
@@ -1902,28 +1389,24 @@ impl<'a> NativeCodegen<'a> {
 
         let inst = builder.ins().call(target_ref, &lowered_args);
         let results = builder.inst_results(inst).to_vec();
-        let return_ty = self
-            .function_return_types
-            .get(&function.name)
-            .cloned()
-            .ok_or_else(|| {
-                format!(
+        let return_ty = match self.function_return_types.get(&function.name).cloned() {
+            Some(return_ty) => return_ty,
+            None => {
+                return Err(format!(
                     "direct backend does not know return type for `{}`",
                     function.name
-                )
-            })?;
+                ));
+            }
+        };
         let boxed = box_thunk_value(self, &mut builder, &results, &return_ty)?;
         builder.ins().return_(&[boxed]);
         builder.finalize();
 
-        self.object
-            .define_function(thunk_id, &mut ctx)
-            .map_err(|error| {
-                format!(
-                    "failed to define direct function thunk `{}`: {}",
-                    function.name, error
-                )
-            })?;
+        try_or_string_error!(
+            self.object.define_function(thunk_id, &mut ctx),
+            "failed to define direct function thunk `{}`: {}",
+            function.name
+        );
         Ok(())
     }
 
@@ -1941,10 +1424,11 @@ impl<'a> NativeCodegen<'a> {
 
         let mut ctx = self.object.make_context();
         ctx.func.signature = main_signature(self.call_conv);
-        let wrapper_id = self
-            .object
-            .declare_function("main", Linkage::Export, &ctx.func.signature)
-            .map_err(|error| format!("failed to declare main wrapper: {}", error))?;
+        let wrapper_id = try_or_string_error!(
+            self.object
+                .declare_function("main", Linkage::Export, &ctx.func.signature),
+            "failed to declare main wrapper: {}"
+        );
         ctx.func.name = UserFuncName::user(0, wrapper_id.as_u32());
 
         let mut builder_ctx = FunctionBuilderContext::new();
@@ -1973,18 +1457,18 @@ impl<'a> NativeCodegen<'a> {
             .ins()
             .call(runtime_init, &[path_ptr, path_len, source_ptr, source_len]);
         let result = builder.ins().call(entry_ref, &[]);
-        let return_value = builder
-            .inst_results(result)
-            .first()
-            .copied()
-            .unwrap_or_else(|| builder.ins().iconst(types::I64, 0));
+        let return_value = match builder.inst_results(result).first().copied() {
+            Some(value) => value,
+            None => builder.ins().iconst(types::I64, 0),
+        };
         let return_code = builder.ins().ireduce(types::I32, return_value);
         builder.ins().return_(&[return_code]);
         builder.finalize();
 
-        self.object
-            .define_function(wrapper_id, &mut ctx)
-            .map_err(|error| format!("failed to define main wrapper: {}", error))?;
+        try_or_string_error!(
+            self.object.define_function(wrapper_id, &mut ctx),
+            "failed to define main wrapper: {}"
+        );
         Ok(())
     }
 }
@@ -1994,6 +1478,7 @@ struct FunctionCompiler<'a> {
     blocks: HashMap<String, cranelift_codegen::ir::Block>,
     variables: HashMap<String, Vec<Variable>>,
     variable_types: HashMap<String, DirectType>,
+    next_variable_index: usize,
     function_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     function_thunk_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     function_return_types: HashMap<String, DirectType>,
@@ -3993,13 +3478,7 @@ impl<'a> FunctionCompiler<'a> {
                     .classes
                     .get(&class_ty.class_name)
                     .and_then(|class| class.methods.iter().find(|method| method.name == "close"))
-                    .is_some()
-                    || self
-                        .find_trait_method(&Type::named(&class_ty.class_name), "close")
-                        .is_some()
-                    || self
-                        .find_trait_method_for_class_name(&class_ty.class_name, "close")
-                        .is_some();
+                    .is_some();
                 if has_close {
                     let operand = Operand::Place(place.to_string());
                     let _ = self.compile_member_call(&operand, "close", Some(place), &[])?;
@@ -4381,23 +3860,6 @@ impl<'a> FunctionCompiler<'a> {
                             ty: DirectType::Scalar(ScalarKind::Bool),
                         })
                     }
-                    "clone" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `clone()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.clone_value, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Opaque(Type::Named(
-                                "Vec".to_string(),
-                                class_args.clone(),
-                            )),
-                        })
-                    }
                     "push" => {
                         let [argument] = args else {
                             return Err("direct backend expected `push()` to receive one argument"
@@ -4770,23 +4232,6 @@ impl<'a> FunctionCompiler<'a> {
                             ty: DirectType::Scalar(ScalarKind::Bool),
                         })
                     }
-                    "clone" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `clone()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.clone_value, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Opaque(Type::Named(
-                                "Map".to_string(),
-                                class_args.clone(),
-                            )),
-                        })
-                    }
                     "get" => {
                         let [argument] = args else {
                             return Err(
@@ -5069,23 +4514,6 @@ impl<'a> FunctionCompiler<'a> {
                             ty: DirectType::Scalar(ScalarKind::Bool),
                         })
                     }
-                    "clone" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `clone()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.clone_value, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Opaque(Type::Named(
-                                "Set".to_string(),
-                                class_args.clone(),
-                            )),
-                        })
-                    }
                     "contains" => {
                         let [argument] = args else {
                             return Err(
@@ -5190,23 +4618,6 @@ impl<'a> FunctionCompiler<'a> {
             if name == "Channel" {
                 let object = self.ensure_opaque(object)?;
                 return match field {
-                    "clone" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `clone()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.clone_value, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Opaque(Type::Named(
-                                "Channel".to_string(),
-                                class_args.clone(),
-                            )),
-                        })
-                    }
                     "send" => {
                         let [argument] = args else {
                             return Err("direct backend expected `send()` to receive one argument"
@@ -5279,23 +4690,6 @@ impl<'a> FunctionCompiler<'a> {
             if name == "Task" {
                 let object = self.ensure_opaque(object)?;
                 return match field {
-                    "clone" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `clone()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.clone_value, &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Opaque(Type::Named(
-                                "Task".to_string(),
-                                class_args.clone(),
-                            )),
-                        })
-                    }
                     "join" => {
                         if !args.is_empty() {
                             return Err(
@@ -5400,10 +4794,6 @@ impl<'a> FunctionCompiler<'a> {
             let Type::Named(candidate_name, _) = candidate_ty else {
                 continue;
             };
-            let check_block = self
-                .builder
-                .current_block()
-                .expect("current block should exist");
             let matched = self.value_matches_runtime_type(object.values[0], candidate_ty)?;
             let then_block = self.builder.create_block();
             let else_block = self.builder.create_block();
@@ -5423,7 +4813,6 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.ins().jump(join_block, &[]);
             self.builder.seal_block(then_block);
             self.builder.switch_to_block(else_block);
-            self.builder.seal_block(check_block);
             current_fallthrough = Some(else_block);
         }
         if let Some(else_block) = current_fallthrough {
@@ -5821,9 +5210,8 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<Vec<Variable>, String> {
         let mut vars = Vec::new();
         for abi in ty.abi_types() {
-            let variable = Variable::from_u32(
-                (self.variables.len() + self.variable_types.len() + vars.len() + 10000) as u32,
-            );
+            let variable = Variable::from_u32(self.next_variable_index as u32);
+            self.next_variable_index += 1;
             self.builder.declare_var(variable, abi);
             let zero = match abi {
                 t if t == types::F64 => self.builder.ins().f64const(Ieee64::with_float(0.0)),
@@ -5864,7 +5252,13 @@ fn unit_value(builder: &mut FunctionBuilder<'_>) -> ValueRef {
 }
 
 fn find_method<'a>(class: Option<&'a MirClass>, field: &str) -> Option<&'a MirMethod> {
-    class?.methods.iter().find(|method| method.name == field)
+    let class = class?;
+    for method in &class.methods {
+        if method.name == field {
+            return Some(method);
+        }
+    }
+    None
 }
 
 fn declare_runtime_function(
@@ -5880,9 +5274,13 @@ fn declare_runtime_function(
     if let Some(result) = result {
         sig.returns.push(AbiParam::new(result));
     }
-    module
-        .declare_function(name, Linkage::Import, &sig)
-        .map_err(|error| format!("failed to declare runtime function `{}`: {}", name, error))
+    match module.declare_function(name, Linkage::Import, &sig) {
+        Ok(id) => Ok(id),
+        Err(error) => Err(format!(
+            "failed to declare runtime function `{}`: {}",
+            name, error
+        )),
+    }
 }
 
 fn declare_string_constant(
@@ -5895,14 +5293,16 @@ fn declare_string_constant(
         *id
     } else {
         let name = format!("aurora_data_{}", string_data.len());
-        let id = object
-            .declare_data(&name, Linkage::Local, false, false)
-            .map_err(|error| format!("failed to declare string data: {}", error))?;
+        let id = try_or_string_error!(
+            object.declare_data(&name, Linkage::Local, false, false),
+            "failed to declare string data: {}"
+        );
         let mut data = DataDescription::new();
         data.define(bytes.to_vec().into_boxed_slice());
-        object
-            .define_data(id, &data)
-            .map_err(|error| format!("failed to define string data: {}", error))?;
+        try_or_string_error!(
+            object.define_data(id, &data),
+            "failed to define string data: {}"
+        );
         string_data.insert(bytes.to_vec(), id);
         id
     };
@@ -5961,17 +5361,19 @@ fn receiver_type(
     function: &MirFunction,
     classes: &HashMap<String, MirClass>,
 ) -> std::result::Result<DirectType, String> {
-    let receiver_ty = function
-        .local_types
-        .iter()
-        .find(|local| local.name == "self")
-        .map(|local| &local.ty)
-        .ok_or_else(|| {
-            format!(
-                "direct backend could not find receiver local type for `{}`",
-                function.name
-            )
-        })?;
+    let mut receiver_ty = None;
+    for local in &function.local_types {
+        if local.name == "self" {
+            receiver_ty = Some(&local.ty);
+            break;
+        }
+    }
+    let Some(receiver_ty) = receiver_ty else {
+        return Err(format!(
+            "direct backend could not find receiver local type for `{}`",
+            function.name
+        ));
+    };
     ensure_direct_type(
         receiver_ty,
         classes,
@@ -5988,9 +5390,11 @@ fn declare_root_variables(
     ty: DirectType,
     initial: Option<&[Value]>,
 ) {
-    let initial_values = initial
-        .map(|values| values.to_vec())
-        .unwrap_or_else(|| ty.zero_values(builder));
+    let initial_values = if let Some(values) = initial {
+        values.to_vec()
+    } else {
+        ty.zero_values(builder)
+    };
     let abi_types = ty.abi_types();
     let mut declared = Vec::new();
     for (offset, abi_ty) in abi_types.into_iter().enumerate() {
@@ -6005,12 +5409,10 @@ fn declare_root_variables(
 }
 
 fn validate_module(module: &MirModule) -> std::result::Result<(), String> {
-    let classes = module
-        .classes
-        .iter()
-        .cloned()
-        .map(|class| (class.name.clone(), class))
-        .collect::<HashMap<_, _>>();
+    let mut classes = HashMap::new();
+    for class in &module.classes {
+        classes.insert(class.name.clone(), class.clone());
+    }
     for class in &module.classes {
         for field in &class.fields {
             ensure_direct_type(
@@ -7035,254 +6437,5 @@ fn collect_spawn_targets(module: &MirModule) -> BTreeSet<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::{
-        direct_type, emit_host_object, ensure_direct_type, infer_operand_type, infer_rvalue_type,
-        main_signature, mangle_symbol, render_direct_type, scalar_kind_for_tests, signature_for,
-        validate_operand, DirectType, ScalarKind,
-    };
-    use crate::ast::{BinaryOp, UnaryOp};
-    use crate::diag::Span;
-    use crate::lower_source_to_mir;
-    use crate::mir::MirReceiverKind;
-    use crate::mir::{CallTarget, MirArg, MirFunction, Operand, Rvalue};
-    use crate::sema::Type;
-
-    #[test]
-    fn direct_backend_emits_object_for_supported_scalar_program() {
-        let source = "def helper(value: int32) -> int32:\n    return value + 2\n\ndef main() -> int32:\n    mut current: int32 = 1\n    if current < 5:\n        current = helper(value=current)\n    print(current)\n    return 0\n";
-
-        let mir = lower_source_to_mir(source).expect("source should lower to MIR");
-        let object = emit_host_object(&mir).expect("direct backend should emit an object");
-
-        assert!(
-            !object.is_empty(),
-            "direct backend object should not be empty"
-        );
-    }
-
-    #[test]
-    fn direct_backend_emits_object_for_plain_class_programs() {
-        let source = include_str!("../../../examples/point.au");
-        let mir = lower_source_to_mir(source).expect("point example should lower to MIR");
-        let object =
-            emit_host_object(&mir).expect("plain classes should now be supported directly");
-
-        assert!(!object.is_empty(), "point object should not be empty");
-    }
-
-    #[test]
-    fn direct_backend_emits_object_for_trait_impl_dispatch() {
-        let source = include_str!("../../../examples/traits/greeter.au");
-        let mir = lower_source_to_mir(source).expect("trait example should lower to MIR");
-        let object =
-            emit_host_object(&mir).expect("trait impl dispatch should now compile directly");
-
-        assert!(
-            !object.is_empty(),
-            "trait dispatch object should not be empty"
-        );
-    }
-
-    #[test]
-    fn mangle_symbol_rewrites_non_alphanumeric_characters() {
-        assert_eq!(mangle_symbol("main"), "aurora_fn_main");
-        assert_eq!(
-            mangle_symbol("helpers.math.double"),
-            "aurora_fn_helpers_math_double"
-        );
-    }
-
-    #[test]
-    fn direct_type_supports_plain_classes_and_scalars() {
-        let source = include_str!("../../../examples/classes/methods.au");
-        let mir = lower_source_to_mir(source).expect("methods example should lower");
-        let classes = mir
-            .classes
-            .iter()
-            .cloned()
-            .map(|class| (class.name.clone(), class))
-            .collect::<HashMap<_, _>>();
-
-        assert_eq!(
-            scalar_kind_for_tests(&Type::named("int32")),
-            Some(ScalarKind::Int32)
-        );
-        assert_eq!(
-            scalar_kind_for_tests(&Type::named("float64")),
-            Some(ScalarKind::Float64)
-        );
-        assert_eq!(
-            scalar_kind_for_tests(&Type::named("bool")),
-            Some(ScalarKind::Bool)
-        );
-        assert_eq!(scalar_kind_for_tests(&Type::Unit), Some(ScalarKind::Unit));
-
-        let counter =
-            direct_type(&Type::named("Counter"), &classes).expect("Counter should be direct");
-        assert_eq!(render_direct_type(&counter), "Counter");
-        assert_eq!(counter.value_count(), 1);
-    }
-
-    #[test]
-    fn infer_operand_and_rvalue_types_track_plain_classes() {
-        let mut variable_types = HashMap::new();
-        variable_types.insert("flag".to_string(), DirectType::Scalar(ScalarKind::Bool));
-        variable_types.insert("number".to_string(), DirectType::Scalar(ScalarKind::Int32));
-        variable_types.insert(
-            "point".to_string(),
-            DirectType::PlainClass(super::PlainClassType {
-                class_name: "Point".to_string(),
-                fields: vec![
-                    super::PlainClassField {
-                        name: "x".to_string(),
-                        ty: DirectType::Scalar(ScalarKind::Float64),
-                    },
-                    super::PlainClassField {
-                        name: "y".to_string(),
-                        ty: DirectType::Scalar(ScalarKind::Float64),
-                    },
-                ],
-            }),
-        );
-        let mut returns = HashMap::new();
-        returns.insert(
-            "helper".to_string(),
-            DirectType::Scalar(ScalarKind::Float64),
-        );
-        let classes = HashMap::new();
-
-        assert_eq!(
-            infer_operand_type(
-                &Operand::Place("flag".to_string()),
-                &variable_types,
-                &HashMap::new()
-            ),
-            Some(DirectType::Scalar(ScalarKind::Bool))
-        );
-        assert_eq!(
-            infer_operand_type(
-                &Operand::Place("point.x".to_string()),
-                &variable_types,
-                &HashMap::new()
-            ),
-            Some(DirectType::Scalar(ScalarKind::Float64))
-        );
-        assert_eq!(
-            infer_rvalue_type(
-                &Rvalue::Unary {
-                    op: UnaryOp::Not,
-                    value: Operand::Place("flag".to_string()),
-                    span: Span::new(1, 1),
-                },
-                &variable_types,
-                &returns,
-                &classes,
-            ),
-            Some(DirectType::Scalar(ScalarKind::Bool))
-        );
-        assert_eq!(
-            infer_rvalue_type(
-                &Rvalue::Binary {
-                    op: BinaryOp::Add,
-                    left: Operand::Place("number".to_string()),
-                    right: Operand::Int(2),
-                    span: Span::new(1, 1),
-                },
-                &variable_types,
-                &returns,
-                &classes,
-            ),
-            Some(DirectType::Scalar(ScalarKind::Int32))
-        );
-        assert_eq!(
-            infer_rvalue_type(
-                &Rvalue::Call {
-                    callee: CallTarget::Name("print".to_string()),
-                    args: vec![MirArg {
-                        name: None,
-                        value: Operand::Bool(true),
-                        writeback_place: None,
-                    }],
-                },
-                &variable_types,
-                &returns,
-                &classes,
-            ),
-            Some(DirectType::Scalar(ScalarKind::Unit))
-        );
-    }
-
-    #[test]
-    fn validate_operand_accepts_nested_places() {
-        validate_operand(&Operand::Place("point.x".to_string()))
-            .expect("nested places should now validate directly");
-    }
-
-    #[test]
-    fn ensure_direct_type_maps_runtime_backed_types_to_opaque_values() {
-        let ty = ensure_direct_type(&Type::named("String"), &HashMap::new(), "test type")
-            .expect("runtime-backed types should still be representable directly");
-        assert_eq!(ty, DirectType::Opaque(Type::named("String")));
-    }
-
-    #[test]
-    fn signature_helpers_flatten_plain_class_abi_types() {
-        let mut classes = HashMap::new();
-        classes.insert(
-            "Point".to_string(),
-            crate::mir::MirClass {
-                name: "Point".to_string(),
-                type_params: Vec::new(),
-                fields: vec![
-                    crate::mir::MirClassField {
-                        name: "x".to_string(),
-                        ty: Type::named("float64"),
-                    },
-                    crate::mir::MirClassField {
-                        name: "y".to_string(),
-                        ty: Type::named("float64"),
-                    },
-                ],
-                methods: Vec::new(),
-            },
-        );
-        let function = MirFunction {
-            name: "demo".to_string(),
-            module_name: "<test>".to_string(),
-            span: crate::diag::Span::new(1, 1),
-            receiver: Some(MirReceiverKind::Borrow),
-            params: vec![crate::mir::MirParam {
-                name: "other".to_string(),
-                passing: MirReceiverKind::Value,
-                ty: Type::named("Point"),
-            }],
-            local_types: vec![crate::mir::MirLocalType {
-                name: "self".to_string(),
-                ty: Type::named("Point"),
-            }],
-            return_type: Type::named("float64"),
-            entry: "entry".to_string(),
-            blocks: Vec::new(),
-        };
-
-        let sig = signature_for(
-            &function,
-            &classes,
-            cranelift_codegen::isa::CallConv::SystemV,
-        )
-        .expect("signature should flatten point receiver and param");
-        let main_sig = main_signature(cranelift_codegen::isa::CallConv::SystemV);
-
-        assert_eq!(sig.params.len(), 4);
-        assert_eq!(sig.returns.len(), 1);
-        assert_eq!(main_sig.returns.len(), 1);
-    }
-}
-
-#[cfg(test)]
-fn scalar_kind_for_tests(ty: &Type) -> Option<ScalarKind> {
-    direct_type(ty, &HashMap::new()).and_then(|ty| ty.scalar_kind())
-}
+#[path = "native_codegen_tests.rs"]
+mod tests;

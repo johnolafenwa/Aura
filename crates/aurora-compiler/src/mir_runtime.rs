@@ -23,7 +23,7 @@ use crate::sema::{substitute_type, Type};
 
 pub fn run(module: &MirModule) -> Result<RunOutput> {
     let module = module.clone();
-    thread::Builder::new()
+    let handle = match thread::Builder::new()
         .name("aurora-mir-runtime".to_string())
         .stack_size(64 * 1024 * 1024)
         .spawn(move || {
@@ -36,21 +36,33 @@ pub fn run(module: &MirModule) -> Result<RunOutput> {
                 value,
                 stdout: rendered_stdout,
             })
-        })
-        .map_err(|error| {
-            Diagnostic::new(format!(
+        }) {
+        Ok(handle) => handle,
+        Err(error) => {
+            return Err(Diagnostic::new(format!(
                 "failed to start Aurora MIR runtime thread: {}",
                 error
-            ))
-        })?
-        .join()
-        .map_err(|_| Diagnostic::new("Aurora MIR runtime panicked while executing the program"))?
+            )))
+        }
+    };
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err(Diagnostic::new(
+            "Aurora MIR runtime panicked while executing the program",
+        )),
+    }
 }
 
 pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> Result<RunOutput> {
-    let module = serde_json::from_slice::<MirModule>(mir_json).map_err(|error| {
-        Diagnostic::new(format!("failed to deserialize embedded MIR: {}", error))
-    })?;
+    let module = match serde_json::from_slice::<MirModule>(mir_json) {
+        Ok(module) => module,
+        Err(error) => {
+            return Err(Diagnostic::new(format!(
+                "failed to deserialize embedded MIR: {}",
+                error
+            )))
+        }
+    };
     let _ = source_path;
     let _ = source;
     run(&module)
@@ -63,9 +75,8 @@ fn render_runtime_error(path: &str, source: &str, error: &Diagnostic) -> String 
 }
 
 fn write_stream(mut stream: impl Write, text: &str) -> io::Result<()> {
-    stream
-        .write_all(text.as_bytes())
-        .and_then(|_| stream.flush())
+    stream.write_all(text.as_bytes())?;
+    stream.flush()
 }
 
 fn run_serialized_mir_entrypoint(mir_json: &[u8], source_path: &str, source: &str) -> i32 {
@@ -192,14 +203,13 @@ impl Env {
 
     fn read_place(&self, place: &str) -> Result<Value> {
         let mut segments = place.split('.');
-        let root = segments
-            .next()
-            .ok_or_else(|| Diagnostic::new("empty MIR place"))?;
-        let mut value = self
-            .values
-            .get(root)
-            .cloned()
-            .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?;
+        let Some(root) = segments.next() else {
+            return Err(Diagnostic::new("empty MIR place"));
+        };
+        let mut value = match self.values.get(root).cloned() {
+            Some(value) => value,
+            None => return Err(Diagnostic::new(format!("unknown MIR place `{}`", place))),
+        };
         for segment in segments {
             let Value::Instance(instance) = value else {
                 return Err(Diagnostic::new(format!(
@@ -207,12 +217,15 @@ impl Env {
                     segment, place
                 )));
             };
-            value = instance.fields.get(segment).cloned().ok_or_else(|| {
-                Diagnostic::new(format!(
-                    "class `{}` has no field `{}` in MIR place `{}`",
-                    instance.class_name, segment, place
-                ))
-            })?;
+            value = match instance.fields.get(segment).cloned() {
+                Some(value) => value,
+                None => {
+                    return Err(Diagnostic::new(format!(
+                        "class `{}` has no field `{}` in MIR place `{}`",
+                        instance.class_name, segment, place
+                    )))
+                }
+            };
         }
         Ok(value)
     }
@@ -228,11 +241,10 @@ impl Env {
             return Ok(());
         }
 
-        let mut root_value = self
-            .values
-            .get(*root)
-            .cloned()
-            .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?;
+        let mut root_value = match self.values.get(*root).cloned() {
+            Some(value) => value,
+            None => return Err(Diagnostic::new(format!("unknown MIR place `{}`", place))),
+        };
         write_nested_place(&mut root_value, rest, value, place)?;
         self.values.insert((*root).to_string(), root_value);
         Ok(())
@@ -265,12 +277,15 @@ fn write_nested_place(
         return Ok(());
     }
 
-    let child = instance.fields.get_mut(segments[0]).ok_or_else(|| {
-        Diagnostic::new(format!(
-            "class `{}` has no field `{}` in MIR place `{}`",
-            instance.class_name, segments[0], full_place
-        ))
-    })?;
+    let child = match instance.fields.get_mut(segments[0]) {
+        Some(child) => child,
+        None => {
+            return Err(Diagnostic::new(format!(
+                "class `{}` has no field `{}` in MIR place `{}`",
+                instance.class_name, segments[0], full_place
+            )))
+        }
+    };
     write_nested_place(child, &segments[1..], value, full_place)
 }
 
@@ -280,18 +295,14 @@ impl MirRuntime {
         stdout: Arc<Mutex<String>>,
         cancellation: CancellationContext,
     ) -> Self {
-        let functions = module
-            .functions
-            .iter()
-            .cloned()
-            .map(|function| (function.name.clone(), function))
-            .collect::<HashMap<_, _>>();
-        let classes = module
-            .classes
-            .iter()
-            .cloned()
-            .map(|class| (class.name.clone(), class))
-            .collect::<HashMap<_, _>>();
+        let mut functions = HashMap::new();
+        for function in &module.functions {
+            functions.insert(function.name.clone(), function.clone());
+        }
+        let mut classes = HashMap::new();
+        for class in &module.classes {
+            classes.insert(class.name.clone(), class.clone());
+        }
         let trait_impls = module.trait_impls.clone();
         Self {
             module: Arc::new(module),
@@ -305,7 +316,7 @@ impl MirRuntime {
     }
 
     fn find_trait_impl_method(&self, receiver_ty: &Type, field: &str) -> Option<&MirMethod> {
-        self.trait_impls.iter().find_map(|trait_impl| {
+        for trait_impl in &self.trait_impls {
             let mut type_params = std::collections::BTreeSet::new();
             collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
             let mut substitutions = HashMap::new();
@@ -315,13 +326,15 @@ impl MirRuntime {
                 &type_params,
                 &mut substitutions,
             ) {
-                return None;
+                continue;
             }
-            trait_impl
-                .methods
-                .iter()
-                .find(|method| method.name == field)
-        })
+            for method in &trait_impl.methods {
+                if method.name == field {
+                    return Some(method);
+                }
+            }
+        }
+        None
     }
 
     fn find_trait_impl_method_for_class_name(
@@ -329,21 +342,24 @@ impl MirRuntime {
         class_name: &str,
         field: &str,
     ) -> Option<&MirMethod> {
-        let mut matches =
-            self.trait_impls
-                .iter()
-                .filter_map(|trait_impl| match &trait_impl.for_type {
-                    Type::Named(name, _) if name == class_name => trait_impl
-                        .methods
-                        .iter()
-                        .find(|method| method.name == field),
-                    _ => None,
-                });
-        let first = matches.next()?;
-        if matches.next().is_some() {
-            return None;
+        let mut first = None;
+        for trait_impl in &self.trait_impls {
+            match &trait_impl.for_type {
+                Type::Named(name, _) if name == class_name => {
+                    for method in &trait_impl.methods {
+                        if method.name == field {
+                            if first.is_some() {
+                                return None;
+                            }
+                            first = Some(method);
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
-        Some(first)
+        first
     }
 
     fn run_main(&mut self) -> Result<Value> {
@@ -2634,14 +2650,13 @@ impl MirRuntime {
             BinaryOp::Eq => Ok(Value::Bool(left == right)),
             BinaryOp::NotEq => Ok(Value::Bool(left != right)),
             BinaryOp::Add => match (left, right) {
-                (Value::Int(left), Value::Int(right)) => {
-                    left.checked_add(right).map(Value::Int).ok_or_else(|| {
-                        span.map_or_else(
-                            || Diagnostic::new("integer overflow"),
-                            |span| Diagnostic::at(span, "integer overflow"),
-                        )
-                    })
-                }
+                (Value::Int(left), Value::Int(right)) => match left.checked_add(right) {
+                    Some(value) => Ok(Value::Int(value)),
+                    None => Err(match span {
+                        Some(span) => Diagnostic::at(span, "integer overflow"),
+                        None => Diagnostic::new("integer overflow"),
+                    }),
+                },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + right)),
                 (Value::String(left), Value::String(right)) => Ok(Value::String(left + &right)),
                 _ => Err(Diagnostic::new(
@@ -2649,93 +2664,69 @@ impl MirRuntime {
                 )),
             },
             BinaryOp::Sub => match (left, right) {
-                (Value::Int(left), Value::Int(right)) => {
-                    left.checked_sub(right).map(Value::Int).ok_or_else(|| {
-                        span.map_or_else(
-                            || Diagnostic::new("integer overflow"),
-                            |span| Diagnostic::at(span, "integer overflow"),
-                        )
-                    })
-                }
+                (Value::Int(left), Value::Int(right)) => match left.checked_sub(right) {
+                    Some(value) => Ok(Value::Int(value)),
+                    None => Err(match span {
+                        Some(span) => Diagnostic::at(span, "integer overflow"),
+                        None => Diagnostic::new("integer overflow"),
+                    }),
+                },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left - right)),
                 _ => Err(Diagnostic::new(
                     "MIR binary subtraction requires matching numeric operands",
                 )),
             },
             BinaryOp::Mul => match (left, right) {
-                (Value::Int(left), Value::Int(right)) => {
-                    left.checked_mul(right).map(Value::Int).ok_or_else(|| {
-                        span.map_or_else(
-                            || Diagnostic::new("integer overflow"),
-                            |span| Diagnostic::at(span, "integer overflow"),
-                        )
-                    })
-                }
+                (Value::Int(left), Value::Int(right)) => match left.checked_mul(right) {
+                    Some(value) => Ok(Value::Int(value)),
+                    None => Err(match span {
+                        Some(span) => Diagnostic::at(span, "integer overflow"),
+                        None => Diagnostic::new("integer overflow"),
+                    }),
+                },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left * right)),
                 _ => Err(Diagnostic::new(
                     "MIR binary multiplication requires matching numeric operands",
                 )),
             },
             BinaryOp::Div => match (left, right) {
-                (Value::Int(_left), Value::Int(right)) if right.is_zero() => Err(span.map_or_else(
-                    || Diagnostic::new("division by zero"),
-                    |span| Diagnostic::at(span, "division by zero"),
-                )),
-                (Value::Int(left), Value::Int(right)) => {
-                    left.checked_div(right).map(Value::Int).ok_or_else(|| {
-                        span.map_or_else(
-                            || Diagnostic::new("integer overflow"),
-                            |span| Diagnostic::at(span, "integer overflow"),
-                        )
-                    })
-                }
+                (Value::Int(_left), Value::Int(right)) if right.is_zero() => Err(match span {
+                    Some(span) => Diagnostic::at(span, "division by zero"),
+                    None => Diagnostic::new("division by zero"),
+                }),
+                (Value::Int(left), Value::Int(right)) => match left.checked_div(right) {
+                    Some(value) => Ok(Value::Int(value)),
+                    None => Err(match span {
+                        Some(span) => Diagnostic::at(span, "integer overflow"),
+                        None => Diagnostic::new("integer overflow"),
+                    }),
+                },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left / right)),
                 _ => Err(Diagnostic::new(
                     "MIR binary division requires matching numeric operands",
                 )),
             },
             BinaryOp::Mod => match (left, right) {
-                (Value::Int(_left), Value::Int(right)) if right.is_zero() => Err(span.map_or_else(
-                    || Diagnostic::new("division by zero"),
-                    |span| Diagnostic::at(span, "division by zero"),
-                )),
-                (Value::Int(left), Value::Int(right)) => {
-                    left.checked_rem(right).map(Value::Int).ok_or_else(|| {
-                        span.map_or_else(
-                            || Diagnostic::new("integer overflow"),
-                            |span| Diagnostic::at(span, "integer overflow"),
-                        )
-                    })
-                }
+                (Value::Int(_left), Value::Int(right)) if right.is_zero() => Err(match span {
+                    Some(span) => Diagnostic::at(span, "division by zero"),
+                    None => Diagnostic::new("division by zero"),
+                }),
+                (Value::Int(left), Value::Int(right)) => match left.checked_rem(right) {
+                    Some(value) => Ok(Value::Int(value)),
+                    None => Err(match span {
+                        Some(span) => Diagnostic::at(span, "integer overflow"),
+                        None => Diagnostic::new("integer overflow"),
+                    }),
+                },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left % right)),
                 _ => Err(Diagnostic::new(
                     "MIR binary remainder requires matching numeric operands",
                 )),
             },
-            BinaryOp::Less => eval_ordering(
-                left,
-                right,
-                |left, right| left < right,
-                |left, right| left < right,
-            ),
-            BinaryOp::LessEq => eval_ordering(
-                left,
-                right,
-                |left, right| left <= right,
-                |left, right| left <= right,
-            ),
-            BinaryOp::Greater => eval_ordering(
-                left,
-                right,
-                |left, right| left > right,
-                |left, right| left > right,
-            ),
-            BinaryOp::GreaterEq => eval_ordering(
-                left,
-                right,
-                |left, right| left >= right,
-                |left, right| left >= right,
-            ),
+            BinaryOp::Less => eval_ordering(BinaryOp::Less, left, right),
+            BinaryOp::LessEq => eval_ordering(BinaryOp::LessEq, left, right),
+            BinaryOp::Greater => eval_ordering(BinaryOp::Greater, left, right),
+            BinaryOp::GreaterEq => eval_ordering(BinaryOp::GreaterEq, left, right),
         }
     }
 }
@@ -2953,17 +2944,28 @@ fn build_range(args: Vec<EvaluatedMirArg>) -> Result<Value> {
     }))
 }
 
-fn eval_ordering(
-    left: Value,
-    right: Value,
-    compare_int: impl FnOnce(IntegerValue, IntegerValue) -> bool + Copy,
-    compare_float: impl FnOnce(f64, f64) -> bool + Copy,
-) -> Result<Value> {
+fn eval_ordering(op: crate::ast::BinaryOp, left: Value, right: Value) -> Result<Value> {
     match (left, right) {
-        (Value::Int(left), Value::Int(right)) => Ok(Value::Bool(compare_int(left, right))),
-        (Value::Float(left), Value::Float(right)) => Ok(Value::Bool(compare_float(left, right))),
+        (Value::Int(left), Value::Int(right)) => Ok(Value::Bool(match op {
+            crate::ast::BinaryOp::Less => left < right,
+            crate::ast::BinaryOp::LessEq => left <= right,
+            crate::ast::BinaryOp::Greater => left > right,
+            crate::ast::BinaryOp::GreaterEq => left >= right,
+            _ => unreachable!("non-ordering op passed to eval_ordering"),
+        })),
+        (Value::Float(left), Value::Float(right)) => Ok(Value::Bool(match op {
+            crate::ast::BinaryOp::Less => left < right,
+            crate::ast::BinaryOp::LessEq => left <= right,
+            crate::ast::BinaryOp::Greater => left > right,
+            crate::ast::BinaryOp::GreaterEq => left >= right,
+            _ => unreachable!("non-ordering op passed to eval_ordering"),
+        })),
         _ => Err(Diagnostic::new(
             "MIR ordering comparisons require matching numeric operands",
         )),
     }
 }
+
+#[cfg(test)]
+#[path = "mir_runtime_tests.rs"]
+mod tests;

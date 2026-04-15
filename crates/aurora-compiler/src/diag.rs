@@ -83,18 +83,5 @@ fn render_annotated(path: &str, source: &str, span: Span, message: &str) -> Stri
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{Diagnostic, Span};
-
-    #[test]
-    fn renders_annotated_diagnostics_with_source_context() {
-        let diagnostic = Diagnostic::at(Span::new(2, 9), "unknown name `value`");
-        let rendered =
-            diagnostic.render_with_source("examples/demo.au", "def main():\n    print(value)\n");
-
-        assert!(rendered.contains("error: unknown name `value`"));
-        assert!(rendered.contains("--> examples/demo.au:2:9"));
-        assert!(rendered.contains("2 |     print(value)"));
-        assert!(rendered.contains("|         ^"));
-    }
-}
+#[path = "diag_tests.rs"]
+mod tests;

@@ -6,8 +6,8 @@
     "tools/*"
   ],
   "scripts": {
-    "coverage:compiler": "cargo llvm-cov -p aurora-compiler --summary-only",
-    "coverage:compiler:check": "cargo llvm-cov -p aurora-compiler --summary-only --fail-under-lines 68 --fail-under-functions 74 --fail-under-regions 68",
+    "coverage:compiler": "cargo llvm-cov -p aurora-compiler --ignore-filename-regex 'crates/aurora-compiler/src/.*_tests\\\\.rs$'",
+    "coverage:compiler:check": "cargo llvm-cov -p aurora-compiler --ignore-filename-regex 'crates/aurora-compiler/src/.*_tests\\\\.rs$' --fail-under-lines 89 --fail-under-functions 89 --fail-under-regions 90",
     "build:extension": "npm --prefix tools/vscode-aurora run build",
     "package:extension": "npm --prefix tools/vscode-aurora run package:vsix",
     "check:lsp": "npm --prefix tools/aurora-language-server run check",

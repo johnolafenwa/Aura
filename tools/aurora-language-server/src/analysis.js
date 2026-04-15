@@ -940,31 +940,44 @@ function parseCallableParams(rawLine, rawParams, line, selfType) {
   const params = [];
   const openParen = rawLine.indexOf("(");
   const paramsOffset = openParen >= 0 ? openParen + 1 : 0;
-  const receiverMatch = rawParams.match(/^\s*(?:borrow\s+(?:mut\s+)?)?self(?:\s*,\s*|$)/);
-  if (receiverMatch && selfType) {
-    params.push({
-      name: "self",
-      type: selfType,
-      line,
-      startCharacter: paramsOffset + receiverMatch[0].indexOf("self"),
-      endCharacter: paramsOffset + receiverMatch[0].indexOf("self") + 4
-    });
-  }
-  const pattern = /([a-zA-Z_][A-Za-z0-9_]*)\s*:\s*((?:borrow\s+(?:mut\s+)?)?[^=,\)]+(?:\[[^\]]+\])?)/g;
-  let match = pattern.exec(rawParams);
-  while (match) {
-    if (match[1] === "self" && selfType) {
-      match = pattern.exec(rawParams);
+  for (const segment of splitTopLevelCommaSegments(rawParams)) {
+    const trimmed = segment.text.trim();
+    if (!trimmed) {
       continue;
     }
+
+    const receiverMatch = trimmed.match(/^(?:borrow\s+(?:mut\s+)?)?self$/);
+    if (receiverMatch && selfType) {
+      const selfOffset = segment.start + trimmed.indexOf("self");
+      params.push({
+        name: "self",
+        type: selfType,
+        line,
+        startCharacter: paramsOffset + selfOffset,
+        endCharacter: paramsOffset + selfOffset + 4
+      });
+      continue;
+    }
+
+    const [namePart, typePart] = splitTopLevelColon(trimmed);
+    if (!namePart || !typePart) {
+      continue;
+    }
+
+    const name = namePart.trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      continue;
+    }
+
+    const rawType = stripTopLevelDefaultValue(typePart);
+    const nameOffset = segment.start + trimmed.indexOf(name);
     params.push({
-      name: match[1],
-      type: normalizeParamType(match[2]),
+      name,
+      type: normalizeParamType(rawType),
       line,
-      startCharacter: paramsOffset + match.index,
-      endCharacter: paramsOffset + match.index + match[1].length
+      startCharacter: paramsOffset + nameOffset,
+      endCharacter: paramsOffset + nameOffset + name.length
     });
-    match = pattern.exec(rawParams);
   }
   return params;
 }
@@ -2485,11 +2498,17 @@ function stripOuterParens(expression) {
 }
 
 function splitTopLevelCommaSeparated(text) {
+  return splitTopLevelCommaSegments(text).map((segment) => segment.text.trim());
+}
+
+function splitTopLevelCommaSegments(text) {
   const parts = [];
   let current = "";
   let parenDepth = 0;
   let bracketDepth = 0;
+  let braceDepth = 0;
   let inString = false;
+  let segmentStart = 0;
 
   for (let index = 0; index < text.length; index += 1) {
     const ch = text[index];
@@ -2533,12 +2552,23 @@ function splitTopLevelCommaSeparated(text) {
       current += ch;
       continue;
     }
-    if (ch === "," && parenDepth === 0 && bracketDepth === 0) {
+    if (ch === "{") {
+      braceDepth += 1;
+      current += ch;
+      continue;
+    }
+    if (ch === "}") {
+      braceDepth = Math.max(0, braceDepth - 1);
+      current += ch;
+      continue;
+    }
+    if (ch === "," && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
       const trimmed = current.trim();
       if (trimmed) {
-        parts.push(trimmed);
+        parts.push({ text: trimmed, start: segmentStart });
       }
       current = "";
+      segmentStart = index + 1;
       continue;
     }
     current += ch;
@@ -2546,9 +2576,64 @@ function splitTopLevelCommaSeparated(text) {
 
   const trimmed = current.trim();
   if (trimmed) {
-    parts.push(trimmed);
+    parts.push({ text: trimmed, start: segmentStart });
   }
   return parts;
+}
+
+function stripTopLevelDefaultValue(text) {
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let inString = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index];
+    if (inString) {
+      if (ch === "\\") {
+        index += 1;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "(") {
+      parenDepth += 1;
+      continue;
+    }
+    if (ch === ")") {
+      parenDepth = Math.max(0, parenDepth - 1);
+      continue;
+    }
+    if (ch === "[") {
+      bracketDepth += 1;
+      continue;
+    }
+    if (ch === "]") {
+      bracketDepth = Math.max(0, bracketDepth - 1);
+      continue;
+    }
+    if (ch === "{") {
+      braceDepth += 1;
+      continue;
+    }
+    if (ch === "}") {
+      braceDepth = Math.max(0, braceDepth - 1);
+      continue;
+    }
+    if (ch === "=" && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
+      return text.slice(0, index).trim();
+    }
+  }
+
+  return text.trim();
 }
 
 function splitTopLevelColon(text) {
@@ -2629,6 +2714,25 @@ function isIdentifierContinue(ch) {
 module.exports = {
   KEYWORDS,
   _testing: {
+    allCallableInfos,
+    baseTypeName,
+    builtinEnums: () => [...BUILTIN_ENUMS.values()],
+    builtinFunctions: () => [...BUILTIN_FUNCTIONS],
+    builtinMembersFor: (typeName) => [...(BUILTIN_MEMBERS[typeName] || [])],
+    countIndent,
+    extractReceiverEndingBefore,
+    findReceiverStart,
+    formatVariantHover,
+    inferCaseBindingType,
+    inferForBindingType,
+    isUnresolvedTypeParamType,
+    isIdentifierContinue,
+    isIdentifierStart,
+    parseBuiltinDetailReturnType,
+    parseParamTypes,
+    pushDiagnosticIfNew,
+    specializeMemberReturnType,
+    stripTopLevelDefaultValue,
     splitTopLevelColon,
     splitTopLevelCommaSeparated
   },
