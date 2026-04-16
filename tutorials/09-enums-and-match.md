@@ -154,15 +154,25 @@ Integer and `String` matches always need a final wildcard arm because the domain
 
 See [examples/control_flow/match_literals.au](../examples/control_flow/match_literals.au).
 
-## Current Limits
+Nested patterns, expression-form `match`, floating-point literal patterns, keyword payload arguments, and multi-payload variants are also supported:
 
-Not yet supported:
+```python
+enum Inner:
+    Pair(int32, int32)
 
-- nested patterns (e.g., matching on a variant inside a variant)
-- expression-form `match` (using match as an expression rather than a statement)
-- floating-point literal patterns
-- keyword arguments for variant payload construction
-- multi-payload variants
+enum Outer:
+    Point(x: int32, y: int32)
+    Wrapped(Inner)
+    Empty
+
+def describe(value: Outer) -> int32:
+    return match value:
+        case Outer.Point(x, y): x + y
+        case Outer.Wrapped(Inner.Pair(a, b)): a * b
+        case Outer.Empty: 0
+```
+
+See [examples/enums/rich_match.au](../examples/enums/rich_match.au).
 
 Built-in generic enums `Result[T, E]`, `Option[T]`, and `SendError[T]` are covered in the next chapter.
 

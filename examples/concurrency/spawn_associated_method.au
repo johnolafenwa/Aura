@@ -1,0 +1,13 @@
+class Worker:
+    def run(value: int32) -> int32:
+        return value + 1
+
+def main() -> int32:
+    task = spawn Worker.run(4)
+    print(task.join())
+
+    with task_group() as group:
+        other = group.spawn(Worker.run, 6)
+        print(other.join())
+
+    return 0

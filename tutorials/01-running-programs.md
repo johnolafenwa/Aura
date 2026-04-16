@@ -29,14 +29,8 @@ cargo run -p aura -- build -o ./target/aurora-point examples/point.au
 ```
 
 - **`check`** -- parse and type-check the file without running it. Use this for fast feedback while editing.
-- **`run`** -- execute the program through the interpreter. This is the easiest way to test your code.
+- **`run`** -- execute the program through the MIR runtime. This is the easiest way to test your code.
 - **`build`** -- compile to a standalone native binary. The output binary does not depend on the original `.au` source files at runtime.
-
-There is also `run-mir`, which executes through an alternate native MIR runtime. It covers the full implemented Aurora surface and is mainly useful for backend debugging or comparing execution paths:
-
-```bash
-cargo run -p aura -- run-mir examples/classes/methods.au
-```
 
 ## Build Backends
 

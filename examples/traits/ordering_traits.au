@@ -1,0 +1,36 @@
+trait Ord[Rhs]:
+    def lt(borrow self, rhs: Rhs) -> bool
+    def le(borrow self, rhs: Rhs) -> bool
+    def gt(borrow self, rhs: Rhs) -> bool
+    def ge(borrow self, rhs: Rhs) -> bool
+
+class Score:
+    value: int32
+
+impl Ord[Score] for Score:
+    def lt(borrow self, rhs: Score) -> bool:
+        return self.value < rhs.value
+
+    def le(borrow self, rhs: Score) -> bool:
+        return self.value <= rhs.value
+
+    def gt(borrow self, rhs: Score) -> bool:
+        return self.value > rhs.value
+
+    def ge(borrow self, rhs: Score) -> bool:
+        return self.value >= rhs.value
+
+def choose_smaller[T: Ord[T]](left: T, right: T) -> T:
+    if left < right:
+        return left
+    return right
+
+def main() -> int32:
+    low = Score(value=2)
+    high = Score(value=5)
+    print(low < high)
+    print(low <= high)
+    print(high > low)
+    print(high >= low)
+    print(choose_smaller(left=high, right=low).value)
+    return 0

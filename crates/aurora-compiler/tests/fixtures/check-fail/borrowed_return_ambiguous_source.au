@@ -1,0 +1,4 @@
+def choose(left: borrow String, right: borrow String, pick_left: bool) -> borrow String:
+    if pick_left:
+        return left
+    return right

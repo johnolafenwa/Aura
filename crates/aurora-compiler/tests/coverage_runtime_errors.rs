@@ -47,7 +47,7 @@ fn assert_runtime_error_contains(source: &str, expected: &str) {
     let run_error = run_source(source).expect_err("source should fail at runtime");
     assert!(
         run_error.message.contains(expected),
-        "interpreter error should contain `{expected}`, got `{}`",
+        "public run error should contain `{expected}`, got `{}`",
         run_error.message
     );
 
@@ -60,7 +60,7 @@ fn assert_runtime_error_contains(source: &str, expected: &str) {
 }
 
 #[test]
-fn runtime_error_surface_covers_interpreter_and_mir_failures() {
+fn runtime_error_surface_covers_public_run_and_explicit_mir_failures() {
     assert_runtime_error_contains(
         r#"
 def main() -> int32:

@@ -41,7 +41,7 @@ Current bootstrap compiler workflow:
 - `cargo run -p aura -- check examples/classes/point_distance.au`
   - parse and type check a program
 - `cargo run -p aura -- run examples/control_flow/while_break_continue.au`
-  - execute the interpreter-backed bootstrap runtime
+  - execute the MIR-backed bootstrap runtime
 - `cargo run -p aura -- run examples/classes/methods.au`
   - execute user-defined instance and associated methods
 - `cargo run -p aura -- run examples/control_flow/match_literals.au`
@@ -80,6 +80,8 @@ Current bootstrap compiler workflow:
   - execute specialized generic trait bounds such as `T: Mapper[int32]`
 - `cargo run -p aura -- run examples/traits/operator_traits.au`
   - execute operator traits through `+` and unary `-`
+- `cargo run -p aura -- run examples/traits/ordering_traits.au`
+  - execute ordering traits through `<`, `<=`, `>`, and `>=`
 - `cargo run -p aura -- run examples/traits/specialized_trait_dispatch.au`
   - execute bounded dispatch across specialized generic trait impls
 - `cargo run -p aura -- run examples/numbers/numeric_casts.au`
@@ -95,11 +97,7 @@ Current bootstrap compiler workflow:
 - `cargo run -p aura -- run examples/concurrency/channels_spawn.au`
   - execute bootstrap channels and spawned tasks
 - `cargo run -p aura -- run examples/concurrency/sleep_builtin.au`
-  - execute `sleep(duration)` delays in the bootstrap runtime and MIR path
-- `cargo run -p aura -- run-mir examples/classes/methods.au`
-  - execute the current MIR runtime path for the current implemented Aurora surface
-- `cargo run -p aura -- run-mir examples/collections/vec_polish.au`
-  - execute the finished maintained `Vec[T]` surface through the MIR path
+  - execute `sleep(duration)` delays in the MIR-backed runtime path
 - `cargo run -p aura -- build -o ./target/aurora-point examples/point.au`
   - compile a standalone native binary through the default auto backend
 - `cargo run -p aura -- build --backend direct -o ./target/aurora-direct ./examples/basic_addition.au`
@@ -132,8 +130,6 @@ Current bootstrap compiler workflow:
   - refresh all branch/tag/default-main git dependencies for the current package or workspace and rewrite `Aurora.lock`
 - `cargo run -p aura -- deps update util`
   - refresh only the `util` git dependency for the current package or workspace
-- `cat examples/modules/simple_import.au | cargo run -p aura -- run-mir --stdin "$(pwd)/examples/modules/simple_import.au"`
-  - run the MIR path against stdin-backed source while still resolving local imports relative to the supplied path
 - `cat examples/modules/simple_import.au | cargo run -p aura -- check --stdin "$(pwd)/examples/modules/simple_import.au"`
   - type-check an editor-style buffer while still resolving local imports relative to the supplied path
 - `npm run coverage:compiler`
@@ -159,11 +155,11 @@ Current `build` status:
 - git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
 - the current package-system milestone writes a local `Aurora.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
 
-Current `run-mir` status:
+Current `run` status:
 
-- `aura run-mir` executes programs natively through the MIR runtime for the current implemented Aurora surface
-- `spawn`, `select`, channels, task groups, `try`, and `with` now run through MIR
-- the direct backend now covers the maintained Aurora surface, so `run-mir` remains primarily useful as an alternate execution path and backend-debugging tool
+- `aura run` now executes programs through the MIR runtime for the current implemented Aurora surface
+- `spawn`, `select`, channels, task groups, `try`, and `with` now run through the same MIR-backed public execution path
+- the maintained execution architecture is now the MIR runtime for `run` plus native direct codegen for `build`
 
 ## VS Code install
 

@@ -177,7 +177,7 @@ fn manifest_aware_cli_commands_support_path_dependencies() {
     );
     assert_eq!(String::from_utf8_lossy(&check.stdout), "ok\n");
 
-    for command in ["run", "run-mir"] {
+    for command in ["run"] {
         let output = Command::new(aura_bin())
             .arg(command)
             .arg(&main_path)
@@ -349,7 +349,7 @@ fn maintained_package_examples_run_through_cli_commands() {
     ];
 
     for (main_path, expected_stdout) in package_examples {
-        for command in ["check", "run", "run-mir"] {
+        for command in ["check", "run"] {
             let output = Command::new(aura_bin())
                 .arg(command)
                 .arg(&main_path)
@@ -445,7 +445,7 @@ def main() -> int32:
     );
     assert_eq!(String::from_utf8_lossy(&check.stdout), "ok\n");
 
-    for command in ["run", "run-mir"] {
+    for command in ["run"] {
         let output = Command::new(aura_bin())
             .arg(command)
             .arg(&main_path)

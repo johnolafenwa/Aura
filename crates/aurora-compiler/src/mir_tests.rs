@@ -144,6 +144,12 @@ def helper() -> int32:
 
 fn trait_lowerer() -> Lowerer<'static> {
     let source = r#"
+trait Add[Rhs, Out]:
+    def add(borrow self, rhs: Rhs) -> Out
+
+trait Neg[Out]:
+    def neg(borrow self) -> Out
+
 trait Named:
     def name(borrow self) -> String
 

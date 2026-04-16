@@ -1,5 +1,0 @@
-error: `spawn` currently supports named function calls only
- --> crates/aurora-compiler/tests/fixtures/check-fail/spawn_member_target_not_supported.au:6:12
-  |
-6 |     task = spawn Worker.run()
-  |            ^

@@ -599,13 +599,15 @@ fn parse_control_flow_patterns_and_helper_errors_cover_more_branches() {
         })
     ));
     assert!(matches!(
-        match_stmt.arms[3].pattern,
+        &match_stmt.arms[3].pattern,
         Pattern::Variant(VariantPattern {
             enum_name: Some(ref name),
             variant_name: ref variant,
-            binding: Some(ref binding),
+            subpatterns,
             ..
-        }) if name == "Status" && variant == "Ready" && binding == "item"
+        }) if name == "Status"
+            && variant == "Ready"
+            && matches!(subpatterns.as_slice(), [Pattern::Binding(binding)] if binding.name == "item")
     ));
     assert!(matches!(match_stmt.arms[4].pattern, Pattern::Wildcard(_)));
 
@@ -647,7 +649,7 @@ fn parse_control_flow_patterns_and_helper_errors_cover_more_branches() {
         .expect_err("invalid negative match pattern should fail");
     assert!(bad_pattern
         .message
-        .contains("boolean/string/integer literals"));
+        .contains("boolean/string/integer/float literals"));
 
     let bad_member = parse_expression("value.1").expect_err("numeric member should fail");
     assert!(bad_member
@@ -769,7 +771,7 @@ fn parser_covers_blank_lines_empty_literals_and_specialization_offsets() {
         .expect_err("invalid match pattern should fail");
     assert!(invalid_pattern
         .message
-        .contains("boolean/string/integer literals"));
+        .contains("boolean/string/integer/float literals"));
 
     let mut specialize =
         parse_expression("Value[int32](1)").expect("specialization expression should parse");
@@ -1034,4 +1036,25 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
     let fstring = parse_expression("f\"{Set{1}}\"")
         .expect("f-string interpolation with nested set braces should parse");
     assert!(matches!(fstring.kind, ExprKind::FString(_)));
+
+    let trait_with_default_method = parse_item_from(
+        [
+            "trait Named:",
+            "    def name(borrow self) -> String",
+            "    def label(borrow self) -> String:",
+            "        return self.name()",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("trait default method should parse");
+    let Item::Trait(trait_decl) = trait_with_default_method else {
+        panic!("expected trait item");
+    };
+    assert_eq!(trait_decl.methods.len(), 2);
+    assert!(trait_decl.methods[0].body.is_empty());
+    assert!(matches!(
+        trait_decl.methods[1].body.as_slice(),
+        [Stmt::Return(ReturnStmt { value: Some(_), .. })]
+    ));
 }

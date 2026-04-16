@@ -24,7 +24,6 @@ After the release build completes, run the binary directly:
 ./target/release/aura check examples/classes/point_distance.au
 ./target/release/aura run examples/classes/point_distance.au
 ./target/release/aura run examples/control_flow/match_literals.au
-./target/release/aura run-mir examples/classes/methods.au
 ./target/release/aura run examples/generics/box_and_wrapper.au
 ./target/release/aura run examples/basics/default_arguments.au
 ./target/release/aura run examples/collections/vec_basics.au
@@ -39,6 +38,7 @@ After the release build completes, run the binary directly:
 ./target/release/aura run examples/traits/generic_trait_impl.au
 ./target/release/aura run examples/traits/generic_trait_bounds.au
 ./target/release/aura run examples/traits/operator_traits.au
+./target/release/aura run examples/traits/ordering_traits.au
 ./target/release/aura run examples/traits/specialized_trait_dispatch.au
 ./target/release/aura run examples/numbers/numeric_casts.au
 ./target/release/aura run examples/numbers/numeric_builtins.au
@@ -59,16 +59,15 @@ You can do the same with the other current examples:
 ```bash
 ./target/release/aura run examples/basics/main_function.au
 ./target/release/aura run examples/basics/top_level_script.au
-./target/release/aura run-mir examples/control_flow/match_literals.au
 ./target/release/aura run examples/collections/vec_iteration.au
-./target/release/aura run-mir examples/collections/vec_polish.au
-./target/release/aura run-mir examples/collections/map_basics.au
-./target/release/aura run-mir examples/collections/set_basics.au
-./target/release/aura run-mir examples/generics/box_and_wrapper.au
-./target/release/aura run-mir examples/traits/greeter.au
-./target/release/aura run-mir examples/numbers/numeric_casts.au
-./target/release/aura run-mir examples/numbers/numeric_builtins.au
-./target/release/aura run-mir examples/strings/string_methods.au
+./target/release/aura run examples/collections/vec_polish.au
+./target/release/aura run examples/collections/map_basics.au
+./target/release/aura run examples/collections/set_basics.au
+./target/release/aura run examples/generics/box_and_wrapper.au
+./target/release/aura run examples/traits/greeter.au
+./target/release/aura run examples/numbers/numeric_casts.au
+./target/release/aura run examples/numbers/numeric_builtins.au
+./target/release/aura run examples/strings/string_methods.au
 ```
 
 ## Install The Binary Somewhere On Your Path
@@ -107,15 +106,11 @@ aura deps update util
   - with no package name, all branch/tag/default-main git dependencies are refreshed
   - with a package name such as `util`, only that dependency is refreshed
 - `aura run <file.au>`
-  - run a program
+  - run a program through the MIR runtime
   - this now includes the maintained `pass` statement and `sleep(duration)` builtin
   - the maintained user-facing surface now also includes the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, `Set[T]`, specialized generic trait bounds, and the current operator-trait subset
   - local file imports and `public` module boundaries now work for file-backed programs
   - manifest-rooted packages now also resolve sibling path dependencies, git dependencies, and workspace members when the entry file lives under a package `src/`
-- `aura run-mir <file.au>`
-  - run a program through the current native MIR runtime path
-  - this now includes the current explicit numeric cast surface with `expr as Type`
-  - statement-form `match` now also supports literal `bool`, integer, and `String` cases through this path
 - `aura build -o <output> <file.au>`
   - compile a standalone native binary for a program
   - this accepts `--backend auto|direct`
@@ -144,7 +139,7 @@ aura deps update util
 
 ## Stdin Mode
 
-Compiler-facing JSON commands still use stdin for editor integration, and the ordinary `check`, `run`, `run-mir`, and `build` commands now honor the supplied stdin path when resolving local module imports.
+Compiler-facing JSON commands still use stdin for editor integration, and the ordinary `check`, `run`, and `build` commands now honor the supplied stdin path when resolving local module imports.
 
 Examples:
 
@@ -156,7 +151,6 @@ cat examples/point.au | ./target/release/aura build -o ./target/aurora-point --s
 cat examples/modules/simple_import.au | ./target/release/aura analyze --stdin "$(pwd)/examples/modules/simple_import.au"
 cat examples/modules/simple_import.au | ./target/release/aura check --stdin "$(pwd)/examples/modules/simple_import.au"
 cat examples/modules/simple_import.au | ./target/release/aura run --stdin "$(pwd)/examples/modules/simple_import.au"
-cat examples/modules/simple_import.au | ./target/release/aura run-mir --stdin "$(pwd)/examples/modules/simple_import.au"
 ./target/release/aura check examples/packages/local_path_dependencies/app/src/main.au
 ./target/release/aura run examples/packages/workspace/app/src/main.au
 ```
@@ -186,8 +180,8 @@ The current `aura build` matrix is:
 3. built binaries no longer depend on the original `.au` source files at runtime
 4. both backend paths still need Cargo/Rust and a host C compiler during the build step
 
-The new `aura run-mir` command is now native for the current implemented surface:
+The maintained execution architecture is now:
 
-1. it is useful for exercising the new backend path directly
-2. it now covers the current implemented Aurora surface, including `spawn`, `select`, channels, task groups, `try`, and `with`
-3. the direct backend now covers the maintained Aurora surface, so `run-mir` is primarily an alternate execution path and backend-debugging tool
+1. `aura run` executes through the MIR runtime
+2. `aura build --backend auto|direct` produces native binaries through the direct backend
+3. both execution paths now cover the maintained Aurora language surface

@@ -41,6 +41,14 @@ The examples are organized by topic so they can serve both as quick references a
     - `41`
     - `42`
     - `42`
+- `borrowed_returns.au`
+  - borrowed return values with explicit source syntax like `-> borrow[user] String`
+  - prints:
+    - `aurora`
+    - `aurora`
+- `borrowed_lifetime_labels.au`
+  - borrowed return labels like `borrow[shared]` flowing through calls and locals
+  - prints `aurora`
 - `pass_keyword.au`
   - the `pass` no-op statement in empty classes and functions
   - prints `0`
@@ -138,6 +146,13 @@ The examples are organized by topic so they can serve both as quick references a
 - `indirect_recursive.au`
   - recursive fields with `indirect Node?` and optional children
   - prints `2`
+- `positional_constructors.au`
+  - positional class constructor arguments with optional trailing named fields
+  - prints:
+    - `1`
+    - `2`
+    - `7`
+    - `9`
 
 ### `control_flow/`
 
@@ -186,9 +201,21 @@ The examples are organized by topic so they can serve both as quick references a
   - prints:
     - `7`
     - `bad`
+- `constructor_ergonomics.au`
+  - keyword payload arguments on enum variants plus bare `Ok(...)` and `Some(...)` constructors with expected types
+  - prints:
+    - `Status.Count(4)`
+    - `7`
+    - `9`
 - `match_borrow.au`
   - `match borrow ...:` plus unqualified built-in enum variants like `case Ok(value):`
   - prints `ok`
+- `rich_match.au`
+  - multi-payload enum variants, nested patterns, named payload fields, and expression-form `match`
+  - prints:
+    - `7`
+    - `30`
+    - `0`
 - `wildcard_match.au`
   - wildcard `case _:` arms in statement-form `match`
   - prints `2`
@@ -244,6 +271,11 @@ The examples are organized by topic so they can serve both as quick references a
 - `generic_trait_impl.au`
   - generic trait declarations plus generic impl headers for generic classes
   - prints `11`
+- `default_trait_methods.au`
+  - default trait method bodies with per-impl overrides
+  - prints:
+    - `name=aurora`
+    - `team=infra`
 - `operator_traits.au`
   - operator traits for `+` and unary `-` through `Add[...]` and `Neg[...]`
   - prints:
@@ -251,6 +283,14 @@ The examples are organized by topic so they can serve both as quick references a
     - `8`
     - `-6`
     - `-8`
+- `ordering_traits.au`
+  - ordering traits for `<`, `<=`, `>`, and `>=` through `Ord[...]`
+  - prints:
+    - `true`
+    - `true`
+    - `true`
+    - `true`
+    - `2`
 - `trait_associated_factory.au`
   - associated trait methods called through the implementing type name
   - prints `7`
@@ -328,6 +368,11 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
 - `spawn_detached.au`
   - explicit detached background work with `spawn detached`
   - prints `9`
+- `spawn_associated_method.au`
+  - spawning associated methods without `self` through both `spawn` and `TaskGroup.spawn(...)`
+  - prints:
+    - `5`
+    - `7`
 - `select_send.au`
   - `select` with a channel send arm and a timer fallback
   - prints:
@@ -528,20 +573,15 @@ cargo run -p aura -- build --backend direct -o ./target/aurora-direct examples/b
 
 The built binary does not depend on the original `.au` source file at runtime, but the build step still needs Cargo/Rust and a host C compiler.
 
-## Run Through The Backend Path
+## Run Programs
 
-The CLI also exposes the current MIR-first backend path directly:
+The maintained public execution path is now `run`, which executes through the MIR runtime:
 
 ```bash
-cargo run -p aura -- run-mir examples/classes/point_distance.au
-cargo run -p aura -- run-mir examples/classes/methods.au
-cargo run -p aura -- run-mir examples/enums/result_match.au
+cargo run -p aura -- run examples/classes/point_distance.au
+cargo run -p aura -- run examples/classes/methods.au
+cargo run -p aura -- run examples/enums/result_match.au
 ```
-
-Current `run-mir` limits:
-
-- it now covers the current implemented Aurora surface, including `spawn`, `select`, channels, task groups, `try`, and `with`
-- the direct backend now covers the maintained Aurora surface, so `run-mir` is mainly useful as an alternate execution path and backend-debugging tool
 
 ## Check, AST, and MIR
 
@@ -549,7 +589,6 @@ Current `run-mir` limits:
 cargo run -p aura -- check examples/classes/default_fields.au
 cargo run -p aura -- ast examples/classes/point_distance.au
 cargo run -p aura -- mir examples/control_flow/while_break_continue.au
-cargo run -p aura -- run-mir examples/classes/methods.au
 cargo run -p aura -- mir examples/enums/result_match.au
 cargo run -p aura -- mir examples/error_handling/try_result.au
 ```

@@ -1,0 +1,6 @@
+def main() -> int32:
+    ch = channel[int32]()
+    print(ch.send(4))
+    print(ch.recv())
+    ch.close()
+    return 0

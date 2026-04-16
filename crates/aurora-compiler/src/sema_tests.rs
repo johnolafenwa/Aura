@@ -55,6 +55,8 @@ fn function_decl(name: &str) -> FunctionDecl {
         type_param_bounds: BTreeMap::new(),
         receiver: None,
         params: Vec::new(),
+        return_passing: ReceiverKind::Value,
+        return_borrow_source: None,
         return_type: type_ref("None"),
         body: Vec::new(),
         span: Span::new(1, 1),
@@ -75,6 +77,8 @@ fn function_signature(params: Vec<Type>, return_type: Type) -> FunctionSignature
     FunctionSignature {
         params,
         return_type,
+        return_passing: ReceiverKind::Value,
+        return_borrow_source: None,
     }
 }
 
@@ -182,6 +186,28 @@ fn class_info(name: &str, copy: bool, field_specs: Vec<(&str, Type, bool)>) -> C
 }
 
 fn enum_info(name: &str, payload: Option<Type>) -> EnumInfo {
+    let payload_fields = payload
+        .as_ref()
+        .map(|ty| crate::ast::EnumPayloadFieldDecl {
+            name: None,
+            ty: match ty {
+                Type::Named(name, _) => type_ref(name),
+                Type::TypeParam(name) => type_ref(name),
+                Type::Module(name) => type_ref(name),
+                Type::Unit => type_ref("None"),
+            },
+            span: Span::new(1, 1),
+        })
+        .into_iter()
+        .collect::<Vec<_>>();
+    let payload_infos = payload
+        .into_iter()
+        .map(|ty| EnumPayloadFieldInfo {
+            name: None,
+            ty,
+            span: Span::new(1, 1),
+        })
+        .collect::<Vec<_>>();
     EnumInfo {
         module_name: "<test>".to_string(),
         decl: EnumDecl {
@@ -191,12 +217,8 @@ fn enum_info(name: &str, payload: Option<Type>) -> EnumInfo {
             type_param_bounds: BTreeMap::new(),
             variants: vec![crate::ast::EnumVariantDecl {
                 name: "Value".to_string(),
-                payload: payload.as_ref().map(|ty| match ty {
-                    Type::Named(name, _) => type_ref(name),
-                    Type::TypeParam(name) => type_ref(name),
-                    Type::Module(name) => type_ref(name),
-                    Type::Unit => type_ref("None"),
-                }),
+                payloads: payload_fields,
+                named_payloads: false,
                 span: Span::new(1, 1),
             }],
             span: Span::new(1, 1),
@@ -205,7 +227,8 @@ fn enum_info(name: &str, payload: Option<Type>) -> EnumInfo {
         variants: BTreeMap::from([(
             "Value".to_string(),
             EnumVariantInfo {
-                payload,
+                payloads: payload_infos,
+                named_payloads: false,
                 span: Span::new(1, 1),
             },
         )]),
@@ -270,6 +293,8 @@ fn local_binding(
         assignable,
         mutable_place,
         passing,
+        borrow_origin: None,
+        borrow_label: None,
         moved,
         moved_fields: moved_fields
             .iter()
@@ -1037,9 +1062,9 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             }),
             &mut locals,
         )
-        .expect_err("spawn should stay limited to named functions")
+        .expect_err("spawn should stay limited to supported callable targets")
         .message
-        .contains("named function calls only"));
+        .contains("associated methods without `self`"));
     assert_eq!(
         checker
             .type_of_expr(
@@ -2133,17 +2158,18 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
             .contains("expects `String`"));
     }
 
-    assert!(checker
-        .type_of_call(
-            &expr(ExprKind::Name("Box".to_string())),
-            &[arg(expr(ExprKind::Int(1)))],
-            span,
-            &mut locals,
-            None,
-        )
-        .expect_err("class constructors currently require keyword arguments")
-        .message
-        .contains("requires keyword arguments"));
+    assert_eq!(
+        checker
+            .type_of_call(
+                &expr(ExprKind::Name("Box".to_string())),
+                &[arg(expr(ExprKind::Int(1)))],
+                span,
+                &mut locals,
+                None,
+            )
+            .expect("positional class constructors should infer the field type"),
+        Type::Named("Box".to_string(), vec![Type::named("int32")])
+    );
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Name("Box".to_string())),
@@ -2287,13 +2313,15 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
     status.variants.insert(
         "Ready".to_string(),
         EnumVariantInfo {
-            payload: None,
+            payloads: Vec::new(),
+            named_payloads: false,
             span,
         },
     );
     status.decl.variants.push(crate::ast::EnumVariantDecl {
         name: "Ready".to_string(),
-        payload: None,
+        payloads: Vec::new(),
+        named_payloads: false,
         span,
     });
 
@@ -2406,25 +2434,26 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
         .expect_err("generic payload-free variants should still need inference")
         .message
         .contains("cannot infer type parameter `T` for enum variant `Status.Ready`"));
-    assert!(checker
-        .type_of_call(
-            &status_value,
-            &[named_arg("value", expr(ExprKind::Int(1)))],
-            span,
-            &mut locals,
-            Some(&Type::Named(
-                "Status".to_string(),
-                vec![Type::named("int32")]
-            )),
-        )
-        .expect_err("enum variant constructors reject keyword arguments")
-        .message
-        .contains("enum variant constructors do not take keyword arguments"));
+    assert_eq!(
+        checker
+            .type_of_call(
+                &status_value,
+                &[named_arg("value", expr(ExprKind::Int(1)))],
+                span,
+                &mut locals,
+                Some(&Type::Named(
+                    "Status".to_string(),
+                    vec![Type::named("int32")]
+                )),
+            )
+            .expect("enum variant constructors should accept `value=` for single payload variants"),
+        Type::Named("Status".to_string(), vec![Type::named("int32")])
+    );
     assert!(checker
         .type_of_call(&specialized_status_value, &[], span, &mut locals, None,)
         .expect_err("payload variants require exactly one argument")
         .message
-        .contains("expects exactly one payload argument"));
+        .contains("payload"));
     assert!(checker
         .type_of_call(
             &specialized_status_value,
@@ -2463,22 +2492,23 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
         })),
         field: "None".to_string(),
     });
-    assert!(checker
-        .type_of_call(
-            &option_some,
-            &[named_arg("value", expr(ExprKind::Int(1)))],
-            span,
-            &mut locals,
-            None,
-        )
-        .expect_err("builtin enum constructors reject keyword arguments")
-        .message
-        .contains("enum variant constructors do not take keyword arguments"));
+    assert_eq!(
+        checker
+            .type_of_call(
+                &option_some,
+                &[named_arg("value", expr(ExprKind::Int(1)))],
+                span,
+                &mut locals,
+                None,
+            )
+            .expect("builtin enum constructors should accept `value=`"),
+        Type::Named("Option".to_string(), vec![Type::named("int32")])
+    );
     assert!(checker
         .type_of_call(&option_some, &[], span, &mut locals, None)
         .expect_err("Option.Some still requires a payload")
         .message
-        .contains("expects exactly one payload argument"));
+        .contains("payload"));
     assert_eq!(
         checker
             .type_of_call(&option_none, &[], span, &mut locals, None)
@@ -3877,6 +3907,8 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             assignable: true,
             mutable_place: true,
             passing: ReceiverKind::Value,
+            borrow_origin: None,
+            borrow_label: None,
             moved: false,
             moved_fields: BTreeSet::new(),
         },
@@ -3898,6 +3930,8 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             assignable: true,
             mutable_place: false,
             passing: ReceiverKind::Borrow,
+            borrow_origin: Some("borrowed".to_string()),
+            borrow_label: None,
             moved: false,
             moved_fields: BTreeSet::new(),
         },
@@ -3916,6 +3950,8 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             assignable: true,
             mutable_place: true,
             passing: ReceiverKind::Value,
+            borrow_origin: None,
+            borrow_label: None,
             moved: true,
             moved_fields: BTreeSet::new(),
         },
@@ -4231,6 +4267,16 @@ fn operator_trait_helpers_map_supported_operators() {
     assert_eq!(binary_operator_trait(BinaryOp::Mul), Some(("Mul", "mul")));
     assert_eq!(binary_operator_trait(BinaryOp::Div), Some(("Div", "div")));
     assert_eq!(binary_operator_trait(BinaryOp::Mod), Some(("Mod", "mod")));
+    assert_eq!(binary_operator_trait(BinaryOp::Less), Some(("Ord", "lt")));
+    assert_eq!(binary_operator_trait(BinaryOp::LessEq), Some(("Ord", "le")));
+    assert_eq!(
+        binary_operator_trait(BinaryOp::Greater),
+        Some(("Ord", "gt"))
+    );
+    assert_eq!(
+        binary_operator_trait(BinaryOp::GreaterEq),
+        Some(("Ord", "ge"))
+    );
     assert_eq!(binary_operator_trait(BinaryOp::Eq), None);
     assert_eq!(
         TraitBound {
@@ -4785,6 +4831,7 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
         name: "value".to_string(),
         ty: type_ref("int32"),
         passing: ReceiverKind::Value,
+        borrow_label: None,
         default: Some(expr(ExprKind::Int(1))),
         span,
     }];
@@ -5544,6 +5591,7 @@ fn operator_method_from_type_param_reports_ambiguity_when_multiple_bounds_match(
     add_decl.params = vec![Param {
         name: "rhs".to_string(),
         passing: ReceiverKind::Value,
+        borrow_label: None,
         ty: type_ref("Rhs"),
         default: None,
         span: Span::new(1, 1),
@@ -5731,17 +5779,18 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
             .expect("module class constructors should resolve"),
         Type::named("Widget")
     );
-    assert!(checker
-        .type_of_call(
-            &module_widget,
-            &[arg(expr(ExprKind::Int(1)))],
-            span,
-            &mut locals,
-            None,
-        )
-        .expect_err("module constructors currently require keyword arguments")
-        .message
-        .contains("requires keyword arguments"));
+    assert_eq!(
+        checker
+            .type_of_call(
+                &module_widget,
+                &[arg(expr(ExprKind::Int(1)))],
+                span,
+                &mut locals,
+                None,
+            )
+            .expect("module constructors should now accept positional arguments"),
+        Type::named("Widget")
+    );
     assert!(checker
         .type_of_call(
             &module_widget,
@@ -5955,25 +6004,23 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         .message
         .contains("enum `Status` has no variant `Missing`"));
 
-    let keyword_variant = checker
-        .type_of_call(
-            &qualified_status_value,
-            &[named_arg("value", expr(ExprKind::Int(1)))],
-            span,
-            &mut locals,
-            None,
-        )
-        .expect_err("qualified enum constructors should reject keyword args");
-    assert!(keyword_variant
-        .message
-        .contains("enum variant constructors do not take keyword arguments"));
+    assert_eq!(
+        checker
+            .type_of_call(
+                &qualified_status_value,
+                &[named_arg("value", expr(ExprKind::Int(1)))],
+                span,
+                &mut locals,
+                None,
+            )
+            .expect("qualified enum constructors should accept `value=`"),
+        Type::named("Status")
+    );
 
     let missing_payload = checker
         .type_of_call(&qualified_status_value, &[], span, &mut locals, None)
         .expect_err("qualified payload variants should require one argument");
-    assert!(missing_payload
-        .message
-        .contains("variant `Value` of enum `Status` expects exactly one payload argument"));
+    assert!(missing_payload.message.contains("payload"));
 
     let wrong_payload = checker
         .type_of_call(
@@ -6236,6 +6283,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 assignable: true,
                 mutable_place: true,
                 passing: ReceiverKind::BorrowMut,
+                borrow_origin: Some("counter".to_string()),
+                borrow_label: None,
                 moved: false,
                 moved_fields: BTreeSet::from(["value.inner".to_string()]),
             },
@@ -6247,6 +6296,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 assignable: false,
                 mutable_place: false,
                 passing: ReceiverKind::Borrow,
+                borrow_origin: Some("borrowed".to_string()),
+                borrow_label: None,
                 moved: false,
                 moved_fields: BTreeSet::new(),
             },
@@ -6258,6 +6309,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 assignable: false,
                 mutable_place: false,
                 passing: ReceiverKind::Borrow,
+                borrow_origin: Some("self".to_string()),
+                borrow_label: None,
                 moved: false,
                 moved_fields: BTreeSet::new(),
             },
@@ -6332,6 +6385,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             assignable: true,
             mutable_place: false,
             passing: ReceiverKind::Value,
+            borrow_origin: None,
+            borrow_label: None,
             moved: false,
             moved_fields: BTreeSet::new(),
         },
@@ -6405,6 +6460,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 name: "value".to_string(),
                 ty: type_ref("int32"),
                 passing: ReceiverKind::Borrow,
+                borrow_label: None,
                 default: None,
                 span,
             }],
@@ -6437,7 +6493,10 @@ fn top_level_type_and_trait_helpers_cover_display_and_copy_paths() {
     assert_eq!(binary_operator_trait(BinaryOp::Add), Some(("Add", "add")));
     assert_eq!(binary_operator_trait(BinaryOp::Div), Some(("Div", "div")));
     assert_eq!(binary_operator_trait(BinaryOp::Eq), None);
-    assert_eq!(binary_operator_trait(BinaryOp::GreaterEq), None);
+    assert_eq!(
+        binary_operator_trait(BinaryOp::GreaterEq),
+        Some(("Ord", "ge"))
+    );
 
     assert_eq!(
         Type::named("int32"),
@@ -6848,22 +6907,20 @@ fn check_lowers_generic_top_level_items_and_impls() {
 
     let maybe = program.enums.get("Maybe").expect("enum should exist");
     assert_eq!(maybe.decl.type_params, vec!["T".to_string()]);
-    assert_eq!(
-        maybe
-            .variants
-            .get("Some")
-            .expect("Some should exist")
-            .payload,
-        Some(Type::TypeParam("T".to_string()))
-    );
-    assert_eq!(
-        maybe
-            .variants
-            .get("None")
-            .expect("None should exist")
-            .payload,
-        None
-    );
+    let some_payloads = &maybe
+        .variants
+        .get("Some")
+        .expect("Some should exist")
+        .payloads;
+    assert_eq!(some_payloads.len(), 1);
+    assert_eq!(some_payloads[0].name, None);
+    assert_eq!(some_payloads[0].ty, Type::TypeParam("T".to_string()));
+    let none_payloads = &maybe
+        .variants
+        .get("None")
+        .expect("None should exist")
+        .payloads;
+    assert!(none_payloads.is_empty());
 
     let class = program.classes.get("Box").expect("class should exist");
     assert_eq!(class.decl.type_params, vec!["T".to_string()]);

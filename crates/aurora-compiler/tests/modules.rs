@@ -261,6 +261,45 @@ def main() -> int32:
 }
 
 #[test]
+fn spawned_module_functions_and_associated_methods_run_across_modules() {
+    let temp = TempDir::new("aurora-modules-spawn-targets");
+    temp.write(
+        "helpers/work.au",
+        r#"public def add_one(value: int32) -> int32:
+    return value + 1
+
+public class Worker:
+    public def run(value: int32) -> int32:
+        return value + 2
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"import helpers.work
+
+def main() -> int32:
+    first = spawn helpers.work.add_one(4)
+    second = spawn helpers.work.Worker.run(5)
+    print(first.join())
+    print(second.join())
+    with task_group() as group:
+        third = group.spawn(helpers.work.add_one, 6)
+        fourth = group.spawn(helpers.work.Worker.run, 7)
+        print(third.join())
+        print(fourth.join())
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("spawned module call targets should run");
+    assert_eq!(output.stdout, "5\n7\n7\n9\n");
+
+    let mir_output =
+        run_path_via_mir(&main_path).expect("spawned module call targets should run via MIR");
+    assert_eq!(mir_output.stdout, "5\n7\n7\n9\n");
+}
+
+#[test]
 fn imported_public_function_can_construct_public_class_and_call_method() {
     let temp = TempDir::new("aurora-modules-constructor-method");
     temp.write(

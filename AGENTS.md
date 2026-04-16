@@ -67,7 +67,7 @@ If a language or tooling behavior changes, update these in the same pass when re
 
 Use layered tests:
 
-- unit tests for lexer, parser, checker, interpreter, and MIR helpers
+- unit tests for lexer, parser, checker, runtime-value helpers, and MIR helpers
 - fixture tests for parse/check/run/diagnostic behavior
 - regression tests for every reported compiler bug
 - example smoke tests for runnable language features

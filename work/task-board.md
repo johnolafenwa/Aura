@@ -1,28 +1,26 @@
 # Task Board
 
-Last updated: 2026-04-15
-
-## Active Work Session
-
-None.
+Last updated: 2026-04-16
 
 ## In Progress
 
 - Expand the frontend from the current bootstrap toward the broader frozen v1 surface without breaking the working path.
 - Keep the categorized example library and `tutorials/` track synchronized with the implemented language subset as the compiler evolves.
-- Continue ratcheting the compiler and language-server coverage floors upward toward enforced 100%, with the next focus on the remaining low-coverage compiler modules `interpreter`, `sema`, `native_runtime`, `mir_runtime`, and `native_codegen`, plus any remaining analyzer helper gaps and the JS fallback branches in `analysis.js`.
+- Continue ratcheting the compiler and language-server coverage floors upward toward enforced 100%, with the next focus on the remaining low-coverage compiler modules `sema`, `native_runtime`, `mir_runtime`, and `native_codegen`, plus any remaining analyzer helper gaps and the JS fallback branches in `analysis.js`.
 - Keep the extracted `crates/aurora-compiler/src/*_tests.rs` layout green and continue pushing production-code coverage upward from the extracted-layout compiler baseline of roughly `89.96%` lines / `89.85%` functions / `90.14%` regions.
-- Resume the April 15 coverage push from the post-extraction baseline and keep driving the dense remaining production modules (`native_codegen`, `interpreter`, `sema`, `mir_runtime`, `native_runtime`) upward toward enforced 100%.
-- Resume from the latest April 15 compiler checkpoint of `92.64%` lines / `91.60%` functions / `91.83%` regions, with the main remaining drag still concentrated in `interpreter.rs`, `native_codegen.rs`, `sema.rs`, and `mir_runtime.rs`.
+- Resume the April 15 coverage push from the post-extraction baseline and keep driving the dense remaining production modules (`native_codegen`, `sema`, `mir_runtime`, and `native_runtime`) upward toward enforced 100%.
+- Resume from the latest April 15 compiler checkpoint of `92.64%` lines / `91.60%` functions / `91.83%` regions, with the main remaining drag still concentrated in `native_codegen.rs`, `sema.rs`, `mir_runtime.rs`, and `native_runtime.rs`.
 
 ## Todo
 
 - Continue shrinking the JS analysis fallback down to recovery-only cases as compiler-backed completions and invalid-buffer recovery improve further; the remaining uncovered LSP fallback branches are now concentrated in `analysis.js`.
-- Extend the trait system beyond the current specialized generic bounds and operator-trait subset toward the remaining proposal surface.
 - Raise the compiler coverage gate beyond `89/89/90` as more direct-backend and checker paths gain focused unit coverage.
 - Raise the language-server coverage gate beyond `91/84/100/91` as the remaining fallback and server branches gain direct regression coverage.
 
 ## Done
+
+- Removed the tree-walk interpreter from the maintained Aurora architecture: extracted shared runtime state into `runtime_value.rs`, switched the public `run` path onto MIR, removed the `run-mir` CLI command, deleted `interpreter.rs` / `interpreter_tests.rs`, added dedicated runtime-value coverage, and aligned READMEs/tutorials/tests/work logs with the reduced two-path model (`run` via MIR, `build` via native codegen).
+- Finished the April 16 major language-surface pass across compiler/runtime/tooling/docs: richer enum `match` with expression-form and nested/multi-payload patterns, float literal match cases, default trait methods, ordering traits for `<`/`<=`/`>`/`>=`, explicit borrow labels such as `borrow[shared]` for borrowed-return lifetimes, positional class constructors, keyword enum payload arguments, bare built-in enum constructors with expected type, explicit `channel[T]()` construction, expanded `spawn`/`TaskGroup.spawn(...)` targets, and an `auto` build fallback that preserves native build coverage for richer source programs.
 
 - Added `aura deps update` and `aura deps update <package>` so branch/tag/default-main git dependencies can be refreshed without deleting `Aurora.lock`, with direct compiler coverage, CLI product tests, and maintained README/tutorial updates for the new workflow.
 - Extended the Aurora package system from local path dependencies to git-backed dependencies, with manifest support for `git`, `rev`, `tag`, and `branch`, default `main` branch fallback, lockfile-pinned git revisions, compiler/CLI/LSP regression coverage, and README/tutorial updates for the maintained package surface.

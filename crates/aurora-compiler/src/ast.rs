@@ -82,7 +82,15 @@ pub struct EnumDecl {
 #[derive(Clone, Debug, Serialize)]
 pub struct EnumVariantDecl {
     pub name: String,
-    pub payload: Option<TypeRef>,
+    pub payloads: Vec<EnumPayloadFieldDecl>,
+    pub named_payloads: bool,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct EnumPayloadFieldDecl {
+    pub name: Option<String>,
+    pub ty: TypeRef,
     pub span: Span,
 }
 
@@ -94,6 +102,8 @@ pub struct FunctionDecl {
     pub type_param_bounds: BTreeMap<String, Vec<TypeRef>>,
     pub receiver: Option<ReceiverKind>,
     pub params: Vec<Param>,
+    pub return_passing: ReceiverKind,
+    pub return_borrow_source: Option<String>,
     pub return_type: TypeRef,
     pub body: Vec<Stmt>,
     pub span: Span,
@@ -130,6 +140,7 @@ pub enum ReceiverKind {
 pub struct Param {
     pub name: String,
     pub passing: ReceiverKind,
+    pub borrow_label: Option<String>,
     pub ty: TypeRef,
     pub default: Option<Expr>,
     pub span: Span,
@@ -209,8 +220,16 @@ pub struct MatchArm {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct MatchExprArm {
+    pub pattern: Pattern,
+    pub value: Expr,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub enum Pattern {
     Variant(VariantPattern),
+    Binding(BindingPattern),
     Literal(LiteralPattern),
     Wildcard(Span),
 }
@@ -219,7 +238,13 @@ pub enum Pattern {
 pub struct VariantPattern {
     pub enum_name: Option<String>,
     pub variant_name: String,
-    pub binding: Option<String>,
+    pub subpatterns: Vec<Pattern>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BindingPattern {
+    pub name: String,
     pub span: Span,
 }
 
@@ -232,6 +257,7 @@ pub struct LiteralPattern {
 #[derive(Clone, Debug, Serialize)]
 pub enum LiteralPatternKind {
     Int(IntegerValue),
+    Float(f64),
     Bool(bool),
     String(String),
 }
@@ -343,6 +369,11 @@ pub enum ExprKind {
     },
     Try(Box<Expr>),
     Group(Box<Expr>),
+    Match {
+        scrutinee: Box<Expr>,
+        borrow_mode: Option<ReceiverKind>,
+        arms: Vec<MatchExprArm>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]

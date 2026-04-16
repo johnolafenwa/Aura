@@ -189,6 +189,14 @@ const EXAMPLE_CASES: &[(&str, &str)] = &[
         "examples/traits/operator_traits.au",
         include_str!("../../../examples/traits/operator_traits.au"),
     ),
+    (
+        "examples/traits/ordering_traits.au",
+        include_str!("../../../examples/traits/ordering_traits.au"),
+    ),
+    (
+        "examples/basics/borrowed_lifetime_labels.au",
+        include_str!("../../../examples/basics/borrowed_lifetime_labels.au"),
+    ),
 ];
 const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
     (
@@ -1125,7 +1133,7 @@ fn broad_scratch_corpus_runtime_paths_do_not_panic() {
                 Ok(Ok(_)) | Ok(Err(_)) => run_completed += 1,
                 Err(_) => {
                     run_panics += 1;
-                    eprintln!("interpreter panicked for {}", path.display());
+                    eprintln!("run path panicked for {}", path.display());
                 }
             }
 
@@ -1203,7 +1211,7 @@ fn maintained_example_tree_public_paths_do_not_panic() {
             Ok(Ok(_)) | Ok(Err(_)) => run_completed += 1,
             Err(_) => {
                 run_panics += 1;
-                eprintln!("interpreter panicked for example {}", path.display());
+                eprintln!("run path panicked for example {}", path.display());
             }
         }
 
@@ -1491,6 +1499,16 @@ fn categorized_examples_run_with_expected_output() {
                 EXAMPLE_CASES[41].1,
                 "6\n8\n-6\n-8\n",
             ),
+            (
+                "examples/traits/ordering_traits.au",
+                EXAMPLE_CASES[42].1,
+                "true\ntrue\ntrue\ntrue\n2\n",
+            ),
+            (
+                "examples/basics/borrowed_lifetime_labels.au",
+                EXAMPLE_CASES[43].1,
+                "aurora\n",
+            ),
         ];
 
     for (path, source, expected_stdout) in cases {
@@ -1714,6 +1732,16 @@ fn categorized_examples_run_through_backend_path_with_expected_output() {
                 EXAMPLE_CASES[41].1,
                 "6\n8\n-6\n-8\n",
             ),
+            (
+                "examples/traits/ordering_traits.au",
+                EXAMPLE_CASES[42].1,
+                "true\ntrue\ntrue\ntrue\n2\n",
+            ),
+            (
+                "examples/basics/borrowed_lifetime_labels.au",
+                EXAMPLE_CASES[43].1,
+                "aurora\n",
+            ),
         ];
 
     for (path, source, expected_stdout) in cases {
@@ -1766,7 +1794,7 @@ fn additional_categorized_examples_run_through_backend_path_with_expected_output
 }
 
 #[test]
-fn runtime_member_surface_matrix_runs_consistently_in_interpreter_and_mir() {
+fn runtime_member_surface_matrix_runs_consistently_through_public_and_explicit_mir_paths() {
     let source = r#"
 def worker(value: int32) -> int32:
     return value + 1
@@ -1864,7 +1892,8 @@ def main() -> int32:
 }
 
 #[test]
-fn runtime_call_writeback_and_cleanup_surface_runs_consistently_in_interpreter_and_mir() {
+fn runtime_call_writeback_and_cleanup_surface_runs_consistently_through_public_and_explicit_mir_paths(
+) {
     let source = r#"
 class Counter:
     value: int32
@@ -1925,8 +1954,8 @@ def main() -> int32:
     return second.value
 "#;
 
-    let interpreted =
-        run_source(source).expect("writeback/cleanup matrix should run in interpreter");
+    let interpreted = run_source(source)
+        .expect("writeback/cleanup matrix should run through the public run path");
     let mir =
         run_source_via_mir(source).expect("writeback/cleanup matrix should run via MIR runtime");
 

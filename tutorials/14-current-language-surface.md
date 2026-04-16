@@ -33,7 +33,7 @@ Do not mix top-level executable statements with `main` in the same file.
 
 Floating-point literals default to `float64`, but they can adopt an expected `float32` type from an annotation, parameter, return type, or class field.
 
-Integer literals now support the full `uint128` range in the checker, interpreter, MIR runtime, and direct backend.
+Integer literals now support the full `uint128` range in the checker, MIR runtime, and direct backend.
 
 ## Types
 
@@ -73,7 +73,7 @@ Aurora now supports a first local package-system milestone:
 - local path dependencies under `[dependencies]`
 - git dependencies under `[dependencies]`
 - workspace roots with `[workspace] members = [...]`
-- package-aware `check`, `run`, `run-mir`, `build`, `analyze`, and `complete`
+- package-aware `check`, `run`, `build`, `analyze`, and `complete`
 - a local `Aurora.lock` written at the package root or workspace root
 
 Current manifest shape:
@@ -302,16 +302,18 @@ The current compiler supports:
 
 - `Enum.Variant`
 - `Enum.Variant(name)`
+- multi-payload enum variants including named payload fields
 - unqualified variants such as `Ok(value)` and `None` when the scrutinee type is known
 - literal patterns over `bool`, integer, and `String`
+- floating-point literal patterns
 - `match borrow value:`
 - `match borrow mut value:`
 - `case _:`
 - exhaustive statement-form `match`
+- expression-form `match`
+- nested enum patterns
 
 Boolean literal matches are exhaustive when they cover both `true` and `false`. Integer and `String` literal matches still require a final wildcard arm.
-
-It does not yet support expression-form `match`, but ordinary nested `match` statements are supported.
 
 ## Concurrency
 
@@ -348,7 +350,6 @@ The current CLI commands are:
 
 - `check`
 - `run`
-- `run-mir`
 - `build`
 - `ast`
 - `ast-json`
@@ -374,11 +375,9 @@ The current VS Code tooling is compiler-backed for:
 
 Not yet implemented:
 
-- positional class constructor arguments
-- keyword arguments for enum variant payloads
 - non-numeric casts
 - direct recursive fields without `indirect`
-- borrowed return types and explicit lifetime syntax
+- broader lifetime inference beyond explicit borrowed-return sources and labels
 
 Current module/import limitations:
 
@@ -393,6 +392,8 @@ Current expression/ergonomics limitations:
 
 - empty list literals still require an expected `Vec[T]` type such as `values: Vec[int32] = []`
 - strings use quoted literals; `String(...)` is not a constructor
-- enum variants are not callable by bare name; use `Result.Ok(...)`, `Result.Err(...)`, `Option.Some(...)`, or `Option.None`
+- enum variants may be called by bare built-in name when an expected type is available, for example `ok: Result[int32, String] = Ok(7)`
 - `channel()` still requires an expected `Channel[T]` type annotation in the bootstrap compiler
-- `spawn` and `TaskGroup.spawn(...)` currently support named function calls only
+- `channel[T]()` is supported when you want to avoid relying on expected type context
+- `spawn` and `TaskGroup.spawn(...)` support named functions plus associated methods without `self`
+- borrowed return labels such as `borrow[shared]` are supported on borrowed parameters and returns for advanced zero-copy APIs

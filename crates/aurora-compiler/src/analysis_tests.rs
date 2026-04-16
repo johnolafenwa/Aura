@@ -102,10 +102,13 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         params: vec![crate::ast::Param {
             name: "value".to_string(),
             passing: ReceiverKind::Value,
+            borrow_label: None,
             ty: type_ref("int32"),
             default: None,
             span: Span::new(1, 1),
         }],
+        return_passing: ReceiverKind::Value,
+        return_borrow_source: None,
         return_type: type_ref(return_type),
         body: Vec::new(),
         span: Span::new(1, 1),
@@ -965,7 +968,10 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
             &VariantPattern {
                 enum_name: None,
                 variant_name: "Some".to_string(),
-                binding: Some("found".to_string()),
+                subpatterns: vec![crate::ast::Pattern::Binding(crate::ast::BindingPattern {
+                    name: "found".to_string(),
+                    span: Span::new(14, 14),
+                })],
                 span: Span::new(14, 14),
             },
         )
@@ -980,7 +986,10 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
             &VariantPattern {
                 enum_name: Some("Status".to_string()),
                 variant_name: "Failed".to_string(),
-                binding: Some("reason".to_string()),
+                subpatterns: vec![crate::ast::Pattern::Binding(crate::ast::BindingPattern {
+                    name: "reason".to_string(),
+                    span: Span::new(10, 14),
+                })],
                 span: Span::new(10, 14),
             },
         )
@@ -1604,7 +1613,8 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
         variants: std::collections::BTreeMap::from([(
             "Ready".to_string(),
             EnumVariantInfo {
-                payload: None,
+                payloads: Vec::new(),
+                named_payloads: false,
                 span: Span::new(1, 1),
             },
         )]),

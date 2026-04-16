@@ -1,0 +1,12 @@
+enum Status:
+    Ready
+    Count(int32)
+
+def main() -> int32:
+    status = Status.Count(value=4)
+    result: Result[int32, String] = Result.Ok(value=7)
+    option: Option[int32] = Some(value=9)
+    print(status)
+    print(result)
+    print(option)
+    return 0

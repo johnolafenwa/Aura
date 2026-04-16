@@ -107,6 +107,14 @@ fn direct_backend_emits_object_for_extended_feature_examples() {
             include_str!("../../../examples/traits/operator_traits.au"),
         ),
         (
+            "traits/ordering_traits",
+            include_str!("../../../examples/traits/ordering_traits.au"),
+        ),
+        (
+            "basics/borrowed_lifetime_labels",
+            include_str!("../../../examples/basics/borrowed_lifetime_labels.au"),
+        ),
+        (
             "traits/generic_trait_bounds",
             include_str!("../../../examples/traits/generic_trait_bounds.au"),
         ),
@@ -3144,6 +3152,8 @@ fn direct_backend_emits_object_for_broad_maintained_example_surface() {
         "examples/traits/specialized_trait_dispatch.au",
         "examples/traits/trait_associated_factory.au",
         "examples/traits/operator_traits.au",
+        "examples/traits/ordering_traits.au",
+        "examples/basics/borrowed_lifetime_labels.au",
         "examples/traits/generic_trait_bounds.au",
         "examples/numbers/float_sqrt.au",
         "examples/numbers/float32_values.au",
@@ -3968,6 +3978,7 @@ fn direct_field_try_and_spawn_helpers_cover_remaining_direct_inference_paths() {
         infer_rvalue_type(
             &Rvalue::VariantPayload {
                 scrutinee: Operand::Place("maybe".to_string()),
+                index: 0,
             },
             &variable_types,
             &HashMap::new(),

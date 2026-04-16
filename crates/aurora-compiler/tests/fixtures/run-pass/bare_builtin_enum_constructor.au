@@ -1,0 +1,30 @@
+def main() -> int32:
+    ok: Result[int32, String] = Ok(7)
+    err: Result[int32, String] = Err("bad")
+    some: Option[int32] = Some(3)
+    none: Option[int32] = None
+
+    match ok:
+        case Ok(value):
+            print(value)
+        case Err(message):
+            print(message)
+
+    match err:
+        case Ok(value):
+            print(value)
+        case Err(message):
+            print(message)
+
+    match some:
+        case Some(value):
+            print(value)
+        case None:
+            print(0)
+
+    match none:
+        case Some(value):
+            print(value)
+        case None:
+            print(1)
+    return 0

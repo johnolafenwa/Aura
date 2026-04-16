@@ -3,7 +3,6 @@ pub mod ast;
 pub mod call;
 pub mod diag;
 pub mod integer;
-pub mod interpreter;
 pub mod lexer;
 pub mod mir;
 pub mod mir_runtime;
@@ -11,6 +10,7 @@ mod native_codegen;
 mod native_runtime;
 mod package;
 pub mod parser;
+pub mod runtime_value;
 pub mod sema;
 
 use std::fs;
@@ -22,13 +22,13 @@ pub use analysis::{
     AnalysisCompletion, AnalysisOutput,
 };
 pub use diag::{Diagnostic, Result, Span};
-pub use interpreter::{run, RunOutput, Value};
 pub use mir::{lower as lower_to_mir, MirModule};
 pub use mir_runtime::{run as run_mir, run_serialized_mir};
 pub use native_codegen::{
     emit_host_object as emit_host_native_object,
     emit_host_object_with_metadata as emit_host_native_object_with_metadata,
 };
+pub use runtime_value::{RunOutput, Value};
 pub use sema::{ImportedBinding, ModuleContext, ModuleNamespace, Program};
 
 use ast::{ImportKind, Item};
@@ -45,24 +45,22 @@ pub fn check_source(source: &str) -> Result<Program> {
 
 pub fn run_source(source: &str) -> Result<RunOutput> {
     let program = check_source(source)?;
-    run(&program)
+    let mir = lower_to_mir(&program);
+    run_mir(&mir)
 }
 
 pub fn run_path_with_source(path: &Path, source: &str) -> Result<RunOutput> {
     let program = check_path_with_source(path, source)?;
-    run(&program)
+    let mir = lower_to_mir(&program);
+    run_mir(&mir)
 }
 
 pub fn run_source_via_mir(source: &str) -> Result<RunOutput> {
-    let program = check_source(source)?;
-    let mir = lower_to_mir(&program);
-    run_mir(&mir)
+    run_source(source)
 }
 
 pub fn run_path_with_source_via_mir(path: &Path, source: &str) -> Result<RunOutput> {
-    let program = check_path_with_source(path, source)?;
-    let mir = lower_to_mir(&program);
-    run_mir(&mir)
+    run_path_with_source(path, source)
 }
 
 pub fn lower_source_to_mir(source: &str) -> Result<MirModule> {
@@ -91,13 +89,12 @@ pub fn check_path_with_source(path: &Path, source: &str) -> Result<Program> {
 
 pub fn run_path(path: &Path) -> Result<RunOutput> {
     let program = check_path(path)?;
-    run(&program)
+    let mir = lower_to_mir(&program);
+    run_mir(&mir)
 }
 
 pub fn run_path_via_mir(path: &Path) -> Result<RunOutput> {
-    let program = check_path(path)?;
-    let mir = lower_to_mir(&program);
-    run_mir(&mir)
+    run_path(path)
 }
 
 pub fn lower_path_to_mir(path: &Path) -> Result<MirModule> {
@@ -634,10 +631,15 @@ fn qualify_enum_decl_for_export(program: &Program, decl: &ast::EnumDecl) -> ast:
         .iter()
         .map(|variant| {
             let mut qualified_variant = variant.clone();
-            qualified_variant.payload = qualified_variant
-                .payload
-                .as_ref()
-                .map(|payload| qualify_export_type_ref(program, payload));
+            qualified_variant.payloads = qualified_variant
+                .payloads
+                .iter()
+                .map(|payload| {
+                    let mut qualified_payload = payload.clone();
+                    qualified_payload.ty = qualify_export_type_ref(program, &payload.ty);
+                    qualified_payload
+                })
+                .collect();
             qualified_variant
         })
         .collect();
@@ -710,9 +712,15 @@ fn qualify_enum_info_for_export(program: &Program, info: &sema::EnumInfo) -> sem
     let mut qualified = info.clone();
     qualified.decl = qualify_enum_decl_for_export(program, &qualified.decl);
     for variant in qualified.variants.values_mut() {
-        if let Some(payload) = &variant.payload {
-            variant.payload = Some(qualify_export_type(program, payload));
-        }
+        variant.payloads = variant
+            .payloads
+            .iter()
+            .map(|payload| sema::EnumPayloadFieldInfo {
+                name: payload.name.clone(),
+                ty: qualify_export_type(program, &payload.ty),
+                span: payload.span,
+            })
+            .collect();
     }
     qualified
 }

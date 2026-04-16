@@ -247,7 +247,35 @@ fn help_flags_exit_successfully() {
             "help path {:?} should print usage",
             args
         );
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).contains("run-mir"),
+            "help path {:?} should no longer advertise `run-mir`, stdout was:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
+}
+
+#[test]
+fn run_mir_command_is_rejected() {
+    let fixture = repo_root().join("examples/basics/simple_example.au");
+    let output = Command::new(aura_bin())
+        .arg("run-mir")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run-mir");
+
+    assert!(
+        !output.status.success(),
+        "`run-mir` should be rejected now, stdout was:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("usage: aura"),
+        "`run-mir` rejection should print usage, stderr was:\n{}",
+        stderr
+    );
 }
 
 #[test]
@@ -572,7 +600,7 @@ fn run_stdin_resolves_local_module_imports() {
 
 #[test]
 fn run_mir_stdin_resolves_local_module_imports() {
-    let temp = TempDir::new("aurora-cli-run-mir-modules-stdin");
+    let temp = TempDir::new("aurora-cli-run-modules-stdin");
     fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
     fs::write(
         temp.path().join("helpers/math.au"),
@@ -584,14 +612,14 @@ fn run_mir_stdin_resolves_local_module_imports() {
         "import helpers.math\n\ndef main() -> int32:\n    print(helpers.math.double(value=5))\n    return 0\n";
 
     let mut child = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg("--stdin")
         .arg(&main_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to spawn aura run-mir");
+        .expect("failed to spawn aura run");
 
     child
         .stdin
@@ -602,11 +630,11 @@ fn run_mir_stdin_resolves_local_module_imports() {
 
     let output = child
         .wait_with_output()
-        .expect("failed to collect aura run-mir output");
+        .expect("failed to collect aura run output");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for module-aware stdin buffers, stderr was:\n{}",
+        "run should succeed for module-aware stdin buffers, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "10\n");
@@ -1130,6 +1158,40 @@ fn build_with_direct_backend_supports_string_methods_example() {
 }
 
 #[test]
+fn build_with_auto_backend_falls_back_for_rich_match_example() {
+    let fixture = repo_root().join("examples/enums/rich_match.au");
+    let output_dir = TempDir::new("aurora-build-auto-rich-match");
+    let output_path = output_dir.path().join("rich-match-auto");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("auto")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura build --backend auto on rich match example");
+
+    assert!(
+        build.status.success(),
+        "auto backend should succeed for rich match example, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run auto-backend rich match binary");
+
+    assert!(
+        run.status.success(),
+        "auto-backend rich match binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n30\n0\n");
+}
+
+#[test]
 fn build_with_direct_backend_supports_indexed_member_chains_and_fstring_indexing() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-index-chain-fstring",
@@ -1244,6 +1306,15 @@ fn build_with_direct_backend_supports_operator_traits_example() {
 }
 
 #[test]
+fn build_with_direct_backend_supports_ordering_traits_example() {
+    assert_direct_backend_example_runs(
+        "examples/traits/ordering_traits.au",
+        "ordering-traits-direct",
+        "true\ntrue\ntrue\ntrue\n2\n",
+    );
+}
+
+#[test]
 fn build_with_direct_backend_supports_generic_data_example() {
     assert_direct_backend_example_runs(
         "examples/generics/box_and_wrapper.au",
@@ -1267,6 +1338,15 @@ fn build_with_direct_backend_supports_borrow_parameters_example() {
         "examples/basics/borrow_parameters.au",
         "borrow-params-direct",
         "41\n42\n42\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_borrowed_lifetime_labels_example() {
+    assert_direct_backend_example_runs(
+        "examples/basics/borrowed_lifetime_labels.au",
+        "borrowed-lifetime-labels-direct",
+        "aurora\n",
     );
 }
 
@@ -1541,6 +1621,15 @@ fn default_build_supports_simple_example() {
 }
 
 #[test]
+fn default_build_supports_borrowed_lifetime_labels_example() {
+    assert_default_backend_example_runs(
+        "examples/basics/borrowed_lifetime_labels.au",
+        "borrowed-lifetime-labels-auto",
+        "aurora\n",
+    );
+}
+
+#[test]
 fn default_build_supports_literal_match_example() {
     assert_default_backend_example_runs(
         "examples/control_flow/match_literals.au",
@@ -1591,6 +1680,15 @@ fn default_build_supports_operator_traits_example() {
         "examples/traits/operator_traits.au",
         "operator-traits-auto",
         "6\n8\n-6\n-8\n",
+    );
+}
+
+#[test]
+fn default_build_supports_ordering_traits_example() {
+    assert_default_backend_example_runs(
+        "examples/traits/ordering_traits.au",
+        "ordering-traits-auto",
+        "true\ntrue\ntrue\ntrue\n2\n",
     );
 }
 
@@ -2104,14 +2202,14 @@ fn built_binary_exits_cleanly_when_stdout_pipe_closes() {
 fn run_mir_executes_supported_programs() {
     let fixture = repo_root().join("examples/classes/methods.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir");
+        .expect("failed to run aura run");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed, stderr was:\n{}",
+        "run should succeed, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "4\n8\n0\n");
@@ -2121,14 +2219,14 @@ fn run_mir_executes_supported_programs() {
 fn run_mir_executes_generic_constructor_specialization_example() {
     let fixture = repo_root().join("examples/generics/generic_constructor_specialization.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on generic constructor specialization example");
+        .expect("failed to run aura run on generic constructor specialization example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for generic constructor specialization example, stderr was:\n{}",
+        "run should succeed for generic constructor specialization example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n");
@@ -2138,14 +2236,14 @@ fn run_mir_executes_generic_constructor_specialization_example() {
 fn run_mir_executes_generic_trait_impl_example() {
     let fixture = repo_root().join("examples/traits/generic_trait_impl.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on generic trait impl example");
+        .expect("failed to run aura run on generic trait impl example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for generic trait impl example, stderr was:\n{}",
+        "run should succeed for generic trait impl example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "11\n");
@@ -2155,14 +2253,14 @@ fn run_mir_executes_generic_trait_impl_example() {
 fn run_mir_executes_try_example() {
     let fixture = repo_root().join("examples/error_handling/try_result.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on try example");
+        .expect("failed to run aura run on try example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for try example, stderr was:\n{}",
+        "run should succeed for try example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
@@ -2175,14 +2273,14 @@ fn run_mir_executes_try_example() {
 fn run_mir_executes_with_example() {
     let fixture = repo_root().join("examples/resources/with_resource.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on with example");
+        .expect("failed to run aura run on with example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for with example, stderr was:\n{}",
+        "run should succeed for with example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
@@ -2192,17 +2290,34 @@ fn run_mir_executes_with_example() {
 }
 
 #[test]
-fn run_mir_executes_literal_match_example() {
-    let fixture = repo_root().join("examples/control_flow/match_literals.au");
+fn run_mir_executes_borrowed_lifetime_labels_example() {
+    let fixture = repo_root().join("examples/basics/borrowed_lifetime_labels.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on literal match example");
+        .expect("failed to run aura run on borrowed lifetime labels example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for literal match example, stderr was:\n{}",
+        "run should succeed for borrowed lifetime labels example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "aurora\n");
+}
+
+#[test]
+fn run_mir_executes_literal_match_example() {
+    let fixture = repo_root().join("examples/control_flow/match_literals.au");
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run on literal match example");
+
+    assert!(
+        output.status.success(),
+        "run should succeed for literal match example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
@@ -2215,14 +2330,14 @@ fn run_mir_executes_literal_match_example() {
 fn run_mir_executes_vec_basics_example() {
     let fixture = repo_root().join("examples/collections/vec_basics.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on vec basics example");
+        .expect("failed to run aura run on vec basics example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for vec basics example, stderr was:\n{}",
+        "run should succeed for vec basics example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
@@ -2235,14 +2350,14 @@ fn run_mir_executes_vec_basics_example() {
 fn run_mir_executes_vec_polish_example() {
     let fixture = repo_root().join("examples/collections/vec_polish.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on vec polish example");
+        .expect("failed to run aura run on vec polish example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for vec polish example, stderr was:\n{}",
+        "run should succeed for vec polish example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
@@ -2255,14 +2370,14 @@ fn run_mir_executes_vec_polish_example() {
 fn run_mir_executes_vec_iteration_example() {
     let fixture = repo_root().join("examples/collections/vec_iteration.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on vec iteration example");
+        .expect("failed to run aura run on vec iteration example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for vec iteration example, stderr was:\n{}",
+        "run should succeed for vec iteration example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
@@ -2273,7 +2388,7 @@ fn run_mir_executes_vec_iteration_example() {
 
 #[test]
 fn run_mir_executes_vec_literals_and_iteration() {
-    let temp = TempDir::new("aurora-run-mir-vec");
+    let temp = TempDir::new("aurora-run-vec");
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
@@ -2282,14 +2397,14 @@ fn run_mir_executes_vec_literals_and_iteration() {
     .expect("failed to write vec source");
 
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&source_path)
         .output()
-        .expect("failed to run aura run-mir");
+        .expect("failed to run aura run");
 
     assert!(
         output.status.success(),
-        "run-mir vec execution should succeed, stderr was:\n{}",
+        "run vec execution should succeed, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "6\n");
@@ -2297,7 +2412,7 @@ fn run_mir_executes_vec_literals_and_iteration() {
 
 #[test]
 fn run_mir_executes_vec_methods_and_constructor() {
-    let temp = TempDir::new("aurora-run-mir-vec-methods");
+    let temp = TempDir::new("aurora-run-vec-methods");
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
@@ -2306,14 +2421,14 @@ fn run_mir_executes_vec_methods_and_constructor() {
     .expect("failed to write vec methods source");
 
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&source_path)
         .output()
-        .expect("failed to run aura run-mir");
+        .expect("failed to run aura run");
 
     assert!(
         output.status.success(),
-        "run-mir vec methods execution should succeed, stderr was:\n{}",
+        "run vec methods execution should succeed, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
@@ -2326,14 +2441,14 @@ fn run_mir_executes_vec_methods_and_constructor() {
 fn run_mir_executes_map_basics_example() {
     let fixture = repo_root().join("examples/collections/map_basics.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on map basics example");
+        .expect("failed to run aura run on map basics example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for map basics example, stderr was:\n{}",
+        "run should succeed for map basics example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
@@ -2346,14 +2461,14 @@ fn run_mir_executes_map_basics_example() {
 fn run_mir_executes_generic_trait_bounds_example() {
     let fixture = repo_root().join("examples/traits/generic_trait_bounds.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on generic trait bounds example");
+        .expect("failed to run aura run on generic trait bounds example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for generic trait bounds example, stderr was:\n{}",
+        "run should succeed for generic trait bounds example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "20\n");
@@ -2363,31 +2478,51 @@ fn run_mir_executes_generic_trait_bounds_example() {
 fn run_mir_executes_operator_traits_example() {
     let fixture = repo_root().join("examples/traits/operator_traits.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on operator traits example");
+        .expect("failed to run aura run on operator traits example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for operator traits example, stderr was:\n{}",
+        "run should succeed for operator traits example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "6\n8\n-6\n-8\n");
 }
 
 #[test]
-fn run_mir_executes_set_basics_example() {
-    let fixture = repo_root().join("examples/collections/set_basics.au");
+fn run_mir_executes_ordering_traits_example() {
+    let fixture = repo_root().join("examples/traits/ordering_traits.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on set basics example");
+        .expect("failed to run aura run on ordering traits example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for set basics example, stderr was:\n{}",
+        "run should succeed for ordering traits example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "true\ntrue\ntrue\ntrue\n2\n"
+    );
+}
+
+#[test]
+fn run_mir_executes_set_basics_example() {
+    let fixture = repo_root().join("examples/collections/set_basics.au");
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run on set basics example");
+
+    assert!(
+        output.status.success(),
+        "run should succeed for set basics example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
@@ -2400,14 +2535,14 @@ fn run_mir_executes_set_basics_example() {
 fn run_mir_executes_string_methods_example() {
     let fixture = repo_root().join("examples/strings/string_methods.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on string methods example");
+        .expect("failed to run aura run on string methods example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for string methods example, stderr was:\n{}",
+        "run should succeed for string methods example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
@@ -2420,14 +2555,14 @@ fn run_mir_executes_string_methods_example() {
 fn run_mir_executes_numeric_builtins_example() {
     let fixture = repo_root().join("examples/numbers/numeric_builtins.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on numeric builtins example");
+        .expect("failed to run aura run on numeric builtins example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for numeric builtins example, stderr was:\n{}",
+        "run should succeed for numeric builtins example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
@@ -2440,14 +2575,14 @@ fn run_mir_executes_numeric_builtins_example() {
 fn run_mir_executes_string_parsing_and_formatting_example() {
     let fixture = repo_root().join("examples/strings/string_parsing_and_formatting.au");
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&fixture)
         .output()
-        .expect("failed to run aura run-mir on string parsing example");
+        .expect("failed to run aura run on string parsing example");
 
     assert!(
         output.status.success(),
-        "run-mir should succeed for string parsing example, stderr was:\n{}",
+        "run should succeed for string parsing example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
@@ -2458,7 +2593,7 @@ fn run_mir_executes_string_parsing_and_formatting_example() {
 
 #[test]
 fn run_mir_executes_string_map_and_numeric_builtins() {
-    let temp = TempDir::new("aurora-run-mir-string-map-numbers");
+    let temp = TempDir::new("aurora-run-string-map-numbers");
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
@@ -2467,14 +2602,14 @@ fn run_mir_executes_string_map_and_numeric_builtins() {
     .expect("failed to write string/map/numbers source");
 
     let output = Command::new(aura_bin())
-        .arg("run-mir")
+        .arg("run")
         .arg(&source_path)
         .output()
-        .expect("failed to run aura run-mir");
+        .expect("failed to run aura run");
 
     assert!(
         output.status.success(),
-        "run-mir string/map/numbers execution should succeed, stderr was:\n{}",
+        "run string/map/numbers execution should succeed, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
@@ -2513,7 +2648,7 @@ fn run_executes_programs_with_local_modules() {
 }
 
 #[test]
-fn module_qualified_spawn_target_reports_a_user_error_across_commands() {
+fn module_qualified_spawn_target_runs_across_commands() {
     let temp = TempDir::new("aurora-cli-qualified-spawn");
     fs::create_dir_all(temp.path().join("pkg")).expect("failed to create module dir");
     fs::write(
@@ -2524,11 +2659,22 @@ fn module_qualified_spawn_target_reports_a_user_error_across_commands() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "import pkg.helpers\n\ndef main() -> int32:\n    task = spawn pkg.helpers.work()\n    return task.join()\n",
+        "import pkg.helpers\n\ndef main() -> int32:\n    task = spawn pkg.helpers.work()\n    print(task.join())\n    return 0\n",
     )
     .expect("failed to write main module");
 
-    for command in ["check", "run", "run-mir"] {
+    let check = Command::new(aura_bin())
+        .arg("check")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura check");
+    assert!(
+        check.status.success(),
+        "check should accept module-qualified spawn targets, stderr was:\n{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    for command in ["run"] {
         let output = Command::new(aura_bin())
             .arg(command)
             .arg(&source_path)
@@ -2536,49 +2682,47 @@ fn module_qualified_spawn_target_reports_a_user_error_across_commands() {
             .expect("failed to run aura command");
 
         assert!(
-            !output.status.success(),
-            "{} should reject module-qualified spawn targets",
-            command
-        );
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("`spawn` currently supports named function calls only"),
-            "{} should report the spawn target diagnostic, stderr was:\n{}",
+            output.status.success(),
+            "{} should execute module-qualified spawn targets, stderr was:\n{}",
             command,
-            stderr
+            String::from_utf8_lossy(&output.stderr)
         );
         assert!(
-            !stderr.contains("panicked at"),
-            "{} should not panic, stderr was:\n{}",
+            String::from_utf8_lossy(&output.stdout) == "1\n",
+            "{} should print the spawned result, stdout was:\n{}",
             command,
-            stderr
+            String::from_utf8_lossy(&output.stdout)
         );
     }
 
-    let output_path = temp.path().join("out");
-    let build = Command::new(aura_bin())
-        .arg("build")
-        .arg("-o")
-        .arg(&output_path)
-        .arg(&source_path)
-        .output()
-        .expect("failed to run aura build");
+    for backend in ["auto", "direct"] {
+        let output_path = temp.path().join(format!("out-{backend}"));
+        let build = Command::new(aura_bin())
+            .arg("build")
+            .arg("--backend")
+            .arg(backend)
+            .arg("-o")
+            .arg(&output_path)
+            .arg(&source_path)
+            .output()
+            .expect("failed to run aura build");
 
-    assert!(
-        !build.status.success(),
-        "build should reject module-qualified spawn targets"
-    );
-    let stderr = String::from_utf8_lossy(&build.stderr);
-    assert!(
-        stderr.contains("`spawn` currently supports named function calls only"),
-        "build should report the spawn target diagnostic, stderr was:\n{}",
-        stderr
-    );
-    assert!(
-        !stderr.contains("panicked at"),
-        "build should not panic, stderr was:\n{}",
-        stderr
-    );
+        assert!(
+            build.status.success(),
+            "build --backend {backend} should accept module-qualified spawn targets, stderr was:\n{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let run = Command::new(&output_path)
+            .output()
+            .expect("failed to run built spawn binary");
+        assert!(
+            run.status.success(),
+            "built binary for backend {backend} should succeed, stderr was:\n{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
+    }
 }
 
 #[test]

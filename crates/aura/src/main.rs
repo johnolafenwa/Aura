@@ -7,8 +7,8 @@ use std::process::{self, Command};
 use aurora_compiler::{
     analyze_path_source, check_path, check_path_with_source, complete_path_source,
     emit_host_native_object_with_metadata, lower_path_to_mir, lower_path_with_source_to_mir,
-    parse_source, run_path, run_path_via_mir, run_path_with_source, run_path_with_source_via_mir,
-    update_git_dependencies_in_working_dir, Diagnostic, MirModule, Value,
+    parse_source, run_path, run_path_with_source, update_git_dependencies_in_working_dir,
+    Diagnostic, MirModule, Value,
 };
 
 struct Input {
@@ -58,26 +58,6 @@ fn main() {
                 run_path_with_source(Path::new(&input.path), &input.source)
             } else {
                 run_path(Path::new(&input.path))
-            };
-            match result {
-                Ok(output) => {
-                    write_stdout(&output.stdout);
-                    if let Value::Int(code) = output.value {
-                        process::exit(code.as_i128().unwrap_or(1) as i32);
-                    }
-                }
-                Err(error) => {
-                    eprintln!("{}", render_error(&input.path, &input.source, &error));
-                    process::exit(1);
-                }
-            }
-        }
-        "run-mir" => {
-            let input = read_input(&mut args);
-            let result = if input.from_stdin {
-                run_path_with_source_via_mir(Path::new(&input.path), &input.source)
-            } else {
-                run_path_via_mir(Path::new(&input.path))
             };
             match result {
                 Ok(output) => {
@@ -384,7 +364,10 @@ fn build_binary_with_backend(
 ) -> std::result::Result<(), String> {
     match backend {
         BuildBackend::Direct => build_direct_native_binary(path, source, mir, output_path),
-        BuildBackend::Auto => build_direct_native_binary(path, source, mir, output_path),
+        BuildBackend::Auto => match build_direct_native_binary(path, source, mir, output_path) {
+            Ok(()) => Ok(()),
+            Err(_) => build_mir_runtime_binary(path, source, mir, output_path),
+        },
     }
 }
 
@@ -463,6 +446,87 @@ fn build_direct_native_binary(
     Ok(())
 }
 
+fn build_mir_runtime_binary(
+    path: &str,
+    source: &str,
+    mir: &MirModule,
+    output_path: &Path,
+) -> std::result::Result<(), String> {
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create output directory `{}`: {}",
+                parent.display(),
+                error
+            )
+        })?;
+    }
+
+    let native_runtime = ensure_native_runtime_artifacts()?;
+    let mir_json =
+        serde_json::to_vec(mir).map_err(|error| format!("failed to serialize MIR: {}", error))?;
+    let launcher_source =
+        emit_mir_runtime_launcher_source(&mir_json, path.as_bytes(), source.as_bytes());
+    let temp_source = temporary_mir_runtime_source_path(output_path);
+    let temp_staticlib = temporary_direct_staticlib_path(output_path);
+    fs::write(&temp_source, launcher_source).map_err(|error| {
+        format!(
+            "failed to write MIR runtime launcher source `{}`: {}",
+            temp_source.display(),
+            error
+        )
+    })?;
+    let staticlib_bytes = fs::read(&native_runtime.staticlib).or_else(|_| {
+        resolve_static_library_path(repo_root(), current_profile()).and_then(|refreshed| {
+            fs::read(&refreshed).map_err(|error| {
+                format!(
+                    "failed to read Aurora runtime library `{}`: {}",
+                    refreshed.display(),
+                    error
+                )
+            })
+        })
+    })?;
+    fs::write(&temp_staticlib, staticlib_bytes).map_err(|error| {
+        format!(
+            "failed to stage Aurora runtime library `{}` as `{}`: {}",
+            native_runtime.staticlib.display(),
+            temp_staticlib.display(),
+            error
+        )
+    })?;
+
+    let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let mut command = Command::new(cc);
+    command
+        .arg(&temp_source)
+        .arg(&temp_staticlib)
+        .arg("-o")
+        .arg(output_path);
+    for arg in &native_runtime.native_link_args {
+        command.arg(arg);
+    }
+
+    let result = command.output().map_err(|error| {
+        format!(
+            "failed to run native linker for MIR runtime backend: {}",
+            error
+        )
+    });
+
+    let _ = fs::remove_file(&temp_source);
+    let _ = fs::remove_file(&temp_staticlib);
+
+    let output = result?;
+    if !output.status.success() {
+        return Err(format!(
+            "MIR runtime backend link failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
 fn temporary_direct_object_path(output_path: &Path) -> PathBuf {
     let file_name = output_path
         .file_name()
@@ -470,6 +534,23 @@ fn temporary_direct_object_path(output_path: &Path) -> PathBuf {
         .unwrap_or("aurora-output");
     let unique = format!(
         "aurora-direct-object-{}-{}-{}.o",
+        file_name,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos()
+    );
+    std::env::temp_dir().join(unique)
+}
+
+fn temporary_mir_runtime_source_path(output_path: &Path) -> PathBuf {
+    let file_name = output_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("aurora-output");
+    let unique = format!(
+        "aurora-mir-runtime-{}-{}-{}.c",
         file_name,
         std::process::id(),
         std::time::SystemTime::now()
@@ -495,6 +576,35 @@ fn temporary_direct_staticlib_path(output_path: &Path) -> PathBuf {
             .as_nanos()
     );
     std::env::temp_dir().join(unique)
+}
+
+fn emit_mir_runtime_launcher_source(mir_json: &[u8], source_path: &[u8], source: &[u8]) -> String {
+    fn render_bytes(name: &str, bytes: &[u8]) -> String {
+        let mut rendered = String::new();
+        rendered.push_str(&format!("static const uint8_t {}[] = {{", name));
+        if bytes.is_empty() {
+            rendered.push_str("0");
+        } else {
+            for (index, byte) in bytes.iter().enumerate() {
+                if index > 0 {
+                    rendered.push_str(", ");
+                }
+                rendered.push_str(&byte.to_string());
+            }
+        }
+        rendered.push_str("};\n");
+        rendered
+    }
+
+    format!(
+        "#include <stddef.h>\n#include <stdint.h>\n\nextern int aurora_native_run(const uint8_t*, size_t, const uint8_t*, size_t, const uint8_t*, size_t);\n\n{}{}{}int main(void) {{\n    return aurora_native_run(AURORA_MIR, {mir_len}, AURORA_SOURCE_PATH, {path_len}, AURORA_SOURCE, {source_len});\n}}\n",
+        render_bytes("AURORA_MIR", mir_json),
+        render_bytes("AURORA_SOURCE_PATH", source_path),
+        render_bytes("AURORA_SOURCE", source),
+        mir_len = mir_json.len(),
+        path_len = source_path.len(),
+        source_len = source.len(),
+    )
 }
 
 fn repo_root() -> PathBuf {
@@ -637,8 +747,8 @@ fn write_stdout(text: &str) {
 }
 
 fn usage_text() -> &'static str {
-    "usage: aura <check|run|run-mir|build|ast|ast-json|mir|analyze> <file.au>\n\
-       or: aura <check|run|run-mir|build|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
+    "usage: aura <check|run|build|ast|ast-json|mir|analyze> <file.au>\n\
+       or: aura <check|run|build|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
        or: aura build [-o <output>] [--backend auto|direct] <file.au>\n\
        or: aura build [-o <output>] [--backend auto|direct] --stdin <virtual-path>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\

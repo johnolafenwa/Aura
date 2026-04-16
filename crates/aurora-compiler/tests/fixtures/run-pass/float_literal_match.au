@@ -1,0 +1,15 @@
+def main() -> int32:
+    match 1.5:
+        case 1.5:
+            print("hit")
+        case _:
+            print("miss")
+
+    match -2.0:
+        case -1.0:
+            print("wrong")
+        case -2.0:
+            print("neg")
+        case _:
+            print("other")
+    return 0

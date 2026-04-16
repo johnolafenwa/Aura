@@ -946,7 +946,9 @@ function parseCallableParams(rawLine, rawParams, line, selfType) {
       continue;
     }
 
-    const receiverMatch = trimmed.match(/^(?:borrow\s+(?:mut\s+)?)?self$/);
+    const receiverMatch = trimmed.match(
+      /^(?:borrow(?:\s+mut)?(?:\[[A-Za-z_][A-Za-z0-9_]*\])?\s+)?self$/
+    );
     if (receiverMatch && selfType) {
       const selfOffset = segment.start + trimmed.indexOf("self");
       params.push({
@@ -987,7 +989,10 @@ function parseParamTypes(rawParams) {
 }
 
 function normalizeParamType(rawType) {
-  return normalizeType(rawType).replace(/^borrow(?: mut)?\s+/, "");
+  return normalizeType(rawType).replace(
+    /^borrow(?: mut)?(?:\[[A-Za-z_][A-Za-z0-9_]*\])?\s+/,
+    ""
+  );
 }
 
 function populateFunctionLocals(functionInfo, lines, moduleInfo) {

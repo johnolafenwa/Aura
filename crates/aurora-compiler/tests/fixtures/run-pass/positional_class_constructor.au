@@ -1,0 +1,12 @@
+class Point:
+    x: int32
+    y: int32 = 9
+
+def main() -> int32:
+    first = Point(1, 2)
+    second = Point(7)
+    print(first.x)
+    print(first.y)
+    print(second.x)
+    print(second.y)
+    return 0

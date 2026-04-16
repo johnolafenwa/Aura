@@ -1,0 +1,15 @@
+class User:
+    name: String
+
+def name_ref(user: borrow User) -> borrow[user] String:
+    return user.name
+
+def echo_name(user: borrow User) -> borrow[user] String:
+    alias = name_ref(user)
+    return alias
+
+def main():
+    user = User(name="aurora")
+    alias = name_ref(user)
+    print(alias)
+    print(echo_name(user))

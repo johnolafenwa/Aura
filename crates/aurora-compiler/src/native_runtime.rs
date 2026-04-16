@@ -11,8 +11,9 @@ use std::time::{Duration as StdDuration, Instant};
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
-use crate::interpreter::{
-    cast_numeric_value, CancellationContext, ChannelValue, EnumVariantValue, InstanceValue,
+use crate::runtime_value::{
+    cast_numeric_value, option_none, option_some, render_float, result_err, result_ok,
+    send_error_closed, CancellationContext, ChannelValue, EnumVariantValue, InstanceValue,
     MapValue, RangeValue, SetValue, TaskGroupValue, TaskValue, TryRecvResult, Value, VecValue,
 };
 use crate::sema::Type;
@@ -44,22 +45,6 @@ fn render_bool(value: i64) -> &'static str {
 
 fn int32_overflow_message(value: i64) -> String {
     format!("integer value `{}` does not fit in `int32`", value)
-}
-
-fn render_float(value: f64) -> String {
-    if !value.is_finite() {
-        return value.to_string();
-    }
-    let roundtripped_f32 = (value as f32) as f64;
-    let mut rendered = if value == roundtripped_f32 {
-        (value as f32).to_string()
-    } else {
-        value.to_string()
-    };
-    if !rendered.contains(['.', 'e', 'E']) {
-        rendered.push_str(".0");
-    }
-    rendered
 }
 
 #[repr(transparent)]
@@ -1683,10 +1668,10 @@ pub extern "C" fn aurora_direct_enum_variant(
     boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: decode_bytes(enum_ptr, enum_len).to_string(),
         variant_name: decode_bytes(variant_ptr, variant_len).to_string(),
-        payload: if payload.is_null() {
-            None
+        payloads: if payload.is_null() {
+            Vec::new()
         } else {
-            Some(Box::new(unsafe { take_value(payload) }))
+            vec![unsafe { take_value(payload) }]
         },
     }))
 }
@@ -1710,13 +1695,16 @@ pub extern "C" fn aurora_direct_variant_matches(
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_variant_payload(value: *mut OpaqueValue) -> *mut OpaqueValue {
+pub extern "C" fn aurora_direct_variant_payload(
+    value: *mut OpaqueValue,
+    index: i64,
+) -> *mut OpaqueValue {
     match unsafe { value_ref(value) } {
-        Value::EnumVariant(variant) => match &variant.payload {
-            Some(payload) => boxed_value(payload.as_ref().clone()),
+        Value::EnumVariant(variant) => match variant.payloads.get(index.max(0) as usize) {
+            Some(payload) => boxed_value(payload.clone()),
             None => runtime_error(format!(
-                "enum variant `{}.{}` does not carry a payload",
-                variant.enum_name, variant.variant_name
+                "enum variant `{}.{}` does not carry a payload at index {}",
+                variant.enum_name, variant.variant_name, index
             )),
         },
         other => runtime_error(format!(
@@ -1851,46 +1839,6 @@ pub extern "C" fn aurora_direct_cancelled() -> i64 {
     } else {
         0
     }
-}
-
-fn option_some(value: Value) -> Value {
-    Value::EnumVariant(EnumVariantValue {
-        enum_name: "Option".to_string(),
-        variant_name: "Some".to_string(),
-        payload: Some(Box::new(value)),
-    })
-}
-
-fn option_none() -> Value {
-    Value::EnumVariant(EnumVariantValue {
-        enum_name: "Option".to_string(),
-        variant_name: "None".to_string(),
-        payload: None,
-    })
-}
-
-fn result_ok(value: Value) -> Value {
-    Value::EnumVariant(EnumVariantValue {
-        enum_name: "Result".to_string(),
-        variant_name: "Ok".to_string(),
-        payload: Some(Box::new(value)),
-    })
-}
-
-fn result_err(value: Value) -> Value {
-    Value::EnumVariant(EnumVariantValue {
-        enum_name: "Result".to_string(),
-        variant_name: "Err".to_string(),
-        payload: Some(Box::new(value)),
-    })
-}
-
-fn send_error_closed(value: Value) -> Value {
-    Value::EnumVariant(EnumVariantValue {
-        enum_name: "SendError".to_string(),
-        variant_name: "Closed".to_string(),
-        payload: Some(Box::new(value)),
-    })
 }
 
 #[no_mangle]

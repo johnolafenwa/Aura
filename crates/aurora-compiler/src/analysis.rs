@@ -668,9 +668,9 @@ impl<'a> AnalysisBuilder<'a> {
                     name: name.clone(),
                     kind: "variant".to_string(),
                     detail: variant
-                        .payload
-                        .as_ref()
-                        .map(|payload| format!("{}({}) -> {}", name, payload, base_name))
+                        .payloads
+                        .first()
+                        .map(|payload| format!("{}({}) -> {}", name, payload.ty, base_name))
                         .unwrap_or_else(|| format!("{} -> {}", name, base_name)),
                 });
             }
@@ -1008,7 +1008,7 @@ impl<'a> AnalysisBuilder<'a> {
         let payload = enum_info
             .variants
             .get(&variant.variant_name)
-            .and_then(|variant_info| variant_info.payload.as_ref());
+            .and_then(|variant_info| variant_info.payloads.first().map(|payload| &payload.ty));
         Some(ResolvedSymbol {
             hover: format_variant_hover(&enum_info.decl.name, &variant.variant_name, payload),
             definition: Some(self.definition_range(
@@ -1179,7 +1179,14 @@ impl<'a> AnalysisBuilder<'a> {
         let Pattern::Variant(variant) = &arm.pattern else {
             return;
         };
-        let Some(binding_name) = &variant.binding else {
+        let Some(binding_name) = variant
+            .subpatterns
+            .iter()
+            .find_map(|pattern| match pattern {
+                Pattern::Binding(binding) => Some(binding.name.as_str()),
+                _ => None,
+            })
+        else {
             return;
         };
         let binding_ty = self
@@ -1201,7 +1208,14 @@ impl<'a> AnalysisBuilder<'a> {
         let Pattern::Variant(variant) = &arm.pattern else {
             return;
         };
-        let Some(binding_name) = &variant.binding else {
+        let Some(binding_name) = variant
+            .subpatterns
+            .iter()
+            .find_map(|pattern| match pattern {
+                Pattern::Binding(binding) => Some(binding.name.as_str()),
+                _ => None,
+            })
+        else {
             return;
         };
         let binding_ty = self
@@ -1318,6 +1332,14 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Index { object, index } => {
                 self.visit_expr(object, scope);
                 self.visit_expr(index, scope);
+            }
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
+                self.visit_expr(scrutinee, scope);
+                for arm in arms {
+                    self.visit_expr(&arm.value, scope);
+                }
             }
             ExprKind::Int(_)
             | ExprKind::DurationMillis(_)
@@ -1529,7 +1551,11 @@ impl<'a> AnalysisBuilder<'a> {
         if let Some(enum_info) = self.program.enums.get(base_name) {
             if let Some(variant_info) = enum_info.variants.get(field) {
                 return Some(ResolvedMember {
-                    hover: format_variant_hover(base_name, field, variant_info.payload.as_ref()),
+                    hover: format_variant_hover(
+                        base_name,
+                        field,
+                        variant_info.payloads.first().map(|payload| &payload.ty),
+                    ),
                     definition: Some(self.definition_range(
                         &enum_info.module_name,
                         variant_info.span,
@@ -1834,6 +1860,9 @@ impl<'a> AnalysisBuilder<'a> {
                     })
             }
             ExprKind::Call { callee, args } => self.infer_call_type(callee, args, scope),
+            ExprKind::Match { arms, .. } => arms
+                .first()
+                .and_then(|arm| self.infer_expr_type(&arm.value, scope)),
             ExprKind::Binary { op, left, right } => {
                 let left_ty = self.infer_expr_type(left, scope)?;
                 let right_ty = self.infer_expr_type(right, scope)?;
@@ -1954,7 +1983,7 @@ impl<'a> AnalysisBuilder<'a> {
 
         self.resolve_named_enum_info(enum_name?)
             .and_then(|info| info.variants.get(variant_name))
-            .and_then(|variant| variant.payload.clone())
+            .and_then(|variant| variant.payloads.first().map(|payload| payload.ty.clone()))
     }
 
     fn push_occurrence(
@@ -2142,12 +2171,16 @@ fn symbols_from_module(module: &Module) -> Vec<AnalysisSymbol> {
                         .map(|variant| AnalysisSymbol {
                             name: variant.name.clone(),
                             kind: "variant".to_string(),
-                            detail: variant
-                                .payload
-                                .as_ref()
-                                .map(lower_type_ref)
-                                .map(|ty| ty.to_string())
-                                .unwrap_or_default(),
+                            detail: if variant.payloads.is_empty() {
+                                String::new()
+                            } else {
+                                variant
+                                    .payloads
+                                    .iter()
+                                    .map(|payload| lower_type_ref(&payload.ty).to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            },
                             line: variant.span.line.saturating_sub(1),
                             start_character: variant.span.column.saturating_sub(1),
                             end_character: variant.span.column.saturating_sub(1)

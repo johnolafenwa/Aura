@@ -1,9 +1,10 @@
 use crate::ast::{
-    Argument, AssignStmt, AssignTarget, BinaryOp, BreakStmt, ClassDecl, ContinueStmt, EnumDecl,
-    EnumVariantDecl, Expr, ExprKind, ExprStmt, FieldDecl, ForStmt, FormatPart, FunctionDecl,
-    IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, Item, LiteralPattern, LiteralPatternKind,
-    MapEntryExpr, MatchArm, MatchStmt, Module, Param, Pattern, ReceiverKind, ReturnStmt, SelectArm,
-    SelectStmt, Stmt, TraitDecl, TypeRef, UnaryOp, VariantPattern, WhileStmt, WithStmt,
+    Argument, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BreakStmt, ClassDecl,
+    ContinueStmt, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt,
+    FieldDecl, ForStmt, FormatPart, FunctionDecl, IfBranch, IfStmt, ImplDecl, ImportDecl,
+    ImportKind, Item, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm,
+    MatchStmt, Module, Param, Pattern, ReceiverKind, ReturnStmt, SelectArm, SelectStmt, Stmt,
+    TraitDecl, TypeRef, UnaryOp, VariantPattern, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -194,17 +195,51 @@ impl Parser {
     fn parse_enum_variant(&mut self) -> Result<EnumVariantDecl> {
         let span = self.current_span();
         let name = self.expect_identifier()?;
-        let payload = if self.eat_simple(&TokenKind::LParen).is_some() {
-            let ty = self.parse_type()?;
+        let (payloads, named_payloads) = if self.eat_simple(&TokenKind::LParen).is_some() {
+            let mut payloads = Vec::new();
+            let mut saw_named = false;
+            let mut saw_unnamed = false;
+            loop {
+                let field_span = self.current_span();
+                let (field_name, field_ty) =
+                    if matches!(self.current_kind(), TokenKind::Identifier(_))
+                        && matches!(self.peek_kind(1), Some(TokenKind::Colon))
+                    {
+                        let field_name = self.expect_identifier()?;
+                        self.expect_simple(TokenKind::Colon)?;
+                        let field_ty = self.parse_type()?;
+                        saw_named = true;
+                        (Some(field_name), field_ty)
+                    } else {
+                        let field_ty = self.parse_type()?;
+                        saw_unnamed = true;
+                        (None, field_ty)
+                    };
+                payloads.push(EnumPayloadFieldDecl {
+                    name: field_name,
+                    ty: field_ty,
+                    span: field_span,
+                });
+                if self.eat_simple(&TokenKind::Comma).is_none() {
+                    break;
+                }
+            }
             self.expect_simple(TokenKind::RParen)?;
-            Some(ty)
+            if saw_named && saw_unnamed {
+                return Err(Diagnostic::at(
+                    span,
+                    "enum variant payloads must be either all named or all positional",
+                ));
+            }
+            (payloads, saw_named)
         } else {
-            None
+            (Vec::new(), false)
         };
         self.expect_newline()?;
         Ok(EnumVariantDecl {
             name,
-            payload,
+            payloads,
+            named_payloads,
             span,
         })
     }
@@ -246,16 +281,8 @@ impl Parser {
         self.expect_simple(TokenKind::LParen)?;
         let (receiver, params) = self.parse_params(allow_receiver)?;
         self.expect_simple(TokenKind::RParen)?;
-        let return_type = if self.eat_simple(&TokenKind::Arrow).is_some() {
-            self.parse_type()?
-        } else {
-            TypeRef {
-                name: "None".to_string(),
-                args: Vec::new(),
-                indirect: false,
-                span,
-            }
-        };
+        let (return_passing, return_borrow_source, return_type) =
+            self.parse_return_annotation(span)?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
         let body = self.parse_block()?;
@@ -267,6 +294,8 @@ impl Parser {
             type_param_bounds,
             receiver,
             params,
+            return_passing,
+            return_borrow_source,
             return_type,
             body,
             span,
@@ -291,7 +320,7 @@ impl Parser {
                 self.parse_pass_stmt()?;
                 continue;
             }
-            methods.push(self.parse_trait_method_signature()?);
+            methods.push(self.parse_trait_method()?);
         }
 
         self.expect_simple(TokenKind::Dedent)?;
@@ -349,24 +378,22 @@ impl Parser {
         })
     }
 
-    fn parse_trait_method_signature(&mut self) -> Result<FunctionDecl> {
+    fn parse_trait_method(&mut self) -> Result<FunctionDecl> {
         let span = self.expect_keyword(TokenKind::KwDef)?.span;
         let name = self.expect_identifier()?;
         let (type_params, type_param_bounds) = self.parse_optional_type_params(true)?;
         self.expect_simple(TokenKind::LParen)?;
         let (receiver, params) = self.parse_params(true)?;
         self.expect_simple(TokenKind::RParen)?;
-        let return_type = if self.eat_simple(&TokenKind::Arrow).is_some() {
-            self.parse_type()?
+        let (return_passing, return_borrow_source, return_type) =
+            self.parse_return_annotation(span)?;
+        let body = if self.eat_simple(&TokenKind::Colon).is_some() {
+            self.expect_newline()?;
+            self.parse_block()?
         } else {
-            TypeRef {
-                name: "None".to_string(),
-                args: Vec::new(),
-                indirect: false,
-                span,
-            }
+            self.expect_newline()?;
+            Vec::new()
         };
-        self.expect_newline()?;
         Ok(FunctionDecl {
             public: false,
             name,
@@ -374,10 +401,44 @@ impl Parser {
             type_param_bounds,
             receiver,
             params,
+            return_passing,
+            return_borrow_source,
             return_type,
-            body: Vec::new(),
+            body,
             span,
         })
+    }
+
+    fn parse_return_annotation(
+        &mut self,
+        span: Span,
+    ) -> Result<(ReceiverKind, Option<String>, TypeRef)> {
+        if self.eat_simple(&TokenKind::Arrow).is_none() {
+            return Ok((
+                ReceiverKind::Value,
+                None,
+                TypeRef {
+                    name: "None".to_string(),
+                    args: Vec::new(),
+                    indirect: false,
+                    span,
+                },
+            ));
+        }
+
+        let mut passing = ReceiverKind::Value;
+        let mut borrow_source = None;
+        if self.eat_simple(&TokenKind::KwBorrow).is_some() {
+            passing = if self.eat_simple(&TokenKind::KwMut).is_some() {
+                ReceiverKind::BorrowMut
+            } else {
+                ReceiverKind::Borrow
+            };
+            borrow_source = self.parse_optional_borrow_label()?;
+        }
+
+        let return_type = self.parse_type()?;
+        Ok((passing, borrow_source, return_type))
     }
 
     fn parse_optional_type_params(
@@ -460,6 +521,7 @@ impl Parser {
                 ));
             }
             let mut passing = ReceiverKind::Value;
+            let mut borrow_label = None;
             let name = self.expect_identifier()?;
             self.expect_simple(TokenKind::Colon)?;
             if passing == ReceiverKind::Value && self.eat_simple(&TokenKind::KwBorrow).is_some() {
@@ -468,6 +530,7 @@ impl Parser {
                 } else {
                     ReceiverKind::Borrow
                 };
+                borrow_label = self.parse_optional_borrow_label()?;
             }
             let ty = self.parse_type()?;
             let default = if self.eat_simple(&TokenKind::Equal).is_some() {
@@ -478,6 +541,7 @@ impl Parser {
             params.push(Param {
                 name,
                 passing,
+                borrow_label,
                 ty,
                 default,
                 span,
@@ -489,6 +553,15 @@ impl Parser {
         }
 
         Ok((receiver, params))
+    }
+
+    fn parse_optional_borrow_label(&mut self) -> Result<Option<String>> {
+        if self.eat_simple(&TokenKind::LBracket).is_none() {
+            return Ok(None);
+        }
+        let label = self.expect_identifier()?;
+        self.expect_simple(TokenKind::RBracket)?;
+        Ok(Some(label))
     }
 
     fn at_borrow_receiver_start(&self) -> bool {
@@ -548,7 +621,7 @@ impl Parser {
         } else {
             Some(self.parse_expr()?)
         };
-        self.expect_newline()?;
+        self.expect_statement_terminator()?;
         Ok(Stmt::Return(ReturnStmt { value, span }))
     }
 
@@ -565,7 +638,7 @@ impl Parser {
         };
         let op = self.parse_assignment_operator()?;
         let value = self.parse_expr()?;
-        self.expect_newline()?;
+        self.expect_statement_terminator()?;
 
         Ok(Stmt::Assign(AssignStmt {
             mutable,
@@ -745,6 +818,24 @@ impl Parser {
         })
     }
 
+    fn parse_match_expr_arm(&mut self) -> Result<MatchExprArm> {
+        let span = self.expect_keyword(TokenKind::KwCase)?.span;
+        let pattern = self.parse_pattern()?;
+        self.expect_simple(TokenKind::Colon)?;
+        let value = self.parse_expr()?;
+        if self.eat_simple(&TokenKind::Newline).is_none()
+            && !self.at_simple(&TokenKind::Dedent)
+            && !self.at_eof()
+        {
+            return Err(self.error_here("expected Newline"));
+        }
+        Ok(MatchExprArm {
+            pattern,
+            value,
+            span,
+        })
+    }
+
     fn parse_pattern(&mut self) -> Result<Pattern> {
         let span = self.current_span();
         if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "_") {
@@ -766,6 +857,13 @@ impl Parser {
                     span,
                 }));
             }
+            TokenKind::FloatLiteral(value) => {
+                self.bump();
+                return Ok(Pattern::Literal(LiteralPattern {
+                    kind: LiteralPatternKind::Float(value),
+                    span,
+                }));
+            }
             TokenKind::IntLiteral(value) => {
                 self.bump();
                 return Ok(Pattern::Literal(LiteralPattern {
@@ -775,24 +873,32 @@ impl Parser {
             }
             TokenKind::Minus => {
                 let minus = self.bump();
-                let TokenKind::IntLiteral(value) = self.current_kind().clone() else {
-                    return Err(Diagnostic::at(
-                        minus.span,
-                        "match patterns currently support enum variants, `_`, and boolean/string/integer literals",
-                    ));
-                };
-                self.bump();
-                let negative =
-                    IntegerValue::from_literal(value)
-                        .checked_neg()
-                        .ok_or_else(|| {
-                            Diagnostic::at(
+                let kind = match self.current_kind().clone() {
+                    TokenKind::IntLiteral(value) => {
+                        self.bump();
+                        let negative = IntegerValue::from_literal(value)
+                            .checked_neg()
+                            .ok_or_else(|| {
+                                Diagnostic::at(
+                                    minus.span,
+                                    "negative integer literal in pattern is outside the supported range",
+                                )
+                            })?;
+                        LiteralPatternKind::Int(negative)
+                    }
+                    TokenKind::FloatLiteral(value) => {
+                        self.bump();
+                        LiteralPatternKind::Float(-value)
+                    }
+                    _ => {
+                        return Err(Diagnostic::at(
                             minus.span,
-                            "negative integer literal in pattern is outside the supported range",
-                        )
-                        })?;
+                            "match patterns currently support enum variants, `_`, and boolean/string/integer/float literals",
+                        ));
+                    }
+                };
                 return Ok(Pattern::Literal(LiteralPattern {
-                    kind: LiteralPatternKind::Int(negative),
+                    kind,
                     span: minus.span,
                 }));
             }
@@ -801,12 +907,24 @@ impl Parser {
         if !matches!(self.current_kind(), TokenKind::Identifier(_)) {
             return Err(Diagnostic::at(
                 span,
-                "match patterns currently support enum variants, `_`, and boolean/string/integer literals",
+                "match patterns currently support enum variants, `_`, and boolean/string/integer/float literals",
             ));
         }
         let mut segments = vec![self.expect_identifier()?];
         while self.eat_simple(&TokenKind::Dot).is_some() {
             segments.push(self.expect_identifier()?);
+        }
+        if segments.len() == 1
+            && !matches!(self.current_kind(), TokenKind::LParen)
+            && segments[0]
+                .chars()
+                .next()
+                .is_some_and(|ch| ch == '_' || ch.is_ascii_lowercase())
+        {
+            return Ok(Pattern::Binding(BindingPattern {
+                name: segments.remove(0),
+                span,
+            }));
         }
         let variant_name = segments
             .pop()
@@ -816,17 +934,25 @@ impl Parser {
         } else {
             Some(segments.join("."))
         };
-        let binding = if self.eat_simple(&TokenKind::LParen).is_some() {
-            let name = self.expect_identifier()?;
+        let subpatterns = if self.eat_simple(&TokenKind::LParen).is_some() {
+            let mut subpatterns = Vec::new();
+            if !self.at_simple(&TokenKind::RParen) {
+                loop {
+                    subpatterns.push(self.parse_pattern()?);
+                    if self.eat_simple(&TokenKind::Comma).is_none() {
+                        break;
+                    }
+                }
+            }
             self.expect_simple(TokenKind::RParen)?;
-            Some(name)
+            subpatterns
         } else {
-            None
+            Vec::new()
         };
         Ok(Pattern::Variant(VariantPattern {
             enum_name,
             variant_name,
-            binding,
+            subpatterns,
             span,
         }))
     }
@@ -865,7 +991,7 @@ impl Parser {
     fn parse_expr_stmt(&mut self) -> Result<Stmt> {
         let span = self.current_span();
         let expr = self.parse_expr()?;
-        self.expect_newline()?;
+        self.expect_statement_terminator()?;
         Ok(Stmt::Expr(ExprStmt { expr, span }))
     }
 
@@ -1103,6 +1229,35 @@ impl Parser {
     }
 
     fn parse_prefix(&mut self) -> Result<Expr> {
+        if let Some(token) = self.eat_simple(&TokenKind::KwMatch) {
+            let borrow_mode = if self.eat_simple(&TokenKind::KwBorrow).is_some() {
+                if self.eat_simple(&TokenKind::KwMut).is_some() {
+                    Some(ReceiverKind::BorrowMut)
+                } else {
+                    Some(ReceiverKind::Borrow)
+                }
+            } else {
+                None
+            };
+            let scrutinee = self.parse_expr()?;
+            self.expect_simple(TokenKind::Colon)?;
+            self.expect_newline()?;
+            self.expect_simple(TokenKind::Indent)?;
+            let mut arms = Vec::new();
+            while !self.at_simple(&TokenKind::Dedent) {
+                arms.push(self.parse_match_expr_arm()?);
+            }
+            self.expect_simple(TokenKind::Dedent)?;
+            return Ok(Expr {
+                kind: ExprKind::Match {
+                    scrutinee: Box::new(scrutinee),
+                    borrow_mode,
+                    arms,
+                },
+                span: token.span,
+            });
+        }
+
         if let Some(token) = self.eat_simple(&TokenKind::KwTry) {
             let value = self.parse_prefix()?;
             return Ok(Expr {
@@ -1725,12 +1880,23 @@ impl Parser {
         self.expect_simple(TokenKind::Newline)
     }
 
+    fn expect_statement_terminator(&mut self) -> Result<()> {
+        if self.eat_simple(&TokenKind::Newline).is_some()
+            || self.at_simple(&TokenKind::Dedent)
+            || self.at_eof()
+        {
+            Ok(())
+        } else {
+            Err(self.error_here("expected Newline"))
+        }
+    }
+
     fn expect_identifier(&mut self) -> Result<String> {
         let token = self.bump();
-        if let TokenKind::Identifier(name) = token.kind {
-            Ok(name)
-        } else {
-            Err(Diagnostic::at(token.span, "expected identifier"))
+        match token.kind {
+            TokenKind::Identifier(name) => Ok(name),
+            TokenKind::KwFrom => Ok("from".to_string()),
+            _ => Err(Diagnostic::at(token.span, "expected identifier")),
         }
     }
 
@@ -1738,6 +1904,7 @@ impl Parser {
         let token = self.bump();
         match token.kind {
             TokenKind::Identifier(name) => Ok(name),
+            TokenKind::KwFrom => Ok("from".to_string()),
             TokenKind::KwSpawn => Ok("spawn".to_string()),
             other => Err(Diagnostic::at(
                 token.span,
@@ -1903,6 +2070,16 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
         ExprKind::Index { object, index } => {
             offset_expr_span(object, line, column_offset);
             offset_expr_span(index, line, column_offset);
+        }
+        ExprKind::Match {
+            scrutinee, arms, ..
+        } => {
+            offset_expr_span(scrutinee, line, column_offset);
+            for arm in arms {
+                arm.span.line = line;
+                arm.span.column += column_offset;
+                offset_expr_span(&mut arm.value, line, column_offset);
+            }
         }
         ExprKind::Name(_)
         | ExprKind::Int(_)

@@ -412,7 +412,7 @@ impl<'a> NativeCodegen<'a> {
             value_type_matches => ("aurora_direct_value_type_matches", [types::I64, types::I64, types::I64], Some(types::I64)),
             enum_variant => ("aurora_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_matches => ("aurora_direct_variant_matches", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            variant_payload => ("aurora_direct_variant_payload", [types::I64], Some(types::I64)),
+            variant_payload => ("aurora_direct_variant_payload", [types::I64, types::I64], Some(types::I64)),
             instance_empty => ("aurora_direct_instance_empty", [types::I64, types::I64], Some(types::I64)),
             instance_get_field => ("aurora_direct_instance_get_field", [types::I64, types::I64, types::I64], Some(types::I64)),
             instance_set_field => ("aurora_direct_instance_set_field", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1843,11 +1843,11 @@ impl<'a> FunctionCompiler<'a> {
             Rvalue::EnumVariant {
                 enum_name,
                 variant_name,
-                payload,
-            } => self.compile_enum_variant(enum_name, variant_name, payload.as_ref()),
-            Rvalue::VariantPayload { scrutinee } => {
+                payloads,
+            } => self.compile_enum_variant(enum_name, variant_name, payloads),
+            Rvalue::VariantPayload { scrutinee, index } => {
                 let scrutinee = self.load_operand(scrutinee)?;
-                self.compile_variant_payload(scrutinee)
+                self.compile_variant_payload(scrutinee, *index)
             }
             Rvalue::Spawn {
                 detached,
@@ -3268,11 +3268,19 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         enum_name: &str,
         variant_name: &str,
-        payload: Option<&Operand>,
+        payloads: &[Operand],
     ) -> std::result::Result<ValueRef, String> {
         let (enum_ptr, enum_len) = self.string_constant(enum_name.as_bytes())?;
         let (variant_ptr, variant_len) = self.string_constant(variant_name.as_bytes())?;
-        let payload = if let Some(payload) = payload {
+        if payloads.len() > 1 {
+            return Err(format!(
+                "direct backend does not yet support enum variants with more than one payload (`{}.{}` has {})",
+                enum_name,
+                variant_name,
+                payloads.len()
+            ));
+        }
+        let payload = if let Some(payload) = payloads.first() {
             let loaded = self.load_operand(payload)?;
             self.ensure_opaque(loaded)?.values[0]
         } else {
@@ -3306,12 +3314,14 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_variant_payload(
         &mut self,
         scrutinee: ValueRef,
+        index: usize,
     ) -> std::result::Result<ValueRef, String> {
         let scrutinee = self.ensure_opaque(scrutinee)?;
+        let index = self.builder.ins().iconst(types::I64, index as i64);
         let inst = self
             .builder
             .ins()
-            .call(self.variant_payload, &[scrutinee.values[0]]);
+            .call(self.variant_payload, &[scrutinee.values[0], index]);
         Ok(ValueRef {
             values: self.builder.inst_results(inst).to_vec(),
             ty: DirectType::Opaque(Type::named("Unknown")),
@@ -3333,7 +3343,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.ins().brif(ok, ok_block, &[], err_block, &[]);
 
         self.builder.switch_to_block(ok_block);
-        let payload = self.compile_variant_payload(value.clone())?;
+        let payload = self.compile_variant_payload(value.clone(), 0)?;
         let coerced = self.coerce_value(payload, &target_ty)?;
         self.store_place(target, coerced)?;
         self.builder.ins().jump(join_block, &[]);
@@ -5003,7 +5013,7 @@ impl<'a> FunctionCompiler<'a> {
                                 .brif(is_closed, closed_block, &[], value_block, &[]);
 
                             self.builder.switch_to_block(closed_block);
-                            let none_value = self.compile_enum_variant("Option", "None", None)?;
+                            let none_value = self.compile_enum_variant("Option", "None", &[])?;
                             self.store_place(
                                 binding,
                                 ValueRef {
@@ -5564,12 +5574,13 @@ fn validate_rvalue(
         )
         .map(|_| ()),
         Rvalue::Member { object, .. } => validate_operand(object),
-        Rvalue::EnumVariant { payload, .. } => payload
-            .as_ref()
-            .map(validate_operand)
-            .transpose()
-            .map(|_| ()),
-        Rvalue::VariantPayload { scrutinee } => validate_operand(scrutinee),
+        Rvalue::EnumVariant { payloads, .. } => {
+            for payload in payloads {
+                validate_operand(payload)?;
+            }
+            Ok(())
+        }
+        Rvalue::VariantPayload { scrutinee, .. } => validate_operand(scrutinee),
         Rvalue::Try { value } => validate_operand(value),
         Rvalue::Spawn {
             task_group, args, ..
@@ -5819,8 +5830,8 @@ fn infer_rvalue_type(
             }
         }
         Rvalue::EnumVariant { enum_name, .. } => Some(DirectType::Opaque(Type::named(enum_name))),
-        Rvalue::VariantPayload { scrutinee } => {
-            infer_variant_payload_type(scrutinee, variable_types, classes)
+        Rvalue::VariantPayload { scrutinee, index } => {
+            infer_variant_payload_type(scrutinee, *index, variable_types, classes)
                 .or_else(|| Some(DirectType::Opaque(Type::named("Unknown"))))
         }
         Rvalue::Try { value } => infer_try_type(value, variable_types, classes)
@@ -6097,6 +6108,7 @@ fn builtin_opaque_member_return_type(
 
 fn infer_variant_payload_type(
     scrutinee: &Operand,
+    index: usize,
     variable_types: &HashMap<String, DirectType>,
     classes: &HashMap<String, MirClass>,
 ) -> Option<DirectType> {
@@ -6104,10 +6116,10 @@ fn infer_variant_payload_type(
     let DirectType::Opaque(Type::Named(name, args)) = scrutinee_ty else {
         return None;
     };
-    let payload_ty = match (name.as_str(), args.as_slice()) {
-        ("Option", [inner]) => inner.clone(),
-        ("Result", [ok, _]) => ok.clone(),
-        ("SendError", [inner]) => inner.clone(),
+    let payload_ty = match (name.as_str(), args.as_slice(), index) {
+        ("Option", [inner], 0) => inner.clone(),
+        ("Result", [ok, _], 0) => ok.clone(),
+        ("SendError", [inner], 0) => inner.clone(),
         _ => return None,
     };
     direct_type(&payload_ty, classes)

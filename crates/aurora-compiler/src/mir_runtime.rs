@@ -10,14 +10,14 @@ use std::time::{Duration as StdDuration, Instant};
 use crate::ast::UnaryOp;
 use crate::diag::{Diagnostic, Result};
 use crate::integer::IntegerValue;
-use crate::interpreter::{
-    cast_numeric_value, CancellationContext, ChannelValue, EnumVariantValue, InstanceValue,
-    MapValue, RangeValue, RunOutput, SetValue, TaskGroupValue, TaskValue, TryRecvResult, Value,
-    VecValue,
-};
 use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod, MirModule,
     MirParam, MirReceiverKind, MirSelectKind, MirTraitImpl, Operand, Rvalue, Terminator,
+};
+use crate::runtime_value::{
+    cast_numeric_value, option_none, option_some, result_err, result_ok, send_error_closed,
+    CancellationContext, ChannelValue, EnumVariantValue, InstanceValue, MapValue, RangeValue,
+    RunOutput, SetValue, TaskGroupValue, TaskValue, TryRecvResult, Value, VecValue,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -168,6 +168,7 @@ struct MirRuntime {
     stdout: Arc<Mutex<String>>,
     cancellation: CancellationContext,
     call_depth: usize,
+    return_type_stack: Vec<Type>,
 }
 
 struct CallOutcome {
@@ -312,6 +313,7 @@ impl MirRuntime {
             stdout,
             cancellation,
             call_depth: 0,
+            return_type_stack: Vec::new(),
         }
     }
 
@@ -335,6 +337,81 @@ impl MirRuntime {
             }
         }
         None
+    }
+
+    fn find_from_trait_impl_method(
+        &self,
+        source_ty: &Type,
+        target_ty: &Type,
+    ) -> Option<MirFunction> {
+        for trait_impl in &self.trait_impls {
+            if trait_impl.trait_name != "From" || trait_impl.trait_args.len() != 1 {
+                continue;
+            }
+            let mut type_params = std::collections::BTreeSet::new();
+            collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
+            for trait_arg in &trait_impl.trait_args {
+                collect_type_params_from_type(trait_arg, &mut type_params);
+            }
+            let mut substitutions = HashMap::new();
+            if !crate::sema::type_pattern_matches(
+                &trait_impl.for_type,
+                target_ty,
+                &type_params,
+                &mut substitutions,
+            ) {
+                continue;
+            }
+            if crate::sema::substitute_type(&trait_impl.trait_args[0], &substitutions) != *source_ty
+            {
+                continue;
+            }
+            for method in &trait_impl.methods {
+                if method.name == "from" {
+                    if let Some(function) = self.functions.get(&method.function_name) {
+                        return Some(function.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn current_return_type(&self) -> Option<&Type> {
+        self.return_type_stack.last()
+    }
+
+    fn convert_try_error_via_from(&mut self, payload: Value, source_ty: &Type) -> Result<Value> {
+        let Some(Type::Named(return_name, return_args)) = self.current_return_type() else {
+            return Err(Diagnostic::new(
+                "MIR `try` is only allowed inside a function returning `Result`",
+            ));
+        };
+        if return_name != "Result" || return_args.len() != 2 {
+            return Err(Diagnostic::new(
+                "MIR `try` is only allowed inside a function returning `Result`",
+            ));
+        }
+        let target_error_ty = return_args[1].clone();
+        if source_ty == &target_error_ty {
+            return Ok(payload);
+        }
+        let Some(function) = self.find_from_trait_impl_method(source_ty, &target_error_ty) else {
+            return Err(Diagnostic::new(format!(
+                "`try` error type `{}` does not match enclosing `Result` error type `{}`",
+                source_ty, target_error_ty
+            )));
+        };
+        let outcome = self.call_function(
+            &function,
+            None,
+            vec![EvaluatedMirArg {
+                name: None,
+                value: payload,
+                writeback_place: None,
+            }],
+        )?;
+        Ok(outcome.value)
     }
 
     fn find_trait_impl_method_for_class_name(
@@ -401,7 +478,7 @@ impl MirRuntime {
             Value::EnumVariant(variant) => match (
                 variant.enum_name.as_str(),
                 variant.variant_name.as_str(),
-                variant.payload.as_deref(),
+                variant.single_payload(),
             ) {
                 ("Option", "Some", Some(payload)) => Self::infer_value_type(payload)
                     .map(|inner| Type::Named("Option".to_string(), vec![inner])),
@@ -501,6 +578,9 @@ impl MirRuntime {
         span: Option<crate::diag::Span>,
     ) -> Result<Value> {
         let coerced = match (&value, ty) {
+            (Value::Unit, Type::Named(name, args)) if name == "Option" && args.len() == 1 => {
+                option_none()
+            }
             (Value::Int(_), Type::Named(name, _))
                 if name.starts_with("int") || name.starts_with("uint") =>
             {
@@ -595,7 +675,11 @@ impl MirRuntime {
                 env.define_typed(&param.name, ty, value);
             }
 
-            let value = self.execute_function(function, &mut env)?;
+            let return_type = substitute_type(&function.return_type, &substitutions);
+            self.return_type_stack.push(return_type);
+            let value_result = self.execute_function(function, &mut env);
+            self.return_type_stack.pop();
+            let value = value_result?;
             let updated_receiver = if function.receiver == Some(MirReceiverKind::BorrowMut) {
                 Some(env.read_place("self")?)
             } else {
@@ -959,15 +1043,22 @@ impl MirRuntime {
                         "MIR `try` requires a `Result` value at runtime",
                     ));
                 }
-                match (variant.variant_name.as_str(), variant.payload) {
-                    ("Ok", Some(payload)) => Ok(RvalueOutcome::Value(*payload)),
-                    ("Err", Some(payload)) => Ok(RvalueOutcome::Return(Value::EnumVariant(
-                        EnumVariantValue {
-                            enum_name: "Result".to_string(),
-                            variant_name: "Err".to_string(),
-                            payload: Some(payload),
-                        },
-                    ))),
+                match (variant.variant_name.as_str(), variant.payloads.as_slice()) {
+                    ("Ok", [payload]) => Ok(RvalueOutcome::Value(payload.clone())),
+                    ("Err", [payload]) => {
+                        let source_ty = self
+                            .infer_runtime_value_type(payload)
+                            .unwrap_or_else(|| Type::named("Unknown"));
+                        let payload =
+                            self.convert_try_error_via_from(payload.clone(), &source_ty)?;
+                        Ok(RvalueOutcome::Return(Value::EnumVariant(
+                            EnumVariantValue {
+                                enum_name: "Result".to_string(),
+                                variant_name: "Err".to_string(),
+                                payloads: vec![payload],
+                            },
+                        )))
+                    }
                     _ => Err(Diagnostic::new(
                         "MIR `try` encountered an invalid `Result` payload at runtime",
                     )),
@@ -1062,17 +1153,16 @@ impl MirRuntime {
             Rvalue::EnumVariant {
                 enum_name,
                 variant_name,
-                payload,
+                payloads,
             } => Ok(RvalueOutcome::Value(Value::EnumVariant(EnumVariantValue {
                 enum_name: enum_name.clone(),
                 variant_name: variant_name.clone(),
-                payload: payload
-                    .as_ref()
+                payloads: payloads
+                    .iter()
                     .map(|payload| self.evaluate_operand(payload, env))
-                    .transpose()?
-                    .map(Box::new),
+                    .collect::<Result<Vec<_>>>()?,
             }))),
-            Rvalue::VariantPayload { scrutinee } => {
+            Rvalue::VariantPayload { scrutinee, index } => {
                 let scrutinee = self.evaluate_operand(scrutinee, env)?;
                 let Value::EnumVariant(variant) = scrutinee else {
                     return Err(Diagnostic::new(format!(
@@ -1080,10 +1170,10 @@ impl MirRuntime {
                         scrutinee.render()
                     )));
                 };
-                let payload = variant.payload.map(|payload| *payload).ok_or_else(|| {
+                let payload = variant.payloads.get(*index).cloned().ok_or_else(|| {
                     Diagnostic::new(format!(
-                        "enum variant `{}.{}` does not carry a payload",
-                        variant.enum_name, variant.variant_name
+                        "enum variant `{}.{}` does not carry a payload at index {}",
+                        variant.enum_name, variant.variant_name, index
                     ))
                 })?;
                 Ok(RvalueOutcome::Value(payload))
@@ -2734,46 +2824,6 @@ impl MirRuntime {
 enum BlockOutcome {
     Return(Value),
     Goto(String),
-}
-
-fn option_some(value: Value) -> Value {
-    Value::EnumVariant(EnumVariantValue {
-        enum_name: "Option".to_string(),
-        variant_name: "Some".to_string(),
-        payload: Some(Box::new(value)),
-    })
-}
-
-fn option_none() -> Value {
-    Value::EnumVariant(EnumVariantValue {
-        enum_name: "Option".to_string(),
-        variant_name: "None".to_string(),
-        payload: None,
-    })
-}
-
-fn result_ok(value: Value) -> Value {
-    Value::EnumVariant(EnumVariantValue {
-        enum_name: "Result".to_string(),
-        variant_name: "Ok".to_string(),
-        payload: Some(Box::new(value)),
-    })
-}
-
-fn result_err(value: Value) -> Value {
-    Value::EnumVariant(EnumVariantValue {
-        enum_name: "Result".to_string(),
-        variant_name: "Err".to_string(),
-        payload: Some(Box::new(value)),
-    })
-}
-
-fn send_error_closed(value: Value) -> Value {
-    Value::EnumVariant(EnumVariantValue {
-        enum_name: "SendError".to_string(),
-        variant_name: "Closed".to_string(),
-        payload: Some(Box::new(value)),
-    })
 }
 
 fn evaluate_named_args(args: &[MirArg], env: &Env) -> Result<Vec<EvaluatedMirArg>> {

@@ -140,6 +140,29 @@ The bootstrap compiler supports functions returning:
 - `Task[T]`
 - `None`
 
+Borrowed returns are also supported when the source is explicit:
+
+```python
+class User:
+    name: String
+
+def name_ref(user: borrow User) -> borrow[user] String:
+    return user.name
+```
+
+The same syntax works for methods as `-> borrow[self] T`.
+
+When multiple borrowed parameters share the same lifetime, you can give them a shared borrow label and return that label explicitly:
+
+```python
+def choose_nonempty(left: borrow[shared] String, right: borrow[shared] String) -> borrow[shared] String:
+    if left.len() > 0:
+        return left
+    return right
+```
+
+See [examples/basics/borrowed_returns.au](../examples/basics/borrowed_returns.au) and [examples/basics/borrowed_lifetime_labels.au](../examples/basics/borrowed_lifetime_labels.au).
+
 ## Generic Functions
 
 Functions can be generic over type parameters:
@@ -153,5 +176,5 @@ The compiler infers type arguments from the arguments you pass and, when needed,
 
 ## Current Limits
 
-- borrowed return types on ordinary functions are not yet supported
-- explicit lifetime syntax on function signatures is not yet supported
+- borrowed return values still require an explicit source or borrow label such as `borrow[self]`, `borrow[param]`, or `borrow[shared]`
+- broader lifetime inference without an explicit source/label is still outside the bootstrap compiler

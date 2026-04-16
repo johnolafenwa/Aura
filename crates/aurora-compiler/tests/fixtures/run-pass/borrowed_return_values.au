@@ -1,0 +1,21 @@
+class User:
+    name: String
+
+def name_ref(user: borrow User) -> borrow[user] String:
+    return user.name
+
+class Holder:
+    value: String
+
+    def value_ref(borrow self) -> borrow[self] String:
+        return self.value
+
+def print_name(name: borrow String):
+    print(name)
+
+def main():
+    user = User(name="aurora")
+    holder = Holder(value="engine")
+    print(name_ref(user))
+    print(holder.value_ref())
+    print_name(name_ref(user))

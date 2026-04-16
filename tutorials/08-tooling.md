@@ -8,7 +8,7 @@ The `aura` CLI is the primary interface for working with Aurora programs:
 
 ```bash
 cargo run -p aura -- check myfile.au     # type-check without running
-cargo run -p aura -- run myfile.au       # execute through the interpreter
+cargo run -p aura -- run myfile.au       # execute through the MIR runtime
 cargo run -p aura -- build -o out myfile.au  # compile to a native binary
 ```
 

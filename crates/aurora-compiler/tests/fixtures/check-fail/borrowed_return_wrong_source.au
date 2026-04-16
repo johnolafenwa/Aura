@@ -1,0 +1,2 @@
+def take_left(left: borrow String, right: borrow String) -> borrow[left] String:
+    return right

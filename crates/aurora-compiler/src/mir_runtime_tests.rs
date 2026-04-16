@@ -6,11 +6,11 @@ use super::{
 };
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
-use crate::interpreter::{ChannelValue, EnumVariantValue, InstanceValue, RangeValue, Value};
 use crate::mir::{
     BasicBlock, Instruction, MirArg, MirClass, MirFunction, MirLocalType, MirMatchArm, MirMethod,
     MirModule, MirParam, MirSelectArm, MirSelectKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
+use crate::runtime_value::{ChannelValue, EnumVariantValue, InstanceValue, RangeValue, Value};
 use crate::sema::Type;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
@@ -750,6 +750,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
     );
     runtime.trait_impls.push(MirTraitImpl {
         trait_name: "Label".to_string(),
+        trait_args: Vec::new(),
         for_type: Type::named("Status"),
         methods: vec![MirMethod {
             name: "label".to_string(),
@@ -774,7 +775,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
     env.define_typed(
         "values",
         Type::Named("Vec".to_string(), vec![Type::named("int32")]),
-        Value::Vec(crate::interpreter::VecValue {
+        Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![
                 Value::Int(IntegerValue::from_signed(1)),
@@ -788,7 +789,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             "Map".to_string(),
             vec![Type::named("String"), Type::named("int32")],
         ),
-        Value::Map(crate::interpreter::MapValue {
+        Value::Map(crate::runtime_value::MapValue {
             key_type: Type::named("String"),
             value_type: Type::named("int32"),
             entries: vec![(
@@ -800,7 +801,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
     env.define_typed(
         "seen",
         Type::Named("Set".to_string(), vec![Type::named("String")]),
-        Value::Set(crate::interpreter::SetValue {
+        Value::Set(crate::runtime_value::SetValue {
             element_type: Type::named("String"),
             elements: vec![Value::String("ready".to_string())],
         }),
@@ -836,7 +837,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".to_string(),
             variant_name: "Done".to_string(),
-            payload: None,
+            payloads: Vec::new(),
         }),
     );
     env.define_typed("unit", Type::Unit, Value::Unit);
@@ -1172,6 +1173,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
     );
     runtime.trait_impls.push(MirTraitImpl {
         trait_name: "Render".to_string(),
+        trait_args: Vec::new(),
         for_type: Type::named("Status"),
         methods: vec![MirMethod {
             name: "render".to_string(),
@@ -1191,7 +1193,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
     env.define_typed(
         "values",
         Type::Named("Vec".to_string(), vec![Type::named("int32")]),
-        Value::Vec(crate::interpreter::VecValue {
+        Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_signed(1))],
         }),
@@ -1226,7 +1228,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".to_string(),
             variant_name: "Ready".to_string(),
-            payload: None,
+            payloads: Vec::new(),
         }),
     );
 
@@ -1517,6 +1519,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
             trait_impls: vec![
                 MirTraitImpl {
                     trait_name: "Render".to_string(),
+                    trait_args: Vec::new(),
                     for_type: Type::Named(
                         "Box".to_string(),
                         vec![Type::TypeParam("T".to_string())],
@@ -1525,16 +1528,19 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
                 },
                 MirTraitImpl {
                     trait_name: "Render".to_string(),
+                    trait_args: Vec::new(),
                     for_type: Type::named("Widget"),
                     methods: vec![render_method.clone()],
                 },
                 MirTraitImpl {
                     trait_name: "Preview".to_string(),
+                    trait_args: Vec::new(),
                     for_type: Type::named("Widget"),
                     methods: vec![render_method.clone()],
                 },
                 MirTraitImpl {
                     trait_name: "Display".to_string(),
+                    trait_args: Vec::new(),
                     for_type: Type::named("Widget"),
                     methods: vec![MirMethod {
                         name: "display".to_string(),
@@ -1577,21 +1583,21 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
         .is_none());
 
     assert_eq!(
-        MirRuntime::infer_value_type(&Value::Vec(crate::interpreter::VecValue {
+        MirRuntime::infer_value_type(&Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_signed(1))],
         })),
         Some(Type::Named("Vec".to_string(), vec![Type::named("int32")]))
     );
     assert_eq!(
-        MirRuntime::infer_value_type(&Value::Set(crate::interpreter::SetValue {
+        MirRuntime::infer_value_type(&Value::Set(crate::runtime_value::SetValue {
             element_type: Type::named("String"),
             elements: vec![Value::String("ready".to_string())],
         })),
         Some(Type::Named("Set".to_string(), vec![Type::named("String")]))
     );
     assert_eq!(
-        MirRuntime::infer_value_type(&Value::Map(crate::interpreter::MapValue {
+        MirRuntime::infer_value_type(&Value::Map(crate::runtime_value::MapValue {
             key_type: Type::named("String"),
             value_type: Type::named("int32"),
             entries: vec![(
@@ -1698,7 +1704,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     env.define_typed(
         "values",
         Type::Named("Vec".to_string(), vec![Type::named("int32")]),
-        Value::Vec(crate::interpreter::VecValue {
+        Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![
                 Value::Int(IntegerValue::from_signed(1)),
@@ -1709,7 +1715,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     env.define_typed(
         "other",
         Type::Named("Vec".to_string(), vec![Type::named("int32")]),
-        Value::Vec(crate::interpreter::VecValue {
+        Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_signed(3))],
         }),
@@ -1717,7 +1723,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     env.define_typed(
         "texts",
         Type::Named("Vec".to_string(), vec![Type::named("String")]),
-        Value::Vec(crate::interpreter::VecValue {
+        Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("String"),
             elements: vec![
                 Value::String("one".to_string()),
@@ -1731,7 +1737,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             "Map".to_string(),
             vec![Type::named("String"), Type::named("int32")],
         ),
-        Value::Map(crate::interpreter::MapValue {
+        Value::Map(crate::runtime_value::MapValue {
             key_type: Type::named("String"),
             value_type: Type::named("int32"),
             entries: vec![(
@@ -1746,7 +1752,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             "Map".to_string(),
             vec![Type::named("String"), Type::named("int32")],
         ),
-        Value::Map(crate::interpreter::MapValue {
+        Value::Map(crate::runtime_value::MapValue {
             key_type: Type::named("String"),
             value_type: Type::named("int32"),
             entries: vec![(
@@ -1758,7 +1764,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     env.define_typed(
         "flags",
         Type::Named("Set".to_string(), vec![Type::named("String")]),
-        Value::Set(crate::interpreter::SetValue {
+        Value::Set(crate::runtime_value::SetValue {
             element_type: Type::named("String"),
             elements: vec![Value::String("ready".to_string())],
         }),
@@ -2484,7 +2490,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
 
     let vec_missing_place = runtime
         .evaluate_vec_method(
-            crate::interpreter::VecValue {
+            crate::runtime_value::VecValue {
                 element_type: Type::named("int32"),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))],
             },
@@ -2541,7 +2547,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     ] {
         let error = runtime
             .evaluate_vec_method(
-                crate::interpreter::VecValue {
+                crate::runtime_value::VecValue {
                     element_type: Type::named("int32"),
                     elements: vec![Value::Int(IntegerValue::from_signed(1))],
                 },
@@ -2560,7 +2566,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
 
     let internal_index_oob = runtime
         .evaluate_vec_method(
-            crate::interpreter::VecValue {
+            crate::runtime_value::VecValue {
                 element_type: Type::named("int32"),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))],
             },
@@ -2579,7 +2585,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
 
     let internal_set_oob = runtime
         .evaluate_vec_method(
-            crate::interpreter::VecValue {
+            crate::runtime_value::VecValue {
                 element_type: Type::named("int32"),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))],
             },
@@ -2599,7 +2605,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
 
     let map_missing_place = runtime
         .evaluate_map_method(
-            crate::interpreter::MapValue {
+            crate::runtime_value::MapValue {
                 key_type: Type::named("String"),
                 value_type: Type::named("int32"),
                 entries: vec![],
@@ -2616,7 +2622,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
 
     let set_missing_place = runtime
         .evaluate_set_method(
-            crate::interpreter::SetValue {
+            crate::runtime_value::SetValue {
                 element_type: Type::named("String"),
                 elements: vec![],
             },
@@ -2986,10 +2992,10 @@ fn mir_runtime_terminator_and_cleanup_helpers_cover_branch_and_error_paths() {
     env.define_typed(
         "status",
         Type::named("Status"),
-        Value::EnumVariant(crate::interpreter::EnumVariantValue {
+        Value::EnumVariant(crate::runtime_value::EnumVariantValue {
             enum_name: "Status".to_string(),
             variant_name: "Ready".to_string(),
-            payload: None,
+            payloads: Vec::new(),
         }),
     );
     match runtime
@@ -3581,7 +3587,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Result".to_string(),
             variant_name: "Ok".to_string(),
-            payload: None,
+            payloads: Vec::new(),
         }),
     );
     let invalid_payload = match runtime.evaluate_rvalue(
@@ -3600,6 +3606,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
     let non_enum_payload = match runtime.evaluate_rvalue(
         &Rvalue::VariantPayload {
             scrutinee: Operand::Int(1),
+            index: 0,
         },
         &mut env,
     ) {
@@ -3614,12 +3621,13 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".to_string(),
             variant_name: "Ready".to_string(),
-            payload: None,
+            payloads: Vec::new(),
         }),
     );
     let no_payload = match runtime.evaluate_rvalue(
         &Rvalue::VariantPayload {
             scrutinee: Operand::Place("status".to_string()),
+            index: 0,
         },
         &mut env,
     ) {
@@ -3743,7 +3751,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
     );
     assert_eq!(
         MirRuntime::infer_value_type(&Value::ModuleNamespace(
-            crate::interpreter::ModuleNamespaceValue {
+            crate::runtime_value::ModuleNamespaceValue {
                 path: "pkg.tools".to_string(),
             },
         )),

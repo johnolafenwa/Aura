@@ -21,6 +21,8 @@ fn dummy_function(name: &str) -> FunctionDecl {
         type_param_bounds: BTreeMap::new(),
         receiver: Some(ReceiverKind::Borrow),
         params: vec![],
+        return_passing: ReceiverKind::Value,
+        return_borrow_source: None,
         return_type: dummy_type("None"),
         body: vec![],
         span: Span::new(1, 1),

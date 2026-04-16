@@ -4,11 +4,18 @@ Traits define shared behavior that different types can implement. If you know Py
 
 ## Declaring A Trait
 
-A trait lists method signatures without bodies:
+A trait lists method signatures. Methods may omit a body or provide a default implementation:
 
 ```python
 trait Greeter:
     def greet(borrow self) -> String
+```
+
+```python
+trait Named:
+    def name(borrow self) -> String
+    def label(borrow self) -> String:
+        return "name=" + self.name()
 ```
 
 Empty marker traits use `pass`:
@@ -166,6 +173,10 @@ Aurora supports operator overloading through traits. When you implement the righ
 | `a * b` | `Mul[Rhs, Out]` | `mul(borrow self, rhs: Rhs) -> Out` |
 | `a / b` | `Div[Rhs, Out]` | `div(borrow self, rhs: Rhs) -> Out` |
 | `a % b` | `Mod[Rhs, Out]` | `mod(borrow self, rhs: Rhs) -> Out` |
+| `a < b` | `Ord[Rhs]` | `lt(borrow self, rhs: Rhs) -> bool` |
+| `a <= b` | `Ord[Rhs]` | `le(borrow self, rhs: Rhs) -> bool` |
+| `a > b` | `Ord[Rhs]` | `gt(borrow self, rhs: Rhs) -> bool` |
+| `a >= b` | `Ord[Rhs]` | `ge(borrow self, rhs: Rhs) -> bool` |
 | `-a` | `Neg[Out]` | `neg(borrow self) -> Out` |
 | `not a` | `Not[Out]` | `not(borrow self) -> Out` |
 
@@ -194,11 +205,32 @@ def add_all[T: Add[T, T]](left: T, right: T) -> T:
 
 See [examples/traits/operator_traits.au](../examples/traits/operator_traits.au).
 
+Ordering traits work the same way for `<`, `<=`, `>`, and `>=`:
+
+```python
+trait Ord[Rhs]:
+    def lt(borrow self, rhs: Rhs) -> bool
+    def le(borrow self, rhs: Rhs) -> bool
+    def gt(borrow self, rhs: Rhs) -> bool
+    def ge(borrow self, rhs: Rhs) -> bool
+```
+
+This lets you write generic ordered code such as:
+
+```python
+def choose_smaller[T: Ord[T]](left: T, right: T) -> T:
+    if left < right:
+        return left
+    return right
+```
+
+See [examples/traits/ordering_traits.au](../examples/traits/ordering_traits.au).
+
 ## Current Limits
 
 The implemented trait surface supports:
 
-- trait declarations (signature-only methods, marker traits with `pass`)
+- trait declarations (signature-only methods, default methods, marker traits with `pass`)
 - `impl Trait for Type:` blocks
 - specialized impls like `impl Trait for GenericType[ConcreteType]:`
 - generic trait declarations and generic impl headers
@@ -207,4 +239,4 @@ The implemented trait surface supports:
 - multiple bounds with `T: A + B`
 - direct trait-method calls on concrete types
 - associated methods without `self`
-- operator traits for `+`, `-`, `*`, `/`, `%`, unary `-`, and `not`
+- operator traits for `+`, `-`, `*`, `/`, `%`, `<`, `<=`, `>`, `>=`, unary `-`, and `not`

@@ -1,0 +1,15 @@
+def choose_nonempty(left: borrow[shared] String, right: borrow[shared] String) -> borrow[shared] String:
+    if left.len() > 0:
+        return left
+    return right
+
+def identity(text: borrow[src] String) -> borrow[src] String:
+    return text
+
+def main() -> int32:
+    left = ""
+    right = "aurora"
+    picked = choose_nonempty(left=left, right=right)
+    aliased = identity(text=picked)
+    print(aliased)
+    return 0

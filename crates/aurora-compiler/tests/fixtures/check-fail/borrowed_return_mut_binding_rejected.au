@@ -1,0 +1,10 @@
+class User:
+    name: String
+
+def name_ref(user: borrow User) -> borrow[user] String:
+    return user.name
+
+def main():
+    user = User(name="aurora")
+    mut alias = name_ref(user)
+    print(alias)

@@ -1,6 +1,6 @@
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, Expr, ExprKind, IfStmt, LiteralPatternKind,
-    MatchStmt, Pattern, ReceiverKind, Stmt, UnaryOp, WhileStmt,
+    MatchStmt, Param, Pattern, ReceiverKind, Stmt, UnaryOp, WhileStmt,
 };
 use crate::call::{bind_call_arguments, callable_params_from_decl, CallConvention};
 use crate::diag::Span;
@@ -166,6 +166,7 @@ pub struct MirMethod {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirTraitImpl {
     pub trait_name: String,
+    pub trait_args: Vec<Type>,
     pub for_type: Type,
     pub methods: Vec<MirMethod>,
 }
@@ -264,10 +265,11 @@ pub enum Rvalue {
     EnumVariant {
         enum_name: String,
         variant_name: String,
-        payload: Option<Operand>,
+        payloads: Vec<Operand>,
     },
     VariantPayload {
         scrutinee: Operand,
+        index: usize,
     },
     Member {
         object: Operand,
@@ -675,6 +677,7 @@ fn lower_trait_impl(
     }
     MirTraitImpl {
         trait_name: trait_impl.trait_name.clone(),
+        trait_args: trait_impl.trait_args.clone(),
         for_type: trait_impl.for_type.clone(),
         methods,
     }
@@ -845,6 +848,15 @@ struct BasicBlockBuilder {
 }
 
 impl<'a> Lowerer<'a> {
+    fn trait_info_in_scope(&self, name: &str) -> Option<&crate::sema::TraitInfo> {
+        self.program.traits.get(name).or_else(|| {
+            self.program
+                .module_registry
+                .values()
+                .find_map(|namespace| namespace.all_traits.get(name))
+        })
+    }
+
     fn find_namespace_in_modules<'b>(
         modules: &'b BTreeMap<String, ModuleNamespace>,
         path: &str,
@@ -1415,145 +1427,138 @@ impl<'a> Lowerer<'a> {
     fn lower_match(&mut self, match_stmt: &MatchStmt) {
         let scrutinee = self.lower_expr(&match_stmt.scrutinee);
         let scrutinee_ty = self.infer_expr_type(&match_stmt.scrutinee);
-        if !match_stmt
-            .arms
-            .iter()
-            .any(|arm| matches!(arm.pattern, Pattern::Variant(_)))
-        {
-            self.lower_literal_match(match_stmt, scrutinee, scrutinee_ty.as_ref());
-            return;
-        }
         let after_block = self.new_block("match_end");
-        let arms = match_stmt
-            .arms
-            .iter()
-            .map(|arm| {
-                let arm_block = self.new_block("match_arm");
-                (
-                    arm_block,
-                    match &arm.pattern {
-                        Pattern::Variant(pattern) => MirMatchArm {
-                            enum_name: pattern.enum_name.as_deref().map(|enum_name| {
-                                self.resolve_enum_info(enum_name)
-                                    .map(|enum_info| enum_info.decl.name.clone())
-                                    .unwrap_or_else(|| enum_name.to_string())
-                            }),
-                            variant_name: Some(pattern.variant_name.clone()),
-                            wildcard: false,
-                            label: self.label(arm_block),
-                        },
-                        Pattern::Wildcard(_) => MirMatchArm {
-                            enum_name: None,
-                            variant_name: None,
-                            wildcard: true,
-                            label: self.label(arm_block),
-                        },
-                        Pattern::Literal(_) => {
-                            unreachable!("literal patterns should lower through branch chains")
-                        }
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut next_case_block = self.current_block;
 
-        self.terminate(Terminator::Match {
-            scrutinee: scrutinee.clone(),
-            arms: arms.iter().map(|(_, arm)| arm.clone()).collect(),
-            otherwise: self.label(after_block),
-        });
-
-        for ((arm_block, _), arm) in arms.iter().zip(&match_stmt.arms) {
-            self.switch_to(*arm_block);
+        for (index, arm) in match_stmt.arms.iter().enumerate() {
+            self.switch_to(next_case_block);
+            let arm_block = self.new_block("match_arm");
+            let next_block = if index + 1 == match_stmt.arms.len() {
+                after_block
+            } else {
+                self.new_block("match_next")
+            };
             self.scoped_names.push(std::collections::HashMap::new());
-            if let Pattern::Variant(pattern) = &arm.pattern {
-                if let Some(binding) = &pattern.binding {
-                    let target = if let Some(payload_ty) = scrutinee_ty
-                        .as_ref()
-                        .and_then(|ty| self.variant_payload_type(ty, &pattern.variant_name))
-                    {
-                        self.new_typed_temp(payload_ty)
-                    } else {
-                        self.new_temp()
-                    };
-                    self.scoped_names
-                        .last_mut()
-                        .expect("match arm scope should exist")
-                        .insert(binding.clone(), target.clone());
-                    self.emit(Instruction::Assign {
-                        target,
-                        value: Rvalue::VariantPayload {
-                            scrutinee: scrutinee.clone(),
-                        },
-                    });
-                }
-            }
+            self.lower_pattern(
+                &arm.pattern,
+                scrutinee.clone(),
+                scrutinee_ty.as_ref(),
+                arm_block,
+                next_block,
+            );
+            self.switch_to(arm_block);
             self.lower_stmts(&arm.body);
             if !self.current_terminated() {
                 self.terminate(Terminator::Goto(self.label(after_block)));
             }
             self.scoped_names.pop();
+            next_case_block = next_block;
         }
 
         self.switch_to(after_block);
     }
 
-    fn lower_literal_match(
+    fn lower_pattern(
         &mut self,
-        match_stmt: &MatchStmt,
+        pattern: &Pattern,
         scrutinee: Operand,
         scrutinee_ty: Option<&Type>,
+        success_block: usize,
+        failure_block: usize,
     ) {
-        let after_block = self.new_block("match_end");
-        let arm_blocks = match_stmt
-            .arms
-            .iter()
-            .map(|_| self.new_block("match_arm"))
-            .collect::<Vec<_>>();
-        let mut next_condition_block = self.current_block;
-
-        for (index, arm) in match_stmt.arms.iter().enumerate() {
-            self.switch_to(next_condition_block);
-            match &arm.pattern {
-                Pattern::Wildcard(_) => {
-                    self.terminate(Terminator::Goto(self.label(arm_blocks[index])));
-                    break;
-                }
-                Pattern::Literal(pattern) => {
-                    let condition = self.lower_literal_pattern_condition(
-                        scrutinee.clone(),
+        match pattern {
+            Pattern::Wildcard(_) => {
+                self.terminate(Terminator::Goto(self.label(success_block)));
+            }
+            Pattern::Binding(binding) => {
+                let target = if let Some(ty) = scrutinee_ty.cloned() {
+                    self.new_typed_temp(ty)
+                } else {
+                    self.new_temp()
+                };
+                self.scoped_names
+                    .last_mut()
+                    .expect("match arm scope should exist")
+                    .insert(binding.name.clone(), target.clone());
+                self.emit(Instruction::Assign {
+                    target,
+                    value: Rvalue::Use(scrutinee),
+                });
+                self.terminate(Terminator::Goto(self.label(success_block)));
+            }
+            Pattern::Literal(pattern) => {
+                let condition = self.lower_literal_pattern_condition(
+                    scrutinee,
+                    scrutinee_ty,
+                    &pattern.kind,
+                    pattern.span,
+                );
+                self.terminate(Terminator::Branch {
+                    condition,
+                    then_label: self.label(success_block),
+                    else_label: self.label(failure_block),
+                });
+            }
+            Pattern::Variant(pattern) => {
+                let matched_block = self.new_block("match_variant");
+                self.terminate(Terminator::Match {
+                    scrutinee: scrutinee.clone(),
+                    arms: vec![MirMatchArm {
+                        enum_name: Some(self.resolve_pattern_enum_name(pattern, scrutinee_ty)),
+                        variant_name: Some(pattern.variant_name.clone()),
+                        wildcard: false,
+                        label: self.label(matched_block),
+                    }],
+                    otherwise: self.label(failure_block),
+                });
+                self.switch_to(matched_block);
+                let payload_types = self
+                    .variant_payload_types(
                         scrutinee_ty,
-                        &pattern.kind,
-                        pattern.span,
-                    );
-                    let else_block = if index + 1 == match_stmt.arms.len() {
-                        after_block
+                        &self.resolve_pattern_enum_name(pattern, scrutinee_ty),
+                        &pattern.variant_name,
+                    )
+                    .unwrap_or_else(|| vec![Type::named("Unknown"); pattern.subpatterns.len()]);
+                if payload_types.len() != pattern.subpatterns.len() {
+                    self.terminate(Terminator::Goto(self.label(failure_block)));
+                    return;
+                }
+                if pattern.subpatterns.is_empty() {
+                    self.terminate(Terminator::Goto(self.label(success_block)));
+                    return;
+                }
+                let mut next_block = matched_block;
+                for (index, subpattern) in pattern.subpatterns.iter().enumerate() {
+                    self.switch_to(next_block);
+                    let payload_ty = payload_types.get(index).cloned();
+                    let payload_target = if let Some(ty) = payload_ty.clone() {
+                        self.new_typed_temp(ty)
                     } else {
-                        self.new_block("match_next")
+                        self.new_temp()
                     };
-                    self.terminate(Terminator::Branch {
-                        condition,
-                        then_label: self.label(arm_blocks[index]),
-                        else_label: self.label(else_block),
+                    self.emit(Instruction::Assign {
+                        target: payload_target.clone(),
+                        value: Rvalue::VariantPayload {
+                            scrutinee: scrutinee.clone(),
+                            index,
+                        },
                     });
-                    next_condition_block = else_block;
-                }
-                Pattern::Variant(_) => {
-                    unreachable!("literal matches should be rejected before MIR lowering")
+                    let subpattern_success = if index + 1 == pattern.subpatterns.len() {
+                        success_block
+                    } else {
+                        self.new_block("match_payload")
+                    };
+                    self.lower_pattern(
+                        subpattern,
+                        Operand::Place(payload_target),
+                        payload_ty.as_ref(),
+                        subpattern_success,
+                        failure_block,
+                    );
+                    next_block = subpattern_success;
                 }
             }
         }
-
-        for (arm_block, arm) in arm_blocks.iter().zip(&match_stmt.arms) {
-            self.switch_to(*arm_block);
-            self.scoped_names.push(std::collections::HashMap::new());
-            self.lower_stmts(&arm.body);
-            self.scoped_names.pop();
-            if !self.current_terminated() {
-                self.terminate(Terminator::Goto(self.label(after_block)));
-            }
-        }
-
-        self.switch_to(after_block);
     }
 
     fn lower_literal_pattern_condition(
@@ -1606,6 +1611,7 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             },
+            LiteralPatternKind::Float(value) => Operand::Float(*value),
             LiteralPatternKind::Bool(value) => Operand::Bool(*value),
             LiteralPatternKind::String(value) => Operand::String(value.clone()),
         }
@@ -1671,6 +1677,7 @@ impl<'a> Lowerer<'a> {
                     target: for_stmt.binding.clone(),
                     value: Rvalue::VariantPayload {
                         scrutinee: Operand::Place(next_value),
+                        index: 0,
                     },
                 });
             }
@@ -1725,6 +1732,7 @@ impl<'a> Lowerer<'a> {
                     target: for_stmt.binding.clone(),
                     value: Rvalue::VariantPayload {
                         scrutinee: Operand::Place(next_value),
+                        index: 0,
                     },
                 });
                 if for_stmt.borrow_mode == Some(ReceiverKind::BorrowMut) {
@@ -1866,6 +1874,7 @@ impl<'a> Lowerer<'a> {
                     target: for_stmt.binding.clone(),
                     value: Rvalue::VariantPayload {
                         scrutinee: Operand::Place(next_value),
+                        index: 0,
                     },
                 });
                 self.emit(Instruction::Assign {
@@ -2241,7 +2250,7 @@ impl<'a> Lowerer<'a> {
                                 value: Rvalue::EnumVariant {
                                     enum_name: enum_info.decl.name.clone(),
                                     variant_name: field.clone(),
-                                    payload: None,
+                                    payloads: Vec::new(),
                                 },
                             });
                             return Operand::Place(temp);
@@ -2260,7 +2269,7 @@ impl<'a> Lowerer<'a> {
                             value: Rvalue::EnumVariant {
                                 enum_name: enum_name.clone(),
                                 variant_name: field.clone(),
-                                payload: None,
+                                payloads: Vec::new(),
                             },
                         });
                         return Operand::Place(temp);
@@ -2319,7 +2328,57 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Call { callee, args } => self.lower_call(expr, callee, args),
+            ExprKind::Match {
+                scrutinee,
+                borrow_mode: _,
+                arms,
+            } => self.lower_match_expr(expr, scrutinee, arms),
         }
+    }
+
+    fn lower_match_expr(
+        &mut self,
+        expr: &Expr,
+        scrutinee_expr: &Expr,
+        arms: &[crate::ast::MatchExprArm],
+    ) -> Operand {
+        let scrutinee = self.lower_expr(scrutinee_expr);
+        let scrutinee_ty = self.infer_expr_type(scrutinee_expr);
+        let result = self.new_temp_for_expr(expr);
+        let after_block = self.new_block("match_expr_end");
+        let mut next_case_block = self.current_block;
+
+        for (index, arm) in arms.iter().enumerate() {
+            self.switch_to(next_case_block);
+            let arm_block = self.new_block("match_expr_arm");
+            let next_block = if index + 1 == arms.len() {
+                after_block
+            } else {
+                self.new_block("match_expr_next")
+            };
+            self.scoped_names.push(std::collections::HashMap::new());
+            self.lower_pattern(
+                &arm.pattern,
+                scrutinee.clone(),
+                scrutinee_ty.as_ref(),
+                arm_block,
+                next_block,
+            );
+            self.switch_to(arm_block);
+            let value = self.lower_expr(&arm.value);
+            self.emit(Instruction::Assign {
+                target: result.clone(),
+                value: Rvalue::Use(value),
+            });
+            if !self.current_terminated() {
+                self.terminate(Terminator::Goto(self.label(after_block)));
+            }
+            self.scoped_names.pop();
+            next_case_block = next_block;
+        }
+
+        self.switch_to(after_block);
+        Operand::Place(result)
     }
 
     fn lower_logical_expr(&mut self, op: BinaryOp, left: &Expr, right: &Expr) -> Operand {
@@ -2364,23 +2423,10 @@ impl<'a> Lowerer<'a> {
         let ExprKind::Call { callee, args } = &value.kind else {
             panic!("spawn should lower from a call expression");
         };
-        let ExprKind::Name(function) = &callee.kind else {
-            panic!("spawn should lower from a named function call");
-        };
-
-        let lowered_args = self
-            .program
-            .functions
-            .get(function)
-            .map(|function_info| {
-                self.lower_user_args(
-                    &format!("function `{}`", function),
-                    &function_info.decl.params,
-                    args,
-                    callee.span,
-                )
-            })
-            .unwrap_or_else(|| self.lower_args(args));
+        let (function, params, display_name) = self
+            .resolve_spawn_target(callee)
+            .expect("spawn should lower from a supported callable target");
+        let lowered_args = self.lower_user_args(&display_name, &params, args, callee.span);
         let temp = self.new_temp();
         self.emit(Instruction::Assign {
             target: temp.clone(),
@@ -2392,6 +2438,73 @@ impl<'a> Lowerer<'a> {
             },
         });
         Operand::Place(temp)
+    }
+
+    fn resolve_spawn_target(&self, callee: &Expr) -> Option<(String, Vec<Param>, String)> {
+        let base_callee = match &callee.kind {
+            ExprKind::Specialize { expr, .. } => &**expr,
+            _ => callee,
+        };
+        match &base_callee.kind {
+            ExprKind::Name(function) => self.program.functions.get(function).map(|function_info| {
+                (
+                    function.clone(),
+                    function_info.decl.params.clone(),
+                    format!("function `{}`", function),
+                )
+            }),
+            ExprKind::Member { object, field } => {
+                if let Some((module_path, item_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(class_info) = namespace.classes.get(&item_name) {
+                            if let Some(method) = class_info.methods.get(field) {
+                                if method.decl.receiver.is_none() {
+                                    return Some((
+                                        format!("{}::{}.{}", module_path, item_name, field),
+                                        method.decl.params.clone(),
+                                        format!("method `{}.{}`", item_name, field),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some((module_path, function_name)) = self.qualified_module_item(callee) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(function) = namespace
+                            .functions
+                            .get(&function_name)
+                            .or_else(|| namespace.all_functions.get(&function_name))
+                        {
+                            return Some((
+                                imported_module_function_name(&module_path, &function_name),
+                                function.decl.params.clone(),
+                                format!("function `{}.{}`", module_path, function_name),
+                            ));
+                        }
+                    }
+                }
+                let base_object = match &object.kind {
+                    ExprKind::Specialize { expr, .. } => &**expr,
+                    _ => &**object,
+                };
+                if let ExprKind::Name(class_name) = &base_object.kind {
+                    if let Some(class_info) = self.resolve_class_info(class_name) {
+                        if let Some(method) = class_info.methods.get(field) {
+                            if method.decl.receiver.is_none() {
+                                return Some((
+                                    format!("{}.{}", class_name, field),
+                                    method.decl.params.clone(),
+                                    format!("method `{}.{}`", class_name, field),
+                                ));
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
     }
 
     fn lower_call(&mut self, expr: &Expr, callee: &Expr, args: &[Argument]) -> Operand {
@@ -2407,18 +2520,42 @@ impl<'a> Lowerer<'a> {
                     .resolve_class_info(name)
                     .expect("class should exist during MIR lowering")
                     .clone();
+                let field_names = class
+                    .decl
+                    .fields
+                    .iter()
+                    .map(|field| field.name.clone())
+                    .collect::<Vec<_>>();
+                let mut next_positional_field = 0usize;
+                let mut saw_named = false;
+                let mut provided = std::collections::BTreeMap::<String, Operand>::new();
+                for argument in args {
+                    let field_name = if let Some(field_name) = argument.name.as_ref() {
+                        saw_named = true;
+                        field_name.clone()
+                    } else {
+                        assert!(
+                            !saw_named,
+                            "positional class constructor arguments must come before named arguments"
+                        );
+                        let field_name = field_names
+                            .get(next_positional_field)
+                            .expect("class constructor should have enough fields")
+                            .clone();
+                        next_positional_field += 1;
+                        field_name
+                    };
+                    provided.insert(field_name, self.lower_expr(&argument.value));
+                }
                 let fields = class
                     .decl
                     .fields
                     .iter()
                     .filter_map(|field| {
-                        if let Some(argument) = args
-                            .iter()
-                            .find(|argument| argument.name.as_deref() == Some(field.name.as_str()))
-                        {
+                        if let Some(value) = provided.get(&field.name) {
                             Some(MirFieldInit {
                                 name: field.name.clone(),
-                                value: self.lower_expr(&argument.value),
+                                value: value.clone(),
                             })
                         } else {
                             field.default.as_ref().map(|default| MirFieldInit {
@@ -2436,13 +2573,33 @@ impl<'a> Lowerer<'a> {
                     },
                 });
             }
-            ExprKind::Name(name) if name == "Channel" => {
+            ExprKind::Name(name) if name == "Channel" || name == "channel" => {
                 let lowered_args = self.lower_args(args);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::Call {
                         callee: CallTarget::Name("channel".to_string()),
                         args: lowered_args,
+                    },
+                });
+            }
+            ExprKind::Name(name) if matches!(name.as_str(), "Some" | "Ok" | "Err" | "Closed") => {
+                let payloads = args
+                    .iter()
+                    .map(|argument| self.lower_expr(&argument.value))
+                    .collect::<Vec<_>>();
+                let enum_name = match name.as_str() {
+                    "Some" => "Option",
+                    "Ok" | "Err" => "Result",
+                    "Closed" => "SendError",
+                    _ => unreachable!(),
+                };
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::EnumVariant {
+                        enum_name: enum_name.to_string(),
+                        variant_name: name.clone(),
+                        payloads,
                     },
                 });
             }
@@ -2525,15 +2682,16 @@ impl<'a> Lowerer<'a> {
                             }
                         }
                         if let Some(enum_info) = namespace.enums.get(&item_name).cloned() {
-                            let payload = args
-                                .first()
-                                .map(|argument| self.lower_expr(&argument.value));
+                            let payloads = args
+                                .iter()
+                                .map(|argument| self.lower_expr(&argument.value))
+                                .collect::<Vec<_>>();
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
                                 value: Rvalue::EnumVariant {
                                     enum_name: enum_info.decl.name.clone(),
                                     variant_name: field.clone(),
-                                    payload,
+                                    payloads,
                                 },
                             });
                             return Operand::Place(temp);
@@ -2562,17 +2720,42 @@ impl<'a> Lowerer<'a> {
                             return Operand::Place(temp);
                         }
                         if let Some(class) = namespace.classes.get(field).cloned() {
+                            let field_names = class
+                                .decl
+                                .fields
+                                .iter()
+                                .map(|field_decl| field_decl.name.clone())
+                                .collect::<Vec<_>>();
+                            let mut next_positional_field = 0usize;
+                            let mut saw_named = false;
+                            let mut provided = std::collections::BTreeMap::<String, Operand>::new();
+                            for argument in args {
+                                let field_name = if let Some(field_name) = argument.name.as_ref() {
+                                    saw_named = true;
+                                    field_name.clone()
+                                } else {
+                                    assert!(
+                                        !saw_named,
+                                        "positional class constructor arguments must come before named arguments"
+                                    );
+                                    let field_name = field_names
+                                        .get(next_positional_field)
+                                        .expect("class constructor should have enough fields")
+                                        .clone();
+                                    next_positional_field += 1;
+                                    field_name
+                                };
+                                provided.insert(field_name, self.lower_expr(&argument.value));
+                            }
                             let fields = class
                                 .decl
                                 .fields
                                 .iter()
                                 .filter_map(|field_decl| {
-                                    if let Some(argument) = args.iter().find(|argument| {
-                                        argument.name.as_deref() == Some(field_decl.name.as_str())
-                                    }) {
+                                    if let Some(value) = provided.get(&field_decl.name) {
                                         Some(MirFieldInit {
                                             name: field_decl.name.clone(),
-                                            value: self.lower_expr(&argument.value),
+                                            value: value.clone(),
                                         })
                                     } else {
                                         field_decl.default.as_ref().map(|default| MirFieldInit {
@@ -2595,23 +2778,12 @@ impl<'a> Lowerer<'a> {
                 }
 
                 if field == "spawn" {
-                    let function = match &args[0].value.kind {
-                        ExprKind::Name(function) => function.clone(),
-                        _ => panic!("task-group spawn should lower from a named function target"),
-                    };
+                    let (function, params, display_name) = self
+                        .resolve_spawn_target(&args[0].value)
+                        .expect("task-group spawn should lower from a supported callable target");
                     let group = self.lower_expr(object);
-                    let lowered_args = if let Some(function_info) =
-                        self.resolve_function_info(&function).cloned()
-                    {
-                        self.lower_user_args(
-                            &format!("function `{}`", function),
-                            &function_info.decl.params,
-                            &args[1..],
-                            callee.span,
-                        )
-                    } else {
-                        self.lower_args(&args[1..])
-                    };
+                    let lowered_args =
+                        self.lower_user_args(&display_name, &params, &args[1..], callee.span);
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
                         value: Rvalue::Spawn {
@@ -2685,15 +2857,16 @@ impl<'a> Lowerer<'a> {
                     if is_known_enum_name(self.program, enum_name)
                         || self.resolve_enum_info(enum_name).is_some()
                     {
-                        let payload = args
-                            .first()
-                            .map(|argument| self.lower_expr(&argument.value));
+                        let payloads = args
+                            .iter()
+                            .map(|argument| self.lower_expr(&argument.value))
+                            .collect::<Vec<_>>();
                         self.emit(Instruction::Assign {
                             target: temp.clone(),
                             value: Rvalue::EnumVariant {
                                 enum_name: enum_name.clone(),
                                 variant_name: field.clone(),
-                                payload,
+                                payloads,
                             },
                         });
                         return Operand::Place(temp);
@@ -3254,6 +3427,9 @@ impl<'a> Lowerer<'a> {
                     self.operator_return_type_for_binary(&left_ty, &right_ty, *op)
                 }
             }
+            ExprKind::Match { arms, .. } => arms
+                .first()
+                .and_then(|arm| self.infer_expr_type(&arm.value)),
         }
     }
 
@@ -3402,7 +3578,9 @@ impl<'a> Lowerer<'a> {
         right_ty: &Type,
         op: BinaryOp,
     ) -> Option<Type> {
-        let (trait_name, _field) = binary_operator_trait(op)?;
+        let (trait_name, field) = binary_operator_trait(op)?;
+        let trait_info = self.trait_info_in_scope(trait_name)?;
+        let method = trait_info.methods.get(field)?;
         match left_ty {
             Type::TypeParam(type_param) => self
                 .type_param_bounds
@@ -3411,16 +3589,24 @@ impl<'a> Lowerer<'a> {
                 .flatten()
                 .find(|bound| {
                     bound.trait_name == trait_name
-                        && bound.trait_args.len() == 2
+                        && !bound.trait_args.is_empty()
                         && bound.trait_args[0] == *right_ty
                 })
-                .map(|bound| bound.trait_args[1].clone()),
+                .map(|bound| {
+                    let substitutions = crate::sema::self_type_substitutions(
+                        &trait_info.decl,
+                        &bound.trait_args,
+                        Type::TypeParam(type_param.to_string()),
+                    );
+                    substitute_type(&method.signature.return_type, &substitutions)
+                }),
             _ => self
                 .trait_impls_in_scope()
-                .filter(|trait_impl| {
-                    trait_impl.trait_name == trait_name && trait_impl.trait_args.len() == 2
-                })
+                .filter(|trait_impl| trait_impl.trait_name == trait_name)
                 .find_map(|trait_impl| {
+                    let Some(trait_method) = trait_impl.methods.get(field) else {
+                        return None;
+                    };
                     let mut type_params = BTreeSet::new();
                     collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
                     for trait_arg in &trait_impl.trait_args {
@@ -3435,6 +3621,9 @@ impl<'a> Lowerer<'a> {
                     ) {
                         return None;
                     }
+                    if trait_impl.trait_args.is_empty() {
+                        return None;
+                    }
                     if !crate::sema::type_pattern_matches(
                         &trait_impl.trait_args[0],
                         right_ty,
@@ -3443,7 +3632,18 @@ impl<'a> Lowerer<'a> {
                     ) {
                         return None;
                     }
-                    Some(substitute_type(&trait_impl.trait_args[1], &substitutions))
+                    let trait_substitutions = crate::sema::self_type_substitutions(
+                        &trait_info.decl,
+                        &trait_impl.trait_args,
+                        left_ty.clone(),
+                    );
+                    Some(substitute_type(
+                        &trait_method.signature.return_type,
+                        &trait_substitutions
+                            .into_iter()
+                            .chain(substitutions)
+                            .collect::<std::collections::HashMap<_, _>>(),
+                    ))
                 }),
         }
     }
@@ -3491,6 +3691,83 @@ impl<'a> Lowerer<'a> {
         Some(first)
     }
 
+    fn resolve_pattern_enum_name(
+        &self,
+        pattern: &crate::ast::VariantPattern,
+        scrutinee_ty: Option<&Type>,
+    ) -> String {
+        if let Some(enum_name) = pattern.enum_name.as_deref() {
+            return self
+                .resolve_enum_info(enum_name)
+                .map(|enum_info| enum_info.decl.name.clone())
+                .unwrap_or_else(|| enum_name.to_string());
+        }
+        match scrutinee_ty {
+            Some(Type::Named(name, _)) => name.clone(),
+            _ => "Unknown".to_string(),
+        }
+    }
+
+    fn variant_payload_types(
+        &self,
+        enum_ty: Option<&Type>,
+        enum_name: &str,
+        variant_name: &str,
+    ) -> Option<Vec<Type>> {
+        if let Some(enum_ty) = enum_ty {
+            match enum_ty {
+                Type::Named(name, args) if name == "Option" && args.len() == 1 => {
+                    return Some(match variant_name {
+                        "Some" => vec![args[0].clone()],
+                        "None" => Vec::new(),
+                        _ => return None,
+                    });
+                }
+                Type::Named(name, args) if name == "Result" && args.len() == 2 => {
+                    return Some(match variant_name {
+                        "Ok" => vec![args[0].clone()],
+                        "Err" => vec![args[1].clone()],
+                        _ => return None,
+                    });
+                }
+                Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
+                    return Some(match variant_name {
+                        "Closed" => vec![args[0].clone()],
+                        _ => return None,
+                    });
+                }
+                Type::Named(name, args) if name == enum_name => {
+                    let enum_info = self.resolve_enum_info(name)?;
+                    let variant = enum_info.variants.get(variant_name)?;
+                    let substitutions = enum_info
+                        .decl
+                        .type_params
+                        .iter()
+                        .cloned()
+                        .zip(args.iter().cloned())
+                        .collect::<std::collections::HashMap<_, _>>();
+                    return Some(
+                        variant
+                            .payloads
+                            .iter()
+                            .map(|payload| substitute_type(&payload.ty, &substitutions))
+                            .collect(),
+                    );
+                }
+                _ => {}
+            }
+        }
+        let enum_info = self.resolve_enum_info(enum_name)?;
+        let variant = enum_info.variants.get(variant_name)?;
+        Some(
+            variant
+                .payloads
+                .iter()
+                .map(|payload| payload.ty.clone())
+                .collect(),
+        )
+    }
+
     fn variant_payload_type(&self, enum_ty: &Type, variant_name: &str) -> Option<Type> {
         match enum_ty {
             Type::Named(name, args) if name == "Option" && args.len() == 1 => {
@@ -3506,7 +3783,7 @@ impl<'a> Lowerer<'a> {
             }
             Type::Named(name, args) => {
                 let enum_info = self.resolve_enum_info(name)?;
-                let payload = enum_info.variants.get(variant_name)?.payload.as_ref()?;
+                let payload = enum_info.variants.get(variant_name)?.payloads.first()?;
                 let substitutions = enum_info
                     .decl
                     .type_params
@@ -3514,7 +3791,7 @@ impl<'a> Lowerer<'a> {
                     .cloned()
                     .zip(args.iter().cloned())
                     .collect::<std::collections::HashMap<_, _>>();
-                Some(substitute_type(payload, &substitutions))
+                Some(substitute_type(&payload.ty, &substitutions))
             }
             _ => None,
         }

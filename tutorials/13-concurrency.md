@@ -58,7 +58,7 @@ See [examples/concurrency/channel_iteration.au](../examples/concurrency/channel_
 
 ## Spawning Tasks
 
-Use `spawn` with a named function call to run work concurrently:
+Use `spawn` with a named function call or an associated method without `self` to run work concurrently:
 
 ```python
 def producer(out: Channel[int32]):
@@ -73,6 +73,16 @@ task = spawn producer(ch.clone())
 `spawn` returns a `Task[T]`. Call `.join()` to wait for the task to complete.
 
 `Task[T]` also supports `.clone()` for sharing a handle between multiple consumers.
+
+Associated methods without `self` work too:
+
+```python
+class Worker:
+    def run(value: int32) -> int32:
+        return value + 1
+
+task = spawn Worker.run(4)
+```
 
 ### Fire-And-Forget With `spawn detached`
 

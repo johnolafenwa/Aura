@@ -210,10 +210,20 @@ counter.reset()
 
 See [examples/classes/mutating_methods.au](../examples/classes/mutating_methods.au).
 
+Constructors now support positional field arguments as long as they come before any named fields:
+
+```python
+class Point:
+    x: int32
+    y: int32 = 9
+
+first = Point(1, 2)
+second = Point(7)
+```
+
 ## Current Limits
 
 The bootstrap compiler does not yet support:
 
 - separate `impl` blocks
 - method visibility modifiers
-- positional class constructor arguments; bootstrap constructors are keyword-only

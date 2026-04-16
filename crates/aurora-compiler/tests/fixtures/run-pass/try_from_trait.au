@@ -1,0 +1,26 @@
+trait From[T]:
+    def from(value: T) -> Self
+
+enum ReadError:
+    Missing
+
+enum AppError:
+    Read(ReadError)
+
+impl From[ReadError] for AppError:
+    def from(value: ReadError) -> AppError:
+        return AppError.Read(value)
+
+def read(flag: bool) -> Result[int32, ReadError]:
+    if flag:
+        return Result.Ok(7)
+    return Result.Err(ReadError.Missing)
+
+def load(flag: bool) -> Result[int32, AppError]:
+    value = try read(flag)
+    return Result.Ok(value + 1)
+
+def main() -> int32:
+    print(load(true))
+    print(load(false))
+    return 0

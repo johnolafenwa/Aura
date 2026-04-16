@@ -68,6 +68,7 @@ fn callable_params_follow_default_presence() {
         Param {
             name: "required".to_string(),
             passing: ReceiverKind::Value,
+            borrow_label: None,
             ty: dummy_type("int32"),
             default: None,
             span: Span::new(1, 1),
@@ -75,6 +76,7 @@ fn callable_params_follow_default_presence() {
         Param {
             name: "optional".to_string(),
             passing: ReceiverKind::Value,
+            borrow_label: None,
             ty: dummy_type("int32"),
             default: Some(Expr {
                 kind: ExprKind::Int(1),
@@ -238,6 +240,7 @@ fn call_binding_helpers_cover_argument_count_and_decl_metadata_paths() {
     let params = vec![Param {
         name: "value".to_string(),
         passing: ReceiverKind::Borrow,
+        borrow_label: None,
         ty: dummy_type("String"),
         default: None,
         span: Span::new(2, 4),

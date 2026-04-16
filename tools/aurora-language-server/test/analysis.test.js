@@ -823,6 +823,12 @@ test("fallback analysis helper parses callable parameter types through borrow an
   );
   assert.deepEqual(
     _testing.parseParamTypes(
+      "left: borrow[shared] String, right: borrow mut[shared] Vec[int32]"
+    ),
+    ["String", "Vec[int32]"]
+  );
+  assert.deepEqual(
+    _testing.parseParamTypes(
       "items: Vec[int32] = build(defaults[0], {\"seed\": 1}), enabled: bool = true"
     ),
     ["Vec[int32]", "bool"]

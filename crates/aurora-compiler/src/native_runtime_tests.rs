@@ -7,7 +7,7 @@ use super::{
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
-use crate::interpreter::{
+use crate::runtime_value::{
     CancellationContext, ChannelValue, EnumVariantValue, InstanceValue, MapValue,
     ModuleNamespaceValue, RangeValue, SetValue, TaskGroupValue, TaskValue, Value, VecValue,
 };
@@ -110,7 +110,7 @@ fn expect_vec_strings(ptr: *mut OpaqueValue) -> Vec<String> {
             .elements
             .into_iter()
             .map(|value| match value {
-                Value::String(text) => text,
+                Value::String(text) => text.to_string(),
                 other => panic!("expected string element, found {:?}", other),
             })
             .collect(),
@@ -123,7 +123,7 @@ fn expect_option_some_int(ptr: *mut OpaqueValue) -> i128 {
         Value::EnumVariant(variant)
             if variant.enum_name == "Option" && variant.variant_name == "Some" =>
         {
-            match *variant.payload.expect("expected option payload") {
+            match variant.single_payload().expect("expected option payload") {
                 Value::Int(value) => value.as_i128().expect("expected signed integer"),
                 other => panic!("expected int payload, found {:?}", other),
             }
@@ -137,8 +137,8 @@ fn expect_option_some_string(ptr: *mut OpaqueValue) -> String {
         Value::EnumVariant(variant)
             if variant.enum_name == "Option" && variant.variant_name == "Some" =>
         {
-            match *variant.payload.expect("expected option payload") {
-                Value::String(text) => text,
+            match variant.single_payload().expect("expected option payload") {
+                Value::String(text) => text.to_string(),
                 other => panic!("expected string payload, found {:?}", other),
             }
         }
@@ -159,7 +159,7 @@ fn expect_result_ok_int(ptr: *mut OpaqueValue) -> i128 {
         Value::EnumVariant(variant)
             if variant.enum_name == "Result" && variant.variant_name == "Ok" =>
         {
-            match *variant.payload.expect("expected result payload") {
+            match variant.single_payload().expect("expected result payload") {
                 Value::Int(value) => value.as_i128().expect("expected signed integer"),
                 other => panic!("expected int payload, found {:?}", other),
             }
@@ -173,8 +173,8 @@ fn expect_result_ok_float(ptr: *mut OpaqueValue) -> f64 {
         Value::EnumVariant(variant)
             if variant.enum_name == "Result" && variant.variant_name == "Ok" =>
         {
-            match *variant.payload.expect("expected result payload") {
-                Value::Float(value) => value,
+            match variant.single_payload().expect("expected result payload") {
+                Value::Float(value) => *value,
                 other => panic!("expected float payload, found {:?}", other),
             }
         }
@@ -187,8 +187,8 @@ fn expect_result_err_string(ptr: *mut OpaqueValue) -> String {
         Value::EnumVariant(variant)
             if variant.enum_name == "Result" && variant.variant_name == "Err" =>
         {
-            match *variant.payload.expect("expected result payload") {
-                Value::String(text) => text,
+            match variant.single_payload().expect("expected result payload") {
+                Value::String(text) => text.to_string(),
                 other => panic!("expected string payload, found {:?}", other),
             }
         }
@@ -941,7 +941,7 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
         string_value("payload"),
     );
     assert_eq!(
-        expect_string(super::aurora_direct_variant_payload(boxed_payload)),
+        expect_string(super::aurora_direct_variant_payload(boxed_payload, 0)),
         "payload"
     );
 
@@ -1273,10 +1273,10 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     "Ready".len(),
                     std::ptr::null_mut(),
                 );
-                super::aurora_direct_variant_payload(ready);
+                super::aurora_direct_variant_payload(ready, 0);
             }
             "variant-payload-type" => {
-                super::aurora_direct_variant_payload(int_value(1));
+                super::aurora_direct_variant_payload(int_value(1), 0);
             }
             "instance-get-missing" => {
                 let empty =
@@ -1615,7 +1615,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         value_type_name(&Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".to_string(),
             variant_name: "Ready".to_string(),
-            payload: None,
+            payloads: Vec::new(),
         })),
         "Status"
     );
@@ -1998,7 +1998,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     let enum_value = super::boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Status".to_string(),
         variant_name: "Ready".to_string(),
-        payload: None,
+        payloads: Vec::new(),
     }));
     let unit_value = super::boxed_value(Value::Unit);
 
@@ -2043,7 +2043,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
 #[test]
 fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     assert!(!current_cancellation().is_cancelled());
-    let group = TaskGroupValue::new(&crate::interpreter::CancellationContext::default());
+    let group = TaskGroupValue::new(&crate::runtime_value::CancellationContext::default());
     let child = group.child_cancellation();
     group.cancel();
     let scoped = with_cancellation_scope(child, || current_cancellation().is_cancelled());
@@ -2131,7 +2131,7 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
         value_type_name(&Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".to_string(),
             variant_name: "Ready".to_string(),
-            payload: None,
+            payloads: Vec::new(),
         })),
         "Status"
     );

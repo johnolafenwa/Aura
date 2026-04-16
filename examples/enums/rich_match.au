@@ -1,0 +1,21 @@
+enum Inner:
+    Pair(int32, int32)
+
+enum Outer:
+    Point(x: int32, y: int32)
+    Wrapped(Inner)
+    Empty
+
+def describe(value: Outer) -> int32:
+    return match value:
+        case Outer.Point(x, y): x + y
+        case Outer.Wrapped(Inner.Pair(a, b)): a * b
+        case Outer.Empty: 0
+
+def main():
+    point = Outer.Point(x=3, y=4)
+    nested = Outer.Wrapped(Inner.Pair(5, 6))
+    empty = Outer.Empty
+    print(describe(point))
+    print(describe(nested))
+    print(describe(empty))

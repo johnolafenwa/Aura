@@ -19,6 +19,8 @@ These tutorials teach the language as it exists in this repository today, not th
 - `if`, `elif`, `else`, `while`, `for range(...)`, `break`, and `continue`
 - statement-form `match` over enum variants plus literal `bool`, integer, and `String` cases
 - `with`, `try expr`, channels, spawned tasks, detached tasks, task groups, and `select`
+- expression-form `match`, nested enum patterns, and multi-payload variants
+- borrowed return values with explicit source syntax like `-> borrow[user] T`
 - user-defined generic classes, enums, and functions
 - trait declarations, trait impls, and bounded generic calls
 - local file modules with `import`, `from ... import ...`, and `public` visibility
@@ -49,9 +51,9 @@ Today's working subset includes:
 
 The repository is not at the full proposal yet. Notable gaps include:
 
-- nested match patterns
-- expression-form `match`
-- borrowed return types and explicit lifetime syntax
+- full dependency registries and version solving beyond local/git package dependencies
+- deeper lifetime/borrowing work beyond the current explicit borrowed-return source syntax
+- further direct-backend hardening and the remaining coverage push toward 100%
 
 ## Recommended Companion Material
 
