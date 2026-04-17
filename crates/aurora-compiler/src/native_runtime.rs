@@ -5,7 +5,8 @@ use std::io::{self, Write};
 use std::process;
 use std::slice;
 use std::str;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{OnceLock, RwLock};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
@@ -29,6 +30,8 @@ fn write_stdout(text: &str) {
     };
     if let Some(error) = write_result.err().or_else(|| flush_result.err()) {
         if error.kind() == io::ErrorKind::BrokenPipe {
+            // `with_sigpipe_blocked` only leaves SIGPIPE ignored on this path because this
+            // caller exits the process immediately after observing BrokenPipe.
             process::exit(0);
         }
         let _ = writeln!(io::stderr().lock(), "failed to write to stdout: {}", error);
@@ -39,14 +42,26 @@ fn write_stdout(text: &str) {
 #[cfg(unix)]
 fn with_sigpipe_blocked<T>(f: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
     unsafe {
+        let previous_handler = libc::signal(libc::SIGPIPE, libc::SIG_IGN);
         let mut sigpipe_set: libc::sigset_t = std::mem::zeroed();
         libc::sigemptyset(&mut sigpipe_set);
         libc::sigaddset(&mut sigpipe_set, libc::SIGPIPE);
 
         let mut old_mask: libc::sigset_t = std::mem::zeroed();
         if libc::pthread_sigmask(libc::SIG_BLOCK, &sigpipe_set, &mut old_mask) != 0 {
-            return f();
+            let result = f();
+            if previous_handler != libc::SIG_ERR {
+                let _ = libc::signal(libc::SIGPIPE, previous_handler);
+            }
+            return result;
         }
+
+        let restore_sigpipe_state = || {
+            let _ = libc::pthread_sigmask(libc::SIG_SETMASK, &old_mask, std::ptr::null_mut());
+            if previous_handler != libc::SIG_ERR {
+                let _ = libc::signal(libc::SIGPIPE, previous_handler);
+            }
+        };
 
         let result = f();
         if matches!(&result, Err(error) if error.kind() == io::ErrorKind::BrokenPipe) {
@@ -57,10 +72,15 @@ fn with_sigpipe_blocked<T>(f: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
                 let mut received = 0;
                 let _ = libc::sigwait(&sigpipe_set, &mut received);
             }
+            // Restore the thread's signal mask so the helper does not leak blocked SIGPIPE
+            // state. We intentionally keep SIGPIPE ignored on this path because the caller
+            // exits immediately after seeing BrokenPipe; restoring the previous disposition
+            // before that exit can cause the pending SIGPIPE to terminate the process.
+            let _ = libc::pthread_sigmask(libc::SIG_SETMASK, &old_mask, std::ptr::null_mut());
             return result;
         }
 
-        let _ = libc::pthread_sigmask(libc::SIG_SETMASK, &old_mask, std::ptr::null_mut());
+        restore_sigpipe_state();
         result
     }
 }
@@ -82,8 +102,10 @@ fn int32_overflow_message(value: i64) -> String {
     format!("integer value `{}` does not fit in `int32`", value)
 }
 
-#[repr(transparent)]
-pub struct OpaqueValue(RwLock<Value>);
+pub struct OpaqueValue {
+    ref_count: AtomicUsize,
+    value: RwLock<Value>,
+}
 
 type NativeThunk = unsafe extern "C" fn(*const i64, usize) -> *mut OpaqueValue;
 
@@ -132,7 +154,47 @@ fn extract_duration_millis(value: impl Borrow<Value>) -> i128 {
 }
 
 fn boxed_value(value: Value) -> *mut OpaqueValue {
-    Arc::into_raw(Arc::new(OpaqueValue(RwLock::new(value)))) as *mut OpaqueValue
+    Box::into_raw(Box::new(OpaqueValue {
+        ref_count: AtomicUsize::new(1),
+        value: RwLock::new(value),
+    }))
+}
+
+// These helpers validate the explicit refcount stored in `OpaqueValue`, but they cannot detect
+// stale or forged raw pointers after an object has been freed and the address reused. The
+// codegen/runtime ABI must still guarantee that callers only retain or release live values.
+fn retain_ref_count(ref_count: &AtomicUsize) -> std::result::Result<(), &'static str> {
+    loop {
+        let current = ref_count.load(Ordering::Relaxed);
+        if current == 0 {
+            return Err("attempted to retain an already-released direct runtime value");
+        }
+        if current == usize::MAX {
+            return Err("direct runtime value reference count overflow");
+        }
+        if ref_count
+            .compare_exchange_weak(current, current + 1, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+}
+
+fn release_ref_count(ref_count: &AtomicUsize) -> std::result::Result<bool, &'static str> {
+    loop {
+        let current = ref_count.load(Ordering::Acquire);
+        if current == 0 {
+            return Err("attempted to release an already-released direct runtime value");
+        }
+        let next = current - 1;
+        if ref_count
+            .compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return Ok(next == 0);
+        }
+    }
 }
 
 unsafe fn with_value<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -> T {
@@ -140,7 +202,7 @@ unsafe fn with_value<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -
         .as_ref()
         .unwrap_or_else(|| runtime_error("direct runtime received a null opaque value pointer"));
     let guard = value
-        .0
+        .value
         .read()
         .unwrap_or_else(|_| runtime_error("direct runtime value lock was poisoned"));
     read(&guard)
@@ -155,7 +217,7 @@ unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> 
         .as_ref()
         .unwrap_or_else(|| runtime_error("direct runtime received a null opaque value pointer"));
     let mut guard = value
-        .0
+        .value
         .write()
         .unwrap_or_else(|_| runtime_error("direct runtime value lock was poisoned"));
     write(&mut guard)
@@ -167,7 +229,9 @@ unsafe fn take_value(ptr: *mut OpaqueValue) -> Value {
 
 unsafe fn consume_value(ptr: *mut OpaqueValue) -> Value {
     let value = value_ref(ptr);
-    aurora_direct_release_value(ptr);
+    unsafe {
+        aurora_direct_release_value(ptr);
+    }
     value
 }
 
@@ -362,6 +426,9 @@ fn eval_binary_value(
                 Some(value) => Ok(Value::Int(value)),
                 None => Err(Diagnostic::new("integer overflow")),
             },
+            (Value::Float(_), Value::Float(right)) if right == 0.0 => {
+                Err(Diagnostic::new("division by zero"))
+            }
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left / right)),
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `/` operands `{}` and `{}`",
@@ -377,6 +444,9 @@ fn eval_binary_value(
                 Some(value) => Ok(Value::Int(value)),
                 None => Err(Diagnostic::new("integer overflow")),
             },
+            (Value::Float(_), Value::Float(right)) if right == 0.0 => {
+                Err(Diagnostic::new("division by zero"))
+            }
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left % right)),
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `%` operands `{}` and `{}`",
@@ -467,18 +537,40 @@ pub extern "C" fn aurora_direct_box_unit() -> *mut OpaqueValue {
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_retain_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
+/// # Safety
+///
+/// `value` must be either null or a live `OpaqueValue` pointer allocated by the Aurora direct
+/// runtime. Callers must only retain pointers whose storage is still owned by the current process.
+pub unsafe extern "C" fn aurora_direct_retain_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
     if !value.is_null() {
-        unsafe { Arc::increment_strong_count(value as *const OpaqueValue) };
+        let opaque = unsafe {
+            value.as_ref().unwrap_or_else(|| {
+                runtime_error("direct runtime received a null opaque value pointer")
+            })
+        };
+        if let Err(message) = retain_ref_count(&opaque.ref_count) {
+            runtime_error(message);
+        }
     }
     value
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_release_value(value: *mut OpaqueValue) {
+/// # Safety
+///
+/// `value` must be either null or a live `OpaqueValue` pointer allocated by the Aurora direct
+/// runtime. Each successful retain/release pair must be balanced according to the direct-runtime
+/// ownership contract.
+pub unsafe extern "C" fn aurora_direct_release_value(value: *mut OpaqueValue) {
     if !value.is_null() {
         unsafe {
-            drop(Arc::from_raw(value as *const OpaqueValue));
+            let opaque = value.as_ref().unwrap_or_else(|| {
+                runtime_error("direct runtime received a null opaque value pointer")
+            });
+            if release_ref_count(&opaque.ref_count).unwrap_or_else(|message| runtime_error(message))
+            {
+                drop(Box::from_raw(value));
+            }
         }
     }
 }
@@ -2089,7 +2181,10 @@ pub extern "C" fn aurora_direct_deadline_new(duration: *mut OpaqueValue) -> i64 
     let deadline = Deadline(
         match Instant::now().checked_add(StdDuration::from_millis(millis)) {
             Some(deadline) => deadline,
-            None => Instant::now(),
+            None => runtime_error(format!(
+                "duration `{}ms` overflows the direct runtime deadline range",
+                millis
+            )),
         },
     );
     Box::into_raw(Box::new(deadline)) as usize as i64

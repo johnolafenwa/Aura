@@ -477,13 +477,11 @@ fn build_mir_runtime_binary(
         emit_mir_runtime_launcher_source(&mir_json, path.as_bytes(), source.as_bytes());
     let temp_source = temporary_mir_runtime_source_path(output_path);
     let temp_staticlib = temporary_direct_staticlib_path(output_path);
-    fs::write(&temp_source, launcher_source).map_err(|error| {
-        format!(
-            "failed to write MIR runtime launcher source `{}`: {}",
-            temp_source.display(),
-            error
-        )
-    })?;
+    write_unique_temp_file(
+        &temp_source,
+        launcher_source.as_bytes(),
+        "MIR runtime launcher source",
+    )?;
     let staticlib_bytes = fs::read(&native_runtime.staticlib).or_else(|_| {
         resolve_static_library_path(repo_root(), current_profile()).and_then(|refreshed| {
             fs::read(&refreshed).map_err(|error| {
@@ -495,14 +493,11 @@ fn build_mir_runtime_binary(
             })
         })
     })?;
-    fs::write(&temp_staticlib, staticlib_bytes).map_err(|error| {
-        format!(
-            "failed to stage Aurora runtime library `{}` as `{}`: {}",
-            native_runtime.staticlib.display(),
-            temp_staticlib.display(),
-            error
-        )
-    })?;
+    write_unique_temp_file(
+        &temp_staticlib,
+        &staticlib_bytes,
+        "staged Aurora runtime library",
+    )?;
 
     let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
     let mut command = Command::new(cc);
@@ -575,6 +570,56 @@ fn temporary_direct_staticlib_path(output_path: &Path) -> PathBuf {
         system_time_nanos()
     );
     std::env::temp_dir().join(unique)
+}
+
+fn write_unique_temp_file(path: &Path, contents: &[u8], description: &str) -> Result<(), String> {
+    write_unique_temp_file_with_writer(path, description, |file| file.write_all(contents))
+}
+
+fn write_unique_temp_file_with_writer(
+    path: &Path,
+    description: &str,
+    writer: impl FnOnce(&mut fs::File) -> io::Result<()>,
+) -> Result<(), String> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            format!(
+                "failed to create {} `{}`: {}",
+                description,
+                path.display(),
+                error
+            )
+        })?;
+
+    let write_result = writer(&mut file).map_err(|error| {
+        format!(
+            "failed to write {} `{}`: {}",
+            description,
+            path.display(),
+            error
+        )
+    });
+    let flush_result = if write_result.is_ok() {
+        file.flush().map_err(|error| {
+            format!(
+                "failed to flush {} `{}`: {}",
+                description,
+                path.display(),
+                error
+            )
+        })
+    } else {
+        Ok(())
+    };
+
+    let result = write_result.and(flush_result);
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result
 }
 
 fn emit_mir_runtime_launcher_source(mir_json: &[u8], source_path: &[u8], source: &[u8]) -> String {
@@ -791,11 +836,14 @@ fn print_version_and_exit() -> ! {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io;
     use std::path::PathBuf;
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use super::resolve_static_library_path;
+    use super::{
+        resolve_static_library_path, write_unique_temp_file, write_unique_temp_file_with_writer,
+    };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
         let unique = format!(
@@ -865,6 +913,41 @@ mod tests {
             error.contains("multiple hashed Aurora runtime archives"),
             "unexpected error message: {}",
             error
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn write_unique_temp_file_rejects_existing_paths() {
+        let root = unique_temp_dir("unique-temp-file");
+        let path = root.join("launcher.c");
+
+        write_unique_temp_file(&path, b"first", "test temp file")
+            .expect("first write should create the temp file");
+        let error = write_unique_temp_file(&path, b"second", "test temp file")
+            .expect_err("existing temp paths should be rejected");
+        assert!(error.contains("failed to create"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn write_unique_temp_file_removes_partial_file_when_write_fails() {
+        let root = unique_temp_dir("unique-temp-file-cleanup");
+        let path = root.join("launcher.c");
+
+        let error = write_unique_temp_file_with_writer(&path, "test temp file", |file| {
+            use std::io::Write;
+
+            file.write_all(b"partial")?;
+            Err(io::Error::other("simulated write failure"))
+        })
+        .expect_err("partial temp files should be cleaned up after write failures");
+        assert!(error.contains("failed to write"));
+        assert!(
+            !path.exists(),
+            "failed unique-temp writes should not leave a stale partial file behind"
         );
 
         let _ = fs::remove_dir_all(root);

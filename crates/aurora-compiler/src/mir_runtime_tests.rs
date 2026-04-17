@@ -37,6 +37,26 @@ fn mir_arg(name: Option<&str>, value: Operand) -> MirArg {
     }
 }
 
+fn run_native_entry(
+    mir_ptr: *const u8,
+    mir_len: usize,
+    source_path_ptr: *const u8,
+    source_path_len: usize,
+    source_ptr: *const u8,
+    source_len: usize,
+) -> i32 {
+    unsafe {
+        crate::mir_runtime::aurora_native_run(
+            mir_ptr,
+            mir_len,
+            source_path_ptr,
+            source_path_len,
+            source_ptr,
+            source_len,
+        )
+    }
+}
+
 #[test]
 fn env_place_helpers_cover_nested_reads_and_writes() {
     let mut env = Env::default();
@@ -157,7 +177,7 @@ fn mir_runtime_stream_and_entrypoint_helpers_cover_success_and_error_paths() {
     let mir = crate::lower_source_to_mir(source).expect("source should lower to MIR");
     let mir_json = serde_json::to_vec(&mir).expect("MIR should serialize");
     let source_path = b"/tmp/runtime_entry.au";
-    let code = crate::mir_runtime::aurora_native_run(
+    let code = run_native_entry(
         mir_json.as_ptr(),
         mir_json.len(),
         source_path.as_ptr(),
@@ -168,7 +188,7 @@ fn mir_runtime_stream_and_entrypoint_helpers_cover_success_and_error_paths() {
     assert_eq!(code, 3);
 
     let invalid_json = b"not-json";
-    let invalid_code = crate::mir_runtime::aurora_native_run(
+    let invalid_code = run_native_entry(
         invalid_json.as_ptr(),
         invalid_json.len(),
         source_path.as_ptr(),
@@ -177,6 +197,17 @@ fn mir_runtime_stream_and_entrypoint_helpers_cover_success_and_error_paths() {
         source.len(),
     );
     assert_eq!(invalid_code, 1);
+
+    let tiny = [b'x'];
+    let oversized_code = run_native_entry(
+        tiny.as_ptr(),
+        (1 << 30) + 1,
+        source_path.as_ptr(),
+        source_path.len(),
+        source.as_ptr(),
+        source.len(),
+    );
+    assert_eq!(oversized_code, 1);
 }
 
 #[test]
@@ -342,6 +373,48 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
     )
     .expect("unit operands should evaluate");
     assert_eq!(unit_value[0].value, Value::Unit);
+}
+
+#[test]
+fn mir_runtime_deadline_helper_rejects_overflowing_instants() {
+    let error = super::deadline_after_millis_with(u64::MAX, |_| None)
+        .expect_err("overflowing instant deadlines should be rejected");
+    assert!(error
+        .message
+        .contains("overflows the MIR runtime deadline range"));
+}
+
+#[test]
+fn mir_runtime_complexity_guard_rejects_excessive_instruction_counts() {
+    let module = MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: Vec::new(),
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![
+                    Instruction::Eval {
+                        value: Operand::Unit
+                    };
+                    super::MAX_RUNTIME_INSTRUCTIONS + 1
+                ],
+                terminator: Terminator::Return(Operand::Int(0)),
+            }],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+
+    let error = super::validate_runtime_module_complexity(&module)
+        .expect_err("oversized MIR modules should be rejected");
+    assert!(error.message.contains("instruction limit"));
 }
 
 #[test]
@@ -2794,6 +2867,15 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
         )
         .expect_err("string division should fail");
     assert!(bad_div.message.contains("matching numeric operands"));
+    let float_div_zero = runtime
+        .eval_binary(
+            crate::ast::BinaryOp::Div,
+            Value::Float(7.5),
+            Value::Float(0.0),
+            span,
+        )
+        .expect_err("float division by zero should fail");
+    assert!(float_div_zero.message.contains("division by zero"));
 
     assert_eq!(
         runtime
@@ -2815,6 +2897,16 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
         )
         .expect_err("bool remainder should fail");
     assert!(bad_mod.message.contains("matching numeric operands"));
+
+    let float_mod_zero = runtime
+        .eval_binary(
+            crate::ast::BinaryOp::Mod,
+            Value::Float(7.5),
+            Value::Float(0.0),
+            span,
+        )
+        .expect_err("float remainder by zero should fail");
+    assert!(float_mod_zero.message.contains("division by zero"));
 
     let task = TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Bool(true))));
     match runtime
@@ -2854,6 +2946,60 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
     assert!(bad_group_member
         .message
         .contains("unsupported task-group method `missing`"));
+}
+
+#[test]
+fn mir_runtime_print_tolerates_poisoned_stdout_lock() {
+    let stdout = Arc::new(Mutex::new(String::new()));
+    let poisoned = stdout.clone();
+    let _ = std::thread::spawn(move || {
+        let _guard = poisoned.lock().expect("poison setup lock should succeed");
+        panic!("poison stdout lock");
+    })
+    .join();
+
+    let mut runtime = MirRuntime::new(
+        MirModule {
+            functions: Vec::new(),
+            classes: Vec::new(),
+            trait_impls: Vec::new(),
+            top_level: None,
+        },
+        stdout.clone(),
+        CancellationContext::default(),
+    );
+    let mut env = Env::default();
+    let value = Value::Int(IntegerValue::from_signed(3));
+    env.define_typed("value", Type::named("int32"), value.clone());
+
+    let printed = runtime
+        .evaluate_call(
+            &crate::mir::CallTarget::Name("print".to_string()),
+            &[mir_arg(Some("value"), Operand::Place("value".to_string()))],
+            &mut env,
+        )
+        .expect("poisoned stdout should not panic");
+    assert_eq!(printed, Value::Unit);
+    assert_eq!(
+        stdout
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_str(),
+        "3\n"
+    );
+}
+
+#[test]
+fn mir_runtime_range_rejects_unsigned_endpoints_outside_signed_index_space() {
+    let error = build_range(vec![EvaluatedMirArg {
+        name: Some("stop".to_string()),
+        value: Value::Int(IntegerValue::from_literal((i128::MAX as u128) + 1)),
+        writeback_place: None,
+    }])
+    .expect_err("oversized unsigned range endpoints should fail");
+    assert!(error
+        .message
+        .contains("must fit in signed index space in MIR runtime"));
 }
 
 #[test]
@@ -3074,7 +3220,7 @@ fn mir_runtime_terminator_and_cleanup_helpers_cover_branch_and_error_paths() {
 #[test]
 fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
     assert_eq!(
-        crate::mir_runtime::aurora_native_run(
+        run_native_entry(
             std::ptr::null(),
             0,
             std::ptr::null(),
@@ -3090,7 +3236,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
     let mir_json = serde_json::to_vec(&mir).expect("mir should serialize");
     let bad_utf8 = [0xffu8];
     assert_eq!(
-        crate::mir_runtime::aurora_native_run(
+        run_native_entry(
             mir_json.as_ptr(),
             mir_json.len(),
             bad_utf8.as_ptr(),
@@ -3101,13 +3247,25 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
         1
     );
     assert_eq!(
-        crate::mir_runtime::aurora_native_run(
+        run_native_entry(
             mir_json.as_ptr(),
             mir_json.len(),
             b"/tmp/test.au".as_ptr(),
             b"/tmp/test.au".len(),
             bad_utf8.as_ptr(),
             bad_utf8.len(),
+        ),
+        1
+    );
+    let tiny = [b'x'];
+    assert_eq!(
+        run_native_entry(
+            tiny.as_ptr(),
+            (1 << 30) + 1,
+            b"/tmp/test.au".as_ptr(),
+            b"/tmp/test.au".len(),
+            source.as_ptr(),
+            source.len(),
         ),
         1
     );
@@ -3793,7 +3951,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
     };
     assert!(receiver_error.message.contains("missing its receiver"));
 
-    let panic_code = crate::mir_runtime::aurora_native_run(
+    let panic_code = run_native_entry(
         std::ptr::null(),
         0,
         std::ptr::null(),

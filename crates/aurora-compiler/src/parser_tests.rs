@@ -2,14 +2,20 @@ use super::*;
 
 fn parse_item_from(source: &str) -> Result<Item> {
     let tokens = lex(source)?;
-    let mut parser = Parser { tokens, index: 0 };
+    let mut parser = Parser::new(tokens);
     parser.parse_item()
 }
 
 fn parse_stmt_from(source: &str) -> Result<Stmt> {
     let tokens = lex(source)?;
-    let mut parser = Parser { tokens, index: 0 };
+    let mut parser = Parser::new(tokens);
     parser.parse_stmt()
+}
+
+fn parse_pattern_from(source: &str) -> Result<Pattern> {
+    let tokens = lex(source)?;
+    let mut parser = Parser::new(tokens);
+    parser.parse_pattern()
 }
 
 #[test]
@@ -234,7 +240,7 @@ fn parse_statement_and_operator_variants_cover_remaining_forms() {
     }
 
     let tokens = lex("==\n").expect("tokens");
-    let mut parser = Parser { tokens, index: 0 };
+    let mut parser = Parser::new(tokens);
     let bad = parser
         .parse_assignment_operator()
         .expect_err("invalid assignment operator should fail");
@@ -246,37 +252,37 @@ fn parse_statement_and_operator_variants_cover_remaining_forms() {
 #[test]
 fn parser_helpers_cover_brackets_keywords_and_member_names() {
     let tokens = lex("Vec[Map[String, int32]]?\n").expect("tokens");
-    let parser = Parser { tokens, index: 0 };
+    let parser = Parser::new(tokens);
     assert_eq!(parser.skip_type_tokens(0), 10);
 
     let tokens = lex("Vec[Map[String, int32]\n").expect("tokens");
-    let parser = Parser { tokens, index: 0 };
+    let parser = Parser::new(tokens);
     assert_eq!(parser.skip_type_tokens(0), 10);
 
     let tokens = lex("[value]\n").expect("tokens");
-    let parser = Parser { tokens, index: 0 };
+    let parser = Parser::new(tokens);
     assert_eq!(parser.skip_bracketed_tokens(0), Some(3));
 
     let tokens = lex("[value\n").expect("tokens");
-    let parser = Parser { tokens, index: 0 };
+    let parser = Parser::new(tokens);
     assert_eq!(parser.skip_bracketed_tokens(0), None);
 
     let tokens = lex("import name\n").expect("tokens");
-    let mut parser = Parser { tokens, index: 0 };
+    let mut parser = Parser::new(tokens);
     assert!(parser.at_keyword_import());
     assert!(!parser.at_keyword_from());
     assert!(parser.eat_simple(&TokenKind::KwImport).is_some());
     assert!(parser.eat_simple(&TokenKind::KwFrom).is_none());
 
     let tokens = lex("spawn\n").expect("tokens");
-    let mut parser = Parser { tokens, index: 0 };
+    let mut parser = Parser::new(tokens);
     assert_eq!(
         parser.expect_member_name().expect("spawn member name"),
         "spawn".to_string()
     );
 
     let tokens = lex("1\n").expect("tokens");
-    let mut parser = Parser { tokens, index: 0 };
+    let mut parser = Parser::new(tokens);
     let err = parser
         .expect_member_name()
         .expect_err("numeric member name should fail");
@@ -285,7 +291,7 @@ fn parser_helpers_cover_brackets_keywords_and_member_names() {
         .contains("expected member name, found IntLiteral"));
 
     let tokens = lex("1\n").expect("tokens");
-    let mut parser = Parser { tokens, index: 0 };
+    let mut parser = Parser::new(tokens);
     let err = parser
         .expect_identifier()
         .expect_err("numeric identifier should fail");
@@ -293,6 +299,59 @@ fn parser_helpers_cover_brackets_keywords_and_member_names() {
 
     let custom = parser.error_here("custom parser error");
     assert_eq!(custom.message, "custom parser error");
+}
+
+#[test]
+fn parse_expression_reports_recursion_limit_for_deep_nesting() {
+    let depth = crate::limits::RECURSION_LIMIT + 32;
+    let mut source = "(".repeat(depth);
+    source.push('1');
+    source.push_str(&")".repeat(depth));
+
+    let error = parse_expression(&source).expect_err("deeply nested expressions should fail");
+    assert!(error.message.contains("recursion limit"));
+}
+
+#[test]
+fn parse_expression_accepts_reasonably_deep_generated_expressions() {
+    let depth = 48usize;
+    let mut source = "(".repeat(depth);
+    source.push('1');
+    source.push_str(&")".repeat(depth));
+
+    let expr = parse_expression(&source).expect("generated nested expressions should parse");
+    assert!(matches!(expr.kind, ExprKind::Group(_)));
+}
+
+#[test]
+fn parser_reports_recursion_limits_for_nested_statements_types_and_patterns() {
+    let depth = crate::limits::RECURSION_LIMIT + 32;
+
+    let mut statement_source = String::from("def main() -> None:\n");
+    for level in 0..depth {
+        statement_source.push_str(&"    ".repeat(level + 1));
+        statement_source.push_str("if true:\n");
+    }
+    statement_source.push_str(&"    ".repeat(depth + 1));
+    statement_source.push_str("pass\n");
+    let statement_error =
+        parse(&statement_source).expect_err("deeply nested statements should fail");
+    assert!(statement_error.message.contains("nesting exceeds"));
+
+    let mut type_source = String::from("def main(value: ");
+    type_source.push_str(&"Vec[".repeat(depth));
+    type_source.push_str("int32");
+    type_source.push_str(&"]".repeat(depth));
+    type_source.push_str(") -> None:\n    pass\n");
+    let type_error = parse_item_from(&type_source).expect_err("deeply nested types should fail");
+    assert!(type_error.message.contains("nesting exceeds"));
+
+    let mut pattern_source = "Wrap(".repeat(depth);
+    pattern_source.push('_');
+    pattern_source.push_str(&")".repeat(depth));
+    let pattern_error =
+        parse_pattern_from(&pattern_source).expect_err("deeply nested patterns should fail");
+    assert!(pattern_error.message.contains("nesting exceeds"));
 }
 
 #[test]
@@ -305,16 +364,13 @@ fn parser_helpers_cover_specialization_and_format_parts() {
 
     let indexed = parse_expression("values[idx]").expect("index expression");
     let tokens = lex("[Type].field\n").expect("tokens");
-    let parser = Parser { tokens, index: 0 };
+    let parser = Parser::new(tokens);
     assert!(!parser.starts_specialization_suffix(&indexed));
 
-    let parser = Parser {
-        tokens: vec![Token {
-            kind: TokenKind::Eof,
-            span: Span::new(1, 1),
-        }],
-        index: 0,
-    };
+    let mut parser = Parser::new(vec![Token {
+        kind: TokenKind::Eof,
+        span: Span::new(1, 1),
+    }]);
     let parts = parser
         .parse_format_parts("hello {config[\"name\"]} tail", Span::new(1, 1))
         .expect("format parts");
@@ -343,6 +399,16 @@ fn parser_helpers_cover_specialization_and_format_parts() {
     assert!(unterminated
         .message
         .contains("unterminated f-string interpolation"));
+}
+
+#[test]
+fn parse_format_parts_reuses_the_current_recursion_budget() {
+    let mut parser = Parser::new(lex("value\n").expect("tokenization should succeed"));
+    parser.recursion_depth = crate::limits::RECURSION_LIMIT;
+    let error = parser
+        .parse_format_parts("value {1}", Span::new(1, 1))
+        .expect_err("f-string interpolation should share the parser recursion budget");
+    assert!(error.message.contains("expression nesting"));
 }
 
 #[test]
@@ -660,7 +726,8 @@ fn parse_control_flow_patterns_and_helper_errors_cover_more_branches() {
 #[test]
 fn parser_helper_functions_cover_format_offsets_and_specialization_checks() {
     let tokens = lex("Value[int32](1)\n").expect("tokenization should succeed");
-    let parser = Parser { tokens, index: 1 };
+    let mut parser = Parser::new(tokens);
+    parser.index = 1;
     let expr = Expr {
         kind: ExprKind::Name("Value".to_string()),
         span: Span::new(1, 1),
@@ -669,7 +736,8 @@ fn parser_helper_functions_cover_format_offsets_and_specialization_checks() {
     assert_eq!(parser.skip_bracketed_tokens(1), Some(4));
 
     let tokens = lex("values[idx].clone()\n").expect("tokenization should succeed");
-    let parser = Parser { tokens, index: 1 };
+    let mut parser = Parser::new(tokens);
+    parser.index = 1;
     let expr = Expr {
         kind: ExprKind::Name("values".to_string()),
         span: Span::new(1, 1),
@@ -677,10 +745,7 @@ fn parser_helper_functions_cover_format_offsets_and_specialization_checks() {
     assert!(!parser.starts_specialization_suffix(&expr));
     assert_eq!(parser.skip_bracketed_tokens(1), Some(4));
 
-    let parser = Parser {
-        tokens: lex("value\n").expect("tokenization should succeed"),
-        index: 0,
-    };
+    let mut parser = Parser::new(lex("value\n").expect("tokenization should succeed"));
     let format_error = parser
         .parse_format_parts("{ }", Span::new(3, 4))
         .expect_err("empty interpolation should fail");
@@ -688,10 +753,7 @@ fn parser_helper_functions_cover_format_offsets_and_specialization_checks() {
         .message
         .contains("f-string interpolation cannot be empty"));
 
-    let parser = Parser {
-        tokens: lex("value\n").expect("tokenization should succeed"),
-        index: 0,
-    };
+    let mut parser = Parser::new(lex("value\n").expect("tokenization should succeed"));
     let unterminated = parser
         .parse_format_parts("{value", Span::new(3, 4))
         .expect_err("unterminated interpolation should fail");
@@ -754,7 +816,8 @@ fn parser_covers_blank_lines_empty_literals_and_specialization_offsets() {
     assert!(matches!(empty_set.kind, ExprKind::Set(ref items) if items.is_empty()));
 
     let tokens = lex("Value[int32].make()\n").expect("tokenization should succeed");
-    let parser = Parser { tokens, index: 1 };
+    let mut parser = Parser::new(tokens);
+    parser.index = 1;
     let expr = Expr {
         kind: ExprKind::Name("Value".to_string()),
         span: Span::new(1, 1),
@@ -763,7 +826,8 @@ fn parser_covers_blank_lines_empty_literals_and_specialization_offsets() {
     assert_eq!(parser.skip_bracketed_tokens(1), Some(4));
 
     let tokens = lex("Value[int32\n").expect("tokenization should succeed");
-    let parser = Parser { tokens, index: 1 };
+    let mut parser = Parser::new(tokens);
+    parser.index = 1;
     assert_eq!(parser.skip_bracketed_tokens(1), None);
     assert!(!parser.starts_specialization_suffix(&expr));
 
@@ -1022,15 +1086,15 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
     assert!(matches!(whitespace_only_block_stmt, Stmt::If(_)));
 
     let tokens = lex("value[\n").expect("tokens");
-    let parser = Parser { tokens, index: 0 };
+    let parser = Parser::new(tokens);
     assert!(!parser.is_assignment_stmt());
 
     let tokens = lex("indirect Value\n").expect("tokens");
-    let parser = Parser { tokens, index: 0 };
+    let parser = Parser::new(tokens);
     assert_eq!(parser.skip_type_tokens(0), 2);
 
     let tokens = lex("[[value]]\n").expect("tokens");
-    let parser = Parser { tokens, index: 0 };
+    let parser = Parser::new(tokens);
     assert_eq!(parser.skip_bracketed_tokens(0), Some(5));
 
     let fstring = parse_expression("f\"{Set{1}}\"")

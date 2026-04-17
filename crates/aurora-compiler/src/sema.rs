@@ -809,9 +809,15 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         let Item::Class(class_decl) = item else {
             continue;
         };
-        let class_info = classes
-            .get(&class_decl.name)
-            .expect("class should exist after collection");
+        let class_info = classes.get(&class_decl.name).ok_or_else(|| {
+            Diagnostic::at(
+                class_decl.span,
+                format!(
+                    "internal error: class `{}` disappeared after collection",
+                    class_decl.name
+                ),
+            )
+        })?;
         for field_decl in &class_decl.fields {
             if field_decl.ty.indirect {
                 continue;
@@ -819,7 +825,15 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             let field_ty = &class_info
                 .fields
                 .get(&field_decl.name)
-                .expect("class field should have lowered type")
+                .ok_or_else(|| {
+                    Diagnostic::at(
+                        field_decl.span,
+                        format!(
+                            "internal error: class field `{}` on `{}` lost its lowered type",
+                            field_decl.name, class_decl.name
+                        ),
+                    )
+                })?
                 .ty;
             if type_reaches_class_through_non_indirect_fields(
                 field_ty,
@@ -846,7 +860,15 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             let field_ty = &class
                 .fields
                 .get(&field_decl.name)
-                .expect("class field should have lowered type")
+                .ok_or_else(|| {
+                    Diagnostic::at(
+                        field_decl.span,
+                        format!(
+                            "internal error: class field `{}` on `{}` lost its lowered type",
+                            field_decl.name, class.decl.name
+                        ),
+                    )
+                })?
                 .ty;
             if !type_is_copy_in_context(field_ty, &classes, &enums) {
                 return Err(Diagnostic::at(
@@ -880,7 +902,20 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             let Some(default) = &field.default else {
                 continue;
             };
-            let lowered = class.fields.get(&field.name).unwrap().ty.clone();
+            let lowered = class
+                .fields
+                .get(&field.name)
+                .ok_or_else(|| {
+                    Diagnostic::at(
+                        field.span,
+                        format!(
+                            "internal error: class field `{}` on `{}` lost its lowered type",
+                            field.name, class.decl.name
+                        ),
+                    )
+                })?
+                .ty
+                .clone();
             let default_ty = default_checker
                 .with_type_params(class_type_param_scope.clone(), BTreeMap::new())
                 .type_of_expr_hint(default, &mut HashMap::new(), Some(&lowered))?;
@@ -1129,10 +1164,15 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             if methods.contains_key(trait_method_name) {
                 continue;
             }
-            let trait_method = trait_info
-                .methods
-                .get(trait_method_name)
-                .expect("trait method should exist");
+            let trait_method = trait_info.methods.get(trait_method_name).ok_or_else(|| {
+                Diagnostic::at(
+                    impl_decl.span,
+                    format!(
+                        "internal error: trait method `{}` disappeared during impl checking",
+                        trait_method_name
+                    ),
+                )
+            })?;
             if trait_method.decl.body.is_empty() {
                 return Err(Diagnostic::at(
                     impl_decl.span,
@@ -1196,7 +1236,11 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
     };
 
     if !program.top_level_stmts.is_empty() && program.functions.contains_key("main") {
-        let main = program.functions.get("main").unwrap();
+        let main = program.functions.get("main").ok_or_else(|| {
+            Diagnostic::new(
+                "internal error: `main` disappeared while validating top-level statements",
+            )
+        })?;
         return Err(Diagnostic::at(
             main.decl.span,
             "files cannot mix top-level executable statements with an explicit `main` function",
@@ -1736,11 +1780,13 @@ fn type_reaches_class_through_non_indirect_fields(
                 if field_decl.ty.indirect {
                     return false;
                 }
-                let field_ty = &class_info
+                let Some(field_ty) = class_info
                     .fields
                     .get(&field_decl.name)
-                    .expect("class field should have lowered type")
-                    .ty;
+                    .map(|field| &field.ty)
+                else {
+                    return false;
+                };
                 type_reaches_class_through_non_indirect_fields(field_ty, target, classes, visiting)
             });
             visiting.remove(name);
@@ -2102,6 +2148,20 @@ enum BlockFlow {
 }
 
 impl<'a> FunctionChecker<'a> {
+    fn bound_argument<'b>(
+        &self,
+        ordered_args: &'b [Option<&'b Argument>],
+        index: usize,
+        span: crate::diag::Span,
+        message: impl Into<String>,
+    ) -> Result<&'b Argument> {
+        ordered_args
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or_else(|| Diagnostic::at(span, format!("internal error: {}", message.into())))
+    }
+
     fn is_copy_type(&self, ty: &Type) -> bool {
         type_is_copy_in_context(ty, self.classes, self.enums)
     }
@@ -2904,7 +2964,12 @@ impl<'a> FunctionChecker<'a> {
                             let expected_source = self
                                 .current_return_borrow_source
                                 .as_deref()
-                                .expect("borrowed return source should be resolved");
+                                .ok_or_else(|| {
+                                    Diagnostic::at(
+                                        value.span,
+                                        "internal error: borrowed return source was not resolved",
+                                    )
+                                })?;
                             if !self.borrow_source_matches(expected_source, &actual_source) {
                                 return Err(Diagnostic::at(
                                     value.span,
@@ -3018,12 +3083,15 @@ impl<'a> FunctionChecker<'a> {
                             if name == "Channel" && args.len() == 1 =>
                         {
                             let element_ty = args[0].clone();
-                            let passing =
-                                if borrow_mode.is_some() && !self.is_copy_type(&element_ty) {
-                                    borrow_mode.unwrap()
+                            let passing = if let Some(borrow_mode) = borrow_mode {
+                                if !self.is_copy_type(&element_ty) {
+                                    borrow_mode
                                 } else {
                                     ReceiverKind::Value
-                                };
+                                }
+                            } else {
+                                ReceiverKind::Value
+                            };
                             (element_ty, passing, false)
                         }
                         (Type::Named(name, args), borrow_mode) if name == "Vec" && args.len() == 1 => {
@@ -3330,7 +3398,12 @@ impl<'a> FunctionChecker<'a> {
         match &callee.kind {
             ExprKind::Name(name) if name == "after" => {
                 let ordered_args = BuiltinFunction::After.bind_args(args, expr.span)?;
-                let duration_arg = ordered_args[0].expect("`after` requires exactly one argument");
+                let duration_arg = ordered_args[0].ok_or_else(|| {
+                    Diagnostic::at(
+                        expr.span,
+                        "internal error: `after` should bind exactly one argument in `select`",
+                    )
+                })?;
                 let duration_ty = self.type_of_expr(&duration_arg.value, locals)?;
                 if duration_ty != Type::named("Duration") {
                     return Err(Diagnostic::at(
@@ -3362,7 +3435,12 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Member { object, field } if field == "send" => {
                 let ordered_args = BuiltinMember::ChannelSend.bind_args(args, expr.span)?;
-                let send_arg = ordered_args[0].expect("`send` requires exactly one argument");
+                let send_arg = ordered_args[0].ok_or_else(|| {
+                    Diagnostic::at(
+                        expr.span,
+                        "internal error: `send` should bind exactly one argument in `select`",
+                    )
+                })?;
                 let receiver_ty = self.type_of_expr(object, locals)?;
                 let Type::Named(name, type_args) = receiver_ty else {
                     return Err(Diagnostic::at(
@@ -3956,7 +4034,15 @@ impl<'a> FunctionChecker<'a> {
                         Ok(Type::Named("Map".to_string(), lowered))
                     }
                     ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
-                        let class = self.resolve_class_info(name).unwrap();
+                        let class = self.resolve_class_info(name).ok_or_else(|| {
+                            Diagnostic::at(
+                                expr.span,
+                                format!(
+                                    "internal error: class `{}` disappeared during explicit type argument checking",
+                                    name
+                                ),
+                            )
+                        })?;
                         if lowered.len() != class.decl.type_params.len() {
                             return Err(Diagnostic::at(
                                 expr.span,
@@ -3976,7 +4062,15 @@ impl<'a> FunctionChecker<'a> {
                         Ok(Type::Named(name.clone(), lowered))
                     }
                     ExprKind::Name(name) if self.resolve_enum_info(name).is_some() => {
-                        let enum_info = self.resolve_enum_info(name).unwrap();
+                        let enum_info = self.resolve_enum_info(name).ok_or_else(|| {
+                            Diagnostic::at(
+                                expr.span,
+                                format!(
+                                    "internal error: enum `{}` disappeared during explicit type argument checking",
+                                    name
+                                ),
+                            )
+                        })?;
                         if lowered.len() != enum_info.decl.type_params.len() {
                             return Err(Diagnostic::at(
                                 expr.span,
@@ -4293,9 +4387,11 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        if let Some(Type::Named(expected_name, _)) = expected {
-                            if expected_name == enum_name {
-                                return Ok(expected.unwrap().clone());
+                        if let Some(expected_ty) = expected {
+                            if let Type::Named(expected_name, _) = expected_ty {
+                                if expected_name == enum_name {
+                                    return Ok(expected_ty.clone());
+                                }
                             }
                         }
                         if enum_info.decl.type_params.is_empty() {
@@ -4785,16 +4881,25 @@ impl<'a> FunctionChecker<'a> {
                 )
             }
             ExprKind::Name(name) if BuiltinFunction::from_name(name).is_some() => {
-                let builtin = BuiltinFunction::from_name(name).unwrap();
+                let builtin = BuiltinFunction::from_name(name).ok_or_else(|| {
+                    Diagnostic::at(
+                        span,
+                        format!(
+                            "internal error: builtin function `{}` disappeared during call checking",
+                            name
+                        ),
+                    )
+                })?;
                 let ordered_args = builtin.bind_args(args, span)?;
                 match builtin {
                     BuiltinFunction::Print => {
-                        self.type_of_expr(
-                            &ordered_args[0]
-                                .expect("`print` requires exactly one argument")
-                                .value,
-                            locals,
-                        )?;
+                        let value_arg = ordered_args[0].ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                "internal error: `print` should bind exactly one argument",
+                            )
+                        })?;
+                        self.type_of_expr(&value_arg.value, locals)?;
                         Ok(Type::Unit)
                     }
                     BuiltinFunction::Range => {
@@ -4850,8 +4955,12 @@ impl<'a> FunctionChecker<'a> {
                     BuiltinFunction::TaskGroup => Ok(Type::named("TaskGroup")),
                     BuiltinFunction::Cancelled => Ok(Type::named("bool")),
                     BuiltinFunction::After => {
-                        let duration_arg =
-                            ordered_args[0].expect("`after` requires exactly one argument");
+                        let duration_arg = ordered_args[0].ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                "internal error: `after` should bind exactly one argument",
+                            )
+                        })?;
                         let duration_ty = self.type_of_expr(&duration_arg.value, locals)?;
                         if duration_ty != Type::named("Duration") {
                             return Err(Diagnostic::at(
@@ -4865,8 +4974,12 @@ impl<'a> FunctionChecker<'a> {
                         Ok(Type::named("Duration"))
                     }
                     BuiltinFunction::Sleep => {
-                        let duration_arg =
-                            ordered_args[0].expect("`sleep` requires exactly one argument");
+                        let duration_arg = ordered_args[0].ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                "internal error: `sleep` should bind exactly one argument",
+                            )
+                        })?;
                         let duration_ty = self.type_of_expr(&duration_arg.value, locals)?;
                         if duration_ty != Type::named("Duration") {
                             return Err(Diagnostic::at(
@@ -4880,8 +4993,12 @@ impl<'a> FunctionChecker<'a> {
                         Ok(Type::Unit)
                     }
                     BuiltinFunction::Abs => {
-                        let value_arg =
-                            ordered_args[0].expect("`abs` requires exactly one argument");
+                        let value_arg = ordered_args[0].ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                "internal error: `abs` should bind exactly one argument",
+                            )
+                        })?;
                         let value_ty = self.type_of_expr(&value_arg.value, locals)?;
                         if !is_numeric_type(&value_ty) {
                             return Err(Diagnostic::at(
@@ -4895,8 +5012,15 @@ impl<'a> FunctionChecker<'a> {
                         Ok(value_ty)
                     }
                     BuiltinFunction::Min | BuiltinFunction::Max => {
-                        let left_arg =
-                            ordered_args[0].expect("`min`/`max` requires a left argument");
+                        let left_arg = ordered_args[0].ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                format!(
+                                    "internal error: `{}` should bind a left argument",
+                                    builtin.name()
+                                ),
+                            )
+                        })?;
                         let left_ty = self.type_of_expr(&left_arg.value, locals)?;
                         if !is_numeric_type(&left_ty) {
                             return Err(Diagnostic::at(
@@ -4908,8 +5032,15 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        let right_arg =
-                            ordered_args[1].expect("`min`/`max` requires a right argument");
+                        let right_arg = ordered_args[1].ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                format!(
+                                    "internal error: `{}` should bind a right argument",
+                                    builtin.name()
+                                ),
+                            )
+                        })?;
                         let right_ty =
                             self.type_of_expr_hint(&right_arg.value, locals, Some(&left_ty))?;
                         if right_ty != left_ty {
@@ -4936,8 +5067,12 @@ impl<'a> FunctionChecker<'a> {
                         Ok(left_ty)
                     }
                     BuiltinFunction::Sqrt => {
-                        let value_arg =
-                            ordered_args[0].expect("`sqrt` requires exactly one argument");
+                        let value_arg = ordered_args[0].ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                "internal error: `sqrt` should bind exactly one argument",
+                            )
+                        })?;
                         let value_ty = self.type_of_expr(&value_arg.value, locals)?;
                         if !matches!(
                             value_ty,
@@ -4956,8 +5091,12 @@ impl<'a> FunctionChecker<'a> {
                         Ok(value_ty)
                     }
                     BuiltinFunction::ParseInt32 => {
-                        let text_arg =
-                            ordered_args[0].expect("`parse_int32` requires exactly one argument");
+                        let text_arg = ordered_args[0].ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                "internal error: `parse_int32` should bind exactly one argument",
+                            )
+                        })?;
                         let text_ty = self.type_of_expr_hint(
                             &text_arg.value,
                             locals,
@@ -4975,8 +5114,12 @@ impl<'a> FunctionChecker<'a> {
                         ))
                     }
                     BuiltinFunction::ParseInt64 => {
-                        let text_arg =
-                            ordered_args[0].expect("`parse_int64` requires exactly one argument");
+                        let text_arg = ordered_args[0].ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                "internal error: `parse_int64` should bind exactly one argument",
+                            )
+                        })?;
                         let text_ty = self.type_of_expr_hint(
                             &text_arg.value,
                             locals,
@@ -4994,8 +5137,12 @@ impl<'a> FunctionChecker<'a> {
                         ))
                     }
                     BuiltinFunction::ParseFloat64 => {
-                        let text_arg =
-                            ordered_args[0].expect("`parse_float64` requires exactly one argument");
+                        let text_arg = ordered_args[0].ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                "internal error: `parse_float64` should bind exactly one argument",
+                            )
+                        })?;
                         let text_ty = self.type_of_expr_hint(
                             &text_arg.value,
                             locals,
@@ -5018,7 +5165,15 @@ impl<'a> FunctionChecker<'a> {
                 }
             }
             ExprKind::Name(name) if self.resolve_function_info(name).is_some() => {
-                let function = self.resolve_function_info(name).unwrap();
+                let function = self.resolve_function_info(name).ok_or_else(|| {
+                    Diagnostic::at(
+                        span,
+                        format!(
+                            "internal error: function `{}` disappeared during call checking",
+                            name
+                        ),
+                    )
+                })?;
                 let seed_substitutions = if let Some(type_args) = explicit_type_args {
                     self.explicit_type_substitutions(
                         &function.decl.type_params,
@@ -5044,7 +5199,15 @@ impl<'a> FunctionChecker<'a> {
                 )
             }
             ExprKind::Name(name) if self.resolve_class_info(name).is_some() => {
-                let class = self.resolve_class_info(name).unwrap();
+                let class = self.resolve_class_info(name).ok_or_else(|| {
+                    Diagnostic::at(
+                        span,
+                        format!(
+                            "internal error: class `{}` disappeared during constructor checking",
+                            name
+                        ),
+                    )
+                })?;
                 let mut provided = HashMap::new();
                 let mut substitutions = if let Some(type_args) = explicit_type_args {
                     self.explicit_type_substitutions(
@@ -5183,13 +5346,21 @@ impl<'a> FunctionChecker<'a> {
                     })
                     .collect::<Result<Vec<_>>>()?;
                 for (type_param, bounds) in &class.type_param_bounds {
-                    let resolved_ty = resolved_args[class
+                    let type_param_index = class
                         .decl
                         .type_params
                         .iter()
                         .position(|name| name == type_param)
-                        .expect("class type parameter should exist")]
-                    .clone();
+                        .ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                format!(
+                                    "internal error: class `{}` is missing declared type parameter `{}` during bound checking",
+                                    name, type_param
+                                ),
+                            )
+                        })?;
+                    let resolved_ty = resolved_args[type_param_index].clone();
                     let substitutions =
                         substitutions_from_decl_type_args(&class.decl.type_params, &resolved_args);
                     let resolved_bounds = bounds
@@ -5356,9 +5527,11 @@ impl<'a> FunctionChecker<'a> {
                             )
                         })?;
                         if variant.payloads.is_empty() && args.is_empty() {
-                            if let Some(Type::Named(expected_name, _)) = expected {
-                                if expected_name == enum_name {
-                                    return Ok(expected.unwrap().clone());
+                            if let Some(expected_ty) = expected {
+                                if let Type::Named(expected_name, _) = expected_ty {
+                                    if expected_name == enum_name {
+                                        return Ok(expected_ty.clone());
+                                    }
                                 }
                             }
                             if enum_info.decl.type_params.is_empty() {
@@ -5452,13 +5625,21 @@ impl<'a> FunctionChecker<'a> {
                             })
                             .collect::<Result<Vec<_>>>()?;
                         for (type_param, bounds) in &enum_info.type_param_bounds {
-                            let resolved_ty = resolved_args[enum_info
+                            let resolved_index = enum_info
                                 .decl
                                 .type_params
                                 .iter()
                                 .position(|name| name == type_param)
-                                .expect("enum type parameter should exist")]
-                            .clone();
+                                .ok_or_else(|| {
+                                    Diagnostic::at(
+                                        span,
+                                        format!(
+                                            "internal error: enum `{}` is missing declared type parameter `{}` during bound checking",
+                                            enum_name, type_param
+                                        ),
+                                    )
+                                })?;
+                            let resolved_ty = resolved_args[resolved_index].clone();
                             let substitutions = substitutions_from_decl_type_args(
                                 &enum_info.decl.type_params,
                                 &resolved_args,
@@ -5617,8 +5798,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let push_arg = ordered_args[0]
-                                        .expect("`push` requires exactly one argument");
+                                    let push_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`push` requires exactly one argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &push_arg.value,
                                         locals,
@@ -5654,8 +5839,12 @@ impl<'a> FunctionChecker<'a> {
                                     ))
                                 }
                                 BuiltinMember::VecGet => {
-                                    let index_arg = ordered_args[0]
-                                        .expect("`get` requires exactly one argument");
+                                    let index_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`get` requires exactly one argument",
+                                    )?;
                                     let index_ty = self.type_of_expr_hint(
                                         &index_arg.value,
                                         locals,
@@ -5685,8 +5874,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let index_arg = ordered_args[0]
-                                        .expect("`set` requires an `index` argument");
+                                    let index_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`set` requires an `index` argument",
+                                    )?;
                                     let index_ty = self.type_of_expr_hint(
                                         &index_arg.value,
                                         locals,
@@ -5701,8 +5894,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let value_arg =
-                                        ordered_args[1].expect("`set` requires a `value` argument");
+                                    let value_arg = self.bound_argument(
+                                        &ordered_args,
+                                        1,
+                                        span,
+                                        "`set` requires a `value` argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &value_arg.value,
                                         locals,
@@ -5735,8 +5932,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let index_arg = ordered_args[0]
-                                        .expect("`remove` requires exactly one argument");
+                                    let index_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`remove` requires exactly one argument",
+                                    )?;
                                     let index_ty = self.type_of_expr_hint(
                                         &index_arg.value,
                                         locals,
@@ -5766,8 +5967,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let first_arg = ordered_args[0]
-                                        .expect("`swap` requires a `first` argument");
+                                    let first_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`swap` requires a `first` argument",
+                                    )?;
                                     let first_ty = self.type_of_expr_hint(
                                         &first_arg.value,
                                         locals,
@@ -5782,8 +5987,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let second_arg = ordered_args[1]
-                                        .expect("`swap` requires a `second` argument");
+                                    let second_arg = self.bound_argument(
+                                        &ordered_args,
+                                        1,
+                                        span,
+                                        "`swap` requires a `second` argument",
+                                    )?;
                                     let second_ty = self.type_of_expr_hint(
                                         &second_arg.value,
                                         locals,
@@ -5801,8 +6010,12 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::named("bool"))
                                 }
                                 BuiltinMember::VecContains => {
-                                    let value_arg = ordered_args[0]
-                                        .expect("`contains` requires a `value` argument");
+                                    let value_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`contains` requires a `value` argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &value_arg.value,
                                         locals,
@@ -5829,8 +6042,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let other_arg = ordered_args[0]
-                                        .expect("`extend` requires an `other` argument");
+                                    let other_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`extend` requires an `other` argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &other_arg.value,
                                         locals,
@@ -5858,8 +6075,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let index_arg = ordered_args[0]
-                                        .expect("`insert` requires an `index` argument");
+                                    let index_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`insert` requires an `index` argument",
+                                    )?;
                                     let index_ty = self.type_of_expr_hint(
                                         &index_arg.value,
                                         locals,
@@ -5874,8 +6095,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let value_arg = ordered_args[1]
-                                        .expect("`insert` requires a `value` argument");
+                                    let value_arg = self.bound_argument(
+                                        &ordered_args,
+                                        1,
+                                        span,
+                                        "`insert` requires a `value` argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &value_arg.value,
                                         locals,
@@ -5920,8 +6145,12 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::StringContains
                                 | BuiltinMember::StringStartsWith
                                 | BuiltinMember::StringEndsWith => {
-                                    let text_arg = ordered_args[0]
-                                        .expect("string predicate methods require one argument");
+                                    let text_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "string predicate methods require one argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &text_arg.value,
                                         locals,
@@ -5939,8 +6168,12 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::named("bool"))
                                 }
                                 BuiltinMember::StringSplit => {
-                                    let text_arg = ordered_args[0]
-                                        .expect("`split` requires a `text` argument");
+                                    let text_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`split` requires a `text` argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &text_arg.value,
                                         locals,
@@ -5955,8 +6188,12 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Named("Vec".to_string(), vec![Type::named("String")]))
                                 }
                                 BuiltinMember::StringReplace => {
-                                    let from_arg = ordered_args[0]
-                                        .expect("`replace` requires a `from` argument");
+                                    let from_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`replace` requires a `from` argument",
+                                    )?;
                                     let from_actual = self.type_of_expr_hint(
                                         &from_arg.value,
                                         locals,
@@ -5971,8 +6208,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let to_arg = ordered_args[1]
-                                        .expect("`replace` requires a `to` argument");
+                                    let to_arg = self.bound_argument(
+                                        &ordered_args,
+                                        1,
+                                        span,
+                                        "`replace` requires a `to` argument",
+                                    )?;
                                     let to_actual = self.type_of_expr_hint(
                                         &to_arg.value,
                                         locals,
@@ -5994,8 +6235,12 @@ impl<'a> FunctionChecker<'a> {
                                 | BuiltinMember::StringTrim
                                 | BuiltinMember::StringClone => Ok(Type::named("String")),
                                 BuiltinMember::StringJoin => {
-                                    let parts_arg = ordered_args[0]
-                                        .expect("`join` requires a `parts` argument");
+                                    let parts_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`join` requires a `parts` argument",
+                                    )?;
                                     let expected_parts =
                                         Type::Named("Vec".to_string(), vec![Type::named("String")]);
                                     let actual = self.type_of_expr_hint(
@@ -6016,8 +6261,12 @@ impl<'a> FunctionChecker<'a> {
                                 }
                                 BuiltinMember::StringStripPrefix
                                 | BuiltinMember::StringStripSuffix => {
-                                    let text_arg = ordered_args[0]
-                                        .expect("string strip methods require one `text` argument");
+                                    let text_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "string strip methods require one `text` argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &text_arg.value,
                                         locals,
@@ -6050,8 +6299,12 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::MapIsEmpty => Ok(Type::named("bool")),
                                 BuiltinMember::MapClone => Ok(receiver_ty.clone()),
                                 BuiltinMember::MapGet => {
-                                    let key_arg = ordered_args[0]
-                                        .expect("`get` requires exactly one key argument");
+                                    let key_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`get` requires exactly one key argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &key_arg.value,
                                         locals,
@@ -6081,8 +6334,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let key_arg =
-                                        ordered_args[0].expect("`set` requires a `key` argument");
+                                    let key_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`set` requires a `key` argument",
+                                    )?;
                                     let key_actual = self.type_of_expr_hint(
                                         &key_arg.value,
                                         locals,
@@ -6097,8 +6354,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let value_arg =
-                                        ordered_args[1].expect("`set` requires a `value` argument");
+                                    let value_arg = self.bound_argument(
+                                        &ordered_args,
+                                        1,
+                                        span,
+                                        "`set` requires a `value` argument",
+                                    )?;
                                     let value_actual = self.type_of_expr_hint(
                                         &value_arg.value,
                                         locals,
@@ -6134,8 +6395,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let key_arg = ordered_args[0]
-                                        .expect("`remove` requires exactly one key argument");
+                                    let key_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`remove` requires exactly one key argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &key_arg.value,
                                         locals,
@@ -6159,8 +6424,12 @@ impl<'a> FunctionChecker<'a> {
                                     ))
                                 }
                                 BuiltinMember::MapContainsKey => {
-                                    let key_arg = ordered_args[0]
-                                        .expect("`contains_key` requires exactly one key argument");
+                                    let key_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`contains_key` requires exactly one key argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &key_arg.value,
                                         locals,
@@ -6219,8 +6488,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let other_arg = ordered_args[0]
-                                        .expect("`extend` requires an `other` argument");
+                                    let other_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`extend` requires an `other` argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &other_arg.value,
                                         locals,
@@ -6251,8 +6524,12 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::SetIsEmpty => Ok(Type::named("bool")),
                                 BuiltinMember::SetClone => Ok(receiver_ty.clone()),
                                 BuiltinMember::SetContains => {
-                                    let value_arg = ordered_args[0]
-                                        .expect("`contains` requires a `value` argument");
+                                    let value_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`contains` requires a `value` argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &value_arg.value,
                                         locals,
@@ -6279,8 +6556,12 @@ impl<'a> FunctionChecker<'a> {
                                             ),
                                         ));
                                     }
-                                    let value_arg = ordered_args[0]
-                                        .expect("set mutation requires a `value` argument");
+                                    let value_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "set mutation requires a `value` argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &value_arg.value,
                                         locals,
@@ -6311,8 +6592,12 @@ impl<'a> FunctionChecker<'a> {
                             return match builtin_member {
                                 BuiltinMember::ChannelClone => Ok(receiver_ty.clone()),
                                 BuiltinMember::ChannelSend => {
-                                    let send_arg = ordered_args[0]
-                                        .expect("`send` requires exactly one argument");
+                                    let send_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`send` requires exactly one argument",
+                                    )?;
                                     let actual = self.type_of_expr_hint(
                                         &send_arg.value,
                                         locals,
@@ -8557,10 +8842,12 @@ impl<'a> FunctionChecker<'a> {
                     Err(error) => return Err(error),
                 }
             } else {
-                let default = param_decl
-                    .default
-                    .as_ref()
-                    .expect("optional parameter should provide a default expression");
+                let default = param_decl.default.as_ref().ok_or_else(|| {
+                    Diagnostic::at(
+                        span,
+                        "internal error: optional parameter is missing its default expression",
+                    )
+                })?;
                 match self.type_of_expr_hint(default, locals, Some(&hinted_expected)) {
                     Ok(actual) => actual,
                     Err(error) if has_unresolved_type_params(&hinted_expected) => {
@@ -9045,7 +9332,15 @@ impl<'a> FunctionChecker<'a> {
                 let payload_name = payload
                     .name
                     .as_deref()
-                    .expect("named enum payloads should have names");
+                    .ok_or_else(|| {
+                        Diagnostic::at(
+                            span,
+                            format!(
+                                "internal error: named enum payload metadata for `{}.{}` is missing its field name",
+                                enum_name, variant_name
+                            ),
+                        )
+                    })?;
                 let argument = args
                     .iter()
                     .find(|argument| argument.name.as_deref() == Some(payload_name))

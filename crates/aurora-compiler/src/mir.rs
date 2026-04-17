@@ -2656,12 +2656,11 @@ impl<'a> Lowerer<'a> {
                 if let Some((module_path, item_name)) = self.qualified_module_item(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(class) = namespace.classes.get(&item_name).cloned() {
-                            if class
+                            if let Some(method) = class
                                 .methods
                                 .get(field)
-                                .is_some_and(|method| method.decl.receiver.is_none())
+                                .filter(|method| method.decl.receiver.is_none())
                             {
-                                let method = class.methods.get(field).unwrap();
                                 let lowered_args = self.lower_user_args(
                                     &format!("method `{}`", field),
                                     &method.decl.params,
@@ -2798,12 +2797,11 @@ impl<'a> Lowerer<'a> {
 
                 if let ExprKind::Name(class_name) = &base_object.kind {
                     if let Some(class) = self.resolve_class_info(class_name).cloned() {
-                        if class
+                        if let Some(method) = class
                             .methods
                             .get(field)
-                            .is_some_and(|method| method.decl.receiver.is_none())
+                            .filter(|method| method.decl.receiver.is_none())
                         {
-                            let method = class.methods.get(field).unwrap();
                             let lowered_args = self.lower_user_args(
                                 &format!("method `{}`", field),
                                 &method.decl.params,
@@ -3117,7 +3115,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Unary { op, expr } => match op {
                 UnaryOp::Not => Some(Type::named("bool")),
                 UnaryOp::Neg => match &expr.kind {
-                    ExprKind::Int(value) => Some(minimal_signed_type_for_negative_literal(*value)),
+                    ExprKind::Int(value) => minimal_signed_type_for_negative_literal(*value),
                     _ => {
                         let value_ty = self.infer_expr_type(expr)?;
                         if is_builtin_unary_operator(*op, &value_ty) {

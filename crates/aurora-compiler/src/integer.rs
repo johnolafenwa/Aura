@@ -26,7 +26,7 @@ enum IntegerSign {
 
 impl PartialEq for IntegerValue {
     fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
+        Ord::cmp(self, other) == Ordering::Equal
     }
 }
 
@@ -34,13 +34,23 @@ impl Eq for IntegerValue {}
 
 impl PartialOrd for IntegerValue {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+        Some(Ord::cmp(self, other))
     }
 }
 
 impl Ord for IntegerValue {
     fn cmp(&self, other: &Self) -> Ordering {
-        IntegerValue::cmp(self, other)
+        let (left_sign, left_mag) = self.sign_magnitude();
+        let (right_sign, right_mag) = other.sign_magnitude();
+        match (left_sign, right_sign) {
+            (IntegerSign::Negative, IntegerSign::Negative) => right_mag.cmp(&left_mag),
+            (IntegerSign::Negative, _) => Ordering::Less,
+            (_, IntegerSign::Negative) => Ordering::Greater,
+            (IntegerSign::Zero, IntegerSign::Zero) => Ordering::Equal,
+            (IntegerSign::Zero, IntegerSign::Positive) => Ordering::Less,
+            (IntegerSign::Positive, IntegerSign::Zero) => Ordering::Greater,
+            (IntegerSign::Positive, IntegerSign::Positive) => left_mag.cmp(&right_mag),
+        }
     }
 }
 
@@ -78,6 +88,32 @@ impl IntegerValue {
         match self {
             Self::Signed(value) => value as f64,
             Self::Unsigned(value) => value as f64,
+        }
+    }
+
+    pub fn to_exact_f64(self) -> Option<f64> {
+        match self {
+            Self::Signed(value) => {
+                let float = value as f64;
+                ((float as i128) == value).then_some(float)
+            }
+            Self::Unsigned(value) => {
+                let float = value as f64;
+                ((float as u128) == value).then_some(float)
+            }
+        }
+    }
+
+    pub fn to_exact_f32(self) -> Option<f32> {
+        match self {
+            Self::Signed(value) => {
+                let float = value as f32;
+                ((float as i128) == value).then_some(float)
+            }
+            Self::Unsigned(value) => {
+                let float = value as f32;
+                ((float as u128) == value).then_some(float)
+            }
         }
     }
 
@@ -170,20 +206,6 @@ impl IntegerValue {
         let (_, right_mag) = rhs.sign_magnitude();
         let magnitude = left_mag.checked_rem(right_mag)?;
         Self::from_sign_and_magnitude(left_sign, magnitude)
-    }
-
-    pub fn cmp(&self, other: &Self) -> Ordering {
-        let (left_sign, left_mag) = self.sign_magnitude();
-        let (right_sign, right_mag) = other.sign_magnitude();
-        match (left_sign, right_sign) {
-            (IntegerSign::Negative, IntegerSign::Negative) => right_mag.cmp(&left_mag),
-            (IntegerSign::Negative, _) => Ordering::Less,
-            (_, IntegerSign::Negative) => Ordering::Greater,
-            (IntegerSign::Zero, IntegerSign::Zero) => Ordering::Equal,
-            (IntegerSign::Zero, IntegerSign::Positive) => Ordering::Less,
-            (IntegerSign::Positive, IntegerSign::Zero) => Ordering::Greater,
-            (IntegerSign::Positive, IntegerSign::Positive) => left_mag.cmp(&right_mag),
-        }
     }
 
     fn combine_signed_magnitudes(
@@ -286,21 +308,23 @@ pub fn integer_type_bounds(ty: &Type) -> Option<IntegerBounds> {
     }
 }
 
-pub fn minimal_signed_type_for_negative_literal(value: u128) -> Type {
-    let negative = IntegerValue::from_literal(value)
-        .checked_neg()
-        .expect("negative literal magnitude should fit into signed inference");
+pub fn minimal_signed_type_for_negative_literal(value: u128) -> Option<Type> {
+    let negative = IntegerValue::from_literal(value).checked_neg()?;
     let int32 = Type::named("int32");
-    if negative.fits_bounds(integer_type_bounds(&int32).expect("int32 bounds should exist")) {
-        return int32;
+    if let Some(int32_bounds) = integer_type_bounds(&int32) {
+        if negative.fits_bounds(int32_bounds) {
+            return Some(int32);
+        }
     }
 
     let int64 = Type::named("int64");
-    if negative.fits_bounds(integer_type_bounds(&int64).expect("int64 bounds should exist")) {
-        return int64;
+    if let Some(int64_bounds) = integer_type_bounds(&int64) {
+        if negative.fits_bounds(int64_bounds) {
+            return Some(int64);
+        }
     }
 
-    Type::named("int128")
+    Some(Type::named("int128"))
 }
 
 #[cfg(test)]

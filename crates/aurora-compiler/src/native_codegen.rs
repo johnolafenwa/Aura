@@ -295,6 +295,15 @@ macro_rules! try_or_string_error {
     };
 }
 
+fn split_field_path_segments<'a>(
+    segments: &'a [&'a str],
+) -> std::result::Result<(&'a str, &'a [&'a str]), String> {
+    match segments.split_first() {
+        Some((head, rest)) => Ok((*head, rest)),
+        None => Err("internal error: direct backend received an empty field path".to_string()),
+    }
+}
+
 impl<'a> NativeCodegen<'a> {
     fn new(
         module: &'a MirModule,
@@ -3255,22 +3264,23 @@ impl<'a> FunctionCompiler<'a> {
         segments: &[&str],
         new_value: ValueRef,
     ) -> std::result::Result<ValueRef, String> {
-        let (start, end, field_ty) = current.ty.field_slice(segments[0]).ok_or_else(|| {
+        let (head, rest) = split_field_path_segments(segments)?;
+        let (start, end, field_ty) = current.ty.field_slice(head).ok_or_else(|| {
             format!(
                 "direct backend does not know field `{}` on `{}`",
-                segments[0],
+                head,
                 render_direct_type(&current.ty)
             )
         })?;
 
-        let replacement = if segments.len() == 1 {
+        let replacement = if rest.is_empty() {
             self.coerce_value(new_value, &field_ty)?
         } else {
             let nested = ValueRef {
                 values: current.values[start..end].to_vec(),
                 ty: field_ty.clone(),
             };
-            self.replace_nested_field(nested, &segments[1..], new_value)?
+            self.replace_nested_field(nested, rest, new_value)?
         };
 
         let mut values = Vec::with_capacity(current.values.len());
@@ -6309,10 +6319,10 @@ fn direct_field_type(
     let DirectType::Opaque(Type::Named(class_name, args)) = ty else {
         return None;
     };
-    if class_name == "MapEntry" && args.len() == 2 {
-        return match field {
-            "key" => direct_type(&args[0], classes),
-            "value" => direct_type(&args[1], classes),
+    if class_name == "MapEntry" {
+        return match (field, args.as_slice()) {
+            ("key", [key, _value]) => direct_type(key, classes),
+            ("value", [_key, value]) => direct_type(value, classes),
             _ => None,
         };
     }

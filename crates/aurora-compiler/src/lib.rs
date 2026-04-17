@@ -4,6 +4,7 @@ pub mod call;
 pub mod diag;
 pub mod integer;
 pub mod lexer;
+pub mod limits;
 pub mod mir;
 pub mod mir_runtime;
 mod native_codegen;

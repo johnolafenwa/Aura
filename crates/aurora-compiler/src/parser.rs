@@ -9,15 +9,20 @@ use crate::ast::{
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
 use crate::lexer::{lex, Token, TokenKind};
+use crate::limits::RECURSION_LIMIT;
 
 pub fn parse(source: &str) -> Result<Module> {
     let tokens = lex(source)?;
-    Parser { tokens, index: 0 }.parse_module()
+    Parser::new(tokens).parse_module()
 }
 
 pub fn parse_expression(source: &str) -> Result<Expr> {
+    parse_expression_with_recursion_depth(source, 0)
+}
+
+fn parse_expression_with_recursion_depth(source: &str, recursion_depth: usize) -> Result<Expr> {
     let tokens = lex(source)?;
-    let mut parser = Parser { tokens, index: 0 };
+    let mut parser = Parser::with_recursion_depth(tokens, recursion_depth);
     parser.skip_newlines();
     let expr = parser.parse_expr()?;
     parser.skip_newlines();
@@ -30,9 +35,37 @@ pub fn parse_expression(source: &str) -> Result<Expr> {
 struct Parser {
     tokens: Vec<Token>,
     index: usize,
+    recursion_depth: usize,
 }
 
 impl Parser {
+    fn new(tokens: Vec<Token>) -> Self {
+        Self::with_recursion_depth(tokens, 0)
+    }
+
+    fn with_recursion_depth(tokens: Vec<Token>, recursion_depth: usize) -> Self {
+        Self {
+            tokens,
+            index: 0,
+            recursion_depth,
+        }
+    }
+
+    fn enter_recursion(&mut self, kind: &str) -> Result<()> {
+        if self.recursion_depth >= RECURSION_LIMIT {
+            return Err(self.error_here(format!(
+                "{} nesting exceeds the supported recursion limit of {}",
+                kind, RECURSION_LIMIT
+            )));
+        }
+        self.recursion_depth += 1;
+        Ok(())
+    }
+
+    fn exit_recursion(&mut self) {
+        self.recursion_depth = self.recursion_depth.saturating_sub(1);
+    }
+
     fn parse_module(&mut self) -> Result<Module> {
         let mut imports = Vec::new();
         let mut items = Vec::new();
@@ -587,6 +620,13 @@ impl Parser {
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt> {
+        self.enter_recursion("statement")?;
+        let result = self.parse_stmt_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_stmt_inner(&mut self) -> Result<Stmt> {
         if self.at_simple(&TokenKind::KwReturn) {
             self.parse_return_stmt()
         } else if self.at_simple(&TokenKind::KwPass) {
@@ -837,6 +877,13 @@ impl Parser {
     }
 
     fn parse_pattern(&mut self) -> Result<Pattern> {
+        self.enter_recursion("pattern")?;
+        let result = self.parse_pattern_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_pattern_inner(&mut self) -> Result<Pattern> {
         let span = self.current_span();
         if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "_") {
             self.bump();
@@ -1012,6 +1059,13 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> Result<TypeRef> {
+        self.enter_recursion("type")?;
+        let result = self.parse_type_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_type_inner(&mut self) -> Result<TypeRef> {
         let span = self.current_span();
         let indirect = self.eat_simple(&TokenKind::KwIndirect).is_some();
         let name = self.parse_identifier_path()?.join(".");
@@ -1054,6 +1108,13 @@ impl Parser {
     }
 
     fn parse_expr(&mut self) -> Result<Expr> {
+        self.enter_recursion("expression")?;
+        let result = self.parse_expr_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_expr_inner(&mut self) -> Result<Expr> {
         self.parse_or()
     }
 
@@ -1229,6 +1290,13 @@ impl Parser {
     }
 
     fn parse_prefix(&mut self) -> Result<Expr> {
+        self.enter_recursion("expression")?;
+        let result = self.parse_prefix_inner();
+        self.exit_recursion();
+        result
+    }
+
+    fn parse_prefix_inner(&mut self) -> Result<Expr> {
         if let Some(token) = self.eat_simple(&TokenKind::KwMatch) {
             let borrow_mode = if self.eat_simple(&TokenKind::KwBorrow).is_some() {
                 if self.eat_simple(&TokenKind::KwMut).is_some() {
@@ -1771,7 +1839,7 @@ impl Parser {
         )
     }
 
-    fn parse_format_parts(&self, value: &str, span: Span) -> Result<Vec<FormatPart>> {
+    fn parse_format_parts(&mut self, value: &str, span: Span) -> Result<Vec<FormatPart>> {
         let mut parts = Vec::new();
         let mut literal_start = 0usize;
         let chars = value.char_indices().collect::<Vec<_>>();
@@ -1834,7 +1902,8 @@ impl Parser {
                     "f-string interpolation cannot be empty",
                 ));
             }
-            let mut expr = parse_expression(expr_text).map_err(|error| {
+            let mut expr = parse_expression_with_recursion_depth(expr_text, self.recursion_depth)
+                .map_err(|error| {
                 Diagnostic::at(
                     span,
                     format!("invalid f-string interpolation `{}`: {}", expr_text, error),

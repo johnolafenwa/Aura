@@ -12,7 +12,9 @@ use crate::runtime_value::{
     ModuleNamespaceValue, RangeValue, SetValue, TaskGroupValue, TaskValue, Value, VecValue,
 };
 use std::collections::BTreeMap;
+use std::io;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 fn string_value(text: &str) -> *mut OpaqueValue {
@@ -344,6 +346,12 @@ fn native_runtime_operator_helpers_cover_comparison_binary_and_unary_error_edges
             .expect("float division should succeed"),
         Value::Float(2.25)
     );
+    assert!(
+        super::eval_binary_value(Value::Float(9.0), Value::Float(0.0), BinaryOp::Div,)
+            .expect_err("float division by zero should fail")
+            .message
+            .contains("division by zero")
+    );
     assert_eq!(
         super::eval_binary_value(Value::Float(9.0), Value::Float(4.0), BinaryOp::Mod,)
             .expect("float modulo should succeed"),
@@ -444,6 +452,53 @@ fn runtime_init_is_callable() {
         b"/virtual/test.au".len(),
         b"def main() -> int32:\n    return 0\n".as_ptr(),
         b"def main() -> int32:\n    return 0\n".len(),
+    );
+}
+
+#[test]
+fn native_runtime_ref_count_helpers_reject_zero_and_overflow() {
+    let overflow = AtomicUsize::new(usize::MAX);
+    let overflow_error =
+        super::retain_ref_count(&overflow).expect_err("overflow should be rejected");
+    assert!(overflow_error.contains("overflow"));
+    assert_eq!(overflow.load(Ordering::Relaxed), usize::MAX);
+
+    let zero = AtomicUsize::new(0);
+    let underflow_error =
+        super::release_ref_count(&zero).expect_err("underflow should be rejected");
+    assert!(underflow_error.contains("already-released"));
+    assert_eq!(zero.load(Ordering::Relaxed), 0);
+
+    let shared = AtomicUsize::new(2);
+    assert!(!super::release_ref_count(&shared).expect("shared release should succeed"));
+    assert_eq!(shared.load(Ordering::Relaxed), 1);
+    super::retain_ref_count(&shared).expect("retain should succeed");
+    assert_eq!(shared.load(Ordering::Relaxed), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn with_sigpipe_blocked_restores_the_previous_signal_mask_after_broken_pipe() {
+    unsafe fn current_sigpipe_blocked() -> bool {
+        let mut current: libc::sigset_t = std::mem::zeroed();
+        let rc = libc::pthread_sigmask(libc::SIG_SETMASK, std::ptr::null(), &mut current);
+        assert_eq!(rc, 0, "should read current signal mask");
+        libc::sigismember(&current, libc::SIGPIPE) == 1
+    }
+
+    let before = unsafe { current_sigpipe_blocked() };
+    let error = super::with_sigpipe_blocked(|| {
+        Err::<(), _>(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "simulated broken pipe",
+        ))
+    })
+    .expect_err("broken pipe should propagate through helper");
+    assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    let after = unsafe { current_sigpipe_blocked() };
+    assert_eq!(
+        after, before,
+        "SIGPIPE mask should be restored after helper returns"
     );
 }
 
@@ -1120,14 +1175,16 @@ fn int32_overflow_helper_exits_with_error() {
 #[test]
 fn native_runtime_entrypoint_guards_invalid_inputs() {
     assert_eq!(
-        crate::mir_runtime::aurora_native_run(
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-            0,
-        ),
+        unsafe {
+            crate::mir_runtime::aurora_native_run(
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            )
+        },
         1
     );
 
@@ -1135,28 +1192,32 @@ fn native_runtime_entrypoint_guards_invalid_inputs() {
     let invalid_path = [0xff_u8];
     let source = b"def main() -> int32:\n    return 0\n";
     assert_eq!(
-        crate::mir_runtime::aurora_native_run(
-            mir_json.as_ptr(),
-            mir_json.len(),
-            invalid_path.as_ptr(),
-            invalid_path.len(),
-            source.as_ptr(),
-            source.len(),
-        ),
+        unsafe {
+            crate::mir_runtime::aurora_native_run(
+                mir_json.as_ptr(),
+                mir_json.len(),
+                invalid_path.as_ptr(),
+                invalid_path.len(),
+                source.as_ptr(),
+                source.len(),
+            )
+        },
         1
     );
 
     let source_path = b"/tmp/test.au";
     let invalid_source = [0xff_u8];
     assert_eq!(
-        crate::mir_runtime::aurora_native_run(
-            mir_json.as_ptr(),
-            mir_json.len(),
-            source_path.as_ptr(),
-            source_path.len(),
-            invalid_source.as_ptr(),
-            invalid_source.len(),
-        ),
+        unsafe {
+            crate::mir_runtime::aurora_native_run(
+                mir_json.as_ptr(),
+                mir_json.len(),
+                source_path.as_ptr(),
+                source_path.len(),
+                invalid_source.as_ptr(),
+                invalid_source.len(),
+            )
+        },
         1
     );
 

@@ -214,6 +214,21 @@ fn lexes_nested_interpolations_and_reports_duration_overflow() {
 }
 
 #[test]
+fn lexer_reports_fstring_interpolation_depth_limit() {
+    let depth = crate::limits::RECURSION_LIMIT + 8;
+    let mut source = "text = f\"".to_string();
+    source.push('{');
+    source.push_str(&"{".repeat(depth));
+    source.push('1');
+    source.push_str(&"}".repeat(depth));
+    source.push('}');
+    source.push_str("\"\n");
+
+    let error = lex(&source).expect_err("deep f-string interpolation should fail");
+    assert!(error.message.contains("nesting limit"));
+}
+
+#[test]
 fn lexer_covers_successful_escape_decoding_and_signed_duration_range_failures() {
     let tokens = kinds(concat!(
         "text = \"\\n\\t\\\"\\\\\"\n",

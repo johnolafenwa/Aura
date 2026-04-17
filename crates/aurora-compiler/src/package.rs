@@ -1,9 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
+use std::io::{Read, Write};
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(unix)]
+use std::{
+    ffi::CString,
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    os::unix::ffi::OsStrExt,
+};
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -16,6 +26,9 @@ const LOCKFILE_VERSION: u32 = 1;
 const SUPPORTED_PACKAGE_EDITION: &str = "2026";
 const MAX_DEPENDENCIES_PER_PACKAGE: usize = 1024;
 const MAX_PACKAGES_IN_GRAPH: usize = 4096;
+const TEMP_FILE_RETRY_LIMIT: usize = 32;
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
 enum PackageOrigin {
@@ -56,9 +69,11 @@ impl GitSelector {
                     dependency_name
                 )));
             }
+            validate_git_revision_literal(dependency_name, &rev)?;
             return Ok(Self::Rev(rev));
         }
         if let Some(tag) = tag {
+            validate_git_selector_literal(dependency_name, "tag", &tag)?;
             if tag.trim().is_empty() {
                 return Err(Diagnostic::new(format!(
                     "dependency `{}` has an empty git tag",
@@ -68,6 +83,7 @@ impl GitSelector {
             return Ok(Self::Tag(tag));
         }
         let branch = branch.unwrap_or_else(|| "main".to_string());
+        validate_git_selector_literal(dependency_name, "branch", &branch)?;
         if branch.trim().is_empty() {
             return Err(Diagnostic::new(format!(
                 "dependency `{}` has an empty git branch",
@@ -91,11 +107,14 @@ impl GitSelector {
             )));
         }
         if let Some(tag) = tag {
+            validate_git_selector_literal(package_name, "tag", &tag)?;
             return Ok(Self::Tag(tag));
         }
         if let Some(branch) = branch {
+            validate_git_selector_literal(package_name, "branch", &branch)?;
             return Ok(Self::Branch(branch));
         }
+        validate_git_revision_literal(package_name, rev)?;
         Ok(Self::Rev(rev.to_string()))
     }
 
@@ -268,13 +287,12 @@ impl PackageGraph {
             }
         }
 
-        fs::write(&lockfile_path, source).map_err(|error| {
-            Diagnostic::new(format!(
-                "failed to write lockfile `{}`: {}",
-                lockfile_path.display(),
-                error
-            ))
-        })
+        write_atomic_file(
+            &lockfile_path,
+            source.as_bytes(),
+            "lockfile",
+            &format!("`{}`", lockfile_path.display()),
+        )
     }
 }
 
@@ -1046,6 +1064,7 @@ fn parse_ls_remote_revision(source: &str, reference: &str, output: &str) -> Resu
             reference, source
         )));
     };
+    validate_git_revision_literal(reference, rev)?;
     Ok(rev.to_string())
 }
 
@@ -1053,7 +1072,17 @@ fn ensure_git_checkout(source: &str, rev: &str) -> Result<PathBuf> {
     let mut permission_denied: Option<(PathBuf, std::io::Error)> = None;
     for cache_root in git_cache_roots() {
         let checkout_dir = cache_root.join(hash_source_key(source)).join(rev);
+        if let Ok(metadata) = fs::symlink_metadata(&checkout_dir) {
+            let file_type = metadata.file_type();
+            if file_type.is_symlink() || !file_type.is_dir() {
+                return Err(Diagnostic::new(format!(
+                    "refusing to use git checkout cache path `{}` because it is not a real directory",
+                    checkout_dir.display()
+                )));
+            }
+        }
         if cached_git_checkout_matches_rev(&checkout_dir, rev)? {
+            reject_symlinks_in_tree(&checkout_dir)?;
             return Ok(checkout_dir);
         }
 
@@ -1107,12 +1136,7 @@ fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Res
             checkout_dir.display()
         ))
     })?;
-    let temp_checkout = parent.join(format!(
-        "{}-tmp-{}-{}",
-        rev,
-        std::process::id(),
-        unix_time_nanos()?
-    ));
+    let temp_checkout = unique_temp_path(parent, rev)?;
     if temp_checkout.exists() {
         let _ = fs::remove_dir_all(&temp_checkout);
     }
@@ -1120,6 +1144,8 @@ fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Res
     run_git_command(
         None,
         vec![
+            "-c".to_string(),
+            "core.symlinks=false".to_string(),
             "clone".to_string(),
             "--quiet".to_string(),
             "--".to_string(),
@@ -1127,6 +1153,7 @@ fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Res
             temp_checkout.to_string_lossy().to_string(),
         ],
     )?;
+    reject_symlinks_in_tree(&temp_checkout)?;
     run_git_command(
         Some(&temp_checkout),
         vec![
@@ -1171,12 +1198,20 @@ fn git_cache_roots() -> Vec<PathBuf> {
     }
 }
 
-fn run_git_command(current_dir: Option<&Path>, args: Vec<String>) -> Result<String> {
+fn configured_git_command(current_dir: Option<&Path>, args: &[String]) -> Command {
     let mut command = Command::new("git");
-    command.args(&args);
+    command.args(args);
+    command.env("GIT_TERMINAL_PROMPT", "0");
+    command.env("GIT_ASKPASS", "");
+    command.env("SSH_ASKPASS", "");
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
     }
+    command
+}
+
+fn run_git_command(current_dir: Option<&Path>, args: Vec<String>) -> Result<String> {
+    let mut command = configured_git_command(current_dir, &args);
     let output = command.output().map_err(|error| {
         Diagnostic::new(format!("failed to run `git {}`: {}", args.join(" "), error))
     })?;
@@ -1195,6 +1230,46 @@ fn run_git_command(current_dir: Option<&Path>, args: Vec<String>) -> Result<Stri
         )));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn reject_symlinks_in_tree(root: &Path) -> Result<()> {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let entries = fs::read_dir(&path).map_err(|error| {
+            Diagnostic::new(format!(
+                "failed to inspect git checkout `{}` for symlinks: {}",
+                path.display(),
+                error
+            ))
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                Diagnostic::new(format!(
+                    "failed to inspect an entry under git checkout `{}`: {}",
+                    path.display(),
+                    error
+                ))
+            })?;
+            let file_type = entry.file_type().map_err(|error| {
+                Diagnostic::new(format!(
+                    "failed to inspect git checkout entry `{}`: {}",
+                    entry.path().display(),
+                    error
+                ))
+            })?;
+            if file_type.is_symlink() {
+                return Err(Diagnostic::new(format!(
+                    "refusing to use git checkout `{}` because it contains symlinked content at `{}`",
+                    root.display(),
+                    entry.path().display()
+                )));
+            }
+            if file_type.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn git_cache_root() -> PathBuf {
@@ -1317,6 +1392,181 @@ fn validate_git_source_literal(dependency_name: &str, source: &str) -> Result<()
     Ok(())
 }
 
+fn validate_git_selector_literal(
+    dependency_name: &str,
+    selector_kind: &str,
+    selector: &str,
+) -> Result<()> {
+    let trimmed = selector.trim();
+    if trimmed.is_empty() {
+        return Err(Diagnostic::new(format!(
+            "dependency `{}` has an empty git {}",
+            dependency_name, selector_kind
+        )));
+    }
+    if trimmed.starts_with('-') {
+        return Err(Diagnostic::new(format!(
+            "dependency `{}` has an invalid git {} `{}`; git {} values must not start with `-`",
+            dependency_name, selector_kind, selector, selector_kind
+        )));
+    }
+    if trimmed
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(Diagnostic::new(format!(
+            "dependency `{}` has an invalid git {} `{}`; git {} values must not contain whitespace or control characters",
+            dependency_name, selector_kind, selector, selector_kind
+        )));
+    }
+    if trimmed.starts_with('/')
+        || trimmed.ends_with('/')
+        || trimmed.ends_with('.')
+        || trimmed.ends_with(".lock")
+        || trimmed.contains("..")
+        || trimmed.contains("//")
+        || trimmed.contains("@{")
+        || trimmed.contains('\\')
+        || trimmed
+            .chars()
+            .any(|ch| matches!(ch, '~' | '^' | ':' | '?' | '*' | '['))
+    {
+        return Err(Diagnostic::new(format!(
+            "dependency `{}` has an invalid git {} `{}`",
+            dependency_name, selector_kind, selector
+        )));
+    }
+    Ok(())
+}
+
+fn validate_git_revision_literal(dependency_name: &str, rev: &str) -> Result<()> {
+    let trimmed = rev.trim();
+    let is_valid_hex_revision =
+        (7..=64).contains(&trimmed.len()) && trimmed.chars().all(|ch| ch.is_ascii_hexdigit());
+    if !is_valid_hex_revision {
+        return Err(Diagnostic::new(format!(
+            "dependency `{}` has an invalid git revision `{}`",
+            dependency_name, rev
+        )));
+    }
+    Ok(())
+}
+
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+        const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+        unsafe extern "system" {
+            fn MoveFileExW(
+                existing_file_name: *const u16,
+                new_file_name: *const u16,
+                flags: u32,
+            ) -> i32;
+        }
+
+        fn wide(path: &Path) -> Vec<u16> {
+            path.as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect()
+        }
+
+        let source_wide = wide(source);
+        let destination_wide = wide(destination);
+        let moved = unsafe {
+            MoveFileExW(
+                source_wide.as_ptr(),
+                destination_wide.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if moved == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(source, destination)
+    }
+}
+
+fn unique_temp_path(parent: &Path, file_name: &str) -> Result<PathBuf> {
+    for _ in 0..TEMP_FILE_RETRY_LIMIT {
+        let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temp_path = parent.join(format!(
+            ".{}.tmp-{}-{}-{}",
+            file_name,
+            std::process::id(),
+            unix_time_nanos()?,
+            counter
+        ));
+        if !temp_path.exists() {
+            return Ok(temp_path);
+        }
+    }
+    Err(Diagnostic::new(format!(
+        "failed to create a unique temporary path for `{}` after {} attempts",
+        parent.join(file_name).display(),
+        TEMP_FILE_RETRY_LIMIT
+    )))
+}
+
+fn write_atomic_file(path: &Path, contents: &[u8], noun: &str, target: &str) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        Diagnostic::new(format!(
+            "internal error: {} path `{}` has no parent directory",
+            noun,
+            path.display()
+        ))
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        Diagnostic::new(format!(
+            "failed to prepare parent directory for {} {}: {}",
+            noun, target, error
+        ))
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("aurora-file");
+    let temp_path = unique_temp_path(parent, file_name)?;
+    let write_result = (|| -> Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|error| {
+                Diagnostic::new(format!(
+                    "failed to create temporary {} for {}: {}",
+                    noun, target, error
+                ))
+            })?;
+        file.write_all(contents).map_err(|error| {
+            Diagnostic::new(format!(
+                "failed to write temporary {} for {}: {}",
+                noun, target, error
+            ))
+        })?;
+        file.flush().map_err(|error| {
+            Diagnostic::new(format!(
+                "failed to flush temporary {} for {}: {}",
+                noun, target, error
+            ))
+        })?;
+        replace_file(&temp_path, path).map_err(|error| {
+            Diagnostic::new(format!("failed to place {} {}: {}", noun, target, error))
+        })?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    write_result
+}
+
 fn is_valid_package_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
@@ -1386,23 +1636,127 @@ fn cached_git_revision_path(checkout_dir: &Path) -> PathBuf {
 }
 
 fn write_cached_git_revision(checkout_dir: &Path, rev: &str) -> Result<()> {
-    fs::write(cached_git_revision_path(checkout_dir), rev).map_err(|error| {
-        Diagnostic::new(format!(
-            "failed to write git cache revision marker for `{}`: {}",
-            checkout_dir.display(),
-            error
-        ))
-    })
+    write_atomic_file(
+        &cached_git_revision_path(checkout_dir),
+        rev.as_bytes(),
+        "git cache revision marker",
+        &format!("`{}`", checkout_dir.display()),
+    )
 }
 
 fn cached_git_checkout_matches_rev(checkout_dir: &Path, rev: &str) -> Result<bool> {
-    if !checkout_dir.join(MANIFEST_NAME).exists() {
+    if !git_checkout_contains_required_files(checkout_dir)? {
         return Ok(false);
     }
-    let Ok(cached) = fs::read_to_string(cached_git_revision_path(checkout_dir)) else {
+    let Some(cached) = read_cached_git_revision(checkout_dir)? else {
         return Ok(false);
     };
     Ok(cached.trim() == rev)
+}
+
+fn git_checkout_contains_required_files(checkout_dir: &Path) -> Result<bool> {
+    let manifest_path = checkout_dir.join(MANIFEST_NAME);
+    let Ok(metadata) = fs::symlink_metadata(&manifest_path) else {
+        return Ok(false);
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(Diagnostic::new(format!(
+            "refusing to use git checkout `{}` because its manifest is symlinked",
+            checkout_dir.display()
+        )));
+    }
+    Ok(metadata.is_file())
+}
+
+#[cfg(unix)]
+fn open_nofollow_dir_fd(path: &Path) -> Result<Option<OwnedFd>> {
+    let display_path = path.display().to_string();
+    let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        Diagnostic::new(format!(
+            "refusing to use git checkout path `{}` because it contains an interior NUL byte",
+            display_path
+        ))
+    })?;
+    let fd = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return Ok(None);
+        }
+        return Err(Diagnostic::new(format!(
+            "failed to inspect git checkout directory `{}`: {}",
+            display_path, error
+        )));
+    }
+    Ok(Some(unsafe { OwnedFd::from_raw_fd(fd) }))
+}
+
+#[cfg(unix)]
+fn open_nofollow_file_at(
+    dir_fd: &OwnedFd,
+    name: &str,
+    checkout_dir: &Path,
+) -> Result<Option<fs::File>> {
+    let name = CString::new(name).map_err(|_| {
+        Diagnostic::new(format!(
+            "internal error: git checkout marker `{}` contains an interior NUL byte",
+            name
+        ))
+    })?;
+    let fd = unsafe {
+        libc::openat(
+            dir_fd.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return Ok(None);
+        }
+        return Err(Diagnostic::new(format!(
+            "failed to inspect git checkout marker `{}` under `{}`: {}",
+            name.to_string_lossy(),
+            checkout_dir.display(),
+            error
+        )));
+    }
+    Ok(Some(unsafe { fs::File::from_raw_fd(fd) }))
+}
+
+#[cfg(unix)]
+fn read_cached_git_revision(checkout_dir: &Path) -> Result<Option<String>> {
+    let Some(dir_fd) = open_nofollow_dir_fd(checkout_dir)? else {
+        return Ok(None);
+    };
+    let Some(mut marker) = open_nofollow_file_at(&dir_fd, ".aurora-cache-rev", checkout_dir)?
+    else {
+        return Ok(None);
+    };
+    let mut cached = String::new();
+    marker.read_to_string(&mut cached).map_err(|error| {
+        Diagnostic::new(format!(
+            "failed to read git revision marker for `{}`: {}",
+            checkout_dir.display(),
+            error
+        ))
+    })?;
+    Ok(Some(cached))
+}
+
+#[cfg(not(unix))]
+fn read_cached_git_revision(checkout_dir: &Path) -> Result<Option<String>> {
+    let path = cached_git_revision_path(checkout_dir);
+    let Ok(cached) = fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    Ok(Some(cached))
 }
 
 fn unix_time_nanos() -> Result<u128> {
@@ -1423,6 +1777,92 @@ fn unsupported_version_dependency(name: &str, version: Option<&str>) -> Diagnost
         "version-only dependencies are not supported yet for `{}` (requested `{}`); use `{} = {{ path = \"...\" }}` or `{} = {{ git = \"...\" }}` instead",
         name, detail, name, name
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(prefix: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "{}-{}-{}",
+                prefix,
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("system time should be after unix epoch")
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&path).expect("failed to create temp dir");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn configured_git_command_disables_interactive_prompts() {
+        let args = vec!["status".to_string()];
+        let command = configured_git_command(None, &args);
+        let envs = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().to_string(),
+                    value.map(|value| value.to_string_lossy().to_string()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            envs.get("GIT_TERMINAL_PROMPT"),
+            Some(&Some("0".to_string()))
+        );
+        assert_eq!(envs.get("GIT_ASKPASS"), Some(&Some(String::new())));
+        assert_eq!(envs.get("SSH_ASKPASS"), Some(&Some(String::new())));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reject_symlinks_in_tree_reports_symlinked_entries() {
+        let temp = TempDir::new("aurora-package-symlink-tree");
+        let root = temp.path.join("checkout");
+        fs::create_dir_all(root.join("src")).expect("failed to create checkout root");
+        fs::write(root.join("Aurora.toml"), "[package]\nname = \"pkg\"\n").expect("manifest");
+        std::os::unix::fs::symlink("/tmp", root.join("src").join("escape"))
+            .expect("failed to create symlink");
+
+        let error = reject_symlinks_in_tree(&root).expect_err("symlinked content should fail");
+        assert!(error.message.contains("contains symlinked content"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_cached_git_revision_rejects_symlinked_markers() {
+        let temp = TempDir::new("aurora-package-symlink-marker");
+        let root = temp.path.join("checkout");
+        fs::create_dir_all(&root).expect("failed to create checkout root");
+        fs::write(root.join("Aurora.toml"), "[package]\nname = \"pkg\"\n").expect("manifest");
+        let target = temp.path.join("outside.rev");
+        fs::write(&target, "1234567").expect("failed to write outside marker");
+        std::os::unix::fs::symlink(&target, root.join(".aurora-cache-rev"))
+            .expect("failed to create symlinked marker");
+
+        let error =
+            read_cached_git_revision(&root).expect_err("symlinked revision marker should fail");
+        assert!(error
+            .message
+            .contains("failed to inspect git checkout marker"));
+    }
 }
 
 fn relative_path_from(base: &Path, target: &Path) -> PathBuf {

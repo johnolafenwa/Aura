@@ -1,4 +1,5 @@
 use crate::diag::{Diagnostic, Result, Span};
+use crate::limits::RECURSION_LIMIT;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Token {
@@ -343,7 +344,18 @@ fn tokenize_line(
                         } else {
                             match current {
                                 '"' => interpolation_in_string = true,
-                                '{' => interpolation_depth += 1,
+                                '{' => {
+                                    if interpolation_depth >= RECURSION_LIMIT {
+                                        return Err(Diagnostic::at(
+                                            Span::new(line_no, column),
+                                            format!(
+                                                "f-string interpolation exceeds the supported nesting limit of {}",
+                                                RECURSION_LIMIT
+                                            ),
+                                        ));
+                                    }
+                                    interpolation_depth += 1;
+                                }
                                 '}' => interpolation_depth = interpolation_depth.saturating_sub(1),
                                 _ => {}
                             }

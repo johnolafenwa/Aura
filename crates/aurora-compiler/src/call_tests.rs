@@ -161,6 +161,16 @@ fn bind_call_arguments_reports_named_binding_errors() {
     )
     .unwrap_err();
     assert!(too_many.message.contains("expects 2 arguments, found 3"));
+
+    let overlap = bind_call_arguments(
+        "function `pair`",
+        &params,
+        &[dummy_arg(None), dummy_arg(Some("left"))],
+        Span::new(1, 1),
+        CallConvention::PositionalOrNamed,
+    )
+    .unwrap_err();
+    assert!(overlap.message.contains("provided more than once"));
 }
 
 #[test]

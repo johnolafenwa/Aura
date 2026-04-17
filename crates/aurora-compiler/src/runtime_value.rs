@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
 use crate::diag::{Diagnostic, Result, Span};
@@ -174,10 +174,28 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
             }
             match target {
                 Type::Named(name, args) if args.is_empty() && name == "float32" => {
-                    Ok(Value::Float((value.to_f64() as f32) as f64))
+                    let float = value.to_exact_f32().ok_or_else(|| {
+                        render_target_error(
+                            span,
+                            format!(
+                                "integer value `{}` cannot be represented exactly as `float32`",
+                                value
+                            ),
+                        )
+                    })?;
+                    Ok(Value::Float(float as f64))
                 }
                 Type::Named(name, args) if args.is_empty() && name == "float64" => {
-                    Ok(Value::Float(value.to_f64()))
+                    let float = value.to_exact_f64().ok_or_else(|| {
+                        render_target_error(
+                            span,
+                            format!(
+                                "integer value `{}` cannot be represented exactly as `float64`",
+                                value
+                            ),
+                        )
+                    })?;
+                    Ok(Value::Float(float))
                 }
                 _ => Err(render_target_error(
                     span,
@@ -292,6 +310,18 @@ impl PartialEq for TaskGroupValue {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
+}
+
+fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn wait_condvar<'a, T>(condvar: &Condvar, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
+    condvar
+        .wait(guard)
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl PartialEq for VecValue {
@@ -485,7 +515,7 @@ pub(crate) enum TryRecvResult {
 
 impl ChannelValue {
     pub(crate) fn try_recv(&self) -> TryRecvResult {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = lock_mutex(&self.inner.state);
         if let Some(value) = state.queue.pop_front() {
             return TryRecvResult::Value(value);
         }
@@ -496,7 +526,7 @@ impl ChannelValue {
     }
 
     pub(crate) fn send(&self, value: Value) -> std::result::Result<(), Value> {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = lock_mutex(&self.inner.state);
         if state.closed {
             return Err(value);
         }
@@ -507,7 +537,7 @@ impl ChannelValue {
     }
 
     pub(crate) fn recv_blocking(&self) -> Option<Value> {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = lock_mutex(&self.inner.state);
         loop {
             if let Some(value) = state.queue.pop_front() {
                 return Some(value);
@@ -515,12 +545,12 @@ impl ChannelValue {
             if state.closed {
                 return None;
             }
-            state = self.inner.ready.wait(state).unwrap();
+            state = wait_condvar(&self.inner.ready, state);
         }
     }
 
     pub(crate) fn close(&self) {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = lock_mutex(&self.inner.state);
         state.closed = true;
         drop(state);
         self.inner.ready.notify_all();
@@ -550,16 +580,19 @@ impl TaskGroupValue {
         CancellationContext { flags }
     }
 
+    // Invariant: every task must be registered before its worker thread is spawned so a later
+    // drain sees the complete task set.
     pub(crate) fn register_task(&self, task: TaskValue) {
-        self.inner.tasks.lock().unwrap().push(task);
+        lock_mutex(&self.inner.tasks).push(task);
     }
 
     pub(crate) fn cancel(&self) {
         self.inner.cancel_flag.store(true, Ordering::SeqCst);
     }
 
+    // Invariant: callers drain only after they have finished registering tasks for the group.
     pub(crate) fn drain_tasks(&self) -> Vec<TaskValue> {
-        let mut tasks = self.inner.tasks.lock().unwrap();
+        let mut tasks = lock_mutex(&self.inner.tasks);
         std::mem::take(&mut *tasks)
     }
 }
@@ -575,7 +608,7 @@ impl TaskValue {
 
     pub(crate) fn join_result(&self) -> std::result::Result<Value, String> {
         let handle = {
-            let mut state = self.inner.handle.lock().unwrap();
+            let mut state = lock_mutex(&self.inner.handle);
             match &mut *state {
                 TaskHandle::Completed(result) => return result.clone(),
                 TaskHandle::Running(handle) => handle.take(),
@@ -589,7 +622,7 @@ impl TaskValue {
         let result = handle
             .join()
             .map_err(|_| "spawned task panicked".to_string())?;
-        let mut state = self.inner.handle.lock().unwrap();
+        let mut state = lock_mutex(&self.inner.handle);
         *state = TaskHandle::Completed(result.clone());
         result
     }

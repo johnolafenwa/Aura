@@ -159,6 +159,7 @@ The current compiler supports these expression forms:
 - unary prefix operators `-` and `not`
 - operator-trait dispatch for `+`, binary `-`, `*`, `/`, `%`, unary `-`, and `not`
 - explicit numeric casts with `expr as Type`
+  - integer casts are range-checked and integer-to-float casts reject silent precision loss
 - list literals such as `[1, 2, 3]`
 - map literals such as `{"aurora": 1}`
 - set literals such as `Set{1, 2, 3}`

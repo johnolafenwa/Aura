@@ -5371,6 +5371,10 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "pattern binding `value` would shadow an existing name",
             ),
             (
+                "enum Leaf:\n    Value(int32)\n\nenum Outer:\n    Wrap(Leaf)\n\ndef main() -> int32:\n    value = Outer.Wrap(value=Leaf.Value(value=1))\n    match value:\n        case Outer.Wrap(Leaf.Value(left, right)):\n            return left\n        case _:\n            return 0\n",
+                "variant `Leaf.Value` expects 1 pattern payload, found 2",
+            ),
+            (
                 "enum Status:\n    Ready\n    Done\n\ndef main() -> int32:\n    status = Status.Ready\n    match status:\n        case Status.Ready:\n            return 1\n",
                 "non-exhaustive match over `Status`: missing `Done`",
             ),

@@ -31,7 +31,7 @@ pub fn run(module: &MirModule) -> Result<RunOutput> {
             let mut runtime =
                 MirRuntime::new(module, stdout.clone(), CancellationContext::default());
             let value = runtime.run_main()?;
-            let rendered_stdout = stdout.lock().unwrap().clone();
+            let rendered_stdout = lock_stdout(&stdout).clone();
             Ok(RunOutput {
                 value,
                 stdout: rendered_stdout,
@@ -53,6 +53,12 @@ pub fn run(module: &MirModule) -> Result<RunOutput> {
     }
 }
 
+fn lock_stdout(stdout: &Arc<Mutex<String>>) -> std::sync::MutexGuard<'_, String> {
+    stdout
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> Result<RunOutput> {
     let module = match serde_json::from_slice::<MirModule>(mir_json) {
         Ok(module) => module,
@@ -63,12 +69,17 @@ pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> R
             )))
         }
     };
+    validate_runtime_module_complexity(&module)?;
     let _ = source_path;
     let _ = source;
     run(&module)
 }
 
 const MAX_CALL_DEPTH: usize = 1024;
+const MAX_EMBEDDED_RUNTIME_BYTES: usize = 1 << 30;
+const MAX_RUNTIME_BLOCKS: usize = 1_000_000;
+const MAX_RUNTIME_INSTRUCTIONS: usize = 1_000_000;
+const MAX_RUNTIME_TERMINATOR_ARMS: usize = 1_000_000;
 
 fn render_runtime_error(path: &str, source: &str, error: &Diagnostic) -> String {
     error.render_with_source(path, source)
@@ -77,6 +88,68 @@ fn render_runtime_error(path: &str, source: &str, error: &Diagnostic) -> String 
 fn write_stream(mut stream: impl Write, text: &str) -> io::Result<()> {
     stream.write_all(text.as_bytes())?;
     stream.flush()
+}
+
+fn validate_embedded_runtime_length(name: &str, len: usize) -> std::result::Result<(), String> {
+    if len > MAX_EMBEDDED_RUNTIME_BYTES {
+        return Err(format!(
+            "embedded {} length {} exceeds the supported runtime limit of {} bytes",
+            name, len, MAX_EMBEDDED_RUNTIME_BYTES
+        ));
+    }
+    Ok(())
+}
+
+fn validate_runtime_module_complexity(module: &MirModule) -> Result<()> {
+    let mut total_blocks = 0usize;
+    let mut total_instructions = 0usize;
+    let mut total_arms = 0usize;
+    for function in module.functions.iter().chain(module.top_level.iter()) {
+        total_blocks = total_blocks.saturating_add(function.blocks.len());
+        if total_blocks > MAX_RUNTIME_BLOCKS {
+            return Err(Diagnostic::new(format!(
+                "embedded MIR exceeds the supported block limit of {}",
+                MAX_RUNTIME_BLOCKS
+            )));
+        }
+        for block in &function.blocks {
+            total_instructions = total_instructions.saturating_add(block.instructions.len());
+            if total_instructions > MAX_RUNTIME_INSTRUCTIONS {
+                return Err(Diagnostic::new(format!(
+                    "embedded MIR exceeds the supported instruction limit of {}",
+                    MAX_RUNTIME_INSTRUCTIONS
+                )));
+            }
+            total_arms = total_arms.saturating_add(match &block.terminator {
+                Terminator::Match { arms, .. } => arms.len(),
+                Terminator::Select { arms, .. } => arms.len(),
+                _ => 0,
+            });
+            if total_arms > MAX_RUNTIME_TERMINATOR_ARMS {
+                return Err(Diagnostic::new(format!(
+                    "embedded MIR exceeds the supported branching-arm limit of {}",
+                    MAX_RUNTIME_TERMINATOR_ARMS
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn deadline_after_millis_with(
+    millis: u64,
+    checked_add: impl FnOnce(StdDuration) -> Option<Instant>,
+) -> Result<Instant> {
+    checked_add(StdDuration::from_millis(millis)).ok_or_else(|| {
+        Diagnostic::new(format!(
+            "duration `{}ms` overflows the MIR runtime deadline range",
+            millis
+        ))
+    })
+}
+
+fn deadline_after_millis(millis: u64) -> Result<Instant> {
+    deadline_after_millis_with(millis, |duration| Instant::now().checked_add(duration))
 }
 
 fn run_serialized_mir_entrypoint(mir_json: &[u8], source_path: &str, source: &str) -> i32 {
@@ -103,7 +176,13 @@ fn run_serialized_mir_entrypoint(mir_json: &[u8], source_path: &str, source: &st
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_native_run(
+/// # Safety
+///
+/// `mir_ptr`, `source_path_ptr`, and `source_ptr` must either be valid for reads of their paired
+/// lengths or be null when the paired length is zero. The byte buffers must remain alive for the
+/// duration of this call and must point to valid UTF-8 for the embedded source path/source
+/// payloads.
+pub unsafe extern "C" fn aurora_native_run(
     mir_ptr: *const u8,
     mir_len: usize,
     source_path_ptr: *const u8,
@@ -118,6 +197,17 @@ pub extern "C" fn aurora_native_run(
                 "aurora native runtime received a null input"
             );
             return 1;
+        }
+
+        for (name, len) in [
+            ("MIR payload", mir_len),
+            ("source path", source_path_len),
+            ("source payload", source_len),
+        ] {
+            if let Err(message) = validate_embedded_runtime_length(name, len) {
+                let _ = writeln!(io::stderr().lock(), "{}", message);
+                return 1;
+            }
         }
 
         let mir_json = unsafe { slice::from_raw_parts(mir_ptr, mir_len) };
@@ -1221,8 +1311,9 @@ impl MirRuntime {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(&["value"], values)?;
                     let rendered = bound[0].value.render();
-                    self.stdout.lock().unwrap().push_str(&rendered);
-                    self.stdout.lock().unwrap().push('\n');
+                    let mut stdout = lock_stdout(&self.stdout);
+                    stdout.push_str(&rendered);
+                    stdout.push('\n');
                     return Ok(Value::Unit);
                 }
 
@@ -2642,11 +2733,8 @@ impl MirRuntime {
                             millis
                         ))
                     })?;
-                    Ok(Some(
-                        Instant::now()
-                            .checked_add(StdDuration::from_millis(millis))
-                            .unwrap_or_else(Instant::now),
-                    ))
+                    let deadline = deadline_after_millis(millis)?;
+                    Ok(Some(deadline))
                 }
                 _ => Ok(None),
             })
@@ -2802,6 +2890,10 @@ impl MirRuntime {
                         None => Diagnostic::new("integer overflow"),
                     }),
                 },
+                (Value::Float(_left), Value::Float(right)) if right == 0.0 => Err(match span {
+                    Some(span) => Diagnostic::at(span, "division by zero"),
+                    None => Diagnostic::new("division by zero"),
+                }),
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left / right)),
                 _ => Err(Diagnostic::new(
                     "MIR binary division requires matching numeric operands",
@@ -2819,6 +2911,10 @@ impl MirRuntime {
                         None => Diagnostic::new("integer overflow"),
                     }),
                 },
+                (Value::Float(_left), Value::Float(right)) if right == 0.0 => Err(match span {
+                    Some(span) => Diagnostic::at(span, "division by zero"),
+                    None => Diagnostic::new("division by zero"),
+                }),
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left % right)),
                 _ => Err(Diagnostic::new(
                     "MIR binary remainder requires matching numeric operands",

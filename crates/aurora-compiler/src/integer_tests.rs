@@ -44,19 +44,23 @@ fn integer_value_helpers_cover_division_remainder_comparisons_and_bounds() {
 
     assert_eq!(
         minimal_signed_type_for_negative_literal(7),
-        Type::named("int32")
+        Some(Type::named("int32"))
     );
     assert_eq!(
         minimal_signed_type_for_negative_literal((i32::MAX as u128) + 2),
-        Type::named("int64")
+        Some(Type::named("int64"))
     );
     assert_eq!(
         minimal_signed_type_for_negative_literal((i64::MAX as u128) + 2),
-        Type::named("int128")
+        Some(Type::named("int128"))
     );
     assert_eq!(
         minimal_signed_type_for_negative_literal((i64::MAX as u128) + 10_000),
-        Type::named("int128")
+        Some(Type::named("int128"))
+    );
+    assert_eq!(
+        minimal_signed_type_for_negative_literal((1u128 << 127) + 1),
+        None
     );
 
     assert_eq!(integer_type_bounds(&Type::Unit), None);

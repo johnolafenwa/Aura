@@ -42,6 +42,16 @@ fn direct_backend_emits_object_for_supported_scalar_program() {
 }
 
 #[test]
+fn direct_field_type_rejects_malformed_builtin_map_entry_shapes_without_panicking() {
+    let malformed = DirectType::Opaque(Type::Named(
+        "MapEntry".to_string(),
+        vec![Type::named("String")],
+    ));
+    assert!(direct_field_type(&malformed, "key", &HashMap::new()).is_none());
+    assert!(direct_field_type(&malformed, "value", &HashMap::new()).is_none());
+}
+
+#[test]
 fn direct_backend_emits_retain_and_release_hooks_for_opaque_call_and_local_flow() {
     let source = r#"
 def echo(value: String):
@@ -4590,6 +4600,13 @@ left.sync_into(other=right, amount=2)
 
     assert!(codegen.functions.contains_key(&top_level.name));
     assert!(codegen.function_thunks.contains_key(&top_level.name));
+}
+
+#[test]
+fn native_codegen_replace_nested_field_rejects_empty_paths_without_panicking() {
+    let error = super::split_field_path_segments(&[])
+        .expect_err("empty field paths should surface an internal diagnostic");
+    assert!(error.contains("empty field path"));
 }
 
 #[test]

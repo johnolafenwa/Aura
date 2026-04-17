@@ -78,6 +78,8 @@ widened = 3 as float64
 
 Integer casts are range-checked at runtime -- `300 as int8` fails cleanly instead of silently wrapping.
 
+Integer-to-float casts are also exactness-checked at runtime -- Aurora rejects casts that would silently lose integer precision instead of rounding them away.
+
 See [examples/numbers/numeric_casts.au](../examples/numbers/numeric_casts.au).
 
 ## The Full Numeric Type System

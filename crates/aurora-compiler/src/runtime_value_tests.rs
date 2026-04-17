@@ -71,6 +71,26 @@ fn cast_numeric_value_covers_success_and_failure_paths() {
     assert!(non_numeric
         .message
         .contains("casts are only supported between numeric types"));
+
+    let float64_precision = cast_numeric_value(
+        Value::Int(IntegerValue::from_literal((1u128 << 53) + 1)),
+        &Type::named("float64"),
+        Some(Span::new(6, 7)),
+    )
+    .expect_err("precision-losing int64 to float64 casts should fail");
+    assert!(float64_precision
+        .message
+        .contains("cannot be represented exactly as `float64`"));
+
+    let float32_precision = cast_numeric_value(
+        Value::Int(IntegerValue::from_literal((1u128 << 24) + 1)),
+        &Type::named("float32"),
+        Some(Span::new(8, 9)),
+    )
+    .expect_err("precision-losing int to float32 casts should fail");
+    assert!(float32_precision
+        .message
+        .contains("cannot be represented exactly as `float32`"));
 }
 
 #[test]
@@ -119,6 +139,65 @@ fn task_and_cancellation_helpers_cover_current_runtime_contract() {
     assert_eq!(group.drain_tasks(), vec![registered]);
     group.cancel();
     assert!(group.child_cancellation().is_cancelled());
+}
+
+#[test]
+fn channel_and_task_helpers_tolerate_poisoned_locks() {
+    let channel = ChannelValue::new();
+    let poisoned_channel = channel.clone();
+    let _ = thread::spawn(move || {
+        let _guard = poisoned_channel
+            .inner
+            .state
+            .lock()
+            .expect("poison setup lock");
+        panic!("poison channel lock");
+    })
+    .join();
+    channel
+        .send(Value::Int(IntegerValue::from_signed(11)))
+        .expect("poisoned channel lock should recover");
+    assert_eq!(
+        channel.try_recv(),
+        TryRecvResult::Value(Value::Int(IntegerValue::from_signed(11)))
+    );
+    channel.close();
+    assert_eq!(channel.recv_blocking(), None);
+
+    let cancellation = CancellationContext::default();
+    let group = TaskGroupValue::new(&cancellation);
+    let poisoned_group = group.clone();
+    let _ = thread::spawn(move || {
+        let _guard = poisoned_group
+            .inner
+            .tasks
+            .lock()
+            .expect("poison setup lock");
+        panic!("poison task-group lock");
+    })
+    .join();
+    let registered = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
+    group.register_task(registered.clone());
+    assert_eq!(group.drain_tasks(), vec![registered]);
+
+    let task = TaskValue::from_handle(thread::spawn(|| {
+        Ok(Value::Int(IntegerValue::from_signed(17)))
+    }));
+    let poisoned_task = task.clone();
+    let _ = thread::spawn(move || {
+        let _guard = poisoned_task
+            .inner
+            .handle
+            .lock()
+            .expect("poison setup lock");
+        panic!("poison task lock");
+    })
+    .join();
+    assert_eq!(
+        task.join_result()
+            .expect("poisoned task handle lock should recover"),
+        Value::Int(IntegerValue::from_signed(17))
+    );
 }
 
 #[test]

@@ -707,6 +707,122 @@ util = { git = "--upload-pack=/tmp/attacker" }
 }
 
 #[test]
+fn git_dependency_manifest_rejects_invalid_branch_and_tag_selectors() {
+    let temp = TempDir::new("aurora-packages-git-invalid-selectors");
+    let main_path = temp.write(
+        "app/src/main.au",
+        r#"def main() -> int32:
+    return 0
+"#,
+    );
+
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+util = { git = "../util-repo", branch = "../release" }
+"#,
+    );
+    let branch_error = check_path(&main_path).expect_err("invalid git branches should be rejected");
+    assert!(
+        branch_error.message.contains("invalid git branch"),
+        "unexpected branch error message: {}",
+        branch_error.message
+    );
+
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+util = { git = "../util-repo", tag = "bad..tag" }
+"#,
+    );
+    let tag_error = check_path(&main_path).expect_err("invalid git tags should be rejected");
+    assert!(
+        tag_error.message.contains("invalid git tag"),
+        "unexpected tag error message: {}",
+        tag_error.message
+    );
+}
+
+#[test]
+fn git_dependency_manifest_rejects_invalid_revisions() {
+    let temp = TempDir::new("aurora-packages-git-invalid-revisions");
+    let dependency = GitRepo::init(
+        &temp,
+        "utility",
+        "utility",
+        &[(
+            "src/math.au",
+            r#"public def answer() -> int32:
+    return 42
+"#,
+        )],
+    );
+    let main_path = temp.write(
+        "app/src/main.au",
+        r#"import utility.math
+
+def main() -> int32:
+    print(utility.math.answer())
+    return 0
+"#,
+    );
+
+    temp.write(
+        "app/Aurora.toml",
+        &format!(
+            r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+utility = {{ git = "{}", rev = "-not-a-revision" }}
+"#,
+            dependency.path.display()
+        ),
+    );
+
+    let error = check_path(&main_path).expect_err("invalid git revisions should be rejected");
+    assert!(
+        error.message.contains("invalid git revision"),
+        "unexpected invalid revision diagnostic: {}",
+        error.message
+    );
+
+    temp.write(
+        "app/Aurora.toml",
+        &format!(
+            r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+utility = {{ git = "{}", rev = "abc123" }}
+"#,
+            dependency.path.display()
+        ),
+    );
+
+    let short_error = check_path(&main_path).expect_err("short git revisions should be rejected");
+    assert!(
+        short_error.message.contains("invalid git revision"),
+        "unexpected short revision diagnostic: {}",
+        short_error.message
+    );
+}
+
+#[test]
 fn package_manifest_rejects_invalid_package_names() {
     let temp = TempDir::new("aurora-packages-invalid-name");
     let main_path = temp.write(
