@@ -116,11 +116,13 @@ fn main() {
             let input = read_input(&mut args);
             match parse_source(&input.source) {
                 Ok(module) => {
-                    write_stdout(&format!(
-                        "{}",
-                        serde_json::to_string_pretty(&module)
-                            .expect("AST should serialize to JSON")
-                    ));
+                    match serde_json::to_string_pretty(&module) {
+                        Ok(json) => write_stdout(&json),
+                        Err(error) => {
+                            eprintln!("failed to serialize AST to JSON: {}", error);
+                            process::exit(1);
+                        }
+                    }
                     write_stdout("\n");
                 }
                 Err(error) => {
@@ -149,10 +151,13 @@ fn main() {
         "analyze" => {
             let input = read_input(&mut args);
             let analysis = analyze_path_source(Path::new(&input.path), &input.source);
-            write_stdout(&format!(
-                "{}",
-                serde_json::to_string(&analysis).expect("analysis should serialize to JSON")
-            ));
+            match serde_json::to_string(&analysis) {
+                Ok(json) => write_stdout(&json),
+                Err(error) => {
+                    eprintln!("failed to serialize analysis to JSON: {}", error);
+                    process::exit(1);
+                }
+            }
             write_stdout("\n");
         }
         "complete" => {
@@ -167,11 +172,13 @@ fn main() {
                 trigger,
             ) {
                 Ok(completions) => {
-                    write_stdout(&format!(
-                        "{}",
-                        serde_json::to_string(&completions)
-                            .expect("completions should serialize to JSON")
-                    ));
+                    match serde_json::to_string(&completions) {
+                        Ok(json) => write_stdout(&json),
+                        Err(error) => {
+                            eprintln!("failed to serialize completions to JSON: {}", error);
+                            process::exit(1);
+                        }
+                    }
                     write_stdout("\n");
                 }
                 Err(error) => {
@@ -321,9 +328,10 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
             print_usage_and_exit(2);
         }
         let mut source = String::new();
-        io::stdin()
-            .read_to_string(&mut source)
-            .expect("failed to read source from stdin");
+        if let Err(error) = io::stdin().read_to_string(&mut source) {
+            eprintln!("failed to read source from stdin: {}", error);
+            process::exit(1);
+        }
         return Input {
             path: virtual_path,
             source,
@@ -536,10 +544,7 @@ fn temporary_direct_object_path(output_path: &Path) -> PathBuf {
         "aurora-direct-object-{}-{}-{}.o",
         file_name,
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time should be after unix epoch")
-            .as_nanos()
+        system_time_nanos()
     );
     std::env::temp_dir().join(unique)
 }
@@ -553,10 +558,7 @@ fn temporary_mir_runtime_source_path(output_path: &Path) -> PathBuf {
         "aurora-mir-runtime-{}-{}-{}.c",
         file_name,
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time should be after unix epoch")
-            .as_nanos()
+        system_time_nanos()
     );
     std::env::temp_dir().join(unique)
 }
@@ -570,10 +572,7 @@ fn temporary_direct_staticlib_path(output_path: &Path) -> PathBuf {
         "aurora-direct-runtime-{}-{}-{}.a",
         file_name,
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time should be after unix epoch")
-            .as_nanos()
+        system_time_nanos()
     );
     std::env::temp_dir().join(unique)
 }
@@ -608,11 +607,18 @@ fn emit_mir_runtime_launcher_source(mir_json: &[u8], source_path: &[u8], source:
 }
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|path| path.parent())
-        .expect("workspace root should be available")
-        .to_path_buf()
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Some(root) = manifest_dir.parent().and_then(|path| path.parent()) {
+        return root.to_path_buf();
+    }
+    manifest_dir
+}
+
+fn system_time_nanos() -> u128 {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => duration.as_nanos(),
+        Err(_) => 0,
+    }
 }
 
 struct NativeRuntimeArtifacts {
@@ -703,13 +709,23 @@ fn resolve_static_library_path(
                 .unwrap_or(false)
         })
         .collect::<Vec<_>>();
-    candidates.sort_by_key(|path| {
-        fs::metadata(path)
-            .and_then(|metadata| metadata.modified())
-            .ok()
-    });
-    if let Some(candidate) = candidates.pop() {
-        return Ok(candidate);
+    if candidates.len() == 1 {
+        if let Some(candidate) = candidates.pop() {
+            return Ok(candidate);
+        }
+    }
+    if !candidates.is_empty() {
+        candidates.sort();
+        return Err(format!(
+            "found multiple hashed Aurora runtime archives in `{}` but no canonical `{}`: {}; rebuild the workspace so the current static runtime path is unambiguous",
+            deps_dir.display(),
+            primary.display(),
+            candidates
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
 
     Err(format!(
@@ -818,19 +834,38 @@ mod tests {
     }
 
     #[test]
-    fn resolve_static_library_path_uses_newest_hashed_archive_when_primary_missing() {
-        let root = unique_temp_dir("newest-hashed");
+    fn resolve_static_library_path_uses_single_hashed_archive_when_primary_missing() {
+        let root = unique_temp_dir("single-hashed");
         let deps = root.join("target").join("debug").join("deps");
         fs::create_dir_all(&deps).expect("deps dir should exist");
-        let older = deps.join("libaurora_compiler-older.a");
-        fs::write(&older, b"older").expect("older archive should write");
-        thread::sleep(Duration::from_millis(10));
-        let newer = deps.join("libaurora_compiler-newer.a");
-        fs::write(&newer, b"newer").expect("newer archive should write");
+        let archive = deps.join("libaurora_compiler-only.a");
+        fs::write(&archive, b"archive").expect("hashed archive should write");
 
         let resolved = resolve_static_library_path(root.clone(), "debug")
-            .expect("should resolve newest hashed runtime library");
-        assert_eq!(resolved, newer);
+            .expect("should resolve the only hashed runtime library");
+        assert_eq!(resolved, archive);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolve_static_library_path_rejects_ambiguous_hashed_archives() {
+        let root = unique_temp_dir("ambiguous-hashed");
+        let deps = root.join("target").join("debug").join("deps");
+        fs::create_dir_all(&deps).expect("deps dir should exist");
+        let first = deps.join("libaurora_compiler-first.a");
+        fs::write(&first, b"first").expect("first archive should write");
+        thread::sleep(Duration::from_millis(10));
+        let second = deps.join("libaurora_compiler-second.a");
+        fs::write(&second, b"second").expect("second archive should write");
+
+        let error = resolve_static_library_path(root.clone(), "debug")
+            .expect_err("ambiguous hashed archives should be rejected");
+        assert!(
+            error.contains("multiple hashed Aurora runtime archives"),
+            "unexpected error message: {}",
+            error
+        );
 
         let _ = fs::remove_dir_all(root);
     }

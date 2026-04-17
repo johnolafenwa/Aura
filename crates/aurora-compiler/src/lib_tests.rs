@@ -4,8 +4,7 @@ use super::{
     import_exists_from_root, infer_package_root, insert_namespace_import, is_builtin_export_type,
     local_item_exists, logical_module_name, lower_path_to_mir, lower_path_with_source_to_mir,
     lower_source_to_mir, parse_source, qualify_export_type, qualify_export_type_ref, run_mir,
-    run_path, run_path_via_mir, run_path_with_source, run_path_with_source_via_mir,
-    run_serialized_mir, run_source, run_source_via_mir, Value,
+    run_path, run_path_with_source, run_serialized_mir, run_source, Value,
 };
 use crate::ast::TypeRef;
 use crate::diag::Span;
@@ -488,13 +487,6 @@ fn path_wrapper_functions_cover_success_and_loader_error_paths() {
         .expect("run_path_with_source should succeed");
     assert_eq!(override_output.stdout, "2\n");
 
-    let mir_output = run_path_via_mir(&main_path).expect("run_path_via_mir should succeed");
-    assert_eq!(mir_output.stdout, "1\n");
-    let override_mir_output =
-        run_path_with_source_via_mir(&main_path, "def main():\n    print(3)\n")
-            .expect("run_path_with_source_via_mir should succeed");
-    assert_eq!(override_mir_output.stdout, "3\n");
-
     lower_path_to_mir(&main_path).expect("lower_path_to_mir should succeed");
     lower_path_with_source_to_mir(&main_path, "def main():\n    print(4)\n")
         .expect("lower_path_with_source_to_mir should succeed");
@@ -574,7 +566,10 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
     let inferred_root =
         infer_package_root(&user_path, Some(&fs::read_to_string(&user_path).unwrap()))
             .expect("package root should infer");
-    assert_eq!(inferred_root, temp.path().to_path_buf());
+    assert_eq!(
+        inferred_root,
+        fs::canonicalize(temp.path()).expect("temp root should canonicalize")
+    );
     assert!(import_exists_from_root(
         temp.path(),
         &["pkg".to_string(), "named".to_string()]
@@ -773,7 +768,10 @@ fn module_loader_reports_import_resolution_and_export_errors() {
 
     let fallback_root = infer_package_root(&duplicate_main, Some("not: valid: aurora"))
         .expect("invalid override should fall back to the entry dir");
-    assert_eq!(fallback_root, temp.path().to_path_buf());
+    assert_eq!(
+        fallback_root,
+        fs::canonicalize(temp.path()).expect("temp root should canonicalize")
+    );
 
     let program = check_path(&module_path).expect("module should check");
     assert!(matches!(
@@ -810,8 +808,9 @@ fn runs_the_point_milestone() {
 }
 
 #[test]
-fn mir_runtime_runs_the_point_milestone() {
-    let output = run_source_via_mir(POINT_SOURCE).expect("point program should run via MIR");
+fn explicit_mir_runtime_runs_the_point_milestone() {
+    let mir = lower_source_to_mir(POINT_SOURCE).expect("point program should lower to MIR");
+    let output = run_mir(&mir).expect("point program should run via explicit MIR runtime");
     assert_eq!(output.stdout, "5.0\n");
     assert_eq!(output.value, zero_exit_value());
 }
@@ -849,7 +848,8 @@ fn control_flow_example_runs() {
 #[test]
 fn mir_runtime_runs_class_methods_example() {
     let source = include_str!("../../../examples/classes/methods.au");
-    let output = run_source_via_mir(source).expect("methods example should run via MIR");
+    let mir = lower_source_to_mir(source).expect("methods example should lower to MIR");
+    let output = run_mir(&mir).expect("methods example should run via explicit MIR runtime");
     assert_eq!(output.stdout, "4\n8\n0\n");
     assert_eq!(output.value, zero_exit_value());
 }
@@ -857,7 +857,8 @@ fn mir_runtime_runs_class_methods_example() {
 #[test]
 fn mir_runtime_runs_enum_match_example() {
     let source = include_str!("../../../examples/enums/result_match.au");
-    let output = run_source_via_mir(source).expect("enum match example should run via MIR");
+    let mir = lower_source_to_mir(source).expect("enum match example should lower to MIR");
+    let output = run_mir(&mir).expect("enum match example should run via explicit MIR runtime");
     assert_eq!(output.stdout, "42\nbad\n0\n");
     assert_eq!(output.value, zero_exit_value());
 }
@@ -872,17 +873,17 @@ fn mir_runtime_runs_try_example_natively() {
 }
 
 #[test]
-fn backend_path_runs_try_example_natively() {
+fn public_run_path_runs_try_example_natively() {
     let source = include_str!("../../../examples/error_handling/try_result.au");
-    let output = run_source_via_mir(source).expect("try example should run through backend path");
+    let output = run_source(source).expect("try example should run through the public run path");
     assert_eq!(output.stdout, "6\ndivision by zero\n");
     assert_eq!(output.value, zero_exit_value());
 }
 
 #[test]
-fn backend_path_runs_with_example_natively() {
+fn public_run_path_runs_with_example_natively() {
     let source = include_str!("../../../examples/resources/with_resource.au");
-    let output = run_source_via_mir(source).expect("with example should run through backend path");
+    let output = run_source(source).expect("with example should run through the public run path");
     assert_eq!(output.stdout, "demo\nclosed demo\ndone\n");
     assert_eq!(output.value, zero_exit_value());
 }
@@ -1043,7 +1044,8 @@ fn imported_function_return_types_keep_members_visible_across_modules() {
     assert_eq!(output.stdout, "41\n");
     assert_eq!(output.value, zero_exit_value());
 
-    let mir_output = run_path_via_mir(&main_path).expect("module program should run via MIR");
+    let mir = lower_path_to_mir(&main_path).expect("module program should lower to MIR");
+    let mir_output = run_mir(&mir).expect("module program should run through explicit MIR runtime");
     assert_eq!(mir_output.stdout, "41\n");
     assert_eq!(mir_output.value, zero_exit_value());
 }
@@ -1108,9 +1110,9 @@ fn broad_scratch_corpus_runtime_paths_do_not_panic() {
 
     let mut runnable = 0usize;
     let mut run_completed = 0usize;
-    let mut run_mir_completed = 0usize;
+    let mut explicit_mir_completed = 0usize;
     let mut run_panics = 0usize;
-    let mut run_mir_panics = 0usize;
+    let mut explicit_mir_panics = 0usize;
 
     for dir in corpus_dirs {
         for path in collect_aurora_files(&dir) {
@@ -1137,10 +1139,12 @@ fn broad_scratch_corpus_runtime_paths_do_not_panic() {
                 }
             }
 
-            match catch_unwind(AssertUnwindSafe(|| run_path_via_mir(&path))) {
-                Ok(Ok(_)) | Ok(Err(_)) => run_mir_completed += 1,
+            match catch_unwind(AssertUnwindSafe(|| {
+                lower_path_to_mir(&path).and_then(|mir| run_mir(&mir))
+            })) {
+                Ok(Ok(_)) | Ok(Err(_)) => explicit_mir_completed += 1,
                 Err(_) => {
-                    run_mir_panics += 1;
+                    explicit_mir_panics += 1;
                     eprintln!("MIR runtime panicked for {}", path.display());
                 }
             }
@@ -1149,11 +1153,11 @@ fn broad_scratch_corpus_runtime_paths_do_not_panic() {
 
     assert!(runnable > 0, "expected runnable scratch programs");
     assert!(
-        run_completed > 0 && run_mir_completed > 0,
+        run_completed > 0 && explicit_mir_completed > 0,
         "expected runtime corpus to exercise both execution paths"
     );
     assert!(
-        run_panics < runnable && run_mir_panics < runnable,
+        run_panics < runnable && explicit_mir_panics < runnable,
         "expected most runtime corpus files to avoid execution panics"
     );
 }
@@ -1169,9 +1173,9 @@ fn maintained_example_tree_public_paths_do_not_panic() {
     let mut emitted_ok = 0usize;
     let mut emission_panics = 0usize;
     let mut run_completed = 0usize;
-    let mut run_mir_completed = 0usize;
+    let mut explicit_mir_completed = 0usize;
     let mut run_panics = 0usize;
-    let mut run_mir_panics = 0usize;
+    let mut explicit_mir_panics = 0usize;
 
     for path in collect_aurora_files_recursive(&examples_dir) {
         file_count += 1;
@@ -1215,10 +1219,12 @@ fn maintained_example_tree_public_paths_do_not_panic() {
             }
         }
 
-        match catch_unwind(AssertUnwindSafe(|| run_path_via_mir(&path))) {
-            Ok(Ok(_)) | Ok(Err(_)) => run_mir_completed += 1,
+        match catch_unwind(AssertUnwindSafe(|| {
+            lower_path_to_mir(&path).and_then(|mir| run_mir(&mir))
+        })) {
+            Ok(Ok(_)) | Ok(Err(_)) => explicit_mir_completed += 1,
             Err(_) => {
-                run_mir_panics += 1;
+                explicit_mir_panics += 1;
                 eprintln!("MIR runtime panicked for example {}", path.display());
             }
         }
@@ -1241,7 +1247,7 @@ fn maintained_example_tree_public_paths_do_not_panic() {
         "expected some maintained examples to emit native direct objects"
     );
     assert!(
-        run_completed > 0 && run_mir_completed > 0,
+        run_completed > 0 && explicit_mir_completed > 0,
         "expected maintained examples to exercise both runtime paths"
     );
     assert!(
@@ -1249,16 +1255,16 @@ fn maintained_example_tree_public_paths_do_not_panic() {
         "expected most lowered maintained examples to avoid direct backend panics"
     );
     assert!(
-        run_panics < file_count && run_mir_panics < file_count,
+        run_panics < file_count && explicit_mir_panics < file_count,
         "expected most maintained examples to avoid runtime panics"
     );
 }
 
 #[test]
-fn backend_path_runs_channels_example_natively() {
+fn public_run_path_runs_channels_example_natively() {
     let source = include_str!("../../../examples/concurrency/channels_spawn.au");
     let output =
-        run_source_via_mir(source).expect("channels example should run through backend path");
+        run_source(source).expect("channels example should run through the public run path");
     assert_eq!(output.stdout, "2\n4\n");
     assert_eq!(output.value, zero_exit_value());
 }
@@ -1524,239 +1530,6 @@ fn categorized_examples_run_with_expected_output() {
 }
 
 #[test]
-fn categorized_examples_run_through_backend_path_with_expected_output() {
-    let cases = [
-            (
-                "examples/basics/top_level_script.au",
-                EXAMPLE_CASES[0].1,
-                "156\n",
-            ),
-            (
-                "examples/basics/main_function.au",
-                EXAMPLE_CASES[1].1,
-                "16\n",
-            ),
-            (
-                "examples/basics/mutable_bindings.au",
-                EXAMPLE_CASES[2].1,
-                "5\n",
-            ),
-            (
-                "examples/basics/default_arguments.au",
-                EXAMPLE_CASES[3].1,
-                "hello world\nhello aurora\n6\n12\n",
-            ),
-            ("examples/basics/pass_keyword.au", EXAMPLE_CASES[4].1, "0\n"),
-            (
-                "examples/classes/point_distance.au",
-                EXAMPLE_CASES[5].1,
-                "5.0\n",
-            ),
-            (
-                "examples/classes/default_fields.au",
-                EXAMPLE_CASES[6].1,
-                "localhost\n8080\n",
-            ),
-            (
-                "examples/classes/methods.au",
-                EXAMPLE_CASES[7].1,
-                "4\n8\n0\n",
-            ),
-            (
-                "examples/control_flow/if_elif_else.au",
-                EXAMPLE_CASES[8].1,
-                "high\n",
-            ),
-            (
-                "examples/control_flow/for_range.au",
-                EXAMPLE_CASES[9].1,
-                "7\n",
-            ),
-            (
-                "examples/control_flow/while_break_continue.au",
-                EXAMPLE_CASES[10].1,
-                "ok\n",
-            ),
-            (
-                "examples/enums/result_match.au",
-                EXAMPLE_CASES[11].1,
-                "42\nbad\n0\n",
-            ),
-            (
-                "examples/enums/result_option.au",
-                EXAMPLE_CASES[12].1,
-                "4\ndivision by zero\n7\n",
-            ),
-            (
-                "examples/enums/explicit_type_args.au",
-                EXAMPLE_CASES[13].1,
-                "7\nbad\n",
-            ),
-            (
-                "examples/generics/box_and_wrapper.au",
-                EXAMPLE_CASES[14].1,
-                "7\nok\n",
-            ),
-            (
-                "examples/traits/greeter.au",
-                EXAMPLE_CASES[15].1,
-                "hello aurora\nhello aurora\n",
-            ),
-            (
-                "examples/traits/multiple_bounds.au",
-                EXAMPLE_CASES[16].1,
-                "9\n",
-            ),
-            (
-                "examples/numbers/float_sqrt.au",
-                EXAMPLE_CASES[17].1,
-                "9.0\n",
-            ),
-            (
-                "examples/numbers/float32_values.au",
-                EXAMPLE_CASES[18].1,
-                "3.25\n2.0\n5.0\n",
-            ),
-            (
-                "examples/numbers/numeric_casts.au",
-                EXAMPLE_CASES[19].1,
-                "7\n3.0\n1.25\n2.0\n",
-            ),
-            (
-                "examples/strings/greeting.au",
-                EXAMPLE_CASES[20].1,
-                "hello, aurora\n",
-            ),
-            (
-                "examples/concurrency/task_group_select.au",
-                EXAMPLE_CASES[21].1,
-                "3\n",
-            ),
-            (
-                "examples/concurrency/task_group_cancel.au",
-                EXAMPLE_CASES[22].1,
-                "0\n1\n",
-            ),
-            (
-                "examples/concurrency/select_timeout.au",
-                EXAMPLE_CASES[23].1,
-                "timeout\n",
-            ),
-            (
-                "examples/concurrency/sleep_builtin.au",
-                EXAMPLE_CASES[24].1,
-                "start\nend\n",
-            ),
-            (
-                "examples/concurrency/send_result.au",
-                EXAMPLE_CASES[25].1,
-                "7\n",
-            ),
-            (
-                "examples/concurrency/spawn_detached.au",
-                EXAMPLE_CASES[26].1,
-                "9\n",
-            ),
-            (
-                "examples/concurrency/select_send.au",
-                EXAMPLE_CASES[27].1,
-                "sent\n4\n",
-            ),
-            (
-                "examples/enums/wildcard_match.au",
-                EXAMPLE_CASES[28].1,
-                "2\n",
-            ),
-            (
-                "examples/generics/generic_method_calls.au",
-                EXAMPLE_CASES[29].1,
-                "7\n",
-            ),
-            (
-                "examples/generics/bounded_types.au",
-                EXAMPLE_CASES[30].1,
-                "aurora\nempty\n",
-            ),
-            (
-                "examples/traits/marker_trait.au",
-                EXAMPLE_CASES[31].1,
-                "1\n",
-            ),
-            (
-                "examples/traits/specialized_generic_impl.au",
-                EXAMPLE_CASES[32].1,
-                "hello\n",
-            ),
-            (
-                "examples/concurrency/minute_duration.au",
-                EXAMPLE_CASES[33].1,
-                "120000ms\n",
-            ),
-            (
-                "examples/traits/generic_dispatch_multiple_types.au",
-                EXAMPLE_CASES[34].1,
-                "dog\ncat\n",
-            ),
-            (
-                "examples/strings/string_methods.au",
-                EXAMPLE_CASES[35].1,
-                "15\ntrue\ntrue\ntrue\naurora repo\n2\naurora\nrepo\naurora lang\naurora repo\nAURORA REPO\nrepo\nnone\naurora\nnone\n11\n",
-            ),
-            (
-                "examples/numbers/numeric_builtins.au",
-                EXAMPLE_CASES[36].1,
-                "7\n3.5\n2\n12\n9.0\n9.0\n",
-            ),
-            (
-                "examples/collections/map_basics.au",
-                EXAMPLE_CASES[37].1,
-                "3\ntrue\n1\n1\n5\naurora\n3\n3\n3\n3\ntrue\n",
-            ),
-            (
-                "examples/collections/set_basics.au",
-                EXAMPLE_CASES[38].1,
-                "3\ntrue\nfalse\ntrue\ntrue\n9\ntrue\ntrue\n1\n",
-            ),
-            (
-                "examples/strings/string_parsing_and_formatting.au",
-                EXAMPLE_CASES[39].1,
-                "42\n-9000000000\n3.5\ntrue\naurora-lang-tests\ntrue\n12\n4\n9\n3.0\n",
-            ),
-            (
-                "examples/traits/generic_trait_bounds.au",
-                EXAMPLE_CASES[40].1,
-                "20\n",
-            ),
-            (
-                "examples/traits/operator_traits.au",
-                EXAMPLE_CASES[41].1,
-                "6\n8\n-6\n-8\n",
-            ),
-            (
-                "examples/traits/ordering_traits.au",
-                EXAMPLE_CASES[42].1,
-                "true\ntrue\ntrue\ntrue\n2\n",
-            ),
-            (
-                "examples/basics/borrowed_lifetime_labels.au",
-                EXAMPLE_CASES[43].1,
-                "aurora\n",
-            ),
-        ];
-
-    for (path, source, expected_stdout) in cases {
-        let output = run_source_via_mir(source).unwrap_or_else(|error| {
-            panic!("{} should run through backend path: {}", path, error);
-        });
-        assert_eq!(
-            output.stdout, expected_stdout,
-            "unexpected backend-path stdout for {}",
-            path
-        );
-    }
-}
-
-#[test]
 fn additional_categorized_examples_type_check() {
     for (path, source, _) in ADDITIONAL_EXAMPLE_CASES {
         check_source(source).unwrap_or_else(|error| {
@@ -1774,20 +1547,6 @@ fn additional_categorized_examples_run_with_expected_output() {
         assert_eq!(
             output.stdout, *expected_stdout,
             "unexpected stdout for {}",
-            path
-        );
-    }
-}
-
-#[test]
-fn additional_categorized_examples_run_through_backend_path_with_expected_output() {
-    for (path, source, expected_stdout) in ADDITIONAL_EXAMPLE_CASES {
-        let output = run_source_via_mir(source).unwrap_or_else(|error| {
-            panic!("{} should run through backend path: {}", path, error);
-        });
-        assert_eq!(
-            output.stdout, *expected_stdout,
-            "unexpected backend-path stdout for {}",
             path
         );
     }
@@ -1884,11 +1643,12 @@ def main() -> int32:
     return 0
 "#;
 
-    let interpreted = run_source(source).expect("runtime member matrix should run");
-    let mir = run_source_via_mir(source).expect("runtime member matrix should run via MIR");
+    let public_output = run_source(source).expect("runtime member matrix should run");
+    let mir = lower_source_to_mir(source).expect("runtime member matrix should lower to MIR");
+    let explicit_output = run_mir(&mir).expect("runtime member matrix should run via MIR");
 
-    assert_eq!(mir.value, interpreted.value);
-    assert_eq!(mir.stdout, interpreted.stdout);
+    assert_eq!(explicit_output.value, public_output.value);
+    assert_eq!(explicit_output.stdout, public_output.stdout);
 }
 
 #[test]
@@ -1954,13 +1714,15 @@ def main() -> int32:
     return second.value
 "#;
 
-    let interpreted = run_source(source)
+    let public_output = run_source(source)
         .expect("writeback/cleanup matrix should run through the public run path");
     let mir =
-        run_source_via_mir(source).expect("writeback/cleanup matrix should run via MIR runtime");
+        lower_source_to_mir(source).expect("writeback/cleanup matrix should lower to explicit MIR");
+    let explicit_output =
+        run_mir(&mir).expect("writeback/cleanup matrix should run via explicit MIR runtime");
 
-    assert_eq!(mir.value, interpreted.value);
-    assert_eq!(mir.stdout, interpreted.stdout);
+    assert_eq!(explicit_output.value, public_output.value);
+    assert_eq!(explicit_output.stdout, public_output.stdout);
 }
 
 #[test]
@@ -1989,44 +1751,10 @@ fn additional_module_examples_run_with_expected_output() {
 }
 
 #[test]
-fn additional_module_examples_run_through_backend_path_with_expected_output() {
-    let cases = [
-        ("examples/modules/namespace_import_types.au", "4\ntrue\n1\n"),
-        ("examples/modules/trait_impl_imports.au", "Ada\nAda\n"),
-    ];
-
-    for (relative_path, expected_stdout) in cases {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../")
-            .join(relative_path);
-        let output = run_path_via_mir(&path).unwrap_or_else(|error| {
-            panic!(
-                "{} should run through backend path: {}",
-                relative_path, error
-            );
-        });
-        assert_eq!(
-            output.stdout, expected_stdout,
-            "unexpected backend-path stdout for {}",
-            relative_path
-        );
-    }
-}
-
-#[test]
 fn module_example_runs_with_expected_output() {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/modules/simple_import.au");
     let output = run_path(&path).expect("module example should run");
-    assert_eq!(output.stdout, "10\n2\n");
-    assert_eq!(output.value, zero_exit_value());
-}
-
-#[test]
-fn module_example_runs_through_backend_path_with_expected_output() {
-    let path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/modules/simple_import.au");
-    let output = run_path_via_mir(&path).expect("module example should run via MIR");
     assert_eq!(output.stdout, "10\n2\n");
     assert_eq!(output.value, zero_exit_value());
 }

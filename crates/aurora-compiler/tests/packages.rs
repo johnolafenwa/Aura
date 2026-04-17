@@ -4,8 +4,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aurora_compiler::{
-    analyze_path_source, check_path, run_path, run_path_via_mir,
-    update_git_dependencies_in_working_dir,
+    analyze_path_source, check_path, run_path, update_git_dependencies_in_working_dir,
 };
 
 struct TempDir {
@@ -46,6 +45,11 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+#[cfg(unix)]
+fn symlink_dir(source: &std::path::Path, target: &std::path::Path) {
+    std::os::unix::fs::symlink(source, target).expect("failed to create symlinked directory");
 }
 
 struct GitRepo {
@@ -192,10 +196,6 @@ public def double(value: int32) -> int32:
 
     let output = run_path(&main_path).expect("manifest-aware package should run");
     assert_eq!(output.stdout, "12\n");
-
-    let mir_output =
-        run_path_via_mir(&main_path).expect("manifest-aware package should run via MIR");
-    assert_eq!(mir_output.stdout, "12\n");
 
     let source = fs::read_to_string(&main_path).expect("main source should be readable");
     let analysis = analyze_path_source(&main_path, &source);
@@ -431,10 +431,6 @@ def main() -> int32:
 
     let output = run_path(&main_path).expect("git dependency on default main should run");
     assert_eq!(output.stdout, "6\n");
-    let mir_output =
-        run_path_via_mir(&main_path).expect("git dependency on default main should run via MIR");
-    assert_eq!(mir_output.stdout, "6\n");
-
     let lockfile_path = temp.path.join("app/Aurora.lock");
     let initial_lockfile =
         fs::read_to_string(&lockfile_path).expect("git dependency should write a lockfile");
@@ -679,4 +675,244 @@ def main() -> int32:
         fs::read_to_string(temp.path.join("app/Aurora.lock")).expect("lockfile should exist");
     assert!(final_lockfile.contains(&new_util_rev));
     assert!(final_lockfile.contains(&new_jsonx_rev));
+}
+
+#[test]
+fn git_dependency_manifest_rejects_dash_prefixed_source_values() {
+    let temp = TempDir::new("aurora-packages-git-dash-source");
+    let main_path = temp.write(
+        "app/src/main.au",
+        r#"def main() -> int32:
+    return 0
+"#,
+    );
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies]
+util = { git = "--upload-pack=/tmp/attacker" }
+"#,
+    );
+
+    let error = check_path(&main_path).expect_err("dash-prefixed git sources should be rejected");
+    assert!(
+        error.message.contains("must not start with `-`"),
+        "unexpected error message: {}",
+        error.message
+    );
+}
+
+#[test]
+fn package_manifest_rejects_invalid_package_names() {
+    let temp = TempDir::new("aurora-packages-invalid-name");
+    let main_path = temp.write(
+        "app/src/main.au",
+        r#"def main() -> int32:
+    return 0
+"#,
+    );
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "../app"
+version = "0.1.0"
+edition = "2026"
+"#,
+    );
+
+    let error = check_path(&main_path).expect_err("invalid package names should be rejected");
+    assert!(
+        error.message.contains("invalid package name"),
+        "unexpected error message: {}",
+        error.message
+    );
+}
+
+#[test]
+fn package_manifest_rejects_unknown_editions() {
+    let temp = TempDir::new("aurora-packages-invalid-edition");
+    let main_path = temp.write(
+        "app/src/main.au",
+        r#"def main() -> int32:
+    return 0
+"#,
+    );
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "1999"
+"#,
+    );
+
+    let error = check_path(&main_path).expect_err("unknown editions should be rejected");
+    assert!(
+        error.message.contains("unsupported package edition"),
+        "unexpected error message: {}",
+        error.message
+    );
+}
+
+#[test]
+fn workspace_members_normalize_dot_prefixes_and_trailing_slashes() {
+    let temp = TempDir::new("aurora-packages-workspace-normalization");
+    temp.write(
+        "Aurora.toml",
+        r#"[workspace]
+members = ["./app/"]
+"#,
+    );
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+"#,
+    );
+    let main_path = temp.write(
+        "app/src/main.au",
+        r#"def main() -> int32:
+    print(7)
+    return 0
+"#,
+    );
+
+    let output = run_path(&main_path).expect("normalized workspace members should resolve");
+    assert_eq!(output.stdout, "7\n");
+    assert!(
+        temp.path().join("Aurora.lock").exists(),
+        "normalized workspace members should still write the workspace lockfile"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn manifest_packages_reject_symlink_imports_that_escape_the_source_root() {
+    let temp = TempDir::new("aurora-packages-symlink-escape");
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+"#,
+    );
+    let main_path = temp.write(
+        "app/src/main.au",
+        r#"import escape.secret
+
+def main() -> int32:
+    print(escape.secret.value())
+    return 0
+"#,
+    );
+    temp.write(
+        "outside/secret.au",
+        r#"public def value() -> int32:
+    return 9
+"#,
+    );
+    symlink_dir(
+        &temp.path().join("outside"),
+        &temp.path().join("app/src/escape"),
+    );
+
+    let error =
+        check_path(&main_path).expect_err("symlink imports escaping the source root should fail");
+    assert!(
+        error.message.contains("escapes package source root"),
+        "unexpected error message: {}",
+        error.message
+    );
+}
+
+#[test]
+fn lockfiles_reject_unsupported_versions() {
+    let temp = TempDir::new("aurora-packages-lockfile-version");
+    let main_path = temp.write(
+        "app/src/main.au",
+        r#"def main() -> int32:
+    return 0
+"#,
+    );
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+"#,
+    );
+    temp.write(
+        "app/Aurora.lock",
+        r#"version = 2
+"#,
+    );
+
+    let error = check_path(&main_path).expect_err("unsupported lockfile versions should fail");
+    assert!(
+        error.message.contains("unsupported lockfile version"),
+        "unexpected error message: {}",
+        error.message
+    );
+}
+
+#[test]
+fn manifests_reject_excessive_dependency_counts() {
+    let temp = TempDir::new("aurora-packages-too-many-deps");
+    let mut manifest = String::from(
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n",
+    );
+    for index in 0..1025 {
+        manifest.push_str(&format!(
+            "dep{} = {{ path = \"../dep{}\" }}\n",
+            index, index
+        ));
+    }
+    temp.write("app/Aurora.toml", &manifest);
+    let main_path = temp.write(
+        "app/src/main.au",
+        r#"def main() -> int32:
+    return 0
+"#,
+    );
+
+    let error = check_path(&main_path).expect_err("dependency count limit should be enforced");
+    assert!(
+        error.message.contains("exceeds the supported limit"),
+        "unexpected error message: {}",
+        error.message
+    );
+}
+
+#[test]
+fn manifests_reject_invalid_package_versions() {
+    let temp = TempDir::new("aurora-packages-invalid-version");
+    let main_path = temp.write(
+        "app/src/main.au",
+        r#"def main() -> int32:
+    return 0
+"#,
+    );
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "app"
+version = "v1"
+edition = "2026"
+"#,
+    );
+
+    let error = check_path(&main_path).expect_err("invalid package versions should fail");
+    assert!(
+        error.message.contains("invalid package version"),
+        "unexpected error message: {}",
+        error.message
+    );
 }

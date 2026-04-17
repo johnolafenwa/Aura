@@ -51,8 +51,21 @@ fn int_vec(values: &[i64]) -> *mut OpaqueValue {
     vec
 }
 
+unsafe fn free_arg_buffer(buffer: *mut i64, count: usize) {
+    let boxed = Box::from_raw(std::ptr::slice_from_raw_parts_mut(buffer, count));
+    drop(boxed);
+}
+
 unsafe fn take_value(ptr: *mut OpaqueValue) -> Value {
     super::take_value(ptr)
+}
+
+unsafe fn retain_value(ptr: *mut OpaqueValue) -> *mut OpaqueValue {
+    super::aurora_direct_retain_value(ptr)
+}
+
+unsafe fn release_value(ptr: *mut OpaqueValue) {
+    super::aurora_direct_release_value(ptr)
 }
 
 fn expect_unit(ptr: *mut OpaqueValue) {
@@ -771,7 +784,14 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
 
 unsafe extern "C" fn test_native_thunk(args: *const i64, len: usize) -> *mut OpaqueValue {
     let args = std::slice::from_raw_parts(args, len);
-    super::aurora_direct_box_i64(args.iter().copied().sum())
+    let total = args
+        .iter()
+        .map(|arg| match value_ref(*arg as *mut OpaqueValue) {
+            Value::Int(value) => value.as_i128().expect("expected signed integer") as i64,
+            other => panic!("expected int arg, found {:?}", other),
+        })
+        .sum();
+    super::aurora_direct_box_i64(total)
 }
 
 #[test]
@@ -980,8 +1000,8 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
     );
 
     let buffer = super::aurora_direct_arg_buffer_new(2);
-    super::aurora_direct_arg_buffer_store(buffer, 0, 20);
-    super::aurora_direct_arg_buffer_store(buffer, 1, 22);
+    super::aurora_direct_arg_buffer_store(buffer, 0, int_value(20) as i64);
+    super::aurora_direct_arg_buffer_store(buffer, 1, int_value(22) as i64);
     let task = super::aurora_direct_spawn_call(
         test_native_thunk as usize as i64,
         buffer,
@@ -1030,6 +1050,8 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
     let deadline = super::aurora_direct_deadline_new(duration_value(0));
     assert_eq!(super::aurora_direct_deadline_ready(deadline), 1);
     assert_eq!(super::aurora_direct_deadline_ready(0), 1);
+    super::aurora_direct_deadline_drop(deadline);
+    super::aurora_direct_deadline_drop(0);
     super::aurora_direct_sleep_ms(0);
     expect_unit(super::aurora_direct_sleep_value(duration_value(0)));
 }
@@ -2060,12 +2082,14 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     let boxed = boxed_value(Value::Int(IntegerValue::from_signed(5)));
     assert_eq!(
         unsafe { value_ref(boxed) },
-        &Value::Int(IntegerValue::from_signed(5))
+        Value::Int(IntegerValue::from_signed(5))
     );
-    match unsafe { value_mut(boxed) } {
-        Value::Int(value) => *value = IntegerValue::from_signed(8),
-        other => panic!("expected int box, found {:?}", other),
-    }
+    unsafe {
+        value_mut(boxed, |value| match value {
+            Value::Int(inner) => *inner = IntegerValue::from_signed(8),
+            other => panic!("expected int box, found {:?}", other),
+        })
+    };
     assert_eq!(expect_int(boxed), 8);
 
     let vec = super::aurora_direct_vec_empty();
@@ -2073,10 +2097,10 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
         vec,
         string_value("x"),
     ));
-    assert_eq!(super::vector_from_ptr(vec).elements.len(), 1);
-    super::vector_from_ptr_mut(vec)
-        .elements
-        .push(Value::String("y".to_string()));
+    assert_eq!(super::with_vector(vec, |vector| vector.elements.len()), 1);
+    super::with_vector_mut(vec, |vector| {
+        vector.elements.push(Value::String("y".to_string()));
+    });
     assert_eq!(
         expect_vec_strings(super::aurora_direct_clone_value(vec)),
         vec!["x".to_string(), "y".to_string()]
@@ -2088,11 +2112,13 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
         string_value("name"),
         int_value(1),
     ));
-    assert_eq!(super::map_from_ptr(map).entries.len(), 1);
-    super::map_from_ptr_mut(map).entries.push((
-        Value::String("other".to_string()),
-        Value::Int(IntegerValue::from_signed(2)),
-    ));
+    assert_eq!(super::with_map(map, |map| map.entries.len()), 1);
+    super::with_map_mut(map, |map| {
+        map.entries.push((
+            Value::String("other".to_string()),
+            Value::Int(IntegerValue::from_signed(2)),
+        ));
+    });
     assert_eq!(
         expect_vec_ints(super::aurora_direct_map_values(map)),
         vec![1, 2]
@@ -2103,10 +2129,10 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
         super::aurora_direct_set_insert_in_place(set, string_value("ready")),
         1
     );
-    assert_eq!(super::set_from_ptr(set).elements.len(), 1);
-    super::set_from_ptr_mut(set)
-        .elements
-        .push(Value::String("go".to_string()));
+    assert_eq!(super::with_set(set, |set| set.elements.len()), 1);
+    super::with_set_mut(set, |set| {
+        set.elements.push(Value::String("go".to_string()));
+    });
     assert_eq!(super::aurora_direct_set_len(set), 2);
 
     assert_eq!(runtime_span(0, 1), None);
@@ -2157,6 +2183,35 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
 
     let rendered = render_runtime_diagnostic(Diagnostic::at(Span::new(1, 1), "annotated"));
     assert!(rendered.contains("error: annotated"));
+}
+
+#[test]
+fn native_runtime_retain_and_release_keep_values_alive_until_last_handle() {
+    let boxed = string_value("aurora");
+    let retained = unsafe { retain_value(boxed) };
+
+    unsafe { release_value(boxed) };
+    assert_eq!(
+        unsafe { value_ref(retained) },
+        Value::String("aurora".to_string())
+    );
+
+    unsafe { release_value(retained) };
+}
+
+#[test]
+fn native_runtime_arg_buffer_store_retains_opaque_values() {
+    let buffer = super::aurora_direct_arg_buffer_new(1);
+    let value = string_value("buffered");
+    super::aurora_direct_arg_buffer_store(buffer, 0, value as i64);
+
+    unsafe {
+        release_value(value);
+        let stored = *buffer as *mut OpaqueValue;
+        assert_eq!(value_ref(stored), Value::String("buffered".to_string()));
+        release_value(stored);
+        free_arg_buffer(buffer, 1);
+    }
 }
 
 #[test]

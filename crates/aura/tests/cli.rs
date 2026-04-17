@@ -599,7 +599,7 @@ fn run_stdin_resolves_local_module_imports() {
 }
 
 #[test]
-fn run_mir_stdin_resolves_local_module_imports() {
+fn run_stdin_with_path_resolves_local_module_imports() {
     let temp = TempDir::new("aurora-cli-run-modules-stdin");
     fs::create_dir_all(temp.path().join("helpers")).expect("failed to create helper dir");
     fs::write(
@@ -2199,7 +2199,7 @@ fn built_binary_exits_cleanly_when_stdout_pipe_closes() {
 }
 
 #[test]
-fn run_mir_executes_supported_programs() {
+fn run_executes_supported_programs() {
     let fixture = repo_root().join("examples/classes/methods.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2216,7 +2216,7 @@ fn run_mir_executes_supported_programs() {
 }
 
 #[test]
-fn run_mir_executes_generic_constructor_specialization_example() {
+fn run_executes_generic_constructor_specialization_example() {
     let fixture = repo_root().join("examples/generics/generic_constructor_specialization.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2233,7 +2233,7 @@ fn run_mir_executes_generic_constructor_specialization_example() {
 }
 
 #[test]
-fn run_mir_executes_generic_trait_impl_example() {
+fn run_executes_generic_trait_impl_example() {
     let fixture = repo_root().join("examples/traits/generic_trait_impl.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2250,7 +2250,7 @@ fn run_mir_executes_generic_trait_impl_example() {
 }
 
 #[test]
-fn run_mir_executes_try_example() {
+fn run_executes_try_example() {
     let fixture = repo_root().join("examples/error_handling/try_result.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2270,7 +2270,7 @@ fn run_mir_executes_try_example() {
 }
 
 #[test]
-fn run_mir_executes_with_example() {
+fn run_executes_with_example() {
     let fixture = repo_root().join("examples/resources/with_resource.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2290,7 +2290,7 @@ fn run_mir_executes_with_example() {
 }
 
 #[test]
-fn run_mir_executes_borrowed_lifetime_labels_example() {
+fn run_executes_borrowed_lifetime_labels_example() {
     let fixture = repo_root().join("examples/basics/borrowed_lifetime_labels.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2307,7 +2307,7 @@ fn run_mir_executes_borrowed_lifetime_labels_example() {
 }
 
 #[test]
-fn run_mir_executes_literal_match_example() {
+fn run_executes_literal_match_example() {
     let fixture = repo_root().join("examples/control_flow/match_literals.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2327,7 +2327,7 @@ fn run_mir_executes_literal_match_example() {
 }
 
 #[test]
-fn run_mir_executes_vec_basics_example() {
+fn run_executes_vec_basics_example() {
     let fixture = repo_root().join("examples/collections/vec_basics.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2347,7 +2347,7 @@ fn run_mir_executes_vec_basics_example() {
 }
 
 #[test]
-fn run_mir_executes_vec_polish_example() {
+fn run_executes_vec_polish_example() {
     let fixture = repo_root().join("examples/collections/vec_polish.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2367,7 +2367,7 @@ fn run_mir_executes_vec_polish_example() {
 }
 
 #[test]
-fn run_mir_executes_vec_iteration_example() {
+fn run_executes_vec_iteration_example() {
     let fixture = repo_root().join("examples/collections/vec_iteration.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2387,7 +2387,7 @@ fn run_mir_executes_vec_iteration_example() {
 }
 
 #[test]
-fn run_mir_executes_vec_literals_and_iteration() {
+fn run_executes_vec_literals_and_iteration() {
     let temp = TempDir::new("aurora-run-vec");
     let source_path = temp.path().join("main.au");
     fs::write(
@@ -2411,7 +2411,7 @@ fn run_mir_executes_vec_literals_and_iteration() {
 }
 
 #[test]
-fn run_mir_executes_vec_methods_and_constructor() {
+fn run_executes_vec_methods_and_constructor() {
     let temp = TempDir::new("aurora-run-vec-methods");
     let source_path = temp.path().join("main.au");
     fs::write(
@@ -2438,7 +2438,7 @@ fn run_mir_executes_vec_methods_and_constructor() {
 }
 
 #[test]
-fn run_mir_executes_map_basics_example() {
+fn run_executes_map_basics_example() {
     let fixture = repo_root().join("examples/collections/map_basics.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2458,7 +2458,7 @@ fn run_mir_executes_map_basics_example() {
 }
 
 #[test]
-fn run_mir_executes_generic_trait_bounds_example() {
+fn run_executes_generic_trait_bounds_example() {
     let fixture = repo_root().join("examples/traits/generic_trait_bounds.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2475,7 +2475,7 @@ fn run_mir_executes_generic_trait_bounds_example() {
 }
 
 #[test]
-fn run_mir_executes_operator_traits_example() {
+fn run_executes_operator_traits_example() {
     let fixture = repo_root().join("examples/traits/operator_traits.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2492,7 +2492,7 @@ fn run_mir_executes_operator_traits_example() {
 }
 
 #[test]
-fn run_mir_executes_ordering_traits_example() {
+fn run_executes_ordering_traits_example() {
     let fixture = repo_root().join("examples/traits/ordering_traits.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2512,7 +2512,7 @@ fn run_mir_executes_ordering_traits_example() {
 }
 
 #[test]
-fn run_mir_executes_set_basics_example() {
+fn run_executes_set_basics_example() {
     let fixture = repo_root().join("examples/collections/set_basics.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2532,7 +2532,7 @@ fn run_mir_executes_set_basics_example() {
 }
 
 #[test]
-fn run_mir_executes_string_methods_example() {
+fn run_executes_string_methods_example() {
     let fixture = repo_root().join("examples/strings/string_methods.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2552,7 +2552,7 @@ fn run_mir_executes_string_methods_example() {
 }
 
 #[test]
-fn run_mir_executes_numeric_builtins_example() {
+fn run_executes_numeric_builtins_example() {
     let fixture = repo_root().join("examples/numbers/numeric_builtins.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2572,7 +2572,7 @@ fn run_mir_executes_numeric_builtins_example() {
 }
 
 #[test]
-fn run_mir_executes_string_parsing_and_formatting_example() {
+fn run_executes_string_parsing_and_formatting_example() {
     let fixture = repo_root().join("examples/strings/string_parsing_and_formatting.au");
     let output = Command::new(aura_bin())
         .arg("run")
@@ -2592,7 +2592,7 @@ fn run_mir_executes_string_parsing_and_formatting_example() {
 }
 
 #[test]
-fn run_mir_executes_string_map_and_numeric_builtins() {
+fn run_executes_string_map_and_numeric_builtins() {
     let temp = TempDir::new("aurora-run-string-map-numbers");
     let source_path = temp.path().join("main.au");
     fs::write(

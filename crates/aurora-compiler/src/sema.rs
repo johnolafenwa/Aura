@@ -2022,20 +2022,6 @@ fn map_key_value_types(ty: &Type) -> Option<(&Type, &Type)> {
     }
 }
 
-fn enum_variant_single_payload(variant: &EnumVariantInfo) -> Option<&Type> {
-    match variant.payloads.as_slice() {
-        [payload] => Some(&payload.ty),
-        _ => None,
-    }
-}
-
-fn pattern_single_binding_name(pattern: &Pattern) -> Option<&str> {
-    match pattern {
-        Pattern::Binding(binding) => Some(binding.name.as_str()),
-        _ => None,
-    }
-}
-
 fn borrow_places_overlap(left: &str, right: &str) -> bool {
     let left_segments = left.split('.').collect::<Vec<_>>();
     let right_segments = right.split('.').collect::<Vec<_>>();

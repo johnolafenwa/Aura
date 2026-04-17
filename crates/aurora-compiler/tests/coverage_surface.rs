@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use aurora_compiler::{
     analyze_path_source, analyze_source, check_path, check_source, complete_path_source,
-    complete_source, emit_host_native_object, lower_path_to_mir, lower_source_to_mir, run_path,
-    run_path_via_mir, run_source, run_source_via_mir,
+    complete_source, emit_host_native_object, lower_path_to_mir, lower_source_to_mir, run_mir,
+    run_path, run_source,
 };
 
 struct TempDir {
@@ -250,11 +250,11 @@ def main() -> int32:
     assert!(completion_names.contains("reverse"));
 
     let output = run_source(source).expect("broad source should run");
-    let mir_output = run_source_via_mir(source).expect("broad source should run via MIR");
+    let mir = lower_source_to_mir(source).expect("broad source should lower to MIR");
+    let mir_output = run_mir(&mir).expect("broad source MIR should run");
     assert_eq!(mir_output.stdout, output.stdout);
     assert!(!program.functions.is_empty());
 
-    let mir = lower_source_to_mir(source).expect("broad source should lower to MIR");
     let object = emit_host_native_object(&mir).expect("broad source should emit a native object");
     assert!(!object.is_empty());
 }
@@ -328,12 +328,12 @@ def main() -> int32:
     assert!(!completion_names.is_empty());
 
     let output = run_path(&main_path).expect("package program should run");
-    let mir_output = run_path_via_mir(&main_path).expect("package program should run via MIR");
+    let mir = lower_path_to_mir(&main_path).expect("package program should lower to MIR");
+    let mir_output = run_mir(&mir).expect("package program MIR should run");
     assert_eq!(output.stdout, "Ada\nAda\n");
     assert_eq!(mir_output.stdout, output.stdout);
     assert!(!program.module.items.is_empty());
 
-    let mir = lower_path_to_mir(&main_path).expect("package program should lower to MIR");
     let object =
         emit_host_native_object(&mir).expect("package program should emit a native object");
     assert!(!object.is_empty());
@@ -367,10 +367,10 @@ fn maintained_example_subset_runs_via_public_entrypoints_and_direct_codegen() {
         );
 
         let output = run_path(&path).expect("maintained example should run");
-        let mir_output = run_path_via_mir(&path).expect("maintained example should run via MIR");
+        let mir = lower_path_to_mir(&path).expect("maintained example should lower to MIR");
+        let mir_output = run_mir(&mir).expect("maintained example MIR should run");
         assert_eq!(mir_output.stdout, output.stdout, "{}", path.display());
 
-        let mir = lower_path_to_mir(&path).expect("maintained example should lower to MIR");
         let object =
             emit_host_native_object(&mir).expect("maintained example should emit a native object");
         assert!(!object.is_empty(), "{}", path.display());

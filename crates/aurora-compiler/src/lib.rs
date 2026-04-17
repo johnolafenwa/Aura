@@ -55,14 +55,6 @@ pub fn run_path_with_source(path: &Path, source: &str) -> Result<RunOutput> {
     run_mir(&mir)
 }
 
-pub fn run_source_via_mir(source: &str) -> Result<RunOutput> {
-    run_source(source)
-}
-
-pub fn run_path_with_source_via_mir(path: &Path, source: &str) -> Result<RunOutput> {
-    run_path_with_source(path, source)
-}
-
 pub fn lower_source_to_mir(source: &str) -> Result<MirModule> {
     let program = check_source(source)?;
     Ok(lower_to_mir(&program))
@@ -91,10 +83,6 @@ pub fn run_path(path: &Path) -> Result<RunOutput> {
     let program = check_path(path)?;
     let mir = lower_to_mir(&program);
     run_mir(&mir)
-}
-
-pub fn run_path_via_mir(path: &Path) -> Result<RunOutput> {
-    run_path(path)
 }
 
 pub fn lower_path_to_mir(path: &Path) -> Result<MirModule> {
@@ -293,12 +281,7 @@ impl ModuleLoader {
         if let Some(graph) = &self.package_graph {
             return graph.resolve_import_path(current_path, module_path);
         }
-        let mut path = self.package_root.clone();
-        for segment in module_path {
-            path.push(segment);
-        }
-        path.set_extension("au");
-        Ok(path)
+        checked_module_path(&self.package_root, module_path)
     }
 
     fn module_name_for_path(&self, path: &Path) -> String {
@@ -338,9 +321,10 @@ fn absolutize(path: &Path) -> PathBuf {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        std::env::current_dir()
-            .expect("current directory should be available")
-            .join(path)
+        match std::env::current_dir() {
+            Ok(current) => current.join(path),
+            Err(_) => path.to_path_buf(),
+        }
     };
     if let Ok(canonical) = fs::canonicalize(&absolute) {
         return canonical;
@@ -391,22 +375,19 @@ fn infer_package_root(entry_path: &Path, source_override: Option<&str>) -> Resul
                     .iter()
                     .all(|import_path| import_exists_from_root(candidate, import_path))
                 {
-                    return Ok(candidate.to_path_buf());
+                    return canonicalize_if_exists(candidate);
                 }
             }
         }
     }
 
-    Ok(entry_dir.to_path_buf())
+    canonicalize_if_exists(entry_dir)
 }
 
 fn import_exists_from_root(root: &Path, module_path: &[String]) -> bool {
-    let mut path = root.to_path_buf();
-    for segment in module_path {
-        path.push(segment);
-    }
-    path.set_extension("au");
-    path.exists()
+    checked_module_path(root, module_path)
+        .map(|path| path.exists())
+        .unwrap_or(false)
 }
 
 fn logical_module_name(package_root: &Path, path: &Path) -> String {
@@ -418,6 +399,54 @@ fn logical_module_name(package_root: &Path, path: &Path) -> String {
         .map(|segment| segment.to_string_lossy().to_string())
         .collect::<Vec<_>>()
         .join(".")
+}
+
+fn checked_module_path(package_root: &Path, module_path: &[String]) -> Result<PathBuf> {
+    let canonical_root = canonicalize_if_exists(package_root)?;
+    let mut path = package_root.to_path_buf();
+    for segment in module_path {
+        path.push(segment);
+    }
+    path.set_extension("au");
+    let canonical = canonicalize_if_exists(&path)?;
+    if !canonical.starts_with(&canonical_root) {
+        return Err(Diagnostic::new(format!(
+            "resolved import path `{}` escapes package source root `{}`",
+            canonical.display(),
+            canonical_root.display()
+        )));
+    }
+    Ok(canonical)
+}
+
+fn canonicalize_if_exists(path: &Path) -> Result<PathBuf> {
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return Ok(canonical);
+    }
+
+    let mut existing_ancestor = path;
+    while !existing_ancestor.exists() {
+        let Some(parent) = existing_ancestor.parent() else {
+            return Ok(path.to_path_buf());
+        };
+        existing_ancestor = parent;
+    }
+
+    let canonical_ancestor = fs::canonicalize(existing_ancestor).map_err(|error| {
+        Diagnostic::new(format!(
+            "failed to resolve path `{}`: {}",
+            existing_ancestor.display(),
+            error
+        ))
+    })?;
+    let Ok(suffix) = path.strip_prefix(existing_ancestor) else {
+        return Ok(path.to_path_buf());
+    };
+    Ok(if suffix.as_os_str().is_empty() {
+        canonical_ancestor
+    } else {
+        canonical_ancestor.join(suffix)
+    })
 }
 
 fn qualify_imported_module_namespaces(
@@ -931,7 +960,7 @@ fn insert_namespace_import(
     }
 
     let mut current = root_namespace;
-    let mut prefix = root_name;
+    let mut prefix = root_name.clone();
     for segment in &path[1..path.len() - 1] {
         prefix = format!("{}.{}", prefix, segment);
         current = current
@@ -954,10 +983,13 @@ fn insert_namespace_import(
                 imported_modules: BTreeMap::new(),
             });
     }
-    current.modules.insert(
-        path.last().cloned().expect("path should be non-empty"),
-        leaf,
-    );
+    let Some(last) = path.last().cloned() else {
+        return Err(Diagnostic::at(
+            span,
+            format!("invalid module import path for `{}`", root_name),
+        ));
+    };
+    current.modules.insert(last, leaf);
     Ok(())
 }
 

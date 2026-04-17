@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use aurora_compiler::{check_source, parse_source, run_source, run_source_via_mir};
+use aurora_compiler::{check_source, parse_source, run_source};
 
 #[test]
 fn parse_pass_fixtures_parse() {
@@ -76,22 +76,6 @@ fn run_pass_fixtures_match_expected_stdout() {
 }
 
 #[test]
-fn run_pass_fixtures_match_expected_stdout_via_mir() {
-    for fixture in fixture_files("run-pass") {
-        let source = read(&fixture);
-        let output = run_source_via_mir(&source)
-            .unwrap_or_else(|error| panic!("{} should run via MIR: {}", fixture.display(), error));
-        let expected = read_expected(&fixture, "stdout");
-        assert_eq!(
-            normalize_newlines(&output.stdout),
-            normalize_newlines(&expected),
-            "unexpected MIR stdout for {}",
-            fixture.display()
-        );
-    }
-}
-
-#[test]
 fn run_fail_fixtures_match_expected_diagnostics() {
     for fixture in fixture_files("run-fail") {
         let source = read(&fixture);
@@ -109,29 +93,6 @@ fn run_fail_fixtures_match_expected_diagnostics() {
             normalize_newlines(&rendered),
             normalize_newlines(&expected),
             "unexpected runtime diagnostic for {}",
-            fixture.display()
-        );
-    }
-}
-
-#[test]
-fn run_fail_fixtures_match_expected_diagnostics_via_mir() {
-    for fixture in fixture_files("run-fail") {
-        let source = read(&fixture);
-        let error = match run_source_via_mir(&source) {
-            Ok(output) => panic!(
-                "{} should fail via MIR at runtime, but produced stdout:\n{}",
-                fixture.display(),
-                output.stdout
-            ),
-            Err(error) => error,
-        };
-        let expected = read_expected(&fixture, "diag");
-        let rendered = error.render_with_source(&display_path(&fixture), &source);
-        assert_eq!(
-            normalize_newlines(&rendered),
-            normalize_newlines(&expected),
-            "unexpected MIR runtime diagnostic for {}",
             fixture.display()
         );
     }

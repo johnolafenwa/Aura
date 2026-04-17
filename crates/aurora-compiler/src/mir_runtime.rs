@@ -153,8 +153,19 @@ pub extern "C" fn aurora_native_run(
 
     match result {
         Ok(code) => code,
-        Err(_) => {
-            let _ = writeln!(io::stderr().lock(), "aurora native runtime panicked");
+        Err(payload) => {
+            let message = if let Some(text) = payload.downcast_ref::<&str>() {
+                text.to_string()
+            } else if let Some(text) = payload.downcast_ref::<String>() {
+                text.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            let _ = writeln!(
+                io::stderr().lock(),
+                "aurora native runtime panicked: {}",
+                message
+            );
             1
         }
     }
@@ -1758,11 +1769,11 @@ impl MirRuntime {
             "send" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["value"], values)?;
-                let value = bound
-                    .into_iter()
-                    .next()
-                    .expect("send should bind one arg")
-                    .value;
+                let Some(value) = bound.into_iter().next().map(|arg| arg.value) else {
+                    return Err(Diagnostic::new(
+                        "internal error: `send` should bind one argument",
+                    ));
+                };
                 match channel.send(value) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(value) => Ok(result_err(send_error_closed(value))),
@@ -1824,11 +1835,11 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["value"], values)?;
                 let mut updated = vector;
-                let value = bound
-                    .into_iter()
-                    .next()
-                    .expect("push should bind one arg")
-                    .value;
+                let Some(value) = bound.into_iter().next().map(|arg| arg.value) else {
+                    return Err(Diagnostic::new(
+                        "internal error: `push` should bind one argument",
+                    ));
+                };
                 updated.elements.push(value);
                 let updated_value = Value::Vec(updated);
                 let Some(place) = receiver_place else {

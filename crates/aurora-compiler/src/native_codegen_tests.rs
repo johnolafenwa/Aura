@@ -42,6 +42,28 @@ fn direct_backend_emits_object_for_supported_scalar_program() {
 }
 
 #[test]
+fn direct_backend_emits_retain_and_release_hooks_for_opaque_call_and_local_flow() {
+    let source = r#"
+def echo(value: String):
+    print(value)
+
+def main() -> int32:
+    mut text = "hello"
+    echo(text)
+    text = "goodbye"
+    print(text)
+    return 0
+"#;
+
+    let mir = lower_source_to_mir(source).expect("source should lower to MIR");
+    let object = emit_host_object(&mir).expect("direct backend should emit an object");
+    let rendered = String::from_utf8_lossy(&object);
+
+    assert!(rendered.contains("aurora_direct_retain_value"));
+    assert!(rendered.contains("aurora_direct_release_value"));
+}
+
+#[test]
 fn direct_backend_emits_object_for_plain_class_programs() {
     let source = include_str!("../../../examples/point.au");
     let mir = lower_source_to_mir(source).expect("point example should lower to MIR");

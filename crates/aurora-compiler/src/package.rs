@@ -1,16 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::diag::{Diagnostic, Result};
 
 const MANIFEST_NAME: &str = "Aurora.toml";
 const LOCKFILE_NAME: &str = "Aurora.lock";
+const LOCKFILE_VERSION: u32 = 1;
+const SUPPORTED_PACKAGE_EDITION: &str = "2026";
+const MAX_DEPENDENCIES_PER_PACKAGE: usize = 1024;
+const MAX_PACKAGES_IN_GRAPH: usize = 4096;
 
 #[derive(Clone, Debug)]
 enum PackageOrigin {
@@ -97,8 +102,8 @@ impl GitSelector {
     fn write_lockfile_fields(&self, output: &mut String) {
         match self {
             Self::Rev(_) => {}
-            Self::Tag(tag) => output.push_str(&format!("tag = \"{}\"\n", tag)),
-            Self::Branch(branch) => output.push_str(&format!("branch = \"{}\"\n", branch)),
+            Self::Tag(tag) => output.push_str(&format!("tag = {}\n", toml_string(tag))),
+            Self::Branch(branch) => output.push_str(&format!("branch = {}\n", toml_string(branch))),
         }
     }
 }
@@ -109,6 +114,7 @@ pub struct PackageSource {
     pub version: String,
     pub manifest_dir: PathBuf,
     pub source_root: PathBuf,
+    canonical_source_root: PathBuf,
     pub external_prefix: Option<String>,
     pub dependencies: BTreeMap<String, String>,
     origin: PackageOrigin,
@@ -145,8 +151,8 @@ impl PackageGraph {
         }
         let root_source_root = packages
             .get(&root_package_name)
-            .expect("root package should be resolved")
-            .source_root
+            .ok_or_else(|| Diagnostic::new("internal error: root package should be resolved"))?
+            .canonical_source_root
             .clone();
 
         if !normalized_entry.starts_with(&root_source_root) {
@@ -167,13 +173,13 @@ impl PackageGraph {
     pub fn source_for_path(&self, path: &Path) -> Option<&PackageSource> {
         self.packages
             .values()
-            .filter(|package| path.starts_with(&package.source_root))
-            .max_by_key(|package| package.source_root.as_os_str().len())
+            .filter(|package| path.starts_with(&package.canonical_source_root))
+            .max_by_key(|package| package.canonical_source_root.as_os_str().len())
     }
 
     pub fn module_name_for_path(&self, path: &Path) -> Option<String> {
         let package = self.source_for_path(path)?;
-        let relative = path.strip_prefix(&package.source_root).ok()?;
+        let relative = path.strip_prefix(&package.canonical_source_root).ok()?;
         let mut without_extension = relative.to_path_buf();
         without_extension.set_extension("");
         let logical = without_extension
@@ -222,12 +228,11 @@ impl PackageGraph {
             (current_package, module_path)
         };
 
-        let mut path = target_package.source_root.clone();
-        for segment in relative_segments {
-            path.push(segment);
-        }
-        path.set_extension("au");
-        Ok(path)
+        checked_source_file_path(
+            &target_package.source_root,
+            &target_package.canonical_source_root,
+            relative_segments,
+        )
     }
 
     pub fn write_lockfile(&self) -> Result<()> {
@@ -235,17 +240,20 @@ impl PackageGraph {
         let mut packages = self.packages.values().collect::<Vec<_>>();
         packages.sort_by(|left, right| left.name.cmp(&right.name));
 
-        let mut source = String::from("version = 1\n");
+        let mut source = format!("version = {}\n", LOCKFILE_VERSION);
         for package in packages {
             source.push_str("\n[[package]]\n");
-            source.push_str(&format!("name = \"{}\"\n", package.name));
-            source.push_str(&format!("version = \"{}\"\n", package.version));
+            source.push_str(&format!("name = {}\n", toml_string(&package.name)));
+            source.push_str(&format!("version = {}\n", toml_string(&package.version)));
             match &package.origin {
                 PackageOrigin::Path => {
                     let relative_path =
                         relative_path_from(&self.lockfile_root, &package.manifest_dir);
                     source.push_str("source = \"path\"\n");
-                    source.push_str(&format!("path = \"{}\"\n", relative_path.display()));
+                    source.push_str(&format!(
+                        "path = {}\n",
+                        toml_string(&relative_path.display().to_string())
+                    ));
                 }
                 PackageOrigin::Git {
                     source: git_source,
@@ -253,8 +261,8 @@ impl PackageGraph {
                     selector,
                 } => {
                     source.push_str("source = \"git\"\n");
-                    source.push_str(&format!("git = \"{}\"\n", git_source));
-                    source.push_str(&format!("rev = \"{}\"\n", rev));
+                    source.push_str(&format!("git = {}\n", toml_string(git_source)));
+                    source.push_str(&format!("rev = {}\n", toml_string(rev)));
                     selector.write_lockfile_fields(&mut source);
                 }
             }
@@ -420,6 +428,22 @@ impl PackageResolver {
             return Ok(existing.name.clone());
         }
 
+        if self.packages.len() >= MAX_PACKAGES_IN_GRAPH {
+            return Err(Diagnostic::new(format!(
+                "package graph exceeds the supported limit of {} packages while resolving `{}`",
+                MAX_PACKAGES_IN_GRAPH, manifest.package.name
+            )));
+        }
+
+        if manifest.dependencies.len() > MAX_DEPENDENCIES_PER_PACKAGE {
+            return Err(Diagnostic::new(format!(
+                "package `{}` declares {} dependencies, which exceeds the supported limit of {}",
+                manifest.package.name,
+                manifest.dependencies.len(),
+                MAX_DEPENDENCIES_PER_PACKAGE
+            )));
+        }
+
         self.in_progress.push(manifest_dir.clone());
         let mut dependencies = BTreeMap::new();
         for (name, dependency) in manifest.dependencies {
@@ -456,10 +480,16 @@ impl PackageResolver {
                         } else {
                             self.locked_packages.get(&name)
                         };
+                        let git_source = git.ok_or_else(|| {
+                            Diagnostic::new(format!(
+                                "dependency `{}` must specify `git = ...` for git resolution",
+                                name
+                            ))
+                        })?;
                         let resolved = resolve_git_dependency(
                             &manifest_dir,
                             &name,
-                            git.expect("git dependency should have been validated"),
+                            git_source,
                             &selector,
                             locked,
                         )?;
@@ -488,11 +518,13 @@ impl PackageResolver {
         }
 
         let source_root = manifest_dir.join("src");
+        let canonical_source_root = canonicalize_dir(&source_root)?;
         let package = PackageSource {
             name: manifest.package.name.clone(),
             version: manifest.package.version,
             manifest_dir: manifest_dir.clone(),
             source_root,
+            canonical_source_root,
             external_prefix: None,
             dependencies,
             origin,
@@ -548,6 +580,7 @@ enum RawDependency {
 
 #[derive(Deserialize)]
 struct RawLockfile {
+    version: Option<u32>,
     #[serde(default)]
     package: Vec<RawLockPackage>,
 }
@@ -555,7 +588,8 @@ struct RawLockfile {
 #[derive(Deserialize)]
 struct RawLockPackage {
     name: String,
-    version: String,
+    #[serde(rename = "version")]
+    _version: String,
     source: String,
     path: Option<String>,
     git: Option<String>,
@@ -597,11 +631,7 @@ fn find_workspace_root(package_manifest_dir: &Path) -> Result<Option<PathBuf>> {
         let Ok(relative_member_path) = package_manifest_dir.strip_prefix(ancestor) else {
             continue;
         };
-        let relative_member_path = if relative_member_path.as_os_str().is_empty() {
-            ".".to_string()
-        } else {
-            relative_member_path.to_string_lossy().replace('\\', "/")
-        };
+        let relative_member_path = normalize_relative_path(relative_member_path);
         if workspace
             .members
             .iter()
@@ -662,8 +692,8 @@ fn resolve_package_graph_for_update(
         }
         let root_source_root = packages
             .get(&root_package_name)
-            .expect("resolved root package should exist")
-            .source_root
+            .ok_or_else(|| Diagnostic::new("internal error: resolved root package should exist"))?
+            .canonical_source_root
             .clone();
         let updated_packages = resolver.refreshed_packages.into_iter().collect::<Vec<_>>();
         return Ok((
@@ -702,8 +732,10 @@ fn resolve_package_graph_for_update(
             root_source_root = resolver
                 .packages
                 .get(&package_name)
-                .expect("resolved workspace member should exist")
-                .source_root
+                .ok_or_else(|| {
+                    Diagnostic::new("internal error: resolved workspace member should exist")
+                })?
+                .canonical_source_root
                 .clone();
         }
     }
@@ -758,10 +790,38 @@ fn load_package_manifest(manifest_dir: &Path) -> Result<ParsedPackageManifest> {
             manifest_path.display()
         )));
     }
+    if !is_valid_package_name(&package.name) {
+        return Err(Diagnostic::new(format!(
+            "manifest `{}` has an invalid package name `{}`; package names must match `[A-Za-z_][A-Za-z0-9_-]*`",
+            manifest_path.display(),
+            package.name
+        )));
+    }
     if package.edition.trim().is_empty() {
         return Err(Diagnostic::new(format!(
             "manifest `{}` has an empty package edition",
             manifest_path.display()
+        )));
+    }
+    if package.version.trim().is_empty() {
+        return Err(Diagnostic::new(format!(
+            "manifest `{}` has an empty package version",
+            manifest_path.display()
+        )));
+    }
+    if !is_valid_package_version(&package.version) {
+        return Err(Diagnostic::new(format!(
+            "manifest `{}` has an invalid package version `{}`; package versions must start with a digit and contain only ASCII letters, digits, `.`, `-`, or `+`",
+            manifest_path.display(),
+            package.version
+        )));
+    }
+    if package.edition != SUPPORTED_PACKAGE_EDITION {
+        return Err(Diagnostic::new(format!(
+            "manifest `{}` uses unsupported package edition `{}`; the current Aurora compiler supports edition `{}`",
+            manifest_path.display(),
+            package.edition,
+            SUPPORTED_PACKAGE_EDITION
         )));
     }
     Ok(ParsedPackageManifest {
@@ -808,6 +868,16 @@ fn load_lockfile(lockfile_root: &Path) -> Result<BTreeMap<String, LockedPackage>
         ))
     })?;
 
+    let version = raw.version.unwrap_or(LOCKFILE_VERSION);
+    if version != LOCKFILE_VERSION {
+        return Err(Diagnostic::new(format!(
+            "unsupported lockfile version `{}` in `{}`; expected version `{}`",
+            version,
+            lockfile_path.display(),
+            LOCKFILE_VERSION
+        )));
+    }
+
     let mut packages = BTreeMap::new();
     for package in raw.package {
         let locked = match package.source.as_str() {
@@ -818,7 +888,6 @@ fn load_lockfile(lockfile_root: &Path) -> Result<BTreeMap<String, LockedPackage>
                         package.name
                     )));
                 }
-                let _ = package.version;
                 LockedPackage {
                     source: LockedPackageSource::Path,
                 }
@@ -838,7 +907,6 @@ fn load_lockfile(lockfile_root: &Path) -> Result<BTreeMap<String, LockedPackage>
                 };
                 let selector =
                     GitSelector::from_lockfile(&package.name, &rev, package.tag, package.branch)?;
-                let _ = package.version;
                 LockedPackage {
                     source: LockedPackageSource::Git {
                         source: git,
@@ -885,6 +953,10 @@ fn validate_dependency_shape(
             "dependency `{}` uses `rev`, `tag`, or `branch` without `git = \"...\"`",
             dependency_name
         )));
+    }
+
+    if let Some(git) = git {
+        validate_git_source_literal(dependency_name, git)?;
     }
 
     Ok(())
@@ -937,6 +1009,7 @@ fn resolve_git_revision(source: &str, selector: &GitSelector) -> Result<String> 
                     "ls-remote".to_string(),
                     "--tags".to_string(),
                     "--refs".to_string(),
+                    "--".to_string(),
                     source.to_string(),
                     reference.clone(),
                 ],
@@ -950,6 +1023,7 @@ fn resolve_git_revision(source: &str, selector: &GitSelector) -> Result<String> 
                 vec![
                     "ls-remote".to_string(),
                     "--heads".to_string(),
+                    "--".to_string(),
                     source.to_string(),
                     reference.clone(),
                 ],
@@ -976,42 +1050,68 @@ fn parse_ls_remote_revision(source: &str, reference: &str, output: &str) -> Resu
 }
 
 fn ensure_git_checkout(source: &str, rev: &str) -> Result<PathBuf> {
-    let checkout_dir = git_cache_root()
-        .join(hex_encode(source.as_bytes()))
-        .join(rev);
-    if checkout_dir.join(MANIFEST_NAME).exists() {
-        return Ok(checkout_dir);
-    }
+    let mut permission_denied: Option<(PathBuf, std::io::Error)> = None;
+    for cache_root in git_cache_roots() {
+        let checkout_dir = cache_root.join(hash_source_key(source)).join(rev);
+        if cached_git_checkout_matches_rev(&checkout_dir, rev)? {
+            return Ok(checkout_dir);
+        }
 
-    if checkout_dir.exists() {
-        fs::remove_dir_all(&checkout_dir).map_err(|error| {
+        if checkout_dir.exists() {
+            fs::remove_dir_all(&checkout_dir).map_err(|error| {
+                Diagnostic::new(format!(
+                    "failed to reset git checkout cache `{}`: {}",
+                    checkout_dir.display(),
+                    error
+                ))
+            })?;
+        }
+
+        let parent = checkout_dir.parent().ok_or_else(|| {
             Diagnostic::new(format!(
-                "failed to reset git checkout cache `{}`: {}",
-                checkout_dir.display(),
-                error
+                "internal error: git checkout cache path `{}` has no parent",
+                checkout_dir.display()
             ))
         })?;
+        match fs::create_dir_all(parent) {
+            Ok(()) => return materialize_git_checkout(source, rev, &checkout_dir),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                permission_denied = Some((parent.to_path_buf(), error));
+            }
+            Err(error) => {
+                return Err(Diagnostic::new(format!(
+                    "failed to create git cache directory `{}`: {}",
+                    parent.display(),
+                    error
+                )));
+            }
+        }
     }
 
-    let parent = checkout_dir
-        .parent()
-        .expect("git checkout should have a parent");
-    fs::create_dir_all(parent).map_err(|error| {
+    let Some((path, error)) = permission_denied else {
+        return Err(Diagnostic::new(
+            "internal error: git cache root resolution produced no writable candidates",
+        ));
+    };
+    Err(Diagnostic::new(format!(
+        "failed to create git cache directory `{}`: {}",
+        path.display(),
+        error
+    )))
+}
+
+fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Result<PathBuf> {
+    let parent = checkout_dir.parent().ok_or_else(|| {
         Diagnostic::new(format!(
-            "failed to create git cache directory `{}`: {}",
-            parent.display(),
-            error
+            "internal error: git checkout cache path `{}` has no parent",
+            checkout_dir.display()
         ))
     })?;
-
     let temp_checkout = parent.join(format!(
         "{}-tmp-{}-{}",
         rev,
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time should be after unix epoch")
-            .as_nanos()
+        unix_time_nanos()?
     ));
     if temp_checkout.exists() {
         let _ = fs::remove_dir_all(&temp_checkout);
@@ -1022,6 +1122,7 @@ fn ensure_git_checkout(source: &str, rev: &str) -> Result<PathBuf> {
         vec![
             "clone".to_string(),
             "--quiet".to_string(),
+            "--".to_string(),
             source.to_string(),
             temp_checkout.to_string_lossy().to_string(),
         ],
@@ -1036,18 +1137,37 @@ fn ensure_git_checkout(source: &str, rev: &str) -> Result<PathBuf> {
             rev.to_string(),
         ],
     )?;
+    write_cached_git_revision(&temp_checkout, rev)?;
 
-    match fs::rename(&temp_checkout, &checkout_dir) {
-        Ok(()) => Ok(checkout_dir),
+    match fs::rename(&temp_checkout, checkout_dir) {
+        Ok(()) => Ok(checkout_dir.to_path_buf()),
         Err(error) if checkout_dir.exists() => {
             let _ = fs::remove_dir_all(&temp_checkout);
-            Ok(checkout_dir)
+            if cached_git_checkout_matches_rev(checkout_dir, rev)? {
+                Ok(checkout_dir.to_path_buf())
+            } else {
+                Err(Diagnostic::new(format!(
+                    "failed to place git checkout `{}` because an incompatible cached checkout already exists after rename failed: {}",
+                    checkout_dir.display(),
+                    error
+                )))
+            }
         }
         Err(error) => Err(Diagnostic::new(format!(
             "failed to place git checkout `{}`: {}",
             checkout_dir.display(),
             error
         ))),
+    }
+}
+
+fn git_cache_roots() -> Vec<PathBuf> {
+    let primary = git_cache_root();
+    let fallback = env::temp_dir().join("aurora").join("git");
+    if primary == fallback {
+        vec![primary]
+    } else {
+        vec![primary, fallback]
     }
 }
 
@@ -1091,6 +1211,7 @@ fn git_cache_root() -> PathBuf {
 }
 
 fn normalize_git_source(manifest_dir: &Path, source: &str) -> Result<String> {
+    validate_git_source_literal("dependency", source)?;
     if is_explicit_git_url(source) {
         return Ok(source.to_string());
     }
@@ -1103,16 +1224,23 @@ fn normalize_git_source(manifest_dir: &Path, source: &str) -> Result<String> {
     if candidate.exists() {
         return canonicalize_dir(&candidate).map(|path| path.to_string_lossy().to_string());
     }
-    Ok(source.to_string())
+    Err(Diagnostic::new(format!(
+        "git dependency source `{}` must be an explicit git URL/SSH source or an existing local path relative to `{}`",
+        source,
+        manifest_dir.display()
+    )))
 }
 
 fn is_explicit_git_url(source: &str) -> bool {
     source.contains("://") || source.starts_with("git@")
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
+fn hash_source_key(source: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(source.as_bytes());
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
         encoded.push_str(&format!("{:02x}", byte));
     }
     encoded
@@ -1161,10 +1289,132 @@ fn canonicalize_if_exists(path: &Path) -> Result<PathBuf> {
 fn normalize_member_path(path: &str) -> String {
     let trimmed = path.trim();
     if trimmed.is_empty() {
+        return ".".to_string();
+    }
+    normalize_relative_path(Path::new(trimmed))
+}
+
+fn validate_git_source_literal(dependency_name: &str, source: &str) -> Result<()> {
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return Err(Diagnostic::new(format!(
+            "dependency `{}` has an empty git source",
+            dependency_name
+        )));
+    }
+    if trimmed.starts_with('-') {
+        return Err(Diagnostic::new(format!(
+            "dependency `{}` has an invalid git source `{}`; git sources must not start with `-`",
+            dependency_name, source
+        )));
+    }
+    if trimmed.chars().any(|ch| ch.is_control()) {
+        return Err(Diagnostic::new(format!(
+            "dependency `{}` has an invalid git source `{}`; git sources must not contain control characters",
+            dependency_name, source
+        )));
+    }
+    Ok(())
+}
+
+fn is_valid_package_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    chars.all(|ch| ch == '_' || ch == '-' || ch.is_ascii_alphanumeric())
+}
+
+fn is_valid_package_version(version: &str) -> bool {
+    let mut chars = version.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_digit() {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '+'))
+}
+
+fn toml_string(value: &str) -> String {
+    format!("{:?}", value)
+}
+
+fn normalize_relative_path(path: &Path) -> String {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(segment) => normalized.push(segment),
+            Component::ParentDir => normalized.push(".."),
+            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
         ".".to_string()
     } else {
-        trimmed.replace('\\', "/").trim_end_matches('/').to_string()
+        normalized.to_string_lossy().replace('\\', "/")
     }
+}
+
+fn checked_source_file_path(
+    source_root: &Path,
+    canonical_source_root: &Path,
+    relative_segments: &[String],
+) -> Result<PathBuf> {
+    let mut path = source_root.to_path_buf();
+    for segment in relative_segments {
+        path.push(segment);
+    }
+    path.set_extension("au");
+    let canonical = canonicalize_if_exists(&path)?;
+    if !canonical.starts_with(canonical_source_root) {
+        return Err(Diagnostic::new(format!(
+            "resolved import path `{}` escapes package source root `{}`",
+            canonical.display(),
+            canonical_source_root.display()
+        )));
+    }
+    Ok(canonical)
+}
+
+fn cached_git_revision_path(checkout_dir: &Path) -> PathBuf {
+    checkout_dir.join(".aurora-cache-rev")
+}
+
+fn write_cached_git_revision(checkout_dir: &Path, rev: &str) -> Result<()> {
+    fs::write(cached_git_revision_path(checkout_dir), rev).map_err(|error| {
+        Diagnostic::new(format!(
+            "failed to write git cache revision marker for `{}`: {}",
+            checkout_dir.display(),
+            error
+        ))
+    })
+}
+
+fn cached_git_checkout_matches_rev(checkout_dir: &Path, rev: &str) -> Result<bool> {
+    if !checkout_dir.join(MANIFEST_NAME).exists() {
+        return Ok(false);
+    }
+    let Ok(cached) = fs::read_to_string(cached_git_revision_path(checkout_dir)) else {
+        return Ok(false);
+    };
+    Ok(cached.trim() == rev)
+}
+
+fn unix_time_nanos() -> Result<u128> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .map_err(|error| {
+            Diagnostic::new(format!(
+                "failed to read the system clock while creating a temporary path: {}",
+                error
+            ))
+        })
 }
 
 fn unsupported_version_dependency(name: &str, version: Option<&str>) -> Diagnostic {

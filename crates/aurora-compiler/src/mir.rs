@@ -3768,35 +3768,6 @@ impl<'a> Lowerer<'a> {
         )
     }
 
-    fn variant_payload_type(&self, enum_ty: &Type, variant_name: &str) -> Option<Type> {
-        match enum_ty {
-            Type::Named(name, args) if name == "Option" && args.len() == 1 => {
-                (variant_name == "Some").then(|| args[0].clone())
-            }
-            Type::Named(name, args) if name == "Result" && args.len() == 2 => match variant_name {
-                "Ok" => Some(args[0].clone()),
-                "Err" => Some(args[1].clone()),
-                _ => None,
-            },
-            Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
-                (variant_name == "Closed").then(|| args[0].clone())
-            }
-            Type::Named(name, args) => {
-                let enum_info = self.resolve_enum_info(name)?;
-                let payload = enum_info.variants.get(variant_name)?.payloads.first()?;
-                let substitutions = enum_info
-                    .decl
-                    .type_params
-                    .iter()
-                    .cloned()
-                    .zip(args.iter().cloned())
-                    .collect::<std::collections::HashMap<_, _>>();
-                Some(substitute_type(&payload.ty, &substitutions))
-            }
-            _ => None,
-        }
-    }
-
     fn builtin_runtime_member_return_type(
         &self,
         receiver_type: &Type,

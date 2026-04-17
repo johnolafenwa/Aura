@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aurora_compiler::{analyze_path_source, check_path, run_path, run_path_via_mir};
+use aurora_compiler::{analyze_path_source, check_path, run_path};
 
 struct TempDir {
     path: PathBuf,
@@ -61,9 +61,6 @@ def main() -> int32:
 
     let output = run_path(&main_path).expect("module import should run");
     assert_eq!(output.stdout, "5\n");
-
-    let mir_output = run_path_via_mir(&main_path).expect("module import should run via MIR");
-    assert_eq!(mir_output.stdout, "5\n");
 }
 
 #[test]
@@ -87,9 +84,6 @@ def main() -> int32:
 
     let output = run_path(&main_path).expect("dotted module import should run");
     assert_eq!(output.stdout, "8\n");
-
-    let mir_output = run_path_via_mir(&main_path).expect("dotted module import should run via MIR");
-    assert_eq!(mir_output.stdout, "8\n");
 }
 
 #[test]
@@ -117,9 +111,6 @@ def main() -> int32:
 
     let output = run_path(&main_path).expect("dotted class import should run");
     assert_eq!(output.stdout, "4\n");
-
-    let mir_output = run_path_via_mir(&main_path).expect("dotted class import should run via MIR");
-    assert_eq!(mir_output.stdout, "4\n");
 }
 
 #[test]
@@ -147,10 +138,6 @@ def main() -> int32:
 
     let output = run_path(&main_path).expect("qualified type annotations should run");
     assert_eq!(output.stdout, "9\n");
-
-    let mir_output =
-        run_path_via_mir(&main_path).expect("qualified type annotations should run via MIR");
-    assert_eq!(mir_output.stdout, "9\n");
 }
 
 #[test]
@@ -215,9 +202,6 @@ def main() -> int32:
 
     let output = run_path(&main_path).expect("dotted enum import should run");
     assert_eq!(output.stdout, "true\n1\n");
-
-    let mir_output = run_path_via_mir(&main_path).expect("dotted enum import should run via MIR");
-    assert_eq!(mir_output.stdout, "true\n1\n");
 }
 
 #[test]
@@ -254,10 +238,6 @@ def main() -> int32:
 
     let output = run_path(&main_path).expect("imported sibling function call should run");
     assert_eq!(output.stdout, "42\n");
-
-    let mir_output =
-        run_path_via_mir(&main_path).expect("imported sibling function call should run via MIR");
-    assert_eq!(mir_output.stdout, "42\n");
 }
 
 #[test]
@@ -293,10 +273,6 @@ def main() -> int32:
 
     let output = run_path(&main_path).expect("spawned module call targets should run");
     assert_eq!(output.stdout, "5\n7\n7\n9\n");
-
-    let mir_output =
-        run_path_via_mir(&main_path).expect("spawned module call targets should run via MIR");
-    assert_eq!(mir_output.stdout, "5\n7\n7\n9\n");
 }
 
 #[test]
@@ -329,14 +305,10 @@ def main() -> int32:
 
     let output = run_path(&main_path).expect("imported constructor/method flow should run");
     assert_eq!(output.stdout, "4\n");
-
-    let mir_output =
-        run_path_via_mir(&main_path).expect("imported constructor/method flow should run via MIR");
-    assert_eq!(mir_output.stdout, "4\n");
 }
 
 #[test]
-fn transitive_reexported_imports_run_via_mir() {
+fn transitive_reexported_imports_run() {
     let temp = TempDir::new("aurora-modules-transitive-reexport");
     temp.write(
         "pkg/base.au",
@@ -364,9 +336,6 @@ def main() -> int32:
 
     let output = run_path(&main_path).expect("transitive re-export should run");
     assert_eq!(output.stdout, "42\n");
-
-    let mir_output = run_path_via_mir(&main_path).expect("transitive re-export should run via MIR");
-    assert_eq!(mir_output.stdout, "42\n");
 }
 
 #[test]
@@ -399,10 +368,6 @@ def main() -> int32:
 
     let output = run_path(&main_path).expect("namespace imports in imported modules should run");
     assert_eq!(output.stdout, "7\n");
-
-    let mir_output = run_path_via_mir(&main_path)
-        .expect("namespace imports in imported modules should run via MIR");
-    assert_eq!(mir_output.stdout, "7\n");
 }
 
 #[test]
@@ -436,10 +401,6 @@ def main() -> int32:
     let output =
         run_path(&main_path).expect("namespace imports in imported module bodies should run");
     assert_eq!(output.stdout, "7\n");
-
-    let mir_output = run_path_via_mir(&main_path)
-        .expect("namespace imports in imported module bodies should run via MIR");
-    assert_eq!(mir_output.stdout, "7\n");
 }
 
 #[test]
@@ -480,9 +441,6 @@ def main() -> int32:
 
     let output = run_path(&main_path).expect("imported trait impls should run");
     assert_eq!(output.stdout, "Ada\nAda\n");
-
-    let mir_output = run_path_via_mir(&main_path).expect("imported trait impls should run via MIR");
-    assert_eq!(mir_output.stdout, "Ada\nAda\n");
 }
 
 #[test]

@@ -489,28 +489,37 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         .is_some());
 
     assert_eq!(
-        lowerer.variant_payload_type(
-            &Type::Named("Option".to_string(), vec![Type::named("String")]),
+        lowerer.variant_payload_types(
+            Some(&Type::Named(
+                "Option".to_string(),
+                vec![Type::named("String")]
+            )),
+            "Option",
             "Some"
         ),
-        Some(Type::named("String"))
+        Some(vec![Type::named("String")])
     );
     assert_eq!(
-        lowerer.variant_payload_type(
-            &Type::Named(
+        lowerer.variant_payload_types(
+            Some(&Type::Named(
                 "Result".to_string(),
                 vec![Type::named("int32"), Type::named("String")]
-            ),
+            )),
+            "Result",
             "Err"
         ),
-        Some(Type::named("String"))
+        Some(vec![Type::named("String")])
     );
     assert_eq!(
-        lowerer.variant_payload_type(
-            &Type::Named("SendError".to_string(), vec![Type::named("int32")]),
+        lowerer.variant_payload_types(
+            Some(&Type::Named(
+                "SendError".to_string(),
+                vec![Type::named("int32")]
+            )),
+            "SendError",
             "Closed"
         ),
-        Some(Type::named("int32"))
+        Some(vec![Type::named("int32")])
     );
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::named("String"), "split"),

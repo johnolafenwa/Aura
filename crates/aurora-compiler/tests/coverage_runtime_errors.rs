@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aurora_compiler::{
-    check_path_with_source, lower_path_with_source_to_mir, run_path_with_source,
-    run_path_with_source_via_mir, run_source, run_source_via_mir,
+    check_path_with_source, lower_path_with_source_to_mir, run_mir, run_path_with_source,
+    run_source,
 };
 
 struct TempDir {
@@ -51,7 +51,8 @@ fn assert_runtime_error_contains(source: &str, expected: &str) {
         run_error.message
     );
 
-    let mir_error = run_source_via_mir(source).expect_err("source should fail via MIR runtime");
+    let mir = aurora_compiler::lower_source_to_mir(source).expect("source should lower to MIR");
+    let mir_error = run_mir(&mir).expect_err("source should fail via MIR runtime");
     assert!(
         mir_error.message.contains(expected),
         "MIR runtime error should contain `{expected}`, got `{}`",
@@ -122,13 +123,11 @@ def main() -> int32:
 
     let output =
         run_path_with_source(&main_path, override_source).expect("path-with-source should run");
-    let mir_output = run_path_with_source_via_mir(&main_path, override_source)
-        .expect("path-with-source should run via MIR");
-    assert_eq!(output.stdout, "12\n");
-    assert_eq!(mir_output.stdout, output.stdout);
-
     let mir = lower_path_with_source_to_mir(&main_path, override_source)
         .expect("path-with-source should lower to MIR");
+    let mir_output = run_mir(&mir).expect("lowered path-with-source should run via MIR");
+    assert_eq!(output.stdout, "12\n");
+    assert_eq!(mir_output.stdout, output.stdout);
     assert!(!mir.functions.is_empty());
 
     let bad_override = r#"from helpers.math import double
