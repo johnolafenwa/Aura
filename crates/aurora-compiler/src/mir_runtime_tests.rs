@@ -597,11 +597,11 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
     assert!(matches!(
         runtime
             .evaluate_call(
-                &crate::mir::CallTarget::Name("task_group".to_string()),
+                &crate::mir::CallTarget::Name("tasks".to_string()),
                 &[],
                 &mut env
             )
-            .expect("task_group() should succeed"),
+            .expect("tasks() should succeed"),
         Value::TaskGroup(_)
     ));
     assert_eq!(
@@ -754,17 +754,17 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
             .expect("parse_float64() should return Result.Err for bad strings"),
         result_err(Value::String("invalid float literal".to_string()))
     );
-    let channel_error = runtime
+    let queue_error = runtime
         .evaluate_call(
-            &crate::mir::CallTarget::Name("channel".to_string()),
+            &crate::mir::CallTarget::Name("queue".to_string()),
             &[
                 mir_arg(None, Operand::Int(1)),
                 mir_arg(None, Operand::Int(2)),
             ],
             &mut env,
         )
-        .expect_err("channel() should reject extra arguments");
-    assert!(channel_error
+        .expect_err("queue() should reject extra arguments");
+    assert!(queue_error
         .message
         .contains("expects at most one optional `capacity` argument"));
 }
@@ -881,7 +881,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
     );
     env.define_typed(
         "jobs",
-        Type::Named("Channel".to_string(), vec![Type::named("int32")]),
+        Type::Named("Queue".to_string(), vec![Type::named("int32")]),
         Value::Channel(ChannelValue::new()),
     );
     env.define_typed(
@@ -1035,7 +1035,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             .evaluate_call(
                 &crate::mir::CallTarget::Member {
                     object: Operand::Place("task".to_string()),
-                    field: "join".to_string(),
+                    field: "result".to_string(),
                     receiver_place: Some("task".to_string()),
                 },
                 &[],
@@ -1844,7 +1844,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     );
     env.define_typed(
         "jobs",
-        Type::Named("Channel".to_string(), vec![Type::named("int32")]),
+        Type::Named("Queue".to_string(), vec![Type::named("int32")]),
         Value::Channel(ChannelValue::new()),
     );
 
@@ -2191,33 +2191,17 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         .expect("string clone should succeed");
     assert_eq!(string_clone, Value::String("Aurora".to_string()));
 
-    let channel_clone = runtime
-        .evaluate_channel_method(
-            match env.read_place("jobs").unwrap() {
-                Value::Channel(channel) => channel,
-                other => panic!("expected channel, found {other:?}"),
-            },
-            "clone",
-            &[],
-            &env,
-        )
-        .expect("channel clone should succeed");
-    match channel_clone {
-        Value::Channel(_) => {}
-        other => panic!("expected channel clone, found {other:?}"),
-    }
-
     let send = runtime
         .evaluate_channel_method(
             match env.read_place("jobs").unwrap() {
                 Value::Channel(channel) => channel,
                 other => panic!("expected channel, found {other:?}"),
             },
-            "send",
+            "put",
             &[mir_arg(Some("value"), Operand::Int(5))],
             &env,
         )
-        .expect("channel send should succeed");
+        .expect("queue put should succeed");
     match send {
         Value::EnumVariant(variant) => assert_eq!(variant.variant_name, "Ok"),
         other => panic!("expected Result from send, found {other:?}"),
@@ -2229,11 +2213,11 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 Value::Channel(channel) => channel,
                 other => panic!("expected channel, found {other:?}"),
             },
-            "recv",
+            "get",
             &[],
             &env,
         )
-        .expect("channel recv should succeed");
+        .expect("queue get should succeed");
     assert_eq!(recv, option_some(Value::Int(IntegerValue::from_signed(5))));
 
     let close = runtime
@@ -2490,19 +2474,18 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             "clone",
             &[],
         )
-        .expect("task clone should succeed");
-    match task_clone {
-        Value::Task(_) => {}
-        other => panic!("expected task, found {other:?}"),
-    }
+        .expect_err("task clone should be unsupported");
+    assert!(task_clone
+        .message
+        .contains("unsupported task method `clone`"));
 
     let task_join = runtime
         .evaluate_task_method(
             TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Bool(true)))),
-            "join",
+            "result",
             &[],
         )
-        .expect("task join should succeed");
+        .expect("task result should succeed");
     assert_eq!(task_join, Value::Bool(true));
 
     let task_error = runtime
@@ -2521,18 +2504,18 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     assert_eq!(cancel, Value::Unit);
 
     let no_target = runtime
-        .evaluate_task_group_method(group.clone(), "spawn", &[], &env)
-        .expect_err("task-group spawn should reject empty args");
+        .evaluate_task_group_method(group.clone(), "start", &[], &env)
+        .expect_err("task-group start should reject empty args");
     assert!(no_target.message.contains("expects a target function"));
 
     let bad_target = runtime
         .evaluate_task_group_method(
             group,
-            "spawn",
+            "start",
             &[mir_arg(Some("target"), Operand::Int(3))],
             &env,
         )
-        .expect_err("task-group spawn should stay in MIR lowering");
+        .expect_err("task-group start should stay in MIR lowering");
     assert!(bad_target
         .message
         .contains("should lower to MIR `Spawn` directly"));
@@ -2909,16 +2892,15 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
     assert!(float_mod_zero.message.contains("division by zero"));
 
     let task = TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Bool(true))));
-    match runtime
+    let clone_error = runtime
         .evaluate_task_method(task.clone(), "clone", &[])
-        .expect("task clone should succeed")
-    {
-        Value::Task(cloned) => assert_eq!(cloned, task),
-        other => panic!("expected cloned task value, found {other:?}"),
-    }
+        .expect_err("task clone should be unsupported");
+    assert!(clone_error
+        .message
+        .contains("unsupported task method `clone`"));
     let join_args = runtime
-        .evaluate_task_method(task.clone(), "join", &[mir_arg(None, Operand::Int(1))])
-        .expect_err("join should reject arguments");
+        .evaluate_task_method(task.clone(), "result", &[mir_arg(None, Operand::Int(1))])
+        .expect_err("result should reject arguments");
     assert!(join_args.message.contains("does not take arguments"));
     let bad_task_member = runtime
         .evaluate_task_method(task, "missing", &[])
@@ -2937,8 +2919,8 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
         Value::Unit
     );
     let spawn_error = runtime
-        .evaluate_task_group_method(group.clone(), "spawn", &[], &env)
-        .expect_err("group spawn should reject empty arg lists");
+        .evaluate_task_group_method(group.clone(), "start", &[], &env)
+        .expect_err("group start should reject empty arg lists");
     assert!(spawn_error.message.contains("expects a target function"));
     let bad_group_member = runtime
         .evaluate_task_group_method(group, "missing", &[], &env)

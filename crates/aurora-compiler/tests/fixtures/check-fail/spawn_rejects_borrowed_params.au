@@ -7,5 +7,5 @@ def show(counter: borrow Counter) -> int32:
 def main() -> int32:
     counter = Counter(value=1)
     task = spawn show(counter)
-    print(task.join())
+    print(task.result())
     return 0

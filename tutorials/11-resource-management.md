@@ -43,12 +43,12 @@ The method must take `borrow mut self`, no extra parameters, and return `None`. 
 
 ## `with ... as ...` For Task Groups
 
-The builtin `task_group()` function returns a `TaskGroup`, which is the one non-class value that supports `with`:
+The builtin `tasks()` function returns a `TaskGroup`, which is the one non-class value that supports `with`:
 
 ```python
-with task_group() as group:
-    group.spawn(worker, out.clone())
-    group.spawn(worker, out.clone())
+with tasks() as group:
+    group.start(worker, out)
+    group.start(worker, out)
 # leaving the block joins all spawned child tasks
 ```
 

@@ -1,12 +1,12 @@
-def producer(out: Channel[int32]):
-    out.send(9)
+def producer(out: Queue[int32]):
+    out.put(9)
     out.close()
 
 def main() -> int32:
-    ch: Channel[int32] = channel()
-    spawn detached producer(ch.clone())
+    jobs: Queue[int32] = queue()
+    spawn detached producer(jobs)
 
-    match ch.recv():
+    match jobs.get():
         case Option.Some(value):
             print(value)
         case Option.None:

@@ -230,26 +230,31 @@ impl Type {
 }
 
 fn is_builtin_copy_named_type(name: &str, args: &[Type]) -> bool {
-    args.is_empty()
-        && matches!(
-            name,
-            "bool"
-                | "int8"
-                | "int16"
-                | "int32"
-                | "int64"
-                | "int128"
-                | "intsize"
-                | "uint8"
-                | "uint16"
-                | "uint32"
-                | "uint64"
-                | "uint128"
-                | "uintsize"
-                | "float32"
-                | "float64"
-                | "Duration"
-        )
+    match name {
+        "Queue" | "Task" => args.len() == 1,
+        _ => {
+            args.is_empty()
+                && matches!(
+                    name,
+                    "bool"
+                        | "int8"
+                        | "int16"
+                        | "int32"
+                        | "int64"
+                        | "int128"
+                        | "intsize"
+                        | "uint8"
+                        | "uint16"
+                        | "uint32"
+                        | "uint64"
+                        | "uint128"
+                        | "uintsize"
+                        | "float32"
+                        | "float64"
+                        | "Duration"
+                )
+        }
+    }
 }
 
 fn resolve_return_borrow_source(
@@ -1398,7 +1403,7 @@ fn lower_type_with_self(
         return Ok(Type::Named(type_name.to_string(), args));
     }
 
-    if type_name == "Channel"
+    if type_name == "Queue"
         || type_name == "Task"
         || type_name == "SendError"
         || type_name == "Vec"
@@ -2000,7 +2005,7 @@ fn is_builtin_type(name: &str) -> bool {
             | "Map"
             | "MapEntry"
             | "Range"
-            | "Channel"
+            | "Queue"
             | "Task"
             | "Option"
             | "Result"
@@ -3080,7 +3085,7 @@ impl<'a> FunctionChecker<'a> {
                             (Type::named("int32"), ReceiverKind::Value, false)
                         }
                         (Type::Named(name, args), borrow_mode)
-                            if name == "Channel" && args.len() == 1 =>
+                            if name == "Queue" && args.len() == 1 =>
                         {
                             let element_ty = args[0].clone();
                             let passing = if let Some(borrow_mode) = borrow_mode {
@@ -3139,7 +3144,7 @@ impl<'a> FunctionChecker<'a> {
                             return Err(Diagnostic::at(
                                 for_stmt.span,
                                 format!(
-                                    "`for` currently requires a `Range`, `Channel[T]`, `Vec[T]`, or `Set[T]` iterable, found `{}`",
+                                    "`for` currently requires a `Range`, `Queue[T]`, `Vec[T]`, or `Set[T]` iterable, found `{}`",
                                     iterable_ty
                                 ),
                             ))
@@ -3391,7 +3396,7 @@ impl<'a> FunctionChecker<'a> {
         let ExprKind::Call { callee, args } = &expr.kind else {
             return Err(Diagnostic::at(
                 expr.span,
-                "`select` currently supports `recv()`, `send(...)`, and `after(...)` arms",
+                "`select` currently supports `get()`, `put(...)`, and `after(...)` arms",
             ));
         };
 
@@ -3413,19 +3418,24 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(None)
             }
-            ExprKind::Member { object, field } if field == "recv" => {
-                BuiltinMember::ChannelRecv.bind_args(args, expr.span)?;
+            ExprKind::Member { object, field } if matches!(field.as_str(), "recv" | "get") => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::at(
+                        expr.span,
+                        "`select` receive arms require `Queue[T].get()` with no arguments",
+                    ));
+                }
                 let receiver_ty = self.type_of_expr(object, locals)?;
                 let Type::Named(name, type_args) = receiver_ty else {
                     return Err(Diagnostic::at(
                         expr.span,
-                        "`select` receive arms require `Channel[T].recv()`",
+                        "`select` receive arms require `Queue[T].get()`",
                     ));
                 };
-                if name != "Channel" || type_args.len() != 1 {
+                if name != "Queue" || type_args.len() != 1 {
                     return Err(Diagnostic::at(
                         expr.span,
-                        "`select` receive arms require `Channel[T].recv()`",
+                        "`select` receive arms require `Queue[T].get()`",
                     ));
                 }
                 Ok(Some(Type::Named(
@@ -3433,25 +3443,25 @@ impl<'a> FunctionChecker<'a> {
                     vec![type_args[0].clone()],
                 )))
             }
-            ExprKind::Member { object, field } if field == "send" => {
-                let ordered_args = BuiltinMember::ChannelSend.bind_args(args, expr.span)?;
+            ExprKind::Member { object, field } if matches!(field.as_str(), "send" | "put") => {
+                let ordered_args = BuiltinMember::QueuePut.bind_args(args, expr.span)?;
                 let send_arg = ordered_args[0].ok_or_else(|| {
                     Diagnostic::at(
                         expr.span,
-                        "internal error: `send` should bind exactly one argument in `select`",
+                        "internal error: `put` should bind exactly one argument in `select`",
                     )
                 })?;
                 let receiver_ty = self.type_of_expr(object, locals)?;
                 let Type::Named(name, type_args) = receiver_ty else {
                     return Err(Diagnostic::at(
                         expr.span,
-                        "`select` send arms require `Channel[T].send(value)`",
+                        "`select` send arms require `Queue[T].put(value)`",
                     ));
                 };
-                if name != "Channel" || type_args.len() != 1 {
+                if name != "Queue" || type_args.len() != 1 {
                     return Err(Diagnostic::at(
                         expr.span,
-                        "`select` send arms require `Channel[T].send(value)`",
+                        "`select` send arms require `Queue[T].put(value)`",
                     ));
                 }
                 let actual =
@@ -3459,7 +3469,7 @@ impl<'a> FunctionChecker<'a> {
                 if actual != type_args[0] {
                     return Err(Diagnostic::at(
                         send_arg.span,
-                        format!("`send()` expects `{}`, found `{}`", type_args[0], actual),
+                        format!("`put()` expects `{}`, found `{}`", type_args[0], actual),
                     ));
                 }
                 Ok(Some(Type::Named(
@@ -3472,7 +3482,7 @@ impl<'a> FunctionChecker<'a> {
             }
             _ => Err(Diagnostic::at(
                 expr.span,
-                "`select` currently supports `recv()`, `send(...)`, and `after(...)` arms",
+                "`select` currently supports `get()`, `put(...)`, and `after(...)` arms",
             )),
         }
     }
@@ -4760,7 +4770,7 @@ impl<'a> FunctionChecker<'a> {
         let (base_callee, explicit_type_args) = self.peel_specialization(callee);
 
         if let (ExprKind::Name(name), Some(type_args)) = (&base_callee.kind, explicit_type_args) {
-            if name == "Channel" {
+            if name == "Queue" {
                 let explicit_args = self.lower_explicit_type_args(type_args)?;
                 if explicit_args.len() != 1 {
                     return Err(Diagnostic::at(
@@ -4774,7 +4784,7 @@ impl<'a> FunctionChecker<'a> {
                 }
                 let capacity_params = [crate::call::CallableParam::optional("capacity")];
                 let ordered_args = bind_call_arguments(
-                    "class `Channel`",
+                    &format!("class `{}`", name),
                     &capacity_params,
                     args,
                     span,
@@ -4793,7 +4803,7 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                 }
-                return Ok(Type::Named("Channel".to_string(), explicit_args));
+                return Ok(Type::Named("Queue".to_string(), explicit_args));
             }
             if name == "Vec" {
                 let explicit_args = self.lower_explicit_type_args(type_args)?;
@@ -4917,42 +4927,52 @@ impl<'a> FunctionChecker<'a> {
                         }
                         Ok(Type::named("Range"))
                     }
-                    BuiltinFunction::Channel => {
+                    BuiltinFunction::Queue => {
                         if let Some(type_args) = explicit_type_args {
                             let explicit_args = self.lower_explicit_type_args(type_args)?;
                             if explicit_args.len() != 1 {
                                 return Err(Diagnostic::at(
                                     span,
                                     format!(
-                                        "`channel[...]()` expects exactly one type argument, found {}",
+                                        "`{}[...]()` expects exactly one type argument, found {}",
+                                        builtin.name(),
                                         explicit_args.len()
                                     ),
                                 ));
                             }
-                            Ok(Type::Named("Channel".to_string(), explicit_args))
+                            Ok(Type::Named("Queue".to_string(), explicit_args))
                         } else {
                             let Some(expected_ty) = expected else {
                                 return Err(Diagnostic::at(
                                     span,
-                                    "`channel()` requires an expected `Channel[T]` type annotation in the bootstrap compiler",
+                                    format!(
+                                        "`{}()` requires an expected `Queue[T]` type annotation in the bootstrap compiler",
+                                        builtin.name()
+                                    ),
                                 ));
                             };
                             let Type::Named(name, args) = expected_ty else {
                                 return Err(Diagnostic::at(
                                     span,
-                                    "`channel()` requires an expected `Channel[T]` type annotation in the bootstrap compiler",
+                                    format!(
+                                        "`{}()` requires an expected `Queue[T]` type annotation in the bootstrap compiler",
+                                        builtin.name()
+                                    ),
                                 ));
                             };
-                            if name != "Channel" || args.len() != 1 {
+                            if name != "Queue" || args.len() != 1 {
                                 return Err(Diagnostic::at(
                                     span,
-                                    "`channel()` requires an expected `Channel[T]` type annotation in the bootstrap compiler",
+                                    format!(
+                                        "`{}()` requires an expected `Queue[T]` type annotation in the bootstrap compiler",
+                                        builtin.name()
+                                    ),
                                 ));
                             }
                             Ok(expected_ty.clone())
                         }
                     }
-                    BuiltinFunction::TaskGroup => Ok(Type::named("TaskGroup")),
+                    BuiltinFunction::Tasks => Ok(Type::named("TaskGroup")),
                     BuiltinFunction::Cancelled => Ok(Type::named("bool")),
                     BuiltinFunction::After => {
                         let duration_arg = ordered_args[0].ok_or_else(|| {
@@ -6586,17 +6606,16 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
 
-                    if receiver_name == "Channel" && receiver_args.len() == 1 {
+                    if receiver_name == "Queue" && receiver_args.len() == 1 {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
-                                BuiltinMember::ChannelClone => Ok(receiver_ty.clone()),
-                                BuiltinMember::ChannelSend => {
+                                BuiltinMember::QueuePut => {
                                     let send_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
                                         span,
-                                        "`send` requires exactly one argument",
+                                        &format!("`{}` requires exactly one argument", field),
                                     )?;
                                     let actual = self.type_of_expr_hint(
                                         &send_arg.value,
@@ -6607,8 +6626,8 @@ impl<'a> FunctionChecker<'a> {
                                         return Err(Diagnostic::at(
                                             send_arg.span,
                                             format!(
-                                                "`send` expects `{}`, found `{}`",
-                                                receiver_args[0], actual
+                                                "`{}` expects `{}`, found `{}`",
+                                                field, receiver_args[0], actual
                                             ),
                                         ));
                                     }
@@ -6626,12 +6645,30 @@ impl<'a> FunctionChecker<'a> {
                                         ],
                                     ))
                                 }
-                                BuiltinMember::ChannelRecv => Ok(Type::Named(
-                                    "Option".to_string(),
-                                    vec![receiver_args[0].clone()],
-                                )),
-                                BuiltinMember::ChannelClose => Ok(Type::Unit),
-                                _ => unreachable!("unexpected channel builtin member"),
+                                BuiltinMember::QueueGet => {
+                                    if let Some(timeout_arg) = ordered_args[0] {
+                                        let actual = self.type_of_expr_hint(
+                                            &timeout_arg.value,
+                                            locals,
+                                            Some(&Type::named("Duration")),
+                                        )?;
+                                        if actual != Type::named("Duration") {
+                                            return Err(Diagnostic::at(
+                                                timeout_arg.span,
+                                                format!(
+                                                    "`get(timeout=...)` expects `Duration`, found `{}`",
+                                                    actual
+                                                ),
+                                            ));
+                                        }
+                                    }
+                                    Ok(Type::Named(
+                                        "Option".to_string(),
+                                        vec![receiver_args[0].clone()],
+                                    ))
+                                }
+                                BuiltinMember::QueueClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected queue builtin member"),
                             };
                         }
                     }
@@ -6640,8 +6677,7 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             builtin_member.bind_args(args, span)?;
                             return match builtin_member {
-                                BuiltinMember::TaskClone => Ok(receiver_ty.clone()),
-                                BuiltinMember::TaskJoin => Ok(receiver_args[0].clone()),
+                                BuiltinMember::TaskResult => Ok(receiver_args[0].clone()),
                                 _ => unreachable!("unexpected task builtin member"),
                             };
                         }
@@ -6649,17 +6685,20 @@ impl<'a> FunctionChecker<'a> {
 
                     if receiver_name == "TaskGroup" && receiver_args.is_empty() {
                         match field.as_str() {
-                            "spawn" => {
+                            "start" => {
                                 if args.is_empty() {
                                     return Err(Diagnostic::at(
                                         span,
-                                        "`spawn` expects a target function followed by its arguments",
+                                        format!(
+                                            "`{}` expects a target function followed by its arguments",
+                                            field
+                                        ),
                                     ));
                                 }
                                 if args[0].name.is_some() {
                                     return Err(Diagnostic::at(
                                         args[0].span,
-                                        "`spawn` does not take keyword arguments",
+                                        format!("`{}` does not take keyword arguments", field),
                                     ));
                                 }
                                 let callable = self.resolve_spawn_callable(&args[0].value)?;
@@ -6687,7 +6726,7 @@ impl<'a> FunctionChecker<'a> {
                                     vec![callable.signature.return_type.clone()],
                                 ));
                             }
-                            "cancel" | "close" => {
+                            "cancel" => {
                                 BuiltinMember::TaskGroupCancel.bind_args(args, span)?;
                                 return Ok(Type::Unit);
                             }

@@ -694,7 +694,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         .into_iter()
         .map(|completion| completion.name)
         .collect::<Vec<_>>();
-    assert!(task_group_member_names.contains(&"spawn".to_string()));
+    assert!(task_group_member_names.contains(&"start".to_string()));
 
     let scope = BTreeMap::from([
         (
@@ -1153,7 +1153,7 @@ fn completion_scope_tracks_nested_statement_bindings() {
         "        return self.value",
         "",
         "def scoped(value: int32) -> int32:",
-        "    jobs: Channel[int32] = channel()",
+        "    jobs: Queue[int32] = queue()",
         "    if value > 0:",
         "        positive = value",
         "        print(positive)",
@@ -1169,10 +1169,10 @@ fn completion_scope_tracks_nested_statement_bindings() {
         "            print(wildcard)",
         "    for item in [1, 2, 3]:",
         "        print(item)",
-        "    with task_group() as group:",
+        "    with tasks() as group:",
         "        print(group.cancel())",
         "    select:",
-        "        case received = jobs.recv():",
+        "        case received = jobs.get():",
         "            print(received)",
         "        case after(1ms):",
         "            pass",
@@ -1636,10 +1636,28 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
     ))
     .iter()
     .any(|item| item.name == "insert"));
+    assert!(builtin_member_completions(&Type::Named(
+        "Queue".to_string(),
+        vec![Type::named("int32")],
+    ))
+    .iter()
+    .any(|item| item.name == "put"));
+    assert!(builtin_member_completions(&Type::Named(
+        "Queue".to_string(),
+        vec![Type::named("int32")],
+    ))
+    .iter()
+    .any(|item| item.name == "get"));
+    assert!(builtin_member_completions(&Type::Named(
+        "Task".to_string(),
+        vec![Type::named("int32")],
+    ))
+    .iter()
+    .any(|item| item.name == "result"));
     assert!(
         builtin_member_completions(&Type::Named("TaskGroup".to_string(), Vec::new(),))
             .iter()
-            .any(|item| item.name == "spawn")
+            .any(|item| item.name == "start")
     );
     assert_eq!(
         builtin_function_return_type("parse_float64"),
@@ -1649,6 +1667,11 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
         ))
     );
     assert_eq!(builtin_function_return_type("min"), None);
+    assert_eq!(builtin_function_return_type("queue"), None);
+    assert_eq!(
+        builtin_function_return_type("tasks"),
+        Some(Type::named("TaskGroup"))
+    );
     assert_eq!(
         format_function_detail(&function_decl("render", "bool")),
         "render(int32) -> bool"
@@ -1799,22 +1822,22 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         .iter()
         .any(|item| item.name == "value"));
 
-    let channel_completions = builtin_member_completions(&Type::Named(
-        "Channel".to_string(),
+    let queue_completions = builtin_member_completions(&Type::Named(
+        "Queue".to_string(),
         vec![Type::named("int32")],
     ));
-    assert!(channel_completions.iter().any(|item| item.name == "send"));
-    assert!(channel_completions.iter().any(|item| item.name == "recv"));
+    assert!(queue_completions.iter().any(|item| item.name == "put"));
+    assert!(queue_completions.iter().any(|item| item.name == "get"));
     let task_completions =
         builtin_member_completions(&Type::Named("Task".to_string(), vec![Type::named("int32")]));
-    assert!(task_completions.iter().any(|item| item.name == "join"));
+    assert!(task_completions.iter().any(|item| item.name == "result"));
 
     assert_eq!(
         builtin_function_return_type("range"),
         Some(Type::named("Range"))
     );
     assert_eq!(
-        builtin_function_return_type("task_group"),
+        builtin_function_return_type("tasks"),
         Some(Type::named("TaskGroup"))
     );
     assert_eq!(

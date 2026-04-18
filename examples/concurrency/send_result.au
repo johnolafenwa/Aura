@@ -1,8 +1,8 @@
 def main() -> int32:
-    ch: Channel[int32] = channel()
-    ch.close()
+    jobs: Queue[int32] = queue()
+    jobs.close()
 
-    send_result = ch.send(7)
+    send_result = jobs.put(7)
     match send_result:
         case Result.Ok(done):
             print("sent")

@@ -290,7 +290,7 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::Unit => "None".to_string(),
         Value::Instance(instance) => instance.class_name.clone(),
         Value::EnumVariant(variant) => variant.enum_name.clone(),
-        Value::Channel(_) => "Channel".to_string(),
+        Value::Channel(_) => "Queue".to_string(),
         Value::Task(_) => "Task".to_string(),
         Value::TaskGroup(_) => "TaskGroup".to_string(),
     }
@@ -1847,7 +1847,7 @@ pub extern "C" fn aurora_direct_value_type_matches(
         Value::Vec(_) => expected == "Vec",
         Value::Set(_) => expected == "Set",
         Value::Map(_) => expected == "Map",
-        Value::Channel(_) => expected == "Channel",
+        Value::Channel(_) => expected == "Queue",
         Value::Task(_) => expected == "Task",
         Value::TaskGroup(_) => expected == "TaskGroup",
         Value::Duration(_) => expected == "Duration",
@@ -2063,7 +2063,7 @@ pub extern "C" fn aurora_direct_channel_send(
             Err(value) => boxed_value(result_err(send_error_closed(value))),
         },
         other => runtime_error(format!(
-            "expected `Channel`, found `{}`",
+            "expected `Queue`, found `{}`",
             value_type_name(other)
         )),
     }
@@ -2077,7 +2077,31 @@ pub extern "C" fn aurora_direct_channel_recv(channel: *mut OpaqueValue) -> *mut 
             None => option_none(),
         }),
         other => runtime_error(format!(
-            "expected `Channel`, found `{}`",
+            "expected `Queue`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_channel_recv_timeout_value(
+    channel: *mut OpaqueValue,
+    duration: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let millis = extract_duration_millis(unsafe { value_ref(duration) });
+    let millis = match u64::try_from(millis) {
+        Ok(millis) => millis,
+        Err(_) => runtime_error("invalid queue timeout duration"),
+    };
+    match unsafe { value_ref(channel) } {
+        Value::Channel(channel) => boxed_value(
+            match channel.recv_timeout(StdDuration::from_millis(millis)) {
+                Some(value) => option_some(value),
+                None => option_none(),
+            },
+        ),
+        other => runtime_error(format!(
+            "expected `Queue`, found `{}`",
             value_type_name(other)
         )),
     }
@@ -2092,7 +2116,7 @@ pub extern "C" fn aurora_direct_channel_try_recv(channel: *mut OpaqueValue) -> i
             TryRecvResult::Empty => 0,
         },
         other => runtime_error(format!(
-            "expected `Channel`, found `{}`",
+            "expected `Queue`, found `{}`",
             value_type_name(other)
         )),
     }
@@ -2106,7 +2130,7 @@ pub extern "C" fn aurora_direct_channel_close(channel: *mut OpaqueValue) -> *mut
             boxed_value(Value::Unit)
         }
         other => runtime_error(format!(
-            "expected `Channel`, found `{}`",
+            "expected `Queue`, found `{}`",
             value_type_name(other)
         )),
     }

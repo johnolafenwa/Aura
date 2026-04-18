@@ -260,13 +260,13 @@ public class Worker:
 def main() -> int32:
     first = spawn helpers.work.add_one(4)
     second = spawn helpers.work.Worker.run(5)
-    print(first.join())
-    print(second.join())
-    with task_group() as group:
-        third = group.spawn(helpers.work.add_one, 6)
-        fourth = group.spawn(helpers.work.Worker.run, 7)
-        print(third.join())
-        print(fourth.join())
+    print(first.result())
+    print(second.result())
+    with tasks() as group:
+        third = group.start(helpers.work.add_one, 6)
+        fourth = group.start(helpers.work.Worker.run, 7)
+        print(third.result())
+        print(fourth.result())
     return 0
 "#,
     );

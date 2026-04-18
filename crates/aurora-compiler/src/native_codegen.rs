@@ -262,6 +262,7 @@ struct NativeCodegen<'a> {
     channel_new: FuncId,
     channel_send: FuncId,
     channel_recv: FuncId,
+    channel_recv_timeout_value: FuncId,
     channel_try_recv: FuncId,
     channel_close: FuncId,
     task_group_new: FuncId,
@@ -435,6 +436,7 @@ impl<'a> NativeCodegen<'a> {
             channel_new => ("aurora_direct_channel_new", [], Some(types::I64)),
             channel_send => ("aurora_direct_channel_send", [types::I64, types::I64], Some(types::I64)),
             channel_recv => ("aurora_direct_channel_recv", [types::I64], Some(types::I64)),
+            channel_recv_timeout_value => ("aurora_direct_channel_recv_timeout_value", [types::I64, types::I64], Some(types::I64)),
             channel_try_recv => ("aurora_direct_channel_try_recv", [types::I64], Some(types::I64)),
             channel_close => ("aurora_direct_channel_close", [types::I64], Some(types::I64)),
             task_group_new => ("aurora_direct_task_group_new", [], Some(types::I64)),
@@ -621,6 +623,7 @@ impl<'a> NativeCodegen<'a> {
             channel_new,
             channel_send,
             channel_recv,
+            channel_recv_timeout_value,
             channel_try_recv,
             channel_close,
             task_group_new,
@@ -1153,6 +1156,9 @@ impl<'a> NativeCodegen<'a> {
         let channel_recv = self
             .object
             .declare_func_in_func(self.channel_recv, builder.func);
+        let channel_recv_timeout_value = self
+            .object
+            .declare_func_in_func(self.channel_recv_timeout_value, builder.func);
         let channel_try_recv = self
             .object
             .declare_func_in_func(self.channel_try_recv, builder.func);
@@ -1311,6 +1317,7 @@ impl<'a> NativeCodegen<'a> {
             channel_new,
             channel_send,
             channel_recv,
+            channel_recv_timeout_value,
             channel_try_recv,
             channel_close,
             task_group_new,
@@ -1630,6 +1637,7 @@ struct FunctionCompiler<'a> {
     channel_new: cranelift_codegen::ir::FuncRef,
     channel_send: cranelift_codegen::ir::FuncRef,
     channel_recv: cranelift_codegen::ir::FuncRef,
+    channel_recv_timeout_value: cranelift_codegen::ir::FuncRef,
     channel_try_recv: cranelift_codegen::ir::FuncRef,
     channel_close: cranelift_codegen::ir::FuncRef,
     task_group_new: cranelift_codegen::ir::FuncRef,
@@ -2435,24 +2443,25 @@ impl<'a> FunctionCompiler<'a> {
         if name == "range" {
             return self.compile_range(args);
         }
-        if name == "channel" {
+        if name == "queue" {
             if args.len() > 1 {
-                return Err(
-                    "direct backend expected `channel()` to take at most one capacity argument"
-                        .to_string(),
-                );
+                return Err(format!(
+                    "direct backend expected `{}()` to take at most one capacity argument",
+                    name
+                ));
             }
             let inst = self.builder.ins().call(self.channel_new, &[]);
             return Ok(self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
-                Type::Named("Channel".to_string(), vec![Type::named("Unknown")]),
+                Type::Named("Queue".to_string(), vec![Type::named("Unknown")]),
             ));
         }
-        if name == "task_group" {
+        if name == "tasks" {
             if !args.is_empty() {
-                return Err(
-                    "direct backend expected `task_group()` to take no arguments".to_string(),
-                );
+                return Err(format!(
+                    "direct backend expected `{}()` to take no arguments",
+                    name
+                ));
             }
             let inst = self.builder.ins().call(self.task_group_new, &[]);
             return Ok(self.owned_opaque_result(
@@ -4761,13 +4770,15 @@ impl<'a> FunctionCompiler<'a> {
                     return Ok(result);
                 }
             }
-            if name == "Channel" {
+            if name == "Queue" {
                 let object = self.ensure_opaque(object)?;
                 return match field {
-                    "send" => {
+                    "put" => {
                         let [argument] = args else {
-                            return Err("direct backend expected `send()` to receive one argument"
-                                .to_string());
+                            return Err(format!(
+                                "direct backend expected `{}()` to receive one argument",
+                                field
+                            ));
                         };
                         let loaded = self.load_operand(&argument.value)?;
                         let value = self.ensure_opaque(loaded)?;
@@ -4792,16 +4803,33 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
-                    "recv" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `recv()` to take no arguments".to_string()
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.channel_recv, &[object.values[0]]);
+                    "get" => {
+                        let inst = match args {
+                            [] => self
+                                .builder
+                                .ins()
+                                .call(self.channel_recv, &[object.values[0]]),
+                            [argument] => {
+                                if argument.name.as_deref() != Some("timeout")
+                                    && argument.name.is_some()
+                                {
+                                    return Err(
+                                        "direct backend expected `get()` or `get(timeout=...)`"
+                                            .to_string(),
+                                    );
+                                }
+                                let timeout = self.load_operand(&argument.value)?;
+                                let timeout = self.ensure_opaque(timeout)?;
+                                self.builder.ins().call(
+                                    self.channel_recv_timeout_value,
+                                    &[object.values[0], timeout.values[0]],
+                                )
+                            }
+                            _ => {
+                                return Err("direct backend expected `get()` or `get(timeout=...)`"
+                                    .to_string())
+                            }
+                        };
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -4836,11 +4864,12 @@ impl<'a> FunctionCompiler<'a> {
             if name == "Task" {
                 let object = self.ensure_opaque(object)?;
                 return match field {
-                    "join" => {
+                    "result" => {
                         if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `join()` to take no arguments".to_string()
-                            );
+                            return Err(format!(
+                                "direct backend expected `{}` to take no arguments",
+                                field
+                            ));
                         }
                         let inst = self.builder.ins().call(self.task_join, &[object.values[0]]);
                         Ok(self.owned_opaque_result(
@@ -5903,8 +5932,8 @@ fn infer_rvalue_type(
             CallTarget::Name(name) if name == "range" => {
                 Some(DirectType::Opaque(Type::named("Range")))
             }
-            CallTarget::Name(name) if name == "channel" => Some(DirectType::Opaque(Type::Named(
-                "Channel".to_string(),
+            CallTarget::Name(name) if name == "queue" => Some(DirectType::Opaque(Type::Named(
+                "Queue".to_string(),
                 vec![Type::named("Unknown")],
             ))),
             CallTarget::Name(name) if name == "Vec" => Some(DirectType::Opaque(Type::Named(
@@ -5919,7 +5948,7 @@ fn infer_rvalue_type(
                 "Map".to_string(),
                 vec![Type::named("Unknown"), Type::named("Unknown")],
             ))),
-            CallTarget::Name(name) if name == "task_group" => {
+            CallTarget::Name(name) if name == "tasks" => {
                 Some(DirectType::Opaque(Type::named("TaskGroup")))
             }
             CallTarget::Name(name) if name == "cancelled" => {
@@ -6030,7 +6059,7 @@ fn infer_select_binding_type(
         MirSelectKind::Recv { channel } => {
             let channel_ty = infer_operand_type(channel, variable_types, classes)?;
             match channel_ty {
-                DirectType::Opaque(Type::Named(name, args)) if name == "Channel" => {
+                DirectType::Opaque(Type::Named(name, args)) if name == "Queue" => {
                     Some(DirectType::Opaque(Type::Named(
                         "Option".to_string(),
                         vec![args
@@ -6048,7 +6077,7 @@ fn infer_select_binding_type(
         MirSelectKind::Send { channel, .. } => {
             let channel_ty = infer_operand_type(channel, variable_types, classes)?;
             match channel_ty {
-                DirectType::Opaque(Type::Named(name, args)) if name == "Channel" => {
+                DirectType::Opaque(Type::Named(name, args)) if name == "Queue" => {
                     Some(DirectType::Opaque(Type::Named(
                         "Result".to_string(),
                         vec![
@@ -6232,21 +6261,7 @@ fn builtin_opaque_member_return_type(
             ),
             classes,
         ),
-        ("Channel", "clone") => Some(DirectType::Opaque(Type::Named(
-            "Channel".to_string(),
-            args.clone(),
-        ))),
-        ("Channel", "recv") => direct_type(
-            &Type::Named(
-                "Option".to_string(),
-                vec![args
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
-            ),
-            classes,
-        ),
-        ("Channel", "send") => direct_type(
+        ("Queue", "put") => direct_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
@@ -6262,14 +6277,20 @@ fn builtin_opaque_member_return_type(
             ),
             classes,
         ),
-        ("Channel", "close") | ("TaskGroup", "cancel") | ("TaskGroup", "close") => {
+        ("Queue", "get") => direct_type(
+            &Type::Named(
+                "Option".to_string(),
+                vec![args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            ),
+            classes,
+        ),
+        ("Queue", "close") | ("TaskGroup", "cancel") | ("TaskGroup", "close") => {
             Some(DirectType::Scalar(ScalarKind::Unit))
         }
-        ("Task", "clone") => Some(DirectType::Opaque(Type::Named(
-            "Task".to_string(),
-            args.clone(),
-        ))),
-        ("Task", "join") => direct_type(args.first().unwrap_or(&Type::Unit), classes),
+        ("Task", "result") => direct_type(args.first().unwrap_or(&Type::Unit), classes),
         _ => None,
     }
 }

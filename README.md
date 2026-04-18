@@ -94,8 +94,8 @@ Current bootstrap compiler workflow:
   - execute parsing builtins, scalar/boolean `.to_string()`, and `String.join(...)`
 - `cargo run -p aura -- run examples/resources/with_resource.au`
   - execute deterministic scoped cleanup with `with`
-- `cargo run -p aura -- run examples/concurrency/channels_spawn.au`
-  - execute bootstrap channels and spawned tasks
+- `cargo run -p aura -- run examples/concurrency/queues_spawn.au`
+  - execute the maintained queue/task concurrency surface
 - `cargo run -p aura -- run examples/concurrency/sleep_builtin.au`
   - execute `sleep(duration)` delays in the MIR-backed runtime path
 - `cargo run -p aura -- build -o ./target/aurora-point examples/point.au`
@@ -158,7 +158,7 @@ Current `build` status:
 Current `run` status:
 
 - `aura run` now executes programs through the MIR runtime for the current implemented Aurora surface
-- `spawn`, `select`, channels, task groups, `try`, and `with` now run through the same MIR-backed public execution path
+- `spawn`, `select`, queues, task groups, `try`, and `with` now run through the same MIR-backed public execution path
 - the maintained execution architecture is now the MIR runtime for `run` plus native direct codegen for `build`
 
 ## VS Code install

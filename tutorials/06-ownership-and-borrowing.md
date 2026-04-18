@@ -53,7 +53,7 @@ The built-in move types include:
 
 - `String`
 - `Vec[T]`, `Map[K, V]`, `Set[T]`
-- `Channel[T]`, `Task[T]`, `TaskGroup`
+- `Queue[T]`, `Task[T]`, `TaskGroup`
 - user-defined classes (by default)
 
 Here is where Python intuition breaks down:
@@ -517,33 +517,33 @@ match borrow mut result:
 
 ## Borrowing And Concurrency
 
-Channels transfer ownership of sent values. When you send a value through a channel, it moves:
+Queues transfer ownership of sent values. When you put a value into a queue, it moves:
 
 ```python
-ch: Channel[String] = channel()
-ch.send("hello")       # "hello" moves into the channel
+jobs: Queue[String] = queue()
+jobs.put("hello")      # "hello" moves into the queue
 # the sent string is now owned by whichever task receives it
 ```
 
-Channels themselves are move types. To share a channel between spawned tasks, clone it:
+Queue and task handles are cheap copy-like references. Passing a queue to `spawn` or `tasks().start(...)` shares the same underlying queue; you do not need `.clone()` for the common case:
 
 ```python
-def send_message(ch: Channel[String]):
-    ch.send("from task")
-    ch.close()
+def send_message(jobs: Queue[String]):
+    jobs.put("from task")
+    jobs.close()
 
-ch: Channel[String] = channel()
-task = spawn send_message(ch.clone())
-msg = ch.recv()        # returns Option[String]
+jobs: Queue[String] = queue()
+task = spawn send_message(jobs)
+msg = jobs.get()       # returns Option[String]
 match msg:
     case Some(value):
         print(value)   # "from task"
     case None:
         pass
-task.join()
+task.result()
 ```
 
-Each clone of the channel is an independent handle to the same underlying channel. Cloning the handle is cheap -- it does not copy the messages.
+Queue and task handles are cheap copy-like values, so the maintained surface does not require `.clone()` when passing them around.
 
 ## Common Patterns And Fixes
 
@@ -654,6 +654,6 @@ The key shift is: in Python, assignment creates aliases. In Aurora, assignment t
 6. Method receivers follow the same rules: `borrow self` reads, `borrow mut self` modifies, `self` consumes.
 7. Use `for x in borrow collection` to iterate without consuming. Use `for x in borrow mut collection` to modify elements.
 8. Use `match borrow value` to pattern-match without consuming.
-9. Channels transfer ownership of sent values. Clone channel handles to share them.
+9. Queues transfer ownership of sent values. Queue and task handles are cheap copy-like values, so sharing the handle itself does not require an explicit clone.
 
 The compiler enforces all of these rules. When you see an error about moved values or borrowing, come back to this chapter -- the fix is almost always one of the patterns listed above.

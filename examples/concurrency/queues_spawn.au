@@ -1,0 +1,19 @@
+def producer(out: Queue[int32]) -> int32:
+    out.put(2)
+    out.put(4)
+    out.close()
+    return 6
+
+def main() -> int32:
+    jobs: Queue[int32] = queue()
+    task = spawn producer(jobs)
+
+    while true:
+        match jobs.get():
+            case Option.Some(value):
+                print(value)
+            case Option.None:
+                break
+
+    print(task.result())
+    return 0

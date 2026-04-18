@@ -231,7 +231,7 @@ The examples are organized by topic so they can serve both as quick references a
   - method calls on generic class instances inside generic functions
   - prints `7`
 - `generic_constructor_specialization.au`
-  - explicit type arguments on class and channel constructors such as `Box[int32](...)`
+  - explicit type arguments on class and queue constructors such as `Box[int32](...)`
   - prints `42`
 - `bounded_types.au`
   - trait bounds on generic class and enum type parameters
@@ -352,34 +352,38 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
 
 ### `concurrency/`
 
-- `channels_spawn.au`
-  - typed channels, `channel()`, `spawn`, `recv()`, and `join()`
+- `queues_spawn.au`
+  - typed queues, `queue()`, `spawn`, `get()`, and `result()`
   - prints:
     - `2`
     - `4`
-- `channel_iteration.au`
-  - `for value in jobs:` iteration over a `Channel[T]` until close
+    - `6`
+- `queue_iteration.au`
+  - `for value in jobs:` iteration over a `Queue[T]` until close
   - prints:
     - `1`
     - `2`
+- `queue_timeout.au`
+  - `Queue.get(timeout=...)` for the ordinary timeout case without `select`
+  - prints `timeout`
 - `send_result.au`
-  - `Channel.send()` returning `Result[None, SendError[T]]`
+  - `Queue.put()` returning `Result[None, SendError[T]]`
   - prints `7`
 - `spawn_detached.au`
   - explicit detached background work with `spawn detached`
   - prints `9`
 - `spawn_associated_method.au`
-  - spawning associated methods without `self` through both `spawn` and `TaskGroup.spawn(...)`
+  - spawning associated methods without `self` through both `spawn` and `TaskGroup.start(...)`
   - prints:
     - `5`
     - `7`
 - `select_send.au`
-  - `select` with a channel send arm and a timer fallback
+  - `select` with a queue send arm and a timer fallback
   - prints:
     - `sent`
     - `4`
 - `task_group_select.au`
-  - `with task_group() as group:`, channel handle cloning, and `select`
+  - `with tasks() as group:`, cheap queue handles, and `select`
   - prints `3`
 - `task_group_cancel.au`
   - cooperative cancellation with `group.cancel()` and `cancelled()`
@@ -387,7 +391,7 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `0`
     - `1`
 - `select_timeout.au`
-  - timer-based `select` without channels
+  - timer-based `select` without queues
   - prints `timeout`
 - `select_timeout_named.au`
   - timer-based `select` using `after(duration=...)`
@@ -532,12 +536,13 @@ cargo run -p aura -- run examples/traits/marker_trait.au
 cargo run -p aura -- run examples/traits/specialized_generic_impl.au
 cargo run -p aura -- run examples/error_handling/try_result.au
 cargo run -p aura -- run examples/resources/with_resource.au
-cargo run -p aura -- run examples/concurrency/channels_spawn.au
+cargo run -p aura -- run examples/concurrency/queues_spawn.au
 cargo run -p aura -- run examples/concurrency/send_result.au
 cargo run -p aura -- run examples/concurrency/spawn_detached.au
 cargo run -p aura -- run examples/concurrency/select_send.au
 cargo run -p aura -- run examples/concurrency/task_group_select.au
 cargo run -p aura -- run examples/concurrency/task_group_cancel.au
+cargo run -p aura -- run examples/concurrency/queue_timeout.au
 cargo run -p aura -- run examples/concurrency/select_timeout.au
 cargo run -p aura -- run examples/concurrency/select_timeout_named.au
 cargo run -p aura -- run examples/concurrency/sleep_builtin.au

@@ -1,8 +1,8 @@
-def producer(out: Channel[int32]):
-    out.send(1)
+def producer(out: Queue[int32]):
+    out.put(1)
     out.close()
 
 def main() -> int32:
-    ch: Channel[int32] = channel()
-    task: Task[None] = spawn detached producer(ch.clone())
+    ch: Queue[int32] = queue()
+    task: Task[None] = spawn detached producer(ch)
     return 0

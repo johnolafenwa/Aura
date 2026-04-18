@@ -259,14 +259,19 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "Ada\nGrace\ntrue\nfalse\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
     ),
     (
-        "examples/concurrency/channel_iteration.au",
-        include_str!("../../../examples/concurrency/channel_iteration.au"),
+        "examples/concurrency/queue_iteration.au",
+        include_str!("../../../examples/concurrency/queue_iteration.au"),
         "1\n2\n",
     ),
     (
-        "examples/concurrency/channels_spawn.au",
-        include_str!("../../../examples/concurrency/channels_spawn.au"),
-        "2\n4\n",
+        "examples/concurrency/queues_spawn.au",
+        include_str!("../../../examples/concurrency/queues_spawn.au"),
+        "2\n4\n6\n",
+    ),
+    (
+        "examples/concurrency/queue_timeout.au",
+        include_str!("../../../examples/concurrency/queue_timeout.au"),
+        "timeout\n",
     ),
     (
         "examples/concurrency/select_timeout_named.au",
@@ -898,11 +903,11 @@ fn mir_runtime_runs_with_example_natively() {
 }
 
 #[test]
-fn mir_runtime_runs_channels_example_natively() {
-    let source = include_str!("../../../examples/concurrency/channels_spawn.au");
-    let mir = lower_source_to_mir(source).expect("channels example should lower to MIR");
-    let output = run_mir(&mir).expect("channels example should run directly through MIR");
-    assert_eq!(output.stdout, "2\n4\n");
+fn mir_runtime_runs_queues_example_natively() {
+    let source = include_str!("../../../examples/concurrency/queues_spawn.au");
+    let mir = lower_source_to_mir(source).expect("queue example should lower to MIR");
+    let output = run_mir(&mir).expect("queue example should run directly through MIR");
+    assert_eq!(output.stdout, "2\n4\n6\n");
     assert_eq!(output.value, zero_exit_value());
 }
 
@@ -1261,11 +1266,10 @@ fn maintained_example_tree_public_paths_do_not_panic() {
 }
 
 #[test]
-fn public_run_path_runs_channels_example_natively() {
-    let source = include_str!("../../../examples/concurrency/channels_spawn.au");
-    let output =
-        run_source(source).expect("channels example should run through the public run path");
-    assert_eq!(output.stdout, "2\n4\n");
+fn public_run_path_runs_queues_example_natively() {
+    let source = include_str!("../../../examples/concurrency/queues_spawn.au");
+    let output = run_source(source).expect("queue example should run through the public run path");
+    assert_eq!(output.stdout, "2\n4\n6\n");
     assert_eq!(output.value, zero_exit_value());
 }
 
@@ -1627,17 +1631,17 @@ def main() -> int32:
     print(seen.remove("x"))
     print(seen.contains("y"))
 
-    jobs: Channel[int32] = channel()
-    jobs_copy = jobs.clone()
-    print(jobs_copy.send(1))
-    print(jobs.recv())
+    jobs: Queue[int32] = queue()
+    jobs_copy = jobs
+    print(jobs_copy.put(1))
+    print(jobs.get())
     jobs.close()
 
     task = spawn worker(4)
-    task_copy = task.clone()
-    print(task_copy.join())
+    task_copy = task
+    print(task_copy.result())
 
-    with task_group() as group:
+    with tasks() as group:
         group.cancel()
 
     return 0
@@ -1691,10 +1695,10 @@ def main() -> int32:
     print(parse_int32("12"))
     print(cancelled())
 
-    jobs: Channel[int32] = channel()
-    print(jobs.send(7))
+    jobs: Queue[int32] = queue()
+    print(jobs.put(7))
     select:
-        case value = jobs.recv():
+        case value = jobs.get():
             print(value)
         case after(duration=1ms):
             print(99)
@@ -1706,9 +1710,9 @@ def main() -> int32:
         print(resource.closed)
 
     task = spawn worker(4)
-    print(task.join())
+    print(task.result())
 
-    with task_group() as group:
+    with tasks() as group:
         group.cancel()
 
     return second.value

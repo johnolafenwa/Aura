@@ -937,7 +937,7 @@ impl<'a> AnalysisBuilder<'a> {
             "SendError" => Some(ResolvedSymbol {
                 hover: builtin_enum_hover(
                     "SendError[T]",
-                    "Channel send failures that preserve the unsent value.",
+                    "Queue send failures that preserve the unsent value.",
                 ),
                 definition: None,
             }),
@@ -1414,7 +1414,7 @@ impl<'a> AnalysisBuilder<'a> {
             "SendError" => Some(ResolvedSymbol {
                 hover: builtin_enum_hover(
                     "SendError[T]",
-                    "Channel send failures that preserve the unsent value.",
+                    "Queue send failures that preserve the unsent value.",
                 ),
                 definition: None,
             }),
@@ -1674,8 +1674,7 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::SetContains
                 | BuiltinMember::SetInsert
                 | BuiltinMember::SetRemove => Some(Type::named("bool")),
-                BuiltinMember::ChannelClone => Some(receiver_type.clone()),
-                BuiltinMember::ChannelSend => {
+                BuiltinMember::QueuePut => {
                     let payload = receiver_type
                         .type_arguments()
                         .first()
@@ -1689,7 +1688,7 @@ impl<'a> AnalysisBuilder<'a> {
                         ],
                     ))
                 }
-                BuiltinMember::ChannelRecv => {
+                BuiltinMember::QueueGet => {
                     let payload = receiver_type
                         .type_arguments()
                         .first()
@@ -1697,9 +1696,11 @@ impl<'a> AnalysisBuilder<'a> {
                         .unwrap_or(Type::Unit);
                     Some(Type::Named("Option".to_string(), vec![payload]))
                 }
-                BuiltinMember::ChannelClose | BuiltinMember::TaskGroupCancel => Some(Type::Unit),
-                BuiltinMember::TaskClone => Some(receiver_type.clone()),
-                BuiltinMember::TaskJoin => receiver_type.type_arguments().first().cloned(),
+                BuiltinMember::QueueClose | BuiltinMember::TaskGroupCancel => Some(Type::Unit),
+                BuiltinMember::TaskResult => receiver_type.type_arguments().first().cloned(),
+                BuiltinMember::TaskGroupStart => {
+                    Some(Type::Named("Task".to_string(), vec![Type::Unit]))
+                }
             };
             return Some(ResolvedMember {
                 hover: builtin_function_hover(builtin_member.detail(), builtin_member.docs()),
@@ -1709,10 +1710,10 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         match base_name {
-            "TaskGroup" if field == "spawn" => Some(ResolvedMember {
+            "TaskGroup" if field == "start" => Some(ResolvedMember {
                 hover: builtin_function_hover(
-                    "spawn(function, ...) -> Task[T]",
-                    "Spawns a child task in the current task group.",
+                    &format!("{}(function, ...) -> Task[T]", field),
+                    "Starts a child task in the current task group.",
                 ),
                 definition: None,
                 ty: Some(Type::Named("Task".to_string(), vec![Type::Unit])),
@@ -1790,7 +1791,7 @@ impl<'a> AnalysisBuilder<'a> {
                             "Option"
                                 | "Result"
                                 | "SendError"
-                                | "Channel"
+                                | "Queue"
                                 | "Vec"
                                 | "Set"
                                 | "Map"
@@ -1839,7 +1840,7 @@ impl<'a> AnalysisBuilder<'a> {
                 }
                 if self.program.classes.contains_key(name)
                     || self.program.enums.contains_key(name)
-                    || matches!(name.as_str(), "Option" | "Result" | "SendError")
+                    || matches!(name.as_str(), "Option" | "Result" | "SendError" | "Queue")
                 {
                     return Some(Type::named(name));
                 }
@@ -1933,7 +1934,7 @@ impl<'a> AnalysisBuilder<'a> {
             ExprKind::Specialize { expr, type_args } => match &expr.kind {
                 ExprKind::Name(name)
                     if self.program.classes.contains_key(name)
-                        || matches!(name.as_str(), "Channel" | "Vec" | "Set" | "Map" | "Task") =>
+                        || matches!(name.as_str(), "Queue" | "Vec" | "Set" | "Map" | "Task") =>
                 {
                     Some(Type::Named(
                         name.clone(),
@@ -1960,7 +1961,7 @@ impl<'a> AnalysisBuilder<'a> {
 
         let iterable_ty = self.infer_expr_type(iterable, scope)?;
         match base_type_name(&iterable_ty) {
-            "Channel" | "Vec" | "Set" => iterable_ty.type_arguments().first().cloned(),
+            "Queue" | "Vec" | "Set" => iterable_ty.type_arguments().first().cloned(),
             _ => None,
         }
     }
@@ -2659,12 +2660,11 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::SetContains,
         BuiltinMember::SetInsert,
         BuiltinMember::SetRemove,
-        BuiltinMember::ChannelClone,
-        BuiltinMember::ChannelSend,
-        BuiltinMember::ChannelRecv,
-        BuiltinMember::ChannelClose,
-        BuiltinMember::TaskClone,
-        BuiltinMember::TaskJoin,
+        BuiltinMember::QueuePut,
+        BuiltinMember::QueueGet,
+        BuiltinMember::QueueClose,
+        BuiltinMember::TaskResult,
+        BuiltinMember::TaskGroupStart,
         BuiltinMember::TaskGroupCancel,
     ] {
         if BuiltinMember::resolve(base_type_name(receiver_type), builtin.name()) == Some(builtin) {
@@ -2683,7 +2683,7 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
     match BuiltinFunction::from_name(name)? {
         BuiltinFunction::Print => Some(Type::Unit),
         BuiltinFunction::Range => Some(Type::named("Range")),
-        BuiltinFunction::TaskGroup => Some(Type::named("TaskGroup")),
+        BuiltinFunction::Tasks => Some(Type::named("TaskGroup")),
         BuiltinFunction::Cancelled => Some(Type::named("bool")),
         BuiltinFunction::After => Some(Type::named("Duration")),
         BuiltinFunction::Sleep => Some(Type::Unit),
@@ -2691,7 +2691,7 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
         BuiltinFunction::Min => None,
         BuiltinFunction::Max => None,
         BuiltinFunction::Sqrt => None,
-        BuiltinFunction::Channel => None,
+        BuiltinFunction::Queue => None,
         BuiltinFunction::ParseInt32 => Some(Type::Named(
             "Result".to_string(),
             vec![Type::named("int32"), Type::named("String")],

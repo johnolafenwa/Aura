@@ -1,21 +1,21 @@
-def worker(out: Channel[int32]):
+def worker(out: Queue[int32]):
     mut i: int32 = 0
     while i < 100:
         if cancelled():
             return
-        out.send(i)
+        out.put(i)
         i += 1
 
 def main() -> int32:
-    out: Channel[int32] = channel()
+    out: Queue[int32] = queue()
 
-    with task_group() as group:
-        group.spawn(worker, out.clone())
+    with tasks() as group:
+        group.start(worker, out)
         mut seen: int32 = 0
 
         while seen < 2:
             select:
-                case value = out.recv():
+                case value = out.get():
                     match value:
                         case Option.Some(next):
                             print(next)

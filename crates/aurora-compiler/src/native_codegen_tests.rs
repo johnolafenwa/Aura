@@ -111,8 +111,12 @@ fn direct_backend_emits_object_for_extended_feature_examples() {
             include_str!("../../../examples/control_flow/match_literals.au"),
         ),
         (
-            "concurrency/channels_spawn",
-            include_str!("../../../examples/concurrency/channels_spawn.au"),
+            "concurrency/queues_spawn",
+            include_str!("../../../examples/concurrency/queues_spawn.au"),
+        ),
+        (
+            "concurrency/queue_timeout",
+            include_str!("../../../examples/concurrency/queue_timeout.au"),
         ),
         (
             "concurrency/select_timeout_named",
@@ -238,17 +242,17 @@ def main() -> int32:
     print(seen.remove("x"))
     print(seen.contains("y"))
 
-    jobs: Channel[int32] = channel()
-    jobs_copy = jobs.clone()
-    print(jobs_copy.send(1))
-    print(jobs.recv())
+    jobs: Queue[int32] = queue()
+    jobs_copy = jobs
+    print(jobs_copy.put(1))
+    print(jobs.get())
     jobs.close()
 
     task = spawn worker(4)
-    task_copy = task.clone()
-    print(task_copy.join())
+    task_copy = task
+    print(task_copy.result())
 
-    with task_group() as group:
+    with tasks() as group:
         group.cancel()
 
     return 0
@@ -299,10 +303,10 @@ def main() -> int32:
     print(parse_int32("12"))
     print(cancelled())
 
-    jobs: Channel[int32] = channel()
-    print(jobs.send(7))
+    jobs: Queue[int32] = queue()
+    print(jobs.put(7))
     select:
-        case value = jobs.recv():
+        case value = jobs.get():
             print(value)
         case after(duration=1ms):
             print(99)
@@ -314,9 +318,9 @@ def main() -> int32:
         print(resource.closed)
 
     task = spawn worker(4)
-    print(task.join())
+    print(task.result())
 
-    with task_group() as group:
+    with tasks() as group:
         group.cancel()
 
     return second.value
@@ -339,8 +343,8 @@ def main() -> int32:
     with Resource() as resource:
         print(resource.closed)
 
-    with task_group() as group:
-        group.close()
+    with tasks() as group:
+        group.cancel()
 
     return 0
 "#;
@@ -721,14 +725,14 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
         element_type: Type::named("String"),
         elements: vec![Operand::String("ready".to_string())],
     };
-    let channel_ty = Type::Named("Channel".to_string(), vec![Type::named("int32")]);
+    let channel_ty = Type::Named("Queue".to_string(), vec![Type::named("int32")]);
     let channel_value = Rvalue::Call {
-        callee: CallTarget::Name("channel".to_string()),
+        callee: CallTarget::Name("queue".to_string()),
         args: Vec::new(),
     };
     let task_group_ty = Type::named("TaskGroup");
     let task_group_value = Rvalue::Call {
-        callee: CallTarget::Name("task_group".to_string()),
+        callee: CallTarget::Name("tasks".to_string()),
         args: Vec::new(),
     };
 
@@ -1283,7 +1287,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Channel.send",
+            "Queue.put",
             module_with_main_member_call_result_type(
                 "jobs",
                 channel_ty.clone(),
@@ -1295,7 +1299,7 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                         Type::Named("SendError".to_string(), vec![Type::named("int32")]),
                     ],
                 ),
-                "send",
+                "put",
                 vec![MirArg {
                     name: None,
                     value: Operand::Int(1),
@@ -1304,18 +1308,18 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "Channel.recv",
+            "Queue.get",
             module_with_main_member_call_result_type(
                 "jobs",
                 channel_ty.clone(),
                 channel_value.clone(),
                 Type::Named("Option".to_string(), vec![Type::named("int32")]),
-                "recv",
+                "get",
                 Vec::new(),
             ),
         ),
         (
-            "Channel.close",
+            "Queue.close",
             module_with_main_member_call_result_type(
                 "jobs",
                 channel_ty.clone(),
@@ -1333,17 +1337,6 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                 task_group_value.clone(),
                 Type::Unit,
                 "cancel",
-                Vec::new(),
-            ),
-        ),
-        (
-            "TaskGroup.close",
-            module_with_main_member_call_result_type(
-                "group",
-                task_group_ty,
-                task_group_value,
-                Type::Unit,
-                "close",
                 Vec::new(),
             ),
         ),
@@ -1381,14 +1374,14 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
         element_type: Type::named("String"),
         elements: vec![Operand::String("ready".to_string())],
     };
-    let channel_ty = Type::Named("Channel".to_string(), vec![Type::named("int32")]);
+    let channel_ty = Type::Named("Queue".to_string(), vec![Type::named("int32")]);
     let channel_value = Rvalue::Call {
-        callee: CallTarget::Name("channel".to_string()),
+        callee: CallTarget::Name("queue".to_string()),
         args: Vec::new(),
     };
     let task_group_ty = Type::named("TaskGroup");
     let task_group_value = Rvalue::Call {
-        callee: CallTarget::Name("task_group".to_string()),
+        callee: CallTarget::Name("tasks".to_string()),
         args: Vec::new(),
     };
 
@@ -1648,14 +1641,21 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 channel_ty.clone(),
                 channel_value.clone(),
                 Type::Named("Option".to_string(), vec![Type::named("int32")]),
-                "recv",
-                vec![MirArg {
-                    name: None,
-                    value: Operand::Int(1),
-                    writeback_place: None,
-                }],
+                "get",
+                vec![
+                    MirArg {
+                        name: None,
+                        value: Operand::Int(1),
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: None,
+                        value: Operand::Int(2),
+                        writeback_place: None,
+                    },
+                ],
             ),
-            "expected `recv()` to take no arguments",
+            "expected `get()` or `get(timeout=...)`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -1681,7 +1681,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "unknown",
                 Vec::new(),
             ),
-            "does not know runtime member `Channel.unknown`",
+            "does not know runtime member `Queue.unknown`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -1737,7 +1737,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
 
 #[test]
 fn direct_backend_manual_select_surface_compiles() {
-    let channel_ty = Type::Named("Channel".to_string(), vec![Type::named("int32")]);
+    let channel_ty = Type::Named("Queue".to_string(), vec![Type::named("int32")]);
     let recv_binding_ty = Type::Named("Option".to_string(), vec![Type::named("int32")]);
     let send_binding_ty = Type::Named(
         "Result".to_string(),
@@ -1776,7 +1776,7 @@ fn direct_backend_manual_select_surface_compiles() {
                     instructions: vec![Instruction::Assign {
                         target: "jobs".to_string(),
                         value: Rvalue::Call {
-                            callee: CallTarget::Name("channel".to_string()),
+                            callee: CallTarget::Name("queue".to_string()),
                             args: Vec::new(),
                         },
                     }],
@@ -1851,7 +1851,7 @@ fn direct_backend_manual_select_surface_compiles() {
                     instructions: vec![Instruction::Assign {
                         target: "jobs".to_string(),
                         value: Rvalue::Call {
-                            callee: CallTarget::Name("channel".to_string()),
+                            callee: CallTarget::Name("queue".to_string()),
                             args: Vec::new(),
                         },
                     }],
@@ -1985,8 +1985,8 @@ def main() -> int32:
     text = "  Aurora repo  "
     print(text)
     print(f"value={text}")
-    jobs: Channel[int32] = channel()
-    group = task_group()
+    jobs: Queue[int32] = queue()
+    group = tasks()
     ready = cancelled()
     sleep(0ms)
     value = abs(-7)
@@ -2022,7 +2022,7 @@ def main() -> int32:
         (
             "channel extra arg",
             module_with_main_call(Rvalue::Call {
-                callee: CallTarget::Name("channel".to_string()),
+                callee: CallTarget::Name("queue".to_string()),
                 args: vec![
                     MirArg {
                         name: None,
@@ -2036,19 +2036,19 @@ def main() -> int32:
                     },
                 ],
             }),
-            "expected `channel()` to take at most one capacity argument",
+            "expected `queue()` to take at most one capacity argument",
         ),
         (
-            "task_group extra arg",
+            "tasks extra arg",
             module_with_main_call(Rvalue::Call {
-                callee: CallTarget::Name("task_group".to_string()),
+                callee: CallTarget::Name("tasks".to_string()),
                 args: vec![MirArg {
                     name: None,
                     value: Operand::Int(1),
                     writeback_place: None,
                 }],
             }),
-            "expected `task_group()` to take no arguments",
+            "expected `tasks()` to take no arguments",
         ),
         (
             "cancelled extra arg",
@@ -2419,17 +2419,16 @@ def main() -> int32:
     has_name = names.contains("aurora")
     removed_name = names.remove("repo")
 
-    jobs: Channel[int32] = channel()
-    send_result = jobs.send(1)
-    recv_result = jobs.recv()
+    jobs: Queue[int32] = queue()
+    send_result = jobs.put(1)
+    recv_result = jobs.get()
     jobs.close()
 
-    group = task_group()
+    group = tasks()
     group.cancel()
-    group.close()
 
     task = spawn worker(value=1)
-    joined_task = task.join()
+    joined_task = task.result()
 
     mut counter = Counter(value=1)
     current_value = counter.read()
@@ -2505,7 +2504,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
         elements: vec![Operand::String("aurora".to_string())],
     };
     let channel_object = || Rvalue::Call {
-        callee: CallTarget::Name("channel".to_string()),
+        callee: CallTarget::Name("queue".to_string()),
         args: vec![],
     };
 
@@ -2638,26 +2637,26 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
             "expected `contains()` to receive one value argument",
         ),
         (
-            "channel recv extra arg",
+            "queue get extra arg",
             module_with_main_member_call(
                 "jobs",
-                Type::Named("Channel".to_string(), vec![Type::named("int32")]),
+                Type::Named("Queue".to_string(), vec![Type::named("int32")]),
                 channel_object(),
-                "recv",
-                one_arg.clone(),
+                "get",
+                two_args.clone(),
             ),
-            "expected `recv()` to take no arguments",
+            "expected `get()` or `get(timeout=...)`",
         ),
         (
-            "channel send missing arg",
+            "queue put missing arg",
             module_with_main_member_call(
                 "jobs",
-                Type::Named("Channel".to_string(), vec![Type::named("int32")]),
+                Type::Named("Queue".to_string(), vec![Type::named("int32")]),
                 channel_object(),
-                "send",
+                "put",
                 vec![],
             ),
-            "expected `send()` to receive one argument",
+            "expected `put()` to receive one argument",
         ),
         (
             "vec swap missing arg",
@@ -3197,8 +3196,8 @@ fn direct_backend_emits_object_for_broad_maintained_example_surface() {
         "examples/strings/borrow_str.au",
         "examples/strings/string_methods.au",
         "examples/strings/string_parsing_and_formatting.au",
-        "examples/concurrency/channels_spawn.au",
-        "examples/concurrency/channel_iteration.au",
+        "examples/concurrency/queues_spawn.au",
+        "examples/concurrency/queue_iteration.au",
         "examples/concurrency/select_send.au",
         "examples/concurrency/select_timeout_named.au",
         "examples/concurrency/spawn_detached.au",
@@ -3465,9 +3464,9 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
     for (name, expected) in [
         ("range", DirectType::Opaque(Type::named("Range"))),
         (
-            "channel",
+            "queue",
             DirectType::Opaque(Type::Named(
-                "Channel".to_string(),
+                "Queue".to_string(),
                 vec![Type::named("Unknown")],
             )),
         ),
@@ -3486,7 +3485,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
                 vec![Type::named("Unknown"), Type::named("Unknown")],
             )),
         ),
-        ("task_group", DirectType::Opaque(Type::named("TaskGroup"))),
+        ("tasks", DirectType::Opaque(Type::named("TaskGroup"))),
         ("cancelled", DirectType::Scalar(ScalarKind::Bool)),
         ("sleep", DirectType::Scalar(ScalarKind::Unit)),
         (
@@ -3703,7 +3702,7 @@ fn builtin_member_and_select_type_helpers_cover_collection_runtime_surface() {
     assert_eq!(
         builtin_opaque_member_return_type(
             &Type::Named("Task".to_string(), vec![Type::named("int32")]),
-            "join",
+            "result",
             &classes,
         ),
         Some(DirectType::Scalar(ScalarKind::Int32))
@@ -3721,22 +3720,11 @@ fn builtin_member_and_select_type_helpers_cover_collection_runtime_surface() {
     );
     assert_eq!(
         builtin_opaque_member_return_type(
-            &Type::Named("Channel".to_string(), vec![Type::named("int32")]),
-            "clone",
-            &classes,
-        ),
-        Some(DirectType::Opaque(Type::Named(
-            "Channel".to_string(),
-            vec![Type::named("int32")],
-        )))
-    );
-    assert_eq!(
-        builtin_opaque_member_return_type(
             &Type::Named("TaskGroup".to_string(), vec![]),
-            "close",
+            "start",
             &classes,
         ),
-        Some(DirectType::Scalar(ScalarKind::Unit))
+        None
     );
     assert_eq!(
         builtin_opaque_member_return_type(
@@ -3784,8 +3772,8 @@ fn builtin_member_and_select_type_helpers_cover_collection_runtime_surface() {
             DirectType::Scalar(ScalarKind::Bool),
         ),
         (
-            Type::Named("Channel".to_string(), vec![Type::named("int32")]),
-            "send",
+            Type::Named("Queue".to_string(), vec![Type::named("int32")]),
+            "put",
             DirectType::Opaque(Type::Named(
                 "Result".to_string(),
                 vec![
@@ -3798,6 +3786,11 @@ fn builtin_member_and_select_type_helpers_cover_collection_runtime_surface() {
             Type::Named("TaskGroup".to_string(), vec![]),
             "cancel",
             DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            Type::Named("Task".to_string(), vec![Type::named("int32")]),
+            "result",
+            DirectType::Scalar(ScalarKind::Int32),
         ),
     ] {
         assert_eq!(
@@ -3831,10 +3824,7 @@ fn builtin_member_and_select_type_helpers_cover_collection_runtime_surface() {
     };
     let variable_types = HashMap::from([(
         "jobs".to_string(),
-        DirectType::Opaque(Type::Named(
-            "Channel".to_string(),
-            vec![Type::named("int32")],
-        )),
+        DirectType::Opaque(Type::Named("Queue".to_string(), vec![Type::named("int32")])),
     )]);
 
     assert_eq!(
@@ -4326,8 +4316,8 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
             Some(DirectType::Scalar(ScalarKind::Bool)),
         ),
         (
-            Type::Named("Channel".to_string(), vec![Type::named("int32")]),
-            "recv",
+            Type::Named("Queue".to_string(), vec![Type::named("int32")]),
+            "get",
             Some(DirectType::Opaque(Type::Named(
                 "Option".to_string(),
                 vec![Type::named("int32")],
@@ -4335,11 +4325,8 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         ),
         (
             Type::Named("Task".to_string(), vec![Type::named("int32")]),
-            "clone",
-            Some(DirectType::Opaque(Type::Named(
-                "Task".to_string(),
-                vec![Type::named("int32")],
-            ))),
+            "result",
+            Some(DirectType::Scalar(ScalarKind::Int32)),
         ),
         (
             Type::Named("TaskGroup".to_string(), vec![]),

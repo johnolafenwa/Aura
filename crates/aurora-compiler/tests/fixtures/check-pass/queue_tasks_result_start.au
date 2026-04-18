@@ -1,0 +1,27 @@
+def produce_numbers(out: Queue[int32]) -> int32:
+    out.put(2)
+    out.put(4)
+    out.close()
+    return 6
+
+def double(value: int32) -> int32:
+    return value * 2
+
+def main() -> int32:
+    jobs: Queue[int32] = queue()
+    task = spawn produce_numbers(jobs)
+
+    while true:
+        match jobs.get():
+            case Option.Some(value):
+                print(value)
+            case Option.None:
+                break
+
+    print(task.result())
+
+    with tasks() as group:
+        other = group.start(double, 5)
+        print(other.result())
+
+    return 0

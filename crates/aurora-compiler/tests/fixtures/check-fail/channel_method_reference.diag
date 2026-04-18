@@ -1,5 +1,0 @@
-error: method `send` on `Channel[int32]` must be called with `(...)`
- --> crates/aurora-compiler/tests/fixtures/check-fail/channel_method_reference.au:3:17
-  |
-3 |     sender = ch.send
-  |                 ^

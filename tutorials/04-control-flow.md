@@ -150,7 +150,7 @@ The current compiler supports `for` over:
 - `range(stop)` and `range(start, stop)` with named-argument forms
 - `Vec[T]`, `borrow Vec[T]`, and `borrow mut Vec[T]`
 - `Set[T]` and `borrow Set[T]`
-- `Channel[T]` (iterates until the channel closes)
+- `Queue[T]` (iterates until the queue closes)
 
 Not yet supported:
 

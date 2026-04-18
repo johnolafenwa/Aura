@@ -1,0 +1,2 @@
+def main() -> None:
+    jobs: Channel[int32] = queue()

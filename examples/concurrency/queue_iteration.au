@@ -1,7 +1,7 @@
 def main() -> int32:
-    jobs: Channel[int32] = channel()
-    jobs.send(1)
-    jobs.send(2)
+    jobs: Queue[int32] = queue()
+    jobs.put(1)
+    jobs.put(2)
     jobs.close()
 
     for job in jobs:

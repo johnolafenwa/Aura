@@ -695,7 +695,7 @@ fn parse_control_flow_patterns_and_helper_errors_cover_more_branches() {
     ));
 
     let select_stmt = parse_stmt_from(
-        ["select:", "    case ready = jobs.recv():", "        pass"]
+        ["select:", "    case ready = jobs.get():", "        pass"]
             .join("\n")
             .as_str(),
     )

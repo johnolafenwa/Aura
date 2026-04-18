@@ -1326,9 +1326,18 @@ fn build_with_direct_backend_supports_generic_data_example() {
 #[test]
 fn build_with_direct_backend_supports_concurrency_example() {
     assert_direct_backend_example_runs(
-        "examples/concurrency/channels_spawn.au",
-        "channels-direct",
-        "2\n4\n",
+        "examples/concurrency/queues_spawn.au",
+        "queues-direct",
+        "2\n4\n6\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_queue_timeout_example() {
+    assert_direct_backend_example_runs(
+        "examples/concurrency/queue_timeout.au",
+        "queue-timeout-direct",
+        "timeout\n",
     );
 }
 
@@ -1558,7 +1567,7 @@ fn build_with_direct_backend_supports_string_map_and_numeric_builtins() {
 fn build_with_direct_backend_ignores_closed_recv_when_timeout_arm_exists() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-select-closed-timeout",
-        "def main() -> int32:\n    ch: Channel[int32] = channel()\n    ch.close()\n    select:\n        case value = ch.recv():\n            match value:\n                case Option.Some(v):\n                    print(v)\n                case Option.None:\n                    print(1)\n        case after(1ms):\n            print(2)\n    return 0\n",
+        "def main() -> int32:\n    ch: Queue[int32] = queue()\n    ch.close()\n    select:\n        case value = ch.get():\n            match value:\n                case Option.Some(v):\n                    print(v)\n                case Option.None:\n                    print(1)\n        case after(1ms):\n            print(2)\n    return 0\n",
     );
 
     assert!(
@@ -1807,7 +1816,7 @@ fn default_build_supports_bare_none_unit_values() {
 fn default_build_ignores_closed_recv_when_timeout_arm_exists() {
     let (_, run) = build_and_run_default_source(
         "aurora-build-auto-select-closed-timeout",
-        "def main() -> int32:\n    ch: Channel[int32] = channel()\n    ch.close()\n    select:\n        case value = ch.recv():\n            match value:\n                case Option.Some(v):\n                    print(v)\n                case Option.None:\n                    print(1)\n        case after(1ms):\n            print(2)\n    return 0\n",
+        "def main() -> int32:\n    ch: Queue[int32] = queue()\n    ch.close()\n    select:\n        case value = ch.get():\n            match value:\n                case Option.Some(v):\n                    print(v)\n                case Option.None:\n                    print(1)\n        case after(1ms):\n            print(2)\n    return 0\n",
     );
 
     assert!(
@@ -1989,25 +1998,25 @@ fn build_runs_indirect_recursive_example() {
 }
 
 #[test]
-fn build_with_direct_backend_supports_task_join_returning_plain_classes() {
+fn build_with_direct_backend_supports_task_result_returning_plain_classes() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-task-join-class",
-        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    task = spawn make_box()\n    box = task.join()\n    print(box.value)\n    return 0\n",
+        "aurora-build-direct-task-result-class",
+        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    task = spawn make_box()\n    box = task.result()\n    print(box.value)\n    return 0\n",
     );
 
     assert!(
         run.status.success(),
-        "direct-backend task join binary should exit successfully, stderr was:\n{}",
+        "direct-backend task result binary should exit successfully, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
 }
 
 #[test]
-fn build_supports_task_join_returning_plain_classes() {
+fn build_supports_task_result_returning_plain_classes() {
     let (temp, source_path) = write_temp_source(
-        "aurora-build-default-task-join-class",
-        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    task = spawn make_box()\n    box = task.join()\n    print(box.value)\n    return 0\n",
+        "aurora-build-default-task-result-class",
+        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    task = spawn make_box()\n    box = task.result()\n    print(box.value)\n    return 0\n",
     );
     let output_path = temp.path().join("out");
 
@@ -2021,7 +2030,7 @@ fn build_supports_task_join_returning_plain_classes() {
 
     assert!(
         build.status.success(),
-        "default build should support task join returning plain classes, stderr was:\n{}",
+        "default build should support task result returning plain classes, stderr was:\n{}",
         String::from_utf8_lossy(&build.stderr)
     );
 
@@ -2039,9 +2048,9 @@ fn build_supports_task_join_returning_plain_classes() {
 
 #[test]
 fn build_produces_runnable_concurrency_binary() {
-    let fixture = repo_root().join("examples/concurrency/channels_spawn.au");
+    let fixture = repo_root().join("examples/concurrency/queues_spawn.au");
     let output_dir = TempDir::new("aurora-build-concurrency");
-    let output_path = output_dir.path().join("channels-spawn");
+    let output_path = output_dir.path().join("queues-spawn");
 
     let build = Command::new(aura_bin())
         .arg("build")
@@ -2066,7 +2075,7 @@ fn build_produces_runnable_concurrency_binary() {
         "built concurrency binary should exit successfully, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n4\n");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n4\n6\n");
 }
 
 #[test]
@@ -2659,7 +2668,7 @@ fn module_qualified_spawn_target_runs_across_commands() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "import pkg.helpers\n\ndef main() -> int32:\n    task = spawn pkg.helpers.work()\n    print(task.join())\n    return 0\n",
+        "import pkg.helpers\n\ndef main() -> int32:\n    task = spawn pkg.helpers.work()\n    print(task.result())\n    return 0\n",
     )
     .expect("failed to write main module");
 

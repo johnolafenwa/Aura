@@ -3,8 +3,8 @@ class Box[T]:
 
 def main() -> int32:
     box = Box[int32](value=42)
-    jobs = Channel[int32](capacity=4)
-    jobs.send(box.value)
+    jobs = Queue[int32](capacity=4)
+    jobs.put(box.value)
     jobs.close()
 
     for value in jobs:

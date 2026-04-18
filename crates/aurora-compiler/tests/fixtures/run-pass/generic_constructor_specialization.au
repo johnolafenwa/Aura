@@ -3,8 +3,8 @@ class Box[T]:
 
 def main() -> int32:
     box = Box[int32](value=42)
-    jobs = Channel[int32](capacity=4)
-    sent = jobs.send(box.value)
+    jobs = Queue[int32](capacity=4)
+    sent = jobs.put(box.value)
     jobs.close()
 
     match sent:
@@ -13,7 +13,7 @@ def main() -> int32:
         case Err(_):
             print("send failed")
 
-    match jobs.recv():
+    match jobs.get():
         case Some(value):
             print(value)
         case None:

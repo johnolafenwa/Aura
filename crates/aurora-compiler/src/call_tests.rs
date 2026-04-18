@@ -202,12 +202,10 @@ fn builtin_function_metadata_and_binding_surface_are_stable() {
         .unwrap_err();
     assert!(range_error.message.contains("expects 1 or 2 arguments"));
 
-    let channel_error = BuiltinFunction::Channel
+    let queue_error = BuiltinFunction::Queue
         .bind_args(&[dummy_arg(None)], Span::new(1, 1))
         .unwrap_err();
-    assert!(channel_error
-        .message
-        .contains("expects 0 arguments, found 1"));
+    assert!(queue_error.message.contains("expects 0 arguments, found 1"));
 }
 
 #[test]
@@ -237,7 +235,7 @@ fn builtin_function_bind_args_cover_remaining_variants() {
         assert_eq!(bound.len(), 2);
     }
 
-    for builtin in [BuiltinFunction::TaskGroup, BuiltinFunction::Cancelled] {
+    for builtin in [BuiltinFunction::Tasks, BuiltinFunction::Cancelled] {
         let bound = builtin
             .bind_args(&[], Span::new(1, 1))
             .expect("builtin should bind");
@@ -268,7 +266,7 @@ fn call_binding_helpers_cover_argument_count_and_decl_metadata_paths() {
     .expect_err("too many arguments should fail");
     assert!(single_error.message.contains("expects 1 argument, found 2"));
 
-    let zero_error = BuiltinFunction::TaskGroup
+    let zero_error = BuiltinFunction::Tasks
         .bind_args(&[dummy_arg(None)], Span::new(1, 1))
         .expect_err("zero-arg builtin should reject positional args");
     assert!(zero_error.message.contains("expects 0 arguments, found 1"));
@@ -283,7 +281,7 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
         BuiltinFunction::ParseFloat64.detail(),
         "parse_float64(text: String) -> Result[float64, String]"
     );
-    assert!(BuiltinFunction::TaskGroup
+    assert!(BuiltinFunction::Tasks
         .docs()
         .contains("structured-concurrency"));
 
@@ -359,12 +357,11 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         ("Set", "contains", BuiltinMember::SetContains),
         ("Set", "insert", BuiltinMember::SetInsert),
         ("Set", "remove", BuiltinMember::SetRemove),
-        ("Channel", "clone", BuiltinMember::ChannelClone),
-        ("Channel", "send", BuiltinMember::ChannelSend),
-        ("Channel", "recv", BuiltinMember::ChannelRecv),
-        ("Channel", "close", BuiltinMember::ChannelClose),
-        ("Task", "clone", BuiltinMember::TaskClone),
-        ("Task", "join", BuiltinMember::TaskJoin),
+        ("Queue", "put", BuiltinMember::QueuePut),
+        ("Queue", "get", BuiltinMember::QueueGet),
+        ("Queue", "close", BuiltinMember::QueueClose),
+        ("Task", "result", BuiltinMember::TaskResult),
+        ("TaskGroup", "start", BuiltinMember::TaskGroupStart),
         ("TaskGroup", "cancel", BuiltinMember::TaskGroupCancel),
     ];
 
@@ -403,7 +400,7 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         .contains("missing required argument `value`"));
 
     let send_args_input = [dummy_arg(Some("value"))];
-    let send_args = BuiltinMember::ChannelSend
+    let send_args = BuiltinMember::QueuePut
         .bind_args(&send_args_input, Span::new(1, 1))
         .unwrap();
     assert_eq!(send_args.len(), 1);
@@ -431,11 +428,8 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         BuiltinMember::SetIsEmpty,
         BuiltinMember::SetClone,
         BuiltinMember::StringClone,
-        BuiltinMember::ChannelClone,
-        BuiltinMember::ChannelRecv,
-        BuiltinMember::ChannelClose,
-        BuiltinMember::TaskClone,
-        BuiltinMember::TaskJoin,
+        BuiltinMember::QueueClose,
+        BuiltinMember::TaskResult,
         BuiltinMember::TaskGroupCancel,
     ] {
         let bound = member

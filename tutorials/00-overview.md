@@ -18,7 +18,7 @@ These tutorials teach the language as it exists in this repository today, not th
 - strings, string parsing/formatting, numbers, duration literals, and the current builtin methods
 - `if`, `elif`, `else`, `while`, `for range(...)`, `break`, and `continue`
 - statement-form `match` over enum variants plus literal `bool`, integer, and `String` cases
-- `with`, `try expr`, channels, spawned tasks, detached tasks, task groups, and `select`
+- `with`, `try expr`, queues, spawned tasks, detached tasks, task groups, and `select`
 - expression-form `match`, nested enum patterns, and multi-payload variants
 - borrowed return values with explicit source syntax like `-> borrow[user] T`
 - user-defined generic classes, enums, and functions
@@ -44,7 +44,7 @@ Today's working subset includes:
 - class methods with `self`, `borrow self`, and `borrow mut self`
 - arithmetic, comparisons, strings, booleans, and duration literals
 - `if`, `elif`, `else`, `while`, `for`, `match`, `with`, `select`, `break`, and `continue`
-- `print`, `range`, `channel`, `task_group`, `cancelled`, `after`, and `sleep`
+- `print`, `range`, `queue`, `tasks`, `cancelled`, `after`, and `sleep`
 - machine-readable compiler output for AST, analysis, and completions
 
 ## What Is Still Outside The Bootstrap Surface

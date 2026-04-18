@@ -4,10 +4,10 @@ class Worker:
 
 def main() -> int32:
     task = spawn Worker.run(4)
-    print(task.join())
+    print(task.result())
 
-    with task_group() as group:
-        other = group.spawn(Worker.run, 6)
-        print(other.join())
+    with tasks() as group:
+        other = group.start(Worker.run, 6)
+        print(other.result())
 
     return 0

@@ -174,7 +174,8 @@ const SQRT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value
 const PARSE_TEXT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
 const AFTER_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("duration")];
 const SLEEP_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("duration")];
-const CHANNEL_SEND_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
+const QUEUE_PUT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
+const QUEUE_GET_PARAMS: [CallableParam<'static>; 1] = [CallableParam::optional("timeout")];
 const VEC_INDEX_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("index")];
 const VEC_PUSH_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
 const VEC_SET_PARAMS: [CallableParam<'static>; 2] = [
@@ -208,8 +209,8 @@ const SET_VALUE_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("
 pub enum BuiltinFunction {
     Print,
     Range,
-    Channel,
-    TaskGroup,
+    Queue,
+    Tasks,
     Cancelled,
     After,
     Sleep,
@@ -225,8 +226,8 @@ pub enum BuiltinFunction {
 pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction::Print,
     BuiltinFunction::Range,
-    BuiltinFunction::Channel,
-    BuiltinFunction::TaskGroup,
+    BuiltinFunction::Queue,
+    BuiltinFunction::Tasks,
     BuiltinFunction::Cancelled,
     BuiltinFunction::After,
     BuiltinFunction::Sleep,
@@ -244,8 +245,8 @@ impl BuiltinFunction {
         match name {
             "print" => Some(Self::Print),
             "range" => Some(Self::Range),
-            "channel" => Some(Self::Channel),
-            "task_group" => Some(Self::TaskGroup),
+            "queue" => Some(Self::Queue),
+            "tasks" => Some(Self::Tasks),
             "cancelled" => Some(Self::Cancelled),
             "after" => Some(Self::After),
             "sleep" => Some(Self::Sleep),
@@ -264,8 +265,8 @@ impl BuiltinFunction {
         match self {
             Self::Print => "print",
             Self::Range => "range",
-            Self::Channel => "channel",
-            Self::TaskGroup => "task_group",
+            Self::Queue => "queue",
+            Self::Tasks => "tasks",
             Self::Cancelled => "cancelled",
             Self::After => "after",
             Self::Sleep => "sleep",
@@ -283,8 +284,8 @@ impl BuiltinFunction {
         match self {
             Self::Print => "print(value) -> None",
             Self::Range => "range(stop: int32) -> Range; range(start: int32, stop: int32) -> Range",
-            Self::Channel => "channel() -> Channel[T]",
-            Self::TaskGroup => "task_group() -> TaskGroup",
+            Self::Queue => "queue() -> Queue[T]",
+            Self::Tasks => "tasks() -> TaskGroup",
             Self::Cancelled => "cancelled() -> bool",
             Self::After => "after(duration: Duration) -> Duration",
             Self::Sleep => "sleep(duration: Duration) -> None",
@@ -304,10 +305,10 @@ impl BuiltinFunction {
             Self::Range => {
                 "Builds an integer range from 0 up to, but not including, `stop`, or from `start` up to, but not including, `stop`."
             }
-            Self::Channel => {
-                "Creates a typed channel when the surrounding annotation or expectation provides `T`."
+            Self::Queue => {
+                "Creates a typed queue when the surrounding annotation or expectation provides `T`."
             }
-            Self::TaskGroup => {
+            Self::Tasks => {
                 "Creates a managed structured-concurrency task group for use with `with`."
             }
             Self::Cancelled => "Returns true when the current task has been cancelled.",
@@ -365,16 +366,16 @@ impl BuiltinFunction {
                     )
                 }
             }
-            Self::Channel => {
-                bind_call_arguments("`channel`", &[], args, span, CallConvention::PositionalOnly)
-            }
-            Self::TaskGroup => bind_call_arguments(
-                "`task_group`",
+            Self::Queue => bind_call_arguments(
+                &format!("`{}`", self.name()),
                 &[],
                 args,
                 span,
                 CallConvention::PositionalOnly,
             ),
+            Self::Tasks => {
+                bind_call_arguments("`tasks`", &[], args, span, CallConvention::PositionalOnly)
+            }
             Self::Cancelled => bind_call_arguments(
                 "`cancelled`",
                 &[],
@@ -485,12 +486,11 @@ pub enum BuiltinMember {
     SetInsert,
     SetRemove,
     StringClone,
-    ChannelClone,
-    ChannelSend,
-    ChannelRecv,
-    ChannelClose,
-    TaskClone,
-    TaskJoin,
+    QueuePut,
+    QueueGet,
+    QueueClose,
+    TaskResult,
+    TaskGroupStart,
     TaskGroupCancel,
 }
 
@@ -559,12 +559,11 @@ impl BuiltinMember {
             ("String", "trim") => Some(Self::StringTrim),
             ("String", "join") => Some(Self::StringJoin),
             ("String", "clone") => Some(Self::StringClone),
-            ("Channel", "clone") => Some(Self::ChannelClone),
-            ("Channel", "send") => Some(Self::ChannelSend),
-            ("Channel", "recv") => Some(Self::ChannelRecv),
-            ("Channel", "close") => Some(Self::ChannelClose),
-            ("Task", "clone") => Some(Self::TaskClone),
-            ("Task", "join") => Some(Self::TaskJoin),
+            ("Queue", "put") => Some(Self::QueuePut),
+            ("Queue", "get") => Some(Self::QueueGet),
+            ("Queue", "close") => Some(Self::QueueClose),
+            ("Task", "result") => Some(Self::TaskResult),
+            ("TaskGroup", "start") => Some(Self::TaskGroupStart),
             ("TaskGroup", "cancel") => Some(Self::TaskGroupCancel),
             _ => None,
         }
@@ -588,11 +587,7 @@ impl BuiltinMember {
             Self::StringJoin => "join",
             Self::VecLen => "len",
             Self::VecIsEmpty => "is_empty",
-            Self::VecClone
-            | Self::MapClone
-            | Self::StringClone
-            | Self::ChannelClone
-            | Self::TaskClone => "clone",
+            Self::VecClone | Self::MapClone | Self::StringClone => "clone",
             Self::VecPush => "push",
             Self::VecPop => "pop",
             Self::VecGet => "get",
@@ -622,10 +617,11 @@ impl BuiltinMember {
             Self::SetContains => "contains",
             Self::SetInsert => "insert",
             Self::SetRemove => "remove",
-            Self::ChannelSend => "send",
-            Self::ChannelRecv => "recv",
-            Self::ChannelClose => "close",
-            Self::TaskJoin => "join",
+            Self::QueuePut => "put",
+            Self::QueueGet => "get",
+            Self::QueueClose => "close",
+            Self::TaskResult => "result",
+            Self::TaskGroupStart => "start",
             Self::TaskGroupCancel => "cancel",
         }
     }
@@ -680,12 +676,11 @@ impl BuiltinMember {
             Self::SetInsert => "insert(value: T) -> bool",
             Self::SetRemove => "remove(value: T) -> bool",
             Self::StringClone => "clone() -> String",
-            Self::ChannelClone => "clone() -> Channel[T]",
-            Self::ChannelSend => "send(value) -> Result[None, SendError[T]]",
-            Self::ChannelRecv => "recv() -> Option[T]",
-            Self::ChannelClose => "close() -> None",
-            Self::TaskClone => "clone() -> Task[T]",
-            Self::TaskJoin => "join() -> T",
+            Self::QueuePut => "put(value) -> Result[None, SendError[T]]",
+            Self::QueueGet => "get(timeout: Duration = ...) -> Option[T]",
+            Self::QueueClose => "close() -> None",
+            Self::TaskResult => "result() -> T",
+            Self::TaskGroupStart => "start(function, ...) -> Task[T]",
             Self::TaskGroupCancel => "cancel() -> None",
         }
     }
@@ -772,16 +767,15 @@ impl BuiltinMember {
             Self::SetInsert => "Inserts `value`, returning false when it is already present.",
             Self::SetRemove => "Removes `value`, returning false when it is absent.",
             Self::StringClone => "Creates a new owned `String` with the same contents.",
-            Self::ChannelClone => "Creates another handle to the same underlying channel.",
-            Self::ChannelSend => {
-                "Sends a value to the channel or returns `SendError.Closed(value)` if the channel is closed."
+            Self::QueuePut => {
+                "Puts a value into the queue or returns `SendError.Closed(value)` if the queue is closed."
             }
-            Self::ChannelRecv => {
-                "Receives the next value from the channel, or `Option.None` when closed."
+            Self::QueueGet => {
+                "Receives the next value from the queue, or `Option.None` when the queue is closed or the optional timeout expires."
             }
-            Self::ChannelClose => "Closes the channel and wakes blocked receivers.",
-            Self::TaskClone => "Creates another handle to the same spawned task.",
-            Self::TaskJoin => "Waits for the spawned task to finish and returns its value.",
+            Self::QueueClose => "Closes the queue and wakes blocked receivers.",
+            Self::TaskResult => "Waits for the spawned task to finish and returns its value.",
+            Self::TaskGroupStart => "Starts a child task in the current task group.",
             Self::TaskGroupCancel => {
                 "Signals cancellation to child tasks in the current task group."
             }
@@ -818,17 +812,21 @@ impl BuiltinMember {
             | Self::SetClone
             | Self::VecPop
             | Self::StringClone
-            | Self::ChannelClone
-            | Self::ChannelRecv
-            | Self::ChannelClose
-            | Self::TaskClone
-            | Self::TaskJoin
+            | Self::TaskResult
+            | Self::QueueClose
             | Self::TaskGroupCancel => bind_call_arguments(
                 &format!("`{}`", self.name()),
                 &[],
                 args,
                 span,
                 CallConvention::PositionalOnly,
+            ),
+            Self::QueueGet => bind_call_arguments(
+                "`get`",
+                &QUEUE_GET_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
             ),
             Self::VecGet | Self::VecRemove => bind_call_arguments(
                 &format!("`{}`", self.name()),
@@ -939,12 +937,19 @@ impl BuiltinMember {
                 span,
                 CallConvention::PositionalOrNamed,
             ),
-            Self::ChannelSend => bind_call_arguments(
-                "`send`",
-                &CHANNEL_SEND_PARAMS,
+            Self::QueuePut => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &QUEUE_PUT_PARAMS,
                 args,
                 span,
                 CallConvention::PositionalOrNamed,
+            ),
+            Self::TaskGroupStart => bind_call_arguments(
+                "`start`",
+                &[CallableParam::required("function")],
+                args,
+                span,
+                CallConvention::PositionalOnly,
             ),
         }
     }

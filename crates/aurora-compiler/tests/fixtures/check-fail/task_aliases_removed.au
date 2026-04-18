@@ -1,0 +1,10 @@
+def worker() -> int32:
+    return 1
+
+def main() -> None:
+    task = spawn worker()
+    print(task.join())
+
+    with task_group() as group:
+        other = group.spawn(worker)
+        print(other.result())

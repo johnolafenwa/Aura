@@ -1873,7 +1873,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         &module_registry,
     );
     let span = Span::new(1, 1);
-    let channel_string = Type::Named("Channel".to_string(), vec![Type::named("String")]);
+    let channel_string = Type::Named("Queue".to_string(), vec![Type::named("String")]);
     let mut locals = HashMap::from([
         (
             "text".to_string(),
@@ -1902,7 +1902,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Specialize {
-                expr: Box::new(expr(ExprKind::Name("Channel".to_string()))),
+                expr: Box::new(expr(ExprKind::Name("Queue".to_string()))),
                 type_args: vec![type_ref("String"), type_ref("int32")],
             }),
             &[],
@@ -1910,13 +1910,13 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
             &mut locals,
             None,
         )
-        .expect_err("Channel arity mismatches should fail")
+        .expect_err("Queue arity mismatches should fail")
         .message
         .contains("expects exactly one type argument"));
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Specialize {
-                expr: Box::new(expr(ExprKind::Name("Channel".to_string()))),
+                expr: Box::new(expr(ExprKind::Name("Queue".to_string()))),
                 type_args: vec![type_ref("String")],
             }),
             &[named_arg(
@@ -1927,14 +1927,14 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
             &mut locals,
             None,
         )
-        .expect_err("Channel capacity should stay int32")
+        .expect_err("Queue capacity should stay int32")
         .message
         .contains("field `capacity` expects `int32`"));
     assert_eq!(
         checker
             .type_of_call(
                 &expr(ExprKind::Specialize {
-                    expr: Box::new(expr(ExprKind::Name("Channel".to_string()))),
+                    expr: Box::new(expr(ExprKind::Name("Queue".to_string()))),
                     type_args: vec![type_ref("String")],
                 }),
                 &[named_arg("capacity", expr(ExprKind::Int(4)))],
@@ -1942,7 +1942,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
                 &mut locals,
                 None,
             )
-            .expect("Channel[T](capacity=...) should type check"),
+            .expect("Queue[T](capacity=...) should type check"),
         channel_string
     );
 
@@ -2043,36 +2043,36 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         .contains("`range` arguments must have type `int32`"));
     assert!(checker
         .type_of_call(
-            &expr(ExprKind::Name("channel".to_string())),
+            &expr(ExprKind::Name("queue".to_string())),
             &[],
             span,
             &mut locals,
             None,
         )
-        .expect_err("channel() requires an expected type")
+        .expect_err("queue() requires an expected type")
         .message
-        .contains("requires an expected `Channel[T]`"));
+        .contains("requires an expected `Queue[T]`"));
     assert!(checker
         .type_of_call(
-            &expr(ExprKind::Name("channel".to_string())),
+            &expr(ExprKind::Name("queue".to_string())),
             &[],
             span,
             &mut locals,
             Some(&Type::named("int32")),
         )
-        .expect_err("channel() rejects non-channel expected types")
+        .expect_err("queue() rejects non-channel expected types")
         .message
-        .contains("requires an expected `Channel[T]`"));
+        .contains("requires an expected `Queue[T]`"));
     assert_eq!(
         checker
             .type_of_call(
-                &expr(ExprKind::Name("channel".to_string())),
+                &expr(ExprKind::Name("queue".to_string())),
                 &[],
                 span,
                 &mut locals,
                 Some(&channel_string),
             )
-            .expect("channel() should follow Channel[T] expectations"),
+            .expect("queue() should follow Queue[T] expectations"),
         channel_string
     );
     assert!(checker
@@ -2570,7 +2570,7 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
         vec![string_ty.clone(), string_ty.clone()],
     );
     let set_string = Type::Named("Set".to_string(), vec![string_ty.clone()]);
-    let channel_string = Type::Named("Channel".to_string(), vec![string_ty.clone()]);
+    let channel_string = Type::Named("Queue".to_string(), vec![string_ty.clone()]);
     let mut locals = HashMap::from([
         (
             "text".to_string(),
@@ -2639,7 +2639,7 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
             ),
         ),
         (
-            "channel".to_string(),
+            "queue".to_string(),
             local_binding(
                 channel_string.clone(),
                 false,
@@ -2896,17 +2896,17 @@ fn checker_member_call_helpers_cover_string_map_set_and_channel_builtins() {
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("channel".to_string()))),
-                field: "send".to_string(),
+                object: Box::new(expr(ExprKind::Name("queue".to_string()))),
+                field: "put".to_string(),
             }),
             &[arg(expr(ExprKind::Int(1)))],
             span,
             &mut locals,
             None,
         )
-        .expect_err("channel.send() should enforce payload types")
+        .expect_err("channel.put() should enforce payload types")
         .message
-        .contains("`send` expects `String`"));
+        .contains("`put` expects `String`"));
 }
 
 #[test]
@@ -2939,7 +2939,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
     let vec_int = Type::Named("Vec".to_string(), vec![int_ty.clone()]);
     let map_ty = Type::Named("Map".to_string(), vec![string_ty.clone(), int_ty.clone()]);
     let set_ty = Type::Named("Set".to_string(), vec![string_ty.clone()]);
-    let channel_ty = Type::Named("Channel".to_string(), vec![string_ty.clone()]);
+    let channel_ty = Type::Named("Queue".to_string(), vec![string_ty.clone()]);
     let task_ty = Type::Named("Task".to_string(), vec![int_ty.clone()]);
     let mut locals = HashMap::from([
         (
@@ -3010,7 +3010,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             local_binding(set_ty.clone(), true, true, ReceiverKind::Value, false, &[]),
         ),
         (
-            "channel".to_string(),
+            "queue".to_string(),
             local_binding(
                 channel_ty.clone(),
                 false,
@@ -3265,16 +3265,16 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         ),
         (
             expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("channel".to_string()))),
-                field: "recv".to_string(),
+                object: Box::new(expr(ExprKind::Name("queue".to_string()))),
+                field: "get".to_string(),
             }),
             Vec::new(),
             Type::Named("Option".to_string(), vec![string_ty.clone()]),
         ),
         (
             expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("channel".to_string()))),
-                field: "send".to_string(),
+                object: Box::new(expr(ExprKind::Name("queue".to_string()))),
+                field: "put".to_string(),
             }),
             vec![arg(expr(ExprKind::String("ok".to_string())))],
             Type::Named(
@@ -3287,7 +3287,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         ),
         (
             expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("channel".to_string()))),
+                object: Box::new(expr(ExprKind::Name("queue".to_string()))),
                 field: "close".to_string(),
             }),
             Vec::new(),
@@ -3296,7 +3296,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("task".to_string()))),
-                field: "join".to_string(),
+                field: "result".to_string(),
             }),
             Vec::new(),
             int_ty.clone(),
@@ -3305,14 +3305,6 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("group".to_string()))),
                 field: "cancel".to_string(),
-            }),
-            Vec::new(),
-            Type::Unit,
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("group".to_string()))),
-                field: "close".to_string(),
             }),
             Vec::new(),
             Type::Unit,
@@ -4297,7 +4289,7 @@ fn reserved_type_names_are_rejected() {
     for source in [
         "class Task:\n    value: int32\n\ndef main():\n    pass\n",
         "enum Result:\n    Ok\n\ndef main():\n    pass\n",
-        "trait Channel:\n    def label(self) -> String\n\ndef main():\n    pass\n",
+        "trait Queue:\n    def label(self) -> String\n\ndef main():\n    pass\n",
     ] {
         let error = crate::check_source(source).expect_err("reserved built-in names should fail");
         assert!(error.message.contains("reserved built-in type name"));
@@ -4505,13 +4497,13 @@ fn function_signature_helper_constructor_is_used() {
 #[test]
 fn select_checker_covers_valid_and_error_paths() {
     let valid = crate::check_source(
-            "def main() -> int32:\n    jobs: Channel[int32] = channel()\n    select:\n        case received = jobs.recv():\n            match received:\n                case Some(value):\n                    print(value)\n                case None:\n                    pass\n        case sent = jobs.send(1):\n            print(sent)\n        case after(1ms):\n            pass\n    return 0\n",
+            "def main() -> int32:\n    jobs: Queue[int32] = queue()\n    select:\n        case received = jobs.get():\n            match received:\n                case Some(value):\n                    print(value)\n                case None:\n                    pass\n        case sent = jobs.put(1):\n            print(sent)\n        case after(1ms):\n            pass\n    return 0\n",
         )
         .expect("valid select source should type check");
     assert!(valid.functions.contains_key("main"));
 
     let all_return = crate::check_source(
-            "def main() -> int32:\n    jobs: Channel[int32] = channel()\n    select:\n        case received = jobs.recv():\n            return 1\n        case after(1ms):\n            return 2\n",
+            "def main() -> int32:\n    jobs: Queue[int32] = queue()\n    select:\n        case received = jobs.get():\n            return 1\n        case after(1ms):\n            return 2\n",
         )
         .expect("all-return select should type check");
     assert!(all_return.functions.contains_key("main"));
@@ -4525,20 +4517,20 @@ fn select_checker_covers_valid_and_error_paths() {
         .contains("`after(...)` select arms cannot bind a value"));
 
     let recv_non_channel = crate::check_source(
-            "def main() -> int32:\n    value = 1\n    select:\n        case found = value.recv():\n            pass\n    return 0\n",
+            "def main() -> int32:\n    value = 1\n    select:\n        case found = value.get():\n            pass\n    return 0\n",
         )
         .expect_err("recv on a non-channel should fail");
     assert!(recv_non_channel
         .message
-        .contains("`select` receive arms require `Channel[T].recv()`"));
+        .contains("`select` receive arms require `Queue[T].get()`"));
 
     let send_non_channel = crate::check_source(
-            "def main() -> int32:\n    value = 1\n    select:\n        case sent = value.send(1):\n            pass\n    return 0\n",
+            "def main() -> int32:\n    value = 1\n    select:\n        case sent = value.put(1):\n            pass\n    return 0\n",
         )
         .expect_err("send on a non-channel should fail");
     assert!(send_non_channel
         .message
-        .contains("`select` send arms require `Channel[T].send(value)`"));
+        .contains("`select` send arms require `Queue[T].put(value)`"));
 
     let after_wrong_type = crate::check_source(
             "def main() -> int32:\n    select:\n        case after(1):\n            pass\n    return 0\n",
@@ -4549,21 +4541,21 @@ fn select_checker_covers_valid_and_error_paths() {
         .contains("`after(...)` expects a `Duration`, found `int32`"));
 
     let invalid_select_expr = crate::check_source(
-            "def main() -> int32:\n    jobs: Channel[int32] = channel()\n    select:\n        case jobs:\n            pass\n    return 0\n",
+            "def main() -> int32:\n    jobs: Queue[int32] = queue()\n    select:\n        case jobs:\n            pass\n    return 0\n",
         )
         .expect_err("non-call select arms should fail");
     assert!(invalid_select_expr
         .message
-        .contains("`select` currently supports `recv()`, `send(...)`, and `after(...)` arms"));
+        .contains("`select` currently supports `get()`, `put(...)`, and `after(...)` arms"));
 
     let send_wrong_type = crate::check_source(
-            "def main() -> int32:\n    jobs: Channel[int32] = channel()\n    select:\n        case status = jobs.send(\"bad\"):\n            pass\n    return 0\n",
+            "def main() -> int32:\n    jobs: Queue[int32] = queue()\n    select:\n        case status = jobs.put(\"bad\"):\n            pass\n    return 0\n",
         )
         .expect_err("send with the wrong type should fail");
-    assert!(send_wrong_type.message.contains("`send()` expects `int32`"));
+    assert!(send_wrong_type.message.contains("`put()` expects `int32`"));
 
     let shadow_binding = crate::check_source(
-            "def main() -> int32:\n    jobs: Channel[int32] = channel()\n    value = 1\n    select:\n        case value = jobs.recv():\n            pass\n    return 0\n",
+            "def main() -> int32:\n    jobs: Queue[int32] = queue()\n    value = 1\n    select:\n        case value = jobs.get():\n            pass\n    return 0\n",
         )
         .expect_err("shadowing select bindings should fail");
     assert!(shadow_binding
@@ -4612,7 +4604,7 @@ fn checker_function_default_loop_and_resource_validation_cover_additional_branch
             ),
             (
                 "def main() -> None:\n    flag = true\n    for value in flag:\n        pass\n",
-                "`for` currently requires a `Range`, `Channel[T]`, `Vec[T]`, or `Set[T]` iterable, found `bool`",
+                "`for` currently requires a `Range`, `Queue[T]`, `Vec[T]`, or `Set[T]` iterable, found `bool`",
             ),
             (
                 "def main() -> None:\n    value = 1\n    for value in range(3):\n        pass\n",
@@ -4923,7 +4915,7 @@ fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_succes
         (
             "jobs".to_string(),
             local_binding(
-                Type::Named("Channel".to_string(), vec![Type::named("int32")]),
+                Type::Named("Queue".to_string(), vec![Type::named("int32")]),
                 false,
                 false,
                 ReceiverKind::Value,
@@ -4954,7 +4946,7 @@ fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_succes
         .expect_err("select helper should reject non-call expressions");
     assert!(invalid_select_arm
         .message
-        .contains("`select` currently supports `recv()`, `send(...)`, and `after(...)` arms"));
+        .contains("`select` currently supports `get()`, `put(...)`, and `after(...)` arms"));
 
     let index_mut_error = checker
         .check_assign(
@@ -5116,7 +5108,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
     let string_ty = Type::named("String");
     let float_ty = Type::named("float64");
     let int_ty = Type::named("int32");
-    let channel_ty = Type::Named("Channel".to_string(), vec![Type::named("String")]);
+    let channel_ty = Type::Named("Queue".to_string(), vec![Type::named("String")]);
     let mut locals = HashMap::from([
         (
             "text".to_string(),
@@ -5153,14 +5145,16 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
         ),
     ]);
 
-    for (callee, args, expected, expected_hint) in [
+    for (label, callee, args, expected, expected_hint) in [
         (
+            "print",
             expr(ExprKind::Name("print".to_string())),
             vec![arg(expr(ExprKind::Name("text".to_string())))],
             Type::Unit,
             None,
         ),
         (
+            "range",
             expr(ExprKind::Name("range".to_string())),
             vec![
                 named_arg("start", expr(ExprKind::Int(1))),
@@ -5170,36 +5164,42 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
         (
-            expr(ExprKind::Name("channel".to_string())),
+            "queue",
+            expr(ExprKind::Name("queue".to_string())),
             Vec::new(),
             channel_ty.clone(),
             Some(channel_ty.clone()),
         ),
         (
-            expr(ExprKind::Name("task_group".to_string())),
+            "tasks",
+            expr(ExprKind::Name("tasks".to_string())),
             Vec::new(),
             Type::named("TaskGroup"),
             None,
         ),
         (
+            "cancelled",
             expr(ExprKind::Name("cancelled".to_string())),
             Vec::new(),
             Type::named("bool"),
             None,
         ),
         (
+            "after",
             expr(ExprKind::Name("after".to_string())),
             vec![named_arg("duration", expr(ExprKind::DurationMillis(1)))],
             Type::named("Duration"),
             None,
         ),
         (
+            "sleep",
             expr(ExprKind::Name("sleep".to_string())),
             vec![arg(expr(ExprKind::DurationMillis(1)))],
             Type::Unit,
             None,
         ),
         (
+            "abs",
             expr(ExprKind::Name("abs".to_string())),
             vec![named_arg(
                 "value",
@@ -5209,6 +5209,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
         (
+            "min",
             expr(ExprKind::Name("min".to_string())),
             vec![
                 named_arg("left", expr(ExprKind::Int(1))),
@@ -5218,6 +5219,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
         (
+            "max",
             expr(ExprKind::Name("max".to_string())),
             vec![
                 named_arg("left", expr(ExprKind::Name("ratio".to_string()))),
@@ -5227,6 +5229,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
         (
+            "sqrt",
             expr(ExprKind::Name("sqrt".to_string())),
             vec![named_arg(
                 "value",
@@ -5236,6 +5239,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
         (
+            "parse_int32",
             expr(ExprKind::Name("parse_int32".to_string())),
             vec![named_arg("text", expr(ExprKind::Name("text".to_string())))],
             Type::Named(
@@ -5245,6 +5249,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
         (
+            "parse_int64",
             expr(ExprKind::Name("parse_int64".to_string())),
             vec![named_arg("text", expr(ExprKind::Name("text".to_string())))],
             Type::Named(
@@ -5254,6 +5259,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
         (
+            "parse_float64",
             expr(ExprKind::Name("parse_float64".to_string())),
             vec![named_arg("text", expr(ExprKind::Name("text".to_string())))],
             Type::Named(
@@ -5263,6 +5269,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
         (
+            "Vec",
             expr(ExprKind::Specialize {
                 expr: Box::new(expr(ExprKind::Name("Vec".to_string()))),
                 type_args: vec![type_ref("int32")],
@@ -5272,6 +5279,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
         (
+            "Set",
             expr(ExprKind::Specialize {
                 expr: Box::new(expr(ExprKind::Name("Set".to_string()))),
                 type_args: vec![type_ref("String")],
@@ -5281,6 +5289,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
         (
+            "Map",
             expr(ExprKind::Specialize {
                 expr: Box::new(expr(ExprKind::Name("Map".to_string()))),
                 type_args: vec![type_ref("String"), type_ref("int32")],
@@ -5296,7 +5305,9 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
         assert_eq!(
             checker
                 .type_of_call(&callee, &args, span, &mut locals, expected_hint.as_ref())
-                .expect("builtin constructor/call should type check"),
+                .unwrap_or_else(|error| panic!(
+                    "{label} builtin constructor/call should type check: {error:?}"
+                )),
             expected
         );
     }
@@ -5383,8 +5394,8 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "`range` arguments must have type `int32`, found `bool`",
             ),
             (
-                "def main() -> int32:\n    return channel()\n",
-                "`channel()` requires an expected `Channel[T]` type annotation",
+                "def main() -> int32:\n    return queue()\n",
+                "`queue()` requires an expected `Queue[T]` type annotation",
             ),
             (
                 "def main() -> int32:\n    return after(duration=1)\n",
@@ -7036,8 +7047,8 @@ fn lower_type_and_imported_context_helpers_cover_builtin_and_context_paths() {
             "`Result` expects exactly two type arguments",
         ),
         (
-            nested_type_ref("Channel", Vec::new()),
-            "`Channel` expects exactly one type argument",
+            nested_type_ref("Queue", Vec::new()),
+            "`Queue` expects exactly one type argument",
         ),
         (
             nested_type_ref("Map", vec![type_ref("String")]),

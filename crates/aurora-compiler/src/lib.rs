@@ -496,7 +496,6 @@ fn is_builtin_export_type(name: &str) -> bool {
             | "Range"
             | "Option"
             | "Result"
-            | "Channel"
             | "Task"
             | "SendError"
             | "TaskGroup"

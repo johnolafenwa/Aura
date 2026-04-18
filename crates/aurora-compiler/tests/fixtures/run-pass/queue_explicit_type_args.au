@@ -1,0 +1,6 @@
+def main() -> int32:
+    ch = Queue[int32]()
+    print(ch.put(4))
+    print(ch.get())
+    ch.close()
+    return 0

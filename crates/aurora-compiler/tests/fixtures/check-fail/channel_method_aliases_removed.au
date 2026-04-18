@@ -1,0 +1,3 @@
+def main() -> None:
+    jobs: Queue[int32] = queue()
+    jobs.send(1)

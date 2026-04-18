@@ -1,4 +1,0 @@
-def main() -> int32:
-    ch: Channel[int32] = channel()
-    sender = ch.send
-    return 0

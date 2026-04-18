@@ -52,7 +52,7 @@ const PRIMITIVE_TYPES = new Set([
   "String",
   "None",
   "Duration",
-  "Channel",
+  "Queue",
   "Task",
   "TaskGroup"
 ]);
@@ -366,52 +366,40 @@ const BUILTIN_MEMBERS = {
       documentation: "The value component of a `MapEntry[K, V]`."
     }
   ],
-  Channel: [
+  Queue: [
     {
-      name: "clone",
+      name: "put",
       kind: "method",
-      detail: "clone() -> Channel[T]",
-      documentation: "Creates another handle to the same underlying channel."
+      detail: "put(value) -> Result[None, SendError[T]]",
+      documentation: "Puts a value into the queue or returns `SendError.Closed(value)` if the queue is closed."
     },
     {
-      name: "send",
+      name: "get",
       kind: "method",
-      detail: "send(value) -> Result[None, SendError[T]]",
-      documentation: "Sends a value to the channel or returns `SendError.Closed(value)` if the channel is closed."
-    },
-    {
-      name: "recv",
-      kind: "method",
-      detail: "recv() -> Option[T]",
-      documentation: "Receives the next value from the channel, or `Option.None` when closed."
+      detail: "get(timeout: Duration = ...) -> Option[T]",
+      documentation: "Receives the next value from the queue, or `Option.None` when the queue is closed or the optional timeout expires."
     },
     {
       name: "close",
       kind: "method",
       detail: "close() -> None",
-      documentation: "Closes the channel and wakes blocked receivers."
+      documentation: "Closes the queue and wakes blocked receivers."
     }
   ],
   Task: [
     {
-      name: "clone",
+      name: "result",
       kind: "method",
-      detail: "clone() -> Task[T]",
-      documentation: "Creates another handle to the same spawned task."
-    },
-    {
-      name: "join",
-      kind: "method",
-      detail: "join() -> T",
+      detail: "result() -> T",
       documentation: "Waits for the spawned task to finish and returns its value."
     }
   ],
   TaskGroup: [
     {
-      name: "spawn",
+      name: "start",
       kind: "method",
-      detail: "spawn(function, ...) -> Task[T]",
-      documentation: "Spawns a child task in the current task group."
+      detail: "start(function, ...) -> Task[T]",
+      documentation: "Starts a child task in the current task group."
     },
     {
       name: "cancel",
@@ -437,15 +425,15 @@ const BUILTIN_FUNCTIONS = [
       "Builds an integer range from 0 up to, but not including, `stop`, or from `start` up to, but not including, `stop`."
   },
   {
-    name: "channel",
+    name: "queue",
     kind: "function",
-    detail: "channel() -> Channel[T]",
-    documentation: "Creates a typed channel when the surrounding annotation or expectation provides `T`."
+    detail: "queue() -> Queue[T]",
+    documentation: "Creates a typed queue when the surrounding annotation or expectation provides `T`."
   },
   {
-    name: "task_group",
+    name: "tasks",
     kind: "function",
-    detail: "task_group() -> TaskGroup",
+    detail: "tasks() -> TaskGroup",
     documentation: "Creates a managed structured-concurrency task group for use with `with`."
   },
   {
@@ -568,7 +556,7 @@ const BUILTIN_ENUMS = new Map([
       kind: "enum",
       name: "SendError",
       detail: "enum SendError[T]",
-      documentation: "Channel send failures that preserve the unsent value.",
+      documentation: "Queue send failures that preserve the unsent value.",
       variants: [
         {
           kind: "variant",
@@ -2379,19 +2367,16 @@ function specializeMemberReturnType(receiverType, member) {
     }
   }
 
-  if (base === "Channel") {
-    const match = receiverType.match(/^Channel\[(.+)\]$/);
+  if (base === "Queue") {
+    const match = receiverType.match(/^Queue\[(.+)\]$/);
     if (!match) {
       return parseBuiltinDetailReturnType(member.detail);
     }
     const inner = normalizeType(match[1]);
-    if (member.name === "clone") {
-      return receiverType;
-    }
-    if (member.name === "recv") {
+    if (member.name === "get") {
       return `Option[${inner}]`;
     }
-    if (member.name === "send") {
+    if (member.name === "put") {
       return `Result[None, SendError[${inner}]]`;
     }
     return "None";
@@ -2402,10 +2387,7 @@ function specializeMemberReturnType(receiverType, member) {
     if (!match) {
       return parseBuiltinDetailReturnType(member.detail);
     }
-    if (member.name === "clone") {
-      return receiverType;
-    }
-    if (member.name === "join") {
+    if (member.name === "result") {
       return normalizeType(match[1]);
     }
   }
@@ -2484,9 +2466,9 @@ function inferForBindingType(iterableExpression, moduleInfo, functionInfo) {
   if (vecMatch) {
     return normalizeType(vecMatch[1]);
   }
-  const channelMatch = iterableType ? iterableType.match(/^Channel\[(.+)\]$/) : null;
-  if (channelMatch) {
-    return normalizeType(channelMatch[1]);
+  const queueMatch = iterableType ? iterableType.match(/^Queue\[(.+)\]$/) : null;
+  if (queueMatch) {
+    return normalizeType(queueMatch[1]);
   }
   const setMatch = iterableType ? iterableType.match(/^Set\[(.+)\]$/) : null;
   if (setMatch) {

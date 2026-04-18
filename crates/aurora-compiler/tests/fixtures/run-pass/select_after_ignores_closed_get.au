@@ -1,10 +1,10 @@
 def main() -> int32:
-    ch: Channel[int32] = channel()
+    ch: Queue[int32] = queue()
     ch.close()
     mut ticks = 0
     while ticks < 3:
         select:
-            case item = ch.recv():
+            case item = ch.get():
                 match item:
                     case Some(value):
                         print(value)

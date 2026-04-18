@@ -1,18 +1,18 @@
-def producer(out: Channel[int32]):
-    out.send(2)
-    out.send(4)
+def producer(out: Queue[int32]):
+    out.put(2)
+    out.put(4)
     out.close()
 
 def main() -> int32:
-    ch: Channel[int32] = channel()
-    task = spawn producer(ch.clone())
+    ch: Queue[int32] = queue()
+    task = spawn producer(ch)
 
     while true:
-        match ch.recv():
+        match ch.get():
             case Option.Some(value):
                 print(value)
             case Option.None:
                 break
 
-    task.join()
+    task.result()
     return 0

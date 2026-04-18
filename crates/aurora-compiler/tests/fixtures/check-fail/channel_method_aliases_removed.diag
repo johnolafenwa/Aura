@@ -1,0 +1,5 @@
+error: unsupported method call `send` on `Queue[int32]`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/channel_method_aliases_removed.au:3:10
+  |
+3 |     jobs.send(1)
+  |          ^

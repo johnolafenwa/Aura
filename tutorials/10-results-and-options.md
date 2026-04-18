@@ -46,7 +46,7 @@ match find_user(1):
         print("not found")
 ```
 
-You will see `Option[T]` throughout Aurora's standard library -- `Vec.pop()`, `Vec.get()`, `Map.get()`, `String.strip_prefix()`, and `Channel.recv()` all return `Option` values.
+You will see `Option[T]` throughout Aurora's standard library -- `Vec.pop()`, `Vec.get()`, `Map.get()`, `String.strip_prefix()`, and `Queue.get()` all return `Option` values.
 
 ## `None` vs `Option.None`
 
@@ -64,17 +64,17 @@ In practice, the distinction is clear from context. When you see `Option.None` i
 
 ## `SendError[T]`
 
-`SendError[T]` is the error type returned when a channel send fails because the channel is already closed. It wraps the value that could not be sent, so you can recover it:
+`SendError[T]` is the error type returned when a queue send fails because the queue is already closed. It wraps the value that could not be sent, so you can recover it:
 
 ```python
-ch: Channel[int32] = channel()
+ch: Queue[int32] = queue()
 ch.close()
 
-match ch.send(4):
+match ch.put(4):
     case Ok(done):
         print("sent")
     case Err(SendError.Closed(value)):
-        print(f"channel closed, could not send {value}")
+        print(f"queue closed, could not send {value}")
 ```
 
 See [examples/concurrency/send_result.au](../examples/concurrency/send_result.au) for a full example.

@@ -54,7 +54,7 @@ Builtin generic or runtime-facing types currently accepted:
 - `Option[T]`
 - `Result[T, E]`
 - `SendError[T]`
-- `Channel[T]`
+- `Queue[T]`
 - `Vec[T]`
 - `Map[K, V]`
 - `Set[T]`
@@ -111,7 +111,7 @@ Current package-system limits:
 
 Aurora uses an ownership model with no garbage collector. See [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md) for the full tutorial.
 
-Copy types (all numeric types, `bool`, `Duration`) are duplicated on assignment. Move types (`String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `Channel[T]`, `Task[T]`, `TaskGroup`, and user-defined classes) transfer ownership on assignment.
+Copy types (all numeric types, `bool`, `Duration`, `Queue[T]`, and `Task[T]`) are duplicated on assignment. Move types (`String`, `Vec[T]`, `Map[K, V]`, `Set[T]`, `TaskGroup`, and user-defined classes) transfer ownership on assignment.
 
 `copy class` declarations are allowed when all fields are copy types.
 
@@ -193,7 +193,7 @@ Ordinary functions, instance methods, and associated methods support:
 - ordinary borrowed parameters with `value: borrow T` and `value: borrow mut T`
 - builtin named arguments for `print(value=...)`, `range(...)`, and `after(duration=...)`
 
-Borrowed ordinary parameters currently work for normal calls, but `spawn` and `TaskGroup.spawn(...)` still require by-value parameters.
+Borrowed ordinary parameters currently work for normal calls, but `spawn` and `TaskGroup.start(...)` still require by-value parameters.
 Calls also reject overlapping borrowed arguments whenever a `borrow mut` parameter participates, including a `borrow mut self` receiver overlapping another borrowed argument in the same method call.
 Empty list literals currently require an expected `Vec[T]` type such as `values: Vec[int32] = []`, or you can use `Vec[int32]()` explicitly.
 Empty map literals currently require an expected `Map[K, V]` type such as `counts: Map[String, int32] = {}`.
@@ -219,8 +219,8 @@ Current builtin functions:
 
 - `print`
 - `range`
-- `channel`
-- `task_group`
+- `queue`
+- `tasks`
 - `cancelled`
 - `after`
 - `sleep`
@@ -288,13 +288,11 @@ Current builtin member methods include:
 - `Set.contains(...)`
 - `Set.insert(...)`
 - `Set.remove(...)`
-- `Channel.clone()`
-- `Channel.send(...)`
-- `Channel.recv()`
-- `Channel.close()`
-- `Task.clone()`
-- `Task.join()`
-- `TaskGroup.spawn(...)`
+- `Queue.put(...)`
+- `Queue.get(...)`
+- `Queue.close()`
+- `Task.result()`
+- `TaskGroup.start(...)`
 - `TaskGroup.cancel()`
 
 ## Pattern Matching
@@ -320,8 +318,8 @@ Boolean literal matches are exhaustive when they cover both `true` and `false`. 
 
 The current bootstrap concurrency surface includes:
 
-- typed channels
-- `for` iteration over channels until close
+- typed queues
+- `for` iteration over queues until close
 - spawned tasks
 - detached tasks
 - task groups
@@ -343,7 +341,7 @@ Current collection notes:
 - `for value in set:` and `for value in borrow set:` are supported for `Set[T]`
 - `for value in borrow mut set:` is not currently supported
 
-Timed `select` loops now treat closed receive arms as inactive when an `after(...)` arm is present, so timeout arms can still fire as an escape path.
+Timed `select` loops now treat closed receive arms as inactive when an `after(...)` arm is present, so timeout arms can still fire as an escape path. `Queue.get(timeout=...)` is also available for the ordinary single-queue timeout case.
 
 ## Tooling
 
@@ -394,7 +392,8 @@ Current expression/ergonomics limitations:
 - empty list literals still require an expected `Vec[T]` type such as `values: Vec[int32] = []`
 - strings use quoted literals; `String(...)` is not a constructor
 - enum variants may be called by bare built-in name when an expected type is available, for example `ok: Result[int32, String] = Ok(7)`
-- `channel()` still requires an expected `Channel[T]` type annotation in the bootstrap compiler
-- `channel[T]()` is supported when you want to avoid relying on expected type context
-- `spawn` and `TaskGroup.spawn(...)` support named functions plus associated methods without `self`
+- `queue()` still requires an expected `Queue[T]` type annotation in the bootstrap compiler
+- `queue[T]()` is supported when you want to avoid relying on expected type context
+- `spawn` and `TaskGroup.start(...)` support named functions plus associated methods without `self`
+- concurrency uses only the maintained `Queue[T]`, `queue()`, `Task.result()`, `tasks()`, and `TaskGroup.start(...)` surface
 - borrowed return labels such as `borrow[shared]` are supported on borrowed parameters and returns for advanced zero-copy APIs

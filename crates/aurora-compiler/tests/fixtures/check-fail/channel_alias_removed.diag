@@ -1,0 +1,5 @@
+error: unknown type `Channel`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/channel_alias_removed.au:2:11
+  |
+2 |     jobs: Channel[int32] = queue()
+  |           ^

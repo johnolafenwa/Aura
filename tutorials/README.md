@@ -52,8 +52,8 @@ The current tutorial set covers:
 - `Aurora.toml` packages with `src/`, local path dependencies, git dependencies, workspaces, and local lockfiles
 - built-in `Result[T, E]`, `Option[T]`, `SendError[T]`, and bare `None`
 - `try expr`
-- `with` using `close(borrow mut self)` and `with task_group() as group:`
-- `Channel[T]`, `channel()`, `spawn`, `spawn detached`, `Task[T].join()`, `task_group()`, `select`, send-result errors, and cooperative cancellation
+- `with` using `close(borrow mut self)` and `with tasks() as group:`
+- `Queue[T]`, `queue()`, `spawn`, `spawn detached`, `Task[T].result()`, `tasks()`, `select`, send-result errors, and cooperative cancellation
 - arithmetic, strings, string parsing/formatting, booleans, comparisons, and duration literals
 - `if`, `elif`, `else`, `for`, `while`, `match`, `break`, and `continue`
 - `print`

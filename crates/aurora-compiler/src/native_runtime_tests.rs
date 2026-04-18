@@ -955,8 +955,16 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
     assert_eq!(
         super::aurora_direct_value_type_matches(
             boxed_value(Value::Channel(ChannelValue::new())),
-            b"Channel".as_ptr(),
-            "Channel".len(),
+            b"Queue".as_ptr(),
+            "Queue".len(),
+        ),
+        1
+    );
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            boxed_value(Value::Channel(ChannelValue::new())),
+            b"Queue".as_ptr(),
+            "Queue".len(),
         ),
         1
     );
@@ -1736,7 +1744,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         value_type_name(&Value::Channel(ChannelValue::new())),
-        "Channel"
+        "Queue"
     );
     assert_eq!(
         value_type_name(&Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(
@@ -2224,7 +2232,7 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     );
     assert_eq!(
         value_type_name(&Value::Channel(ChannelValue::new())),
-        "Channel"
+        "Queue"
     );
     assert_eq!(
         value_type_name(&Value::Task(TaskValue::from_handle(thread::spawn(|| Ok(

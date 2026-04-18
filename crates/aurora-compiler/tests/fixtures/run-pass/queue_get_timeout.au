@@ -1,0 +1,10 @@
+def main() -> int32:
+    jobs = Queue[int32]()
+
+    match jobs.get(timeout=1ms):
+        case Option.Some(value):
+            print(value)
+        case Option.None:
+            print("timeout")
+
+    return 0

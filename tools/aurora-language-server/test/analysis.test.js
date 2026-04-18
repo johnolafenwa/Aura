@@ -56,7 +56,7 @@ const withSource = fs.readFileSync(
   "utf8"
 );
 const concurrencySource = fs.readFileSync(
-  path.join(__dirname, "../../../examples/concurrency/channels_spawn.au"),
+  path.join(__dirname, "../../../examples/concurrency/queues_spawn.au"),
   "utf8"
 );
 const structuredConcurrencySource = fs.readFileSync(
@@ -119,8 +119,8 @@ const matchBorrowSource = fs.readFileSync(
   path.join(__dirname, "../../../examples/enums/match_borrow.au"),
   "utf8"
 );
-const channelIterationSource = fs.readFileSync(
-  path.join(__dirname, "../../../examples/concurrency/channel_iteration.au"),
+const queueIterationSource = fs.readFileSync(
+  path.join(__dirname, "../../../examples/concurrency/queue_iteration.au"),
   "utf8"
 );
 
@@ -527,33 +527,33 @@ test("with example tracks scoped bindings for diagnostics and hover", () => {
   assert.match(hover.value, /local file: FileHandle/);
 });
 
-test("channel and task builtins appear in completions and diagnostics", () => {
+test("queue and task builtins appear in completions and diagnostics", () => {
   const diagnostics = diagnosticsForDocument(concurrencySource);
-  assert.ok(!diagnostics.some((diagnostic) => /unknown name `channel`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /unknown name `queue`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `spawn`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `task`/.test(diagnostic.message)));
-  assert.ok(!diagnostics.some((diagnostic) => /unknown name `ch`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /unknown name `jobs`/.test(diagnostic.message)));
 
-  const channelLine = concurrencySource.split("\n").findIndex((line) => line.includes("match ch.recv():"));
+  const channelLine = concurrencySource.split("\n").findIndex((line) => line.includes("match jobs.get():"));
   const channelText = concurrencySource.split("\n")[channelLine];
   const channelCharacter = channelText.indexOf(".") + 1;
   const channelItems = completionsForDocument(concurrencySource, channelLine, channelCharacter, ".");
   const channelNames = new Set(channelItems.map((item) => item.name));
-  assert.ok(channelNames.has("send"));
-  assert.ok(channelNames.has("recv"));
+  assert.ok(channelNames.has("put"));
+  assert.ok(channelNames.has("get"));
   assert.ok(channelNames.has("close"));
 
-  const taskLine = concurrencySource.split("\n").findIndex((line) => line.includes("task.join()"));
+  const taskLine = concurrencySource.split("\n").findIndex((line) => line.includes("task.result()"));
   const taskText = concurrencySource.split("\n")[taskLine];
   const taskCharacter = taskText.indexOf(".") + 1;
   const taskItems = completionsForDocument(concurrencySource, taskLine, taskCharacter, ".");
   const taskNames = new Set(taskItems.map((item) => item.name));
-  assert.ok(taskNames.has("join"));
+  assert.ok(taskNames.has("result"));
 });
 
 test("structured concurrency bindings and builtins do not report false diagnostics", () => {
   const diagnostics = diagnosticsForDocument(structuredConcurrencySource);
-  assert.ok(!diagnostics.some((diagnostic) => /unknown name `task_group`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /unknown name `tasks`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `group`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `value`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `cancelled`/.test(diagnostic.message)));
@@ -562,13 +562,13 @@ test("structured concurrency bindings and builtins do not report false diagnosti
 test("task-group member completion suggests structured concurrency methods", () => {
   const lineIndex = structuredConcurrencySource
     .split("\n")
-    .findIndex((line) => line.includes("group.spawn(worker, out.clone())"));
+    .findIndex((line) => line.includes("group.start(worker, out)"));
   const lineText = structuredConcurrencySource.split("\n")[lineIndex];
   const character = lineText.indexOf(".") + 1;
   const items = completionsForDocument(structuredConcurrencySource, lineIndex, character, ".");
   const names = new Set(items.map((item) => item.name));
 
-  assert.ok(names.has("spawn"));
+  assert.ok(names.has("start"));
   assert.ok(names.has("cancel"));
 });
 
@@ -588,7 +588,7 @@ test("structured concurrency helpers appear in top-level completions", () => {
   const items = completionsForDocument(cancellationSource, 0, 0, null);
   const names = new Set(items.map((item) => item.name));
 
-  assert.ok(names.has("task_group"));
+  assert.ok(names.has("tasks"));
   assert.ok(names.has("cancelled"));
 });
 
@@ -760,11 +760,11 @@ test("fallback analysis accepts pass and sleep builtins", () => {
   assert.ok(completions.some((item) => item.name === "sleep"));
 });
 
-test("fallback analysis accepts f-strings, copy classes, borrowed match, and channel iteration", () => {
+test("fallback analysis accepts f-strings, copy classes, borrowed match, and queue iteration", () => {
   assert.equal(diagnosticsForDocument(fStringsSource).length, 0);
   assert.equal(diagnosticsForDocument(copyClassSource).length, 0);
   assert.equal(diagnosticsForDocument(matchBorrowSource).length, 0);
-  assert.equal(diagnosticsForDocument(channelIterationSource).length, 0);
+  assert.equal(diagnosticsForDocument(queueIterationSource).length, 0);
 });
 
 test("fallback analysis helpers split top-level colons through nested delimiters", () => {
@@ -967,7 +967,7 @@ test("fallback analysis helper specializes builtin member return types and unres
   const byName = (group) =>
     new Map(_testing.builtinMembersFor(group).map((item) => [item.name, item]));
 
-  const channelMembers = byName("Channel");
+  const queueMembers = byName("Queue");
   const mapMembers = byName("Map");
   const vecMembers = byName("Vec");
   assert.equal(
@@ -1071,41 +1071,33 @@ test("fallback analysis helper specializes builtin member return types and unres
   );
 
   assert.equal(
-    _testing.specializeMemberReturnType("Channel[int32]", channelMembers.get("clone")),
-    "Channel[int32]"
-  );
-  assert.equal(
-    _testing.specializeMemberReturnType("Channel[int32]", channelMembers.get("recv")),
-    "Option[int32]"
-  );
-  assert.equal(
-    _testing.specializeMemberReturnType("Channel[int32]", channelMembers.get("send")),
+    _testing.specializeMemberReturnType("Queue[int32]", queueMembers.get("put")),
     "Result[None, SendError[int32]]"
   );
   assert.equal(
-    _testing.specializeMemberReturnType("Channel[int32]", channelMembers.get("close")),
+    _testing.specializeMemberReturnType("Queue[int32]", queueMembers.get("close")),
     "None"
   );
   assert.equal(
-    _testing.specializeMemberReturnType("Channel", channelMembers.get("recv")),
+    _testing.specializeMemberReturnType("Queue", queueMembers.get("get")),
     "Option[T]"
   );
   assert.equal(
-    _testing.specializeMemberReturnType("Channel[int32]", { name: "close", detail: "close() -> None" }),
+    _testing.specializeMemberReturnType("Queue[int32]", queueMembers.get("get")),
+    "Option[int32]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Queue[int32]", { name: "close", detail: "close() -> None" }),
     "None"
   );
 
   const taskMembers = byName("Task");
   assert.equal(
-    _testing.specializeMemberReturnType("Task[int32]", taskMembers.get("clone")),
-    "Task[int32]"
-  );
-  assert.equal(
-    _testing.specializeMemberReturnType("Task[int32]", taskMembers.get("join")),
+    _testing.specializeMemberReturnType("Task[int32]", taskMembers.get("result")),
     "int32"
   );
   assert.equal(
-    _testing.specializeMemberReturnType("Task", taskMembers.get("join")),
+    _testing.specializeMemberReturnType("Task", taskMembers.get("result")),
     "T"
   );
 
@@ -1115,7 +1107,7 @@ test("fallback analysis helper specializes builtin member return types and unres
     "None"
   );
   assert.equal(
-    _testing.specializeMemberReturnType("TaskGroup", taskGroupMembers.get("spawn")),
+    _testing.specializeMemberReturnType("TaskGroup", taskGroupMembers.get("start")),
     "Task[T]"
   );
   assert.equal(
@@ -1136,7 +1128,7 @@ test("fallback analysis helper specializes builtin member return types and unres
 });
 
 test("fallback analysis testing helpers expose builtin metadata and utility helpers", () => {
-  const builtinMemberGroups = ["float64", "String", "Vec", "Map", "Set", "MapEntry", "Channel", "Task", "TaskGroup"];
+  const builtinMemberGroups = ["float64", "String", "Vec", "Map", "Set", "MapEntry", "Queue", "Task", "TaskGroup"];
   for (const group of builtinMemberGroups) {
     const items = _testing.builtinMembersFor(group);
     assert.ok(items.length > 0, `expected builtin members for ${group}`);

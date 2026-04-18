@@ -1,78 +1,95 @@
 # Concurrency
 
-Aurora provides Go-style concurrency with typed channels, spawned tasks, task groups, and `select`. This chapter walks through each primitive with inline examples.
+Aurora's maintained concurrency surface is built around lightweight tasks, structured task groups, typed queues, and `select`. The runtime is still thread-based, but the primary user-facing model is:
 
-## Channels
+- `Queue[T]` and `queue()`
+- `spawn ...` for one-off tasks
+- `with tasks() as group:` for structured child tasks
+- `Task[T].result()` for waiting on a task result
+- `Queue.get(timeout=...)` for ordinary timeout cases
 
-A channel is a typed pipe for sending values between tasks. Create one with `channel()` and an explicit type annotation:
+Aurora now exposes only the maintained queue/task surface shown in this chapter.
+
+## Queues
+
+A queue is a typed pipe for sending values between tasks. Create one with `queue()` and an explicit type annotation:
 
 ```python
-ch: Channel[int32] = channel()
+jobs: Queue[int32] = queue()
 ```
 
-The bootstrap compiler requires the type annotation -- a bare `channel()` without an expected `Channel[T]` type is rejected.
+The bootstrap compiler still requires the expected type when you call bare `queue()`. If you want the type inline, use `queue[int32]()` or `Queue[int32]()`.
 
 Send and receive:
 
 ```python
-ch: Channel[int32] = channel()
-ch.send(42)
-msg = ch.recv()    # returns Option[int32]
+jobs: Queue[int32] = queue()
+jobs.put(42)
+msg = jobs.get()    # returns Option[int32]
 ```
 
-`recv()` returns `Option[T]`:
+`get()` returns `Option[T]`:
 
 - `Option.Some(value)` when a value is available
-- `Option.None` when the channel is closed and empty
+- `Option.None` when the queue is closed and empty
 
-`send(value)` returns `Result[None, SendError[T]]`:
+`put(value)` returns `Result[None, SendError[T]]`:
 
 - `Result.Ok(None)` on success
-- `Result.Err(SendError.Closed(value))` when the channel is already closed, returning the unsent value
+- `Result.Err(SendError.Closed(value))` when the queue is already closed, returning the unsent value
 
-Close a channel with `ch.close()`. After closing, no more values can be sent, but existing values can still be received.
+Close a queue with `jobs.close()`. After closing, no more values can be sent, but existing values can still be received.
 
-Channels are move types (see [06-ownership-and-borrowing.md](06-ownership-and-borrowing.md)). To share a channel between tasks, clone it:
+Queue handles are cheap copy-like references. Passing the same queue into multiple tasks shares the underlying queue without requiring `.clone()` in the common case.
 
-```python
-sender = ch.clone()
-```
+### Iterating Over A Queue
 
-Each clone is an independent handle to the same underlying channel. Cloning is cheap -- it does not copy messages.
-
-### Iterating Over A Channel
-
-You can iterate over a channel with `for`. The loop runs until the channel is closed and empty:
+You can iterate over a queue with `for`. The loop runs until the queue is closed and empty:
 
 ```python
-jobs: Channel[int32] = channel()
-jobs.send(1)
-jobs.send(2)
+jobs: Queue[int32] = queue()
+jobs.put(1)
+jobs.put(2)
 jobs.close()
 
 for job in jobs:
     print(job)
 ```
 
-See [examples/concurrency/channel_iteration.au](../examples/concurrency/channel_iteration.au).
+See [examples/concurrency/queue_iteration.au](../examples/concurrency/queue_iteration.au).
+
+### Timeout-Friendly Reads
+
+For everyday timeout handling, prefer `get(timeout=...)` over `select`:
+
+```python
+match jobs.get(timeout=100ms):
+    case Option.Some(value):
+        print(value)
+    case Option.None:
+        print("timeout")
+```
+
+See [examples/concurrency/queue_timeout.au](../examples/concurrency/queue_timeout.au).
 
 ## Spawning Tasks
 
 Use `spawn` with a named function call or an associated method without `self` to run work concurrently:
 
 ```python
-def producer(out: Channel[int32]):
-    out.send(2)
-    out.send(4)
+def producer(out: Queue[int32]) -> int32:
+    out.put(2)
+    out.put(4)
     out.close()
+    return 6
 
-ch: Channel[int32] = channel()
-task = spawn producer(ch.clone())
+jobs: Queue[int32] = queue()
+task = spawn producer(jobs)
 ```
 
-`spawn` returns a `Task[T]`. Call `.join()` to wait for the task to complete.
+`spawn` returns a `Task[T]`. Call `.result()` to wait for the task to complete and read its return value.
 
-`Task[T]` also supports `.clone()` for sharing a handle between multiple consumers.
+`Task[T]` also supports `.clone()` as a compatibility helper, but plain assignment and parameter passing are already cheap for task handles.
 
 Associated methods without `self` work too:
 
@@ -86,52 +103,54 @@ task = spawn Worker.run(4)
 
 ### Fire-And-Forget With `spawn detached`
 
-Use `spawn detached` when you do not need to join the result:
+Use `spawn detached` when you do not need a result handle:
 
 ```python
-spawn detached producer(ch.clone())
+spawn detached producer(jobs)
 ```
 
-Detached tasks do not return a `Task[T]` handle.
+Detached tasks do not return a `Task[T]`.
 
 ## Structured Task Groups
 
 Task groups tie child tasks to a lexical scope using `with`:
 
 ```python
-with task_group() as group:
-    group.spawn(worker, jobs.clone(), results.clone())
-    group.spawn(worker, jobs.clone(), results.clone())
-# leaving the block joins all child tasks
+with tasks() as group:
+    first = group.start(worker, jobs)
+    second = group.start(worker, jobs)
+
+    print(first.result())
+    print(second.result())
 ```
 
-When the `with` block ends, any still-running children are joined. This ensures spawned work does not outlive its parent scope.
+When the `with` block ends, any still-running children are joined. This keeps child work scoped to the parent block.
 
 ### Cooperative Cancellation
 
 Call `group.cancel()` to signal all tasks in the group to stop. Inside a task, call `cancelled()` to check whether cancellation was requested:
 
 ```python
-def worker(out: Channel[int32]):
+def worker(out: Queue[int32]):
     mut i: int32 = 0
     while i < 100:
         if cancelled():
-            return        # exit cleanly
-        out.send(i)
+            return
+        out.put(i)
         i += 1
 ```
 
-Cancellation is cooperative -- `cancelled()` returns `true` after `group.cancel()` is called, but the task must check it and decide to stop. Aurora does not forcibly kill tasks.
+Cancellation is cooperative. Aurora does not forcibly kill tasks.
 
 See [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_group_cancel.au).
 
 ## `select`
 
-`select` waits on multiple channel operations or a timer, executing whichever is ready first:
+`select` is still available for multi-arm coordination. It waits on multiple queue operations or a timer, executing whichever is ready first:
 
 ```python
 select:
-    case value = inbox.recv():
+    case value = inbox.get():
         match value:
             case Option.Some(message):
                 print(message)
@@ -143,14 +162,14 @@ select:
 
 ### Supported Arms
 
-- `case binding = channel.recv():` -- receive and bind
-- `case channel.recv():` -- receive and discard
-- `case binding = channel.send(value):` -- send and bind the result
-- `case channel.send(value):` -- send and discard the result
+- `case binding = queue.get():` -- receive and bind
+- `case queue.get():` -- receive and discard
+- `case binding = queue.put(value):` -- send and bind the result
+- `case queue.put(value):` -- send and discard the result
 - `case after(100ms):` -- timeout after a duration
 - `case after(duration=100ms):` -- named form
 
-When a `select` mixes `recv()` arms with an `after(...)` arm, a closed-and-empty channel does not starve the timer. The timeout arm still fires as an escape path.
+When a `select` mixes `get()` arms with an `after(...)` arm, a closed-and-empty queue does not starve the timer. The timeout arm still fires as an escape path.
 
 Duration literals include `ms` (milliseconds), `s` (seconds), and `m` (minutes).
 
@@ -167,29 +186,31 @@ See [examples/concurrency/sleep_builtin.au](../examples/concurrency/sleep_builti
 ## Full Example: Producer-Consumer
 
 ```python
-def producer(out: Channel[int32]):
-    out.send(2)
-    out.send(4)
+def producer(out: Queue[int32]) -> int32:
+    out.put(2)
+    out.put(4)
     out.close()
+    return 6
 
 def main() -> int32:
-    ch: Channel[int32] = channel()
-    task = spawn producer(ch.clone())
+    jobs: Queue[int32] = queue()
+    task = spawn producer(jobs)
 
     while true:
-        match ch.recv():
+        match jobs.get():
             case Option.Some(value):
                 print(value)
             case Option.None:
                 break
 
-    task.join()
+    print(task.result())
     return 0
 ```
 
 See:
 
-- [examples/concurrency/channels_spawn.au](../examples/concurrency/channels_spawn.au)
+- [examples/concurrency/queues_spawn.au](../examples/concurrency/queues_spawn.au)
+- [examples/concurrency/queue_timeout.au](../examples/concurrency/queue_timeout.au)
 - [examples/concurrency/send_result.au](../examples/concurrency/send_result.au)
 - [examples/concurrency/spawn_detached.au](../examples/concurrency/spawn_detached.au)
 - [examples/concurrency/select_send.au](../examples/concurrency/select_send.au)
@@ -204,3 +225,4 @@ The bootstrap concurrency runtime does not yet provide:
 - network or socket integration
 - general async I/O APIs
 - detached-task ownership restrictions from the full proposal
+- borrowed spawn parameters

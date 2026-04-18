@@ -95,11 +95,11 @@ Aurora provides three owned collection types and several runtime types:
 | `Set[T]` | Unordered collection of unique values |
 | `Option[T]` | A value that may or may not be present |
 | `Result[T, E]` | Success or failure |
-| `Channel[T]` | Typed channel for concurrency |
+| `Queue[T]` | Typed queue for concurrency |
 | `Task[T]` | Handle to a spawned task |
 | `TaskGroup` | Structured task scope |
 
-`Option[T]` and `Result[T, E]` are covered in [10-results-and-options.md](10-results-and-options.md). Channels and tasks are covered in [13-concurrency.md](13-concurrency.md).
+`Option[T]` and `Result[T, E]` are covered in [10-results-and-options.md](10-results-and-options.md). Queues and tasks are covered in [13-concurrency.md](13-concurrency.md).
 
 ## `Vec[T]` And List Literals
 

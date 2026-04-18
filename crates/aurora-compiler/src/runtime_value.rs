@@ -3,6 +3,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
+use std::time::{Duration as StdDuration, Instant};
 
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::{IntegerBounds, IntegerValue};
@@ -155,7 +156,7 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
             Value::Unit => "None".to_string(),
             Value::Instance(instance) => instance.class_name.clone(),
             Value::EnumVariant(variant) => variant.enum_name.clone(),
-            Value::Channel(_) => "Channel".to_string(),
+            Value::Channel(_) => "Queue".to_string(),
             Value::Task(_) => "Task".to_string(),
             Value::TaskGroup(_) => "TaskGroup".to_string(),
         }
@@ -324,6 +325,17 @@ fn wait_condvar<'a, T>(condvar: &Condvar, guard: MutexGuard<'a, T>) -> MutexGuar
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+fn wait_timeout_condvar<'a, T>(
+    condvar: &Condvar,
+    guard: MutexGuard<'a, T>,
+    timeout: StdDuration,
+) -> (MutexGuard<'a, T>, bool) {
+    let (guard, timeout_result) = condvar
+        .wait_timeout(guard, timeout)
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    (guard, timeout_result.timed_out())
+}
+
 impl PartialEq for VecValue {
     fn eq(&self, other: &Self) -> bool {
         self.elements == other.elements
@@ -442,9 +454,9 @@ impl Value {
             Value::Range(range) => format!("range({}, {})", range.start, range.end),
             Value::ModuleNamespace(namespace) => format!("<module {}>", namespace.path),
             Value::Unit => String::new(),
-            Value::Channel(_) => "<channel>".to_string(),
+            Value::Channel(_) => "<queue>".to_string(),
             Value::Task(_) => "<task>".to_string(),
-            Value::TaskGroup(_) => "<task_group>".to_string(),
+            Value::TaskGroup(_) => "<tasks>".to_string(),
             Value::Instance(instance) => {
                 let mut rendered = format!("{}(", instance.class_name);
                 for (index, (name, value)) in instance.fields.iter().enumerate() {
@@ -549,6 +561,29 @@ impl ChannelValue {
         }
     }
 
+    pub(crate) fn recv_timeout(&self, timeout: StdDuration) -> Option<Value> {
+        let deadline = Instant::now() + timeout;
+        let mut state = lock_mutex(&self.inner.state);
+        loop {
+            if let Some(value) = state.queue.pop_front() {
+                return Some(value);
+            }
+            if state.closed {
+                return None;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let remaining = deadline.saturating_duration_since(now);
+            let (next_state, timed_out) = wait_timeout_condvar(&self.inner.ready, state, remaining);
+            state = next_state;
+            if timed_out && state.queue.is_empty() {
+                return None;
+            }
+        }
+    }
+
     pub(crate) fn close(&self) {
         let mut state = lock_mutex(&self.inner.state);
         state.closed = true;
@@ -616,7 +651,7 @@ impl TaskValue {
         };
 
         let Some(handle) = handle else {
-            return Err("task join handle was not available".to_string());
+            return Err("task result handle was not available".to_string());
         };
 
         let result = handle

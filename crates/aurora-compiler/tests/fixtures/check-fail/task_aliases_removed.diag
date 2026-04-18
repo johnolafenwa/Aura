@@ -1,0 +1,5 @@
+error: unsupported method call `join` on `Task[int32]`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/task_aliases_removed.au:6:16
+  |
+6 |     print(task.join())
+  |                ^

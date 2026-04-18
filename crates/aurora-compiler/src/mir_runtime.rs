@@ -1322,12 +1322,13 @@ impl MirRuntime {
                     return build_range(values);
                 }
 
-                if name == "channel" {
+                if name == "queue" {
                     let values = evaluate_named_args(args, env)?;
                     if values.len() > 1 {
-                        return Err(Diagnostic::new(
-                            "`channel()` expects at most one optional `capacity` argument",
-                        ));
+                        return Err(Diagnostic::new(format!(
+                            "`{}()` expects at most one optional `capacity` argument",
+                            name
+                        )));
                     }
                     return Ok(Value::Channel(ChannelValue::new()));
                 }
@@ -1360,7 +1361,7 @@ impl MirRuntime {
                     }));
                 }
 
-                if name == "task_group" {
+                if name == "tasks" {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
                     return Ok(Value::TaskGroup(TaskGroupValue::new(&self.cancellation)));
@@ -1851,30 +1852,66 @@ impl MirRuntime {
         env: &Env,
     ) -> Result<Value> {
         match field {
-            "clone" => {
-                if !args.is_empty() {
-                    return Err(Diagnostic::new("`clone` does not take arguments"));
-                }
-                Ok(Value::Channel(channel))
-            }
-            "send" => {
+            "put" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["value"], values)?;
                 let Some(value) = bound.into_iter().next().map(|arg| arg.value) else {
-                    return Err(Diagnostic::new(
-                        "internal error: `send` should bind one argument",
-                    ));
+                    return Err(Diagnostic::new(format!(
+                        "internal error: `{}` should bind one argument",
+                        field
+                    )));
                 };
                 match channel.send(value) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(value) => Ok(result_err(send_error_closed(value))),
                 }
             }
-            "recv" => {
-                if !args.is_empty() {
-                    return Err(Diagnostic::new("`recv` does not take arguments"));
+            "get" => {
+                let values = evaluate_named_args(args, env)?;
+                if values.len() > 1 {
+                    return Err(Diagnostic::new(
+                        "`get()` expects at most one optional `timeout` argument",
+                    ));
                 }
-                Ok(match channel.recv_blocking() {
+                let timeout = if let Some(argument) = values.into_iter().next() {
+                    if argument
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| name != "timeout")
+                    {
+                        return Err(Diagnostic::new(
+                            "`get()` only accepts the named argument `timeout`",
+                        ));
+                    }
+                    match argument.value {
+                        Value::Duration(duration) => Some(duration),
+                        Value::Int(duration) => Some(duration.as_i128().ok_or_else(|| {
+                            Diagnostic::new(
+                                "`get(timeout=...)` duration must fit in signed timer range",
+                            )
+                        })?),
+                        other => {
+                            return Err(Diagnostic::new(format!(
+                                "`get(timeout=...)` expects a `Duration`, found `{}`",
+                                other.render()
+                            )))
+                        }
+                    }
+                } else {
+                    None
+                };
+                let received = if let Some(timeout) = timeout {
+                    let timeout = u64::try_from(timeout).map_err(|_| {
+                        Diagnostic::new(format!(
+                            "duration `{}ms` does not fit in the MIR runtime timer range",
+                            timeout
+                        ))
+                    })?;
+                    channel.recv_timeout(StdDuration::from_millis(timeout))
+                } else {
+                    channel.recv_blocking()
+                };
+                Ok(match received {
                     Some(value) => option_some(value),
                     None => option_none(),
                 })
@@ -2619,15 +2656,12 @@ impl MirRuntime {
         args: &[MirArg],
     ) -> Result<Value> {
         match field {
-            "clone" => {
+            "result" => {
                 if !args.is_empty() {
-                    return Err(Diagnostic::new("`clone` does not take arguments"));
-                }
-                Ok(Value::Task(task))
-            }
-            "join" => {
-                if !args.is_empty() {
-                    return Err(Diagnostic::new("`join` does not take arguments"));
+                    return Err(Diagnostic::new(format!(
+                        "`{}` does not take arguments",
+                        field
+                    )));
                 }
                 self.join_task(task)
             }
@@ -2653,14 +2687,15 @@ impl MirRuntime {
                 group.cancel();
                 Ok(Value::Unit)
             }
-            "spawn" => {
+            "start" => {
                 if args.is_empty() {
-                    return Err(Diagnostic::new(
-                        "`spawn` expects a target function followed by its arguments",
-                    ));
+                    return Err(Diagnostic::new(format!(
+                        "`{}` expects a target function followed by its arguments",
+                        field
+                    )));
                 }
                 Err(Diagnostic::new(
-                    "task-group spawn should lower to MIR `Spawn` directly",
+                    "task-group start should lower to MIR `Spawn` directly",
                 ))
             }
             _ => {

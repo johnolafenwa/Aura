@@ -1,0 +1,4 @@
+def main() -> int32:
+    ch: Queue[int32] = queue()
+    sender = ch.put
+    return 0

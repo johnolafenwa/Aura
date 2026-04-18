@@ -544,7 +544,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     assert_eq!(
         lowerer.builtin_runtime_member_return_type(
             &Type::Named("Task".to_string(), vec![Type::named("bool")]),
-            "join"
+            "result"
         ),
         Some(Type::named("bool"))
     );
@@ -584,8 +584,8 @@ def main() -> int32:
     mut counts = {"a": 1}
     counts["b"] = 2
     seen = Set{"a", "b"}
-    jobs: Channel[int32] = channel()
-    jobs.send(1)
+    jobs: Queue[int32] = queue()
+    jobs.put(1)
     if true and not false:
         counter.value += values[0]
     match "ok":
@@ -598,7 +598,7 @@ def main() -> int32:
     while counter.value < 10:
         break
     select:
-        case value = jobs.recv():
+        case value = jobs.get():
             print(value)
         case after(duration=0ms):
             counter.value += 10
@@ -607,7 +607,7 @@ def main() -> int32:
         print(resource.closed)
     print(consume(value=User(label="aurora")))
     task = spawn worker(counter.value)
-    print(task.join())
+    print(task.result())
     print(seen.contains("a"))
     print(counts.get("a"))
     return counter.value
