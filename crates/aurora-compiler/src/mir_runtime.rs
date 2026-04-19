@@ -16,11 +16,12 @@ use crate::mir::{
 };
 use crate::runtime_value::{
     cast_numeric_value, io_error, io_read_line, option_none, option_some, result_err, result_ok,
-    send_error_closed, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, RangeValue,
-    RunOutput, SetValue, TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue,
-    TlsListenerValue, TlsStreamValue, TryRecvResult, UdpDatagramValue, UdpSocketValue,
-    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    send_error_closed, sleep_with_runtime_scheduler, wait_for_select_progress, CancellationContext,
+    ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue, HttpListenerValue,
+    HttpResponseValue, InstanceValue, MapValue, RangeValue, RunOutput, RuntimeSchedulerWakeReason,
+    SetValue, TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue, TlsListenerValue,
+    TlsStreamValue, TryRecvResult, UdpDatagramValue, UdpSocketValue, UnixListenerValue,
+    UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -1015,7 +1016,7 @@ impl MirRuntime {
                 }
                 Ok(BlockOutcome::Goto(otherwise.clone()))
             }
-            Terminator::Select { arms, otherwise: _ } => self.execute_select(arms, env),
+            Terminator::Select { arms, otherwise } => self.execute_select(arms, otherwise, env),
             Terminator::Unreachable => Err(Diagnostic::new("reached unreachable MIR block")),
         }
     }
@@ -1477,7 +1478,10 @@ impl MirRuntime {
                             duration
                         ))
                     })?;
-                    std::thread::sleep(std::time::Duration::from_millis(duration));
+                    sleep_with_runtime_scheduler(
+                        std::time::Duration::from_millis(duration),
+                        Some(&self.cancellation),
+                    );
                     return Ok(Value::Unit);
                 }
 
@@ -2137,9 +2141,12 @@ impl MirRuntime {
                             timeout
                         ))
                     })?;
-                    channel.recv_timeout(StdDuration::from_millis(timeout))
+                    channel.recv_with_cancellation(
+                        Some(StdDuration::from_millis(timeout)),
+                        Some(&self.cancellation),
+                    )
                 } else {
-                    channel.recv_blocking()
+                    channel.recv_with_cancellation(None, Some(&self.cancellation))
                 };
                 Ok(match received {
                     Some(value) => option_some(value),
@@ -3245,7 +3252,14 @@ impl MirRuntime {
                 } else {
                     None
                 };
-                match HttpResponseValue::request_text(&method, &url, &body, headers, timeout) {
+                match HttpResponseValue::request_text(
+                    &method,
+                    &url,
+                    &body,
+                    headers,
+                    timeout,
+                    Some(&self.cancellation),
+                ) {
                     Ok(response) => Ok(result_ok(Value::HttpResponse(response))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
@@ -3266,7 +3280,14 @@ impl MirRuntime {
                 } else {
                     None
                 };
-                match HttpResponseValue::request_bytes(&method, &url, &bytes, headers, timeout) {
+                match HttpResponseValue::request_bytes(
+                    &method,
+                    &url,
+                    &bytes,
+                    headers,
+                    timeout,
+                    Some(&self.cancellation),
+                ) {
                     Ok(response) => Ok(result_ok(Value::HttpResponse(response))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
@@ -3680,7 +3701,7 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
                 let timeout =
                     expect_optional_timeout(Some(&bound[0].value), "accept(timeout=...)")?;
-                match listener.accept(timeout) {
+                match listener.accept(timeout, Some(&self.cancellation)) {
                     Ok(exchange) => Ok(result_ok(Value::HttpExchange(exchange))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
@@ -4080,6 +4101,7 @@ impl MirRuntime {
     fn execute_select(
         &mut self,
         arms: &[crate::mir::MirSelectArm],
+        otherwise: &str,
         env: &mut Env,
     ) -> Result<BlockOutcome> {
         let deadlines = arms
@@ -4126,7 +4148,33 @@ impl MirRuntime {
                     return Ok(BlockOutcome::Goto(arm.label.clone()));
                 }
             }
-            thread::sleep(StdDuration::from_millis(1));
+            let recv_channels = arms
+                .iter()
+                .filter_map(|arm| match &arm.kind {
+                    MirSelectKind::Recv { channel } => match self.evaluate_operand(channel, env) {
+                        Ok(Value::Channel(channel)) => Some(Ok(channel)),
+                        Ok(other) => Some(Err(Diagnostic::new(format!(
+                            "MIR `select` expected `Queue`, found `{}`",
+                            other.render()
+                        )))),
+                        Err(error) => Some(Err(error)),
+                    },
+                    _ => None,
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let active_deadlines = deadlines
+                .iter()
+                .filter_map(|deadline| deadline.as_ref().copied())
+                .collect::<Vec<_>>();
+            let wake_reason = wait_for_select_progress(
+                &recv_channels,
+                ignore_closed_recv,
+                &active_deadlines,
+                Some(&self.cancellation),
+            );
+            if matches!(wake_reason, RuntimeSchedulerWakeReason::Cancelled) {
+                return Ok(BlockOutcome::Goto(otherwise.to_string()));
+            }
         }
     }
 

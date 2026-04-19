@@ -379,7 +379,7 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `udp:ping`
     - `ping`
 - `http_roundtrip.au`
-  - blocking HTTP listener/request helpers plus `HttpExchange` and `HttpResponse`
+  - maintained HTTP listener/request helpers on the shared evented runtime scheduler plus `HttpExchange` and `HttpResponse`
   - prints:
     - `200`
     - `POST:/hello:body:ok`

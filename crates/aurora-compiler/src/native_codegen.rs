@@ -259,6 +259,8 @@ struct NativeCodegen<'a> {
     instance_set_field: FuncId,
     arg_buffer_new: FuncId,
     arg_buffer_store: FuncId,
+    i64_buffer_new: FuncId,
+    i64_buffer_store: FuncId,
     channel_new: FuncId,
     channel_send: FuncId,
     channel_recv: FuncId,
@@ -374,7 +376,7 @@ struct NativeCodegen<'a> {
     deadline_new: FuncId,
     deadline_ready: FuncId,
     deadline_drop: FuncId,
-    sleep_ms: FuncId,
+    select_wait: FuncId,
     sleep_value: FuncId,
     spawn_call: FuncId,
     string_data: HashMap<Vec<u8>, DataId>,
@@ -615,6 +617,8 @@ impl<'a> NativeCodegen<'a> {
             instance_set_field => ("aurora_direct_instance_set_field", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             arg_buffer_new => ("aurora_direct_arg_buffer_new", [types::I64], Some(types::I64)),
             arg_buffer_store => ("aurora_direct_arg_buffer_store", [types::I64, types::I64, types::I64], None),
+            i64_buffer_new => ("aurora_direct_i64_buffer_new", [types::I64], Some(types::I64)),
+            i64_buffer_store => ("aurora_direct_i64_buffer_store", [types::I64, types::I64, types::I64], None),
             channel_new => ("aurora_direct_channel_new", [], Some(types::I64)),
             channel_send => ("aurora_direct_channel_send", [types::I64, types::I64], Some(types::I64)),
             channel_recv => ("aurora_direct_channel_recv", [types::I64], Some(types::I64)),
@@ -730,7 +734,7 @@ impl<'a> NativeCodegen<'a> {
             deadline_new => ("aurora_direct_deadline_new", [types::I64], Some(types::I64)),
             deadline_ready => ("aurora_direct_deadline_ready", [types::I64], Some(types::I64)),
             deadline_drop => ("aurora_direct_deadline_drop", [types::I64], None),
-            sleep_ms => ("aurora_direct_sleep_ms", [types::I64], None),
+            select_wait => ("aurora_direct_select_wait", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             sleep_value => ("aurora_direct_sleep_value", [types::I64], Some(types::I64)),
             spawn_call => ("aurora_direct_spawn_call", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
         );
@@ -903,6 +907,8 @@ impl<'a> NativeCodegen<'a> {
             instance_set_field,
             arg_buffer_new,
             arg_buffer_store,
+            i64_buffer_new,
+            i64_buffer_store,
             channel_new,
             channel_send,
             channel_recv,
@@ -1018,7 +1024,7 @@ impl<'a> NativeCodegen<'a> {
             deadline_new,
             deadline_ready,
             deadline_drop,
-            sleep_ms,
+            select_wait,
             sleep_value,
             spawn_call,
             string_data: HashMap::new(),
@@ -1531,6 +1537,12 @@ impl<'a> NativeCodegen<'a> {
         let arg_buffer_store = self
             .object
             .declare_func_in_func(self.arg_buffer_store, builder.func);
+        let i64_buffer_new = self
+            .object
+            .declare_func_in_func(self.i64_buffer_new, builder.func);
+        let i64_buffer_store = self
+            .object
+            .declare_func_in_func(self.i64_buffer_store, builder.func);
         let channel_new = self
             .object
             .declare_func_in_func(self.channel_new, builder.func);
@@ -1874,9 +1886,9 @@ impl<'a> NativeCodegen<'a> {
         let deadline_drop = self
             .object
             .declare_func_in_func(self.deadline_drop, builder.func);
-        let sleep_ms = self
+        let select_wait = self
             .object
-            .declare_func_in_func(self.sleep_ms, builder.func);
+            .declare_func_in_func(self.select_wait, builder.func);
         let sleep_value = self
             .object
             .declare_func_in_func(self.sleep_value, builder.func);
@@ -1999,6 +2011,8 @@ impl<'a> NativeCodegen<'a> {
             instance_set_field,
             arg_buffer_new,
             arg_buffer_store,
+            i64_buffer_new,
+            i64_buffer_store,
             channel_new,
             channel_send,
             channel_recv,
@@ -2114,7 +2128,7 @@ impl<'a> NativeCodegen<'a> {
             deadline_new,
             deadline_ready,
             deadline_drop,
-            sleep_ms,
+            select_wait,
             sleep_value,
             spawn_call,
         };
@@ -2420,6 +2434,8 @@ struct FunctionCompiler<'a> {
     instance_set_field: cranelift_codegen::ir::FuncRef,
     arg_buffer_new: cranelift_codegen::ir::FuncRef,
     arg_buffer_store: cranelift_codegen::ir::FuncRef,
+    i64_buffer_new: cranelift_codegen::ir::FuncRef,
+    i64_buffer_store: cranelift_codegen::ir::FuncRef,
     channel_new: cranelift_codegen::ir::FuncRef,
     channel_send: cranelift_codegen::ir::FuncRef,
     channel_recv: cranelift_codegen::ir::FuncRef,
@@ -2535,7 +2551,7 @@ struct FunctionCompiler<'a> {
     deadline_new: cranelift_codegen::ir::FuncRef,
     deadline_ready: cranelift_codegen::ir::FuncRef,
     deadline_drop: cranelift_codegen::ir::FuncRef,
-    sleep_ms: cranelift_codegen::ir::FuncRef,
+    select_wait: cranelift_codegen::ir::FuncRef,
     sleep_value: cranelift_codegen::ir::FuncRef,
     spawn_call: cranelift_codegen::ir::FuncRef,
 }
@@ -2775,8 +2791,8 @@ impl<'a> FunctionCompiler<'a> {
                 self.release_all_temporary_owned();
                 self.builder.ins().jump(self.blocks[otherwise], &[]);
             }
-            Terminator::Select { arms, .. } => {
-                self.compile_select(arms)?;
+            Terminator::Select { arms, otherwise } => {
+                self.compile_select(arms, otherwise)?;
             }
             Terminator::ForRange {
                 binding,
@@ -7623,7 +7639,11 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn compile_select(&mut self, arms: &[MirSelectArm]) -> std::result::Result<(), String> {
+    fn compile_select(
+        &mut self,
+        arms: &[MirSelectArm],
+        otherwise: &str,
+    ) -> std::result::Result<(), String> {
         let loop_block = self.builder.create_block();
         let ignore_closed_recv = arms
             .iter()
@@ -7770,8 +7790,99 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
 
-        let one_ms = self.builder.ins().iconst(types::I64, 1);
-        self.builder.ins().call(self.sleep_ms, &[one_ms]);
+        let recv_arm_count = arms
+            .iter()
+            .filter(|arm| matches!(arm.kind, MirSelectKind::Recv { .. }))
+            .count();
+        let recv_buffer = if recv_arm_count == 0 {
+            self.builder.ins().iconst(types::I64, 0)
+        } else {
+            let count_value = self.builder.ins().iconst(
+                types::I64,
+                i64::try_from(recv_arm_count)
+                    .map_err(|_| "direct backend select recv arm count overflowed i64")?,
+            );
+            let call = self.builder.ins().call(self.i64_buffer_new, &[count_value]);
+            let buffer = self.builder.inst_results(call)[0];
+            let mut recv_index = 0usize;
+            for arm in arms {
+                if let MirSelectKind::Recv { channel } = &arm.kind {
+                    let channel = self.load_operand(channel)?;
+                    let channel = self.ensure_opaque(channel)?;
+                    let index = self.builder.ins().iconst(
+                        types::I64,
+                        i64::try_from(recv_index)
+                            .map_err(|_| "direct backend select recv index overflowed i64")?,
+                    );
+                    self.builder
+                        .ins()
+                        .call(self.i64_buffer_store, &[buffer, index, channel.values[0]]);
+                    recv_index += 1;
+                }
+            }
+            buffer
+        };
+
+        let deadline_buffer = if deadline_params.is_empty() {
+            self.builder.ins().iconst(types::I64, 0)
+        } else {
+            let count_value = self.builder.ins().iconst(
+                types::I64,
+                i64::try_from(deadline_params.len())
+                    .map_err(|_| "direct backend select deadline count overflowed i64")?,
+            );
+            let call = self.builder.ins().call(self.i64_buffer_new, &[count_value]);
+            let buffer = self.builder.inst_results(call)[0];
+            for (index, deadline) in deadline_params.iter().enumerate() {
+                let index = self.builder.ins().iconst(
+                    types::I64,
+                    i64::try_from(index)
+                        .map_err(|_| "direct backend select deadline index overflowed i64")?,
+                );
+                self.builder
+                    .ins()
+                    .call(self.i64_buffer_store, &[buffer, index, *deadline]);
+            }
+            buffer
+        };
+
+        let recv_count_value = self.builder.ins().iconst(
+            types::I64,
+            i64::try_from(recv_arm_count)
+                .map_err(|_| "direct backend select recv arm count overflowed i64")?,
+        );
+        let deadline_count_value = self.builder.ins().iconst(
+            types::I64,
+            i64::try_from(deadline_params.len())
+                .map_err(|_| "direct backend select deadline count overflowed i64")?,
+        );
+        let ignore_closed = self
+            .builder
+            .ins()
+            .iconst(types::I64, if ignore_closed_recv { 1 } else { 0 });
+        let call = self.builder.ins().call(
+            self.select_wait,
+            &[
+                recv_buffer,
+                recv_count_value,
+                ignore_closed,
+                deadline_buffer,
+                deadline_count_value,
+            ],
+        );
+        let cancelled = self.builder.inst_results(call)[0];
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let cancelled = self.builder.ins().icmp(IntCC::NotEqual, cancelled, zero);
+        let cancelled_block = self.builder.create_block();
+        let continue_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(cancelled, cancelled_block, &[], continue_block, &[]);
+        self.builder.switch_to_block(cancelled_block);
+        self.drop_deadlines(&deadline_params);
+        self.builder.ins().jump(self.blocks[otherwise], &[]);
+        self.builder.seal_block(cancelled_block);
+        self.builder.switch_to_block(continue_block);
         self.builder.ins().jump(loop_block, &deadline_params);
         Ok(())
     }

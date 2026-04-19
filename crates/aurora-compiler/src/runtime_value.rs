@@ -6,20 +6,20 @@ use std::net::{
     Shutdown, TcpListener as StdTcpListener, TcpStream as StdTcpStream, ToSocketAddrs,
     UdpSocket as StdUdpSocket,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration as StdDuration, Instant};
 
+use httparse::{
+    Request as HttpParseRequest, Response as HttpParseResponse, Status as HttpParseStatus,
+};
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection};
 use rustls_pemfile::{certs, private_key};
-use tiny_http::{
-    Method as TinyHttpMethod, Request as TinyHttpRequest, Response as TinyHttpResponse,
-};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{accept as websocket_accept, client_tls_with_config, Message, WebSocket};
-use ureq::AgentBuilder;
+use url::Url;
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -123,7 +123,6 @@ pub struct ChannelValue {
 
 struct ChannelState {
     state: Mutex<ChannelInner>,
-    ready: Condvar,
 }
 
 struct ChannelInner {
@@ -242,11 +241,11 @@ struct UdpSocketState {
 }
 
 struct HttpListenerState {
-    server: Mutex<Option<Arc<tiny_http::Server>>>,
+    listener: Mutex<Option<StdTcpListener>>,
 }
 
 struct HttpExchangeState {
-    request: Mutex<Option<TinyHttpRequest>>,
+    stream: Mutex<Option<TcpStreamValue>>,
     method: String,
     path: String,
     headers: Vec<(String, String)>,
@@ -304,6 +303,37 @@ enum TaskHandle {
 #[derive(Clone, Default)]
 pub(crate) struct CancellationContext {
     flags: Vec<Arc<AtomicBool>>,
+}
+
+#[derive(Clone)]
+struct RuntimeSchedulerRegistration {
+    channels: Vec<ChannelValue>,
+    ignore_closed_channels: bool,
+    deadline: Option<Instant>,
+    cancellation: Option<CancellationContext>,
+    waiter: Arc<RuntimeSchedulerWaiter>,
+}
+
+struct RuntimeSchedulerWaiter {
+    state: Mutex<Option<RuntimeSchedulerWakeReason>>,
+    ready: Condvar,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RuntimeSchedulerWakeReason {
+    Ready,
+    TimedOut,
+    Cancelled,
+}
+
+struct RuntimeSchedulerState {
+    registrations: BTreeMap<u64, RuntimeSchedulerRegistration>,
+}
+
+struct RuntimeScheduler {
+    state: Mutex<RuntimeSchedulerState>,
+    ready: Condvar,
+    next_id: AtomicU64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -674,6 +704,224 @@ fn wait_timeout_condvar<'a, T>(
     (guard, timeout_result.timed_out())
 }
 
+impl RuntimeSchedulerWaiter {
+    fn finish(&self, reason: RuntimeSchedulerWakeReason) {
+        let mut state = lock_mutex(&self.state);
+        if state.is_none() {
+            *state = Some(reason);
+            self.ready.notify_all();
+        }
+    }
+
+    fn wait(&self) -> RuntimeSchedulerWakeReason {
+        let mut state = lock_mutex(&self.state);
+        loop {
+            if let Some(reason) = *state {
+                return reason;
+            }
+            state = wait_condvar(&self.ready, state);
+        }
+    }
+}
+
+struct RuntimeSchedulerHandle {
+    id: u64,
+    waiter: Arc<RuntimeSchedulerWaiter>,
+    scheduler: Arc<RuntimeScheduler>,
+}
+
+impl RuntimeSchedulerHandle {
+    fn wait(&self) -> RuntimeSchedulerWakeReason {
+        self.waiter.wait()
+    }
+}
+
+impl Drop for RuntimeSchedulerHandle {
+    fn drop(&mut self) {
+        self.scheduler.unregister(self.id);
+    }
+}
+
+impl RuntimeScheduler {
+    fn start() -> Arc<Self> {
+        let scheduler = Arc::new(Self {
+            state: Mutex::new(RuntimeSchedulerState {
+                registrations: BTreeMap::new(),
+            }),
+            ready: Condvar::new(),
+            next_id: AtomicU64::new(1),
+        });
+        let worker = scheduler.clone();
+        std::thread::spawn(move || worker.run());
+        scheduler
+    }
+
+    fn register(
+        &self,
+        channels: Vec<ChannelValue>,
+        ignore_closed_channels: bool,
+        deadline: Option<Instant>,
+        cancellation: Option<CancellationContext>,
+    ) -> RuntimeSchedulerHandle {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let waiter = Arc::new(RuntimeSchedulerWaiter {
+            state: Mutex::new(None),
+            ready: Condvar::new(),
+        });
+        let registration = RuntimeSchedulerRegistration {
+            channels,
+            ignore_closed_channels,
+            deadline,
+            cancellation,
+            waiter: waiter.clone(),
+        };
+        lock_mutex(&self.state)
+            .registrations
+            .insert(id, registration);
+        self.ready.notify_all();
+        RuntimeSchedulerHandle {
+            id,
+            waiter,
+            scheduler: runtime_scheduler().clone(),
+        }
+    }
+
+    fn unregister(&self, id: u64) {
+        let mut state = lock_mutex(&self.state);
+        if state.registrations.remove(&id).is_some() {
+            self.ready.notify_all();
+        }
+    }
+
+    fn notify(&self) {
+        self.ready.notify_all();
+    }
+
+    fn run(self: Arc<Self>) {
+        loop {
+            let mut state = lock_mutex(&self.state);
+            while state.registrations.is_empty() {
+                state = wait_condvar(&self.ready, state);
+            }
+
+            let mut finished = Vec::new();
+            let mut next_deadline = None;
+            let now = Instant::now();
+            for (id, registration) in &state.registrations {
+                if registration
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(CancellationContext::is_cancelled)
+                {
+                    registration
+                        .waiter
+                        .finish(RuntimeSchedulerWakeReason::Cancelled);
+                    finished.push(*id);
+                    continue;
+                }
+
+                if registration.channels.iter().any(|channel| {
+                    channel.is_ready_for_scheduler_recv(registration.ignore_closed_channels)
+                }) {
+                    registration
+                        .waiter
+                        .finish(RuntimeSchedulerWakeReason::Ready);
+                    finished.push(*id);
+                    continue;
+                }
+
+                if let Some(deadline) = registration.deadline {
+                    if now >= deadline {
+                        registration
+                            .waiter
+                            .finish(RuntimeSchedulerWakeReason::TimedOut);
+                        finished.push(*id);
+                        continue;
+                    }
+                    next_deadline = Some(match next_deadline {
+                        Some(current) => std::cmp::min(current, deadline),
+                        None => deadline,
+                    });
+                }
+            }
+
+            for id in finished {
+                state.registrations.remove(&id);
+            }
+
+            if state.registrations.is_empty() {
+                continue;
+            }
+
+            state = if let Some(deadline) = next_deadline {
+                let now = Instant::now();
+                let timeout = deadline.saturating_duration_since(now);
+                wait_timeout_condvar(&self.ready, state, timeout).0
+            } else {
+                wait_condvar(&self.ready, state)
+            };
+            drop(state);
+        }
+    }
+}
+
+fn runtime_scheduler() -> &'static Arc<RuntimeScheduler> {
+    static SCHEDULER: OnceLock<Arc<RuntimeScheduler>> = OnceLock::new();
+    SCHEDULER.get_or_init(RuntimeScheduler::start)
+}
+
+fn wait_for_runtime_scheduler(
+    channels: Vec<ChannelValue>,
+    ignore_closed_channels: bool,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> RuntimeSchedulerWakeReason {
+    if cancellation.is_some_and(CancellationContext::is_cancelled) {
+        return RuntimeSchedulerWakeReason::Cancelled;
+    }
+    if channels
+        .iter()
+        .any(|channel| channel.is_ready_for_scheduler_recv(ignore_closed_channels))
+    {
+        return RuntimeSchedulerWakeReason::Ready;
+    }
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return RuntimeSchedulerWakeReason::TimedOut;
+    }
+
+    runtime_scheduler()
+        .register(
+            channels,
+            ignore_closed_channels,
+            deadline,
+            cancellation.cloned(),
+        )
+        .wait()
+}
+
+pub(crate) fn wait_for_select_progress(
+    channels: &[ChannelValue],
+    ignore_closed_channels: bool,
+    deadlines: &[Instant],
+    cancellation: Option<&CancellationContext>,
+) -> RuntimeSchedulerWakeReason {
+    let deadline = deadlines.iter().copied().min();
+    wait_for_runtime_scheduler(
+        channels.to_vec(),
+        ignore_closed_channels,
+        deadline,
+        cancellation,
+    )
+}
+
+pub(crate) fn sleep_with_runtime_scheduler(
+    duration: StdDuration,
+    cancellation: Option<&CancellationContext>,
+) {
+    let deadline = Instant::now().checked_add(duration);
+    let _ = wait_for_runtime_scheduler(Vec::new(), false, deadline, cancellation);
+}
+
 impl PartialEq for VecValue {
     fn eq(&self, other: &Self) -> bool {
         self.elements == other.elements
@@ -886,7 +1134,6 @@ impl ChannelValue {
                     queue: VecDeque::new(),
                     closed: false,
                 }),
-                ready: Condvar::new(),
             }),
         }
     }
@@ -900,6 +1147,11 @@ pub(crate) enum TryRecvResult {
 }
 
 impl ChannelValue {
+    fn is_ready_for_scheduler_recv(&self, ignore_closed: bool) -> bool {
+        let state = lock_mutex(&self.inner.state);
+        !state.queue.is_empty() || (!ignore_closed && state.closed)
+    }
+
     pub(crate) fn try_recv(&self) -> TryRecvResult {
         let mut state = lock_mutex(&self.inner.state);
         if let Some(value) = state.queue.pop_front() {
@@ -918,42 +1170,28 @@ impl ChannelValue {
         }
         state.queue.push_back(value);
         drop(state);
-        self.inner.ready.notify_one();
+        runtime_scheduler().notify();
         Ok(())
     }
 
-    pub(crate) fn recv_blocking(&self) -> Option<Value> {
-        let mut state = lock_mutex(&self.inner.state);
+    pub(crate) fn recv_with_cancellation(
+        &self,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> Option<Value> {
+        let deadline = deadline_from_timeout(timeout);
         loop {
-            if let Some(value) = state.queue.pop_front() {
-                return Some(value);
+            match self.try_recv() {
+                TryRecvResult::Value(value) => return Some(value),
+                TryRecvResult::Closed => return None,
+                TryRecvResult::Empty => {}
             }
-            if state.closed {
-                return None;
-            }
-            state = wait_condvar(&self.inner.ready, state);
-        }
-    }
 
-    pub(crate) fn recv_timeout(&self, timeout: StdDuration) -> Option<Value> {
-        let deadline = Instant::now() + timeout;
-        let mut state = lock_mutex(&self.inner.state);
-        loop {
-            if let Some(value) = state.queue.pop_front() {
-                return Some(value);
-            }
-            if state.closed {
-                return None;
-            }
-            let now = Instant::now();
-            if now >= deadline {
-                return None;
-            }
-            let remaining = deadline.saturating_duration_since(now);
-            let (next_state, timed_out) = wait_timeout_condvar(&self.inner.ready, state, remaining);
-            state = next_state;
-            if timed_out && state.queue.is_empty() {
-                return None;
+            match wait_for_runtime_scheduler(vec![self.clone()], false, deadline, cancellation) {
+                RuntimeSchedulerWakeReason::Ready => {}
+                RuntimeSchedulerWakeReason::TimedOut | RuntimeSchedulerWakeReason::Cancelled => {
+                    return None;
+                }
             }
         }
     }
@@ -962,7 +1200,7 @@ impl ChannelValue {
         let mut state = lock_mutex(&self.inner.state);
         state.closed = true;
         drop(state);
-        self.inner.ready.notify_all();
+        runtime_scheduler().notify();
     }
 }
 
@@ -1486,20 +1724,342 @@ fn parse_http_response(
     }
 }
 
-fn tiny_http_method_name(method: &TinyHttpMethod) -> String {
-    match method {
-        TinyHttpMethod::Get => "GET",
-        TinyHttpMethod::Post => "POST",
-        TinyHttpMethod::Put => "PUT",
-        TinyHttpMethod::Delete => "DELETE",
-        TinyHttpMethod::Head => "HEAD",
-        TinyHttpMethod::Options => "OPTIONS",
-        TinyHttpMethod::Connect => "CONNECT",
-        TinyHttpMethod::Patch => "PATCH",
-        TinyHttpMethod::Trace => "TRACE",
-        TinyHttpMethod::NonStandard(name) => name.as_str(),
+const MAX_HTTP_HEADERS: usize = 64;
+const MAX_HTTP_MESSAGE_BYTES: usize = 1024 * 1024;
+
+fn http_reason_phrase(status: i32) -> &'static str {
+    match status {
+        100 => "Continue",
+        101 => "Switching Protocols",
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        204 => "No Content",
+        301 => "Moved Permanently",
+        302 => "Found",
+        304 => "Not Modified",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        413 => "Payload Too Large",
+        415 => "Unsupported Media Type",
+        426 => "Upgrade Required",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        _ => "",
     }
-    .to_string()
+}
+
+fn http_header_name_eq(name: &str, expected: &str) -> bool {
+    name.eq_ignore_ascii_case(expected)
+}
+
+fn parse_http_headers(headers: &[httparse::Header<'_>]) -> io::Result<Vec<(String, String)>> {
+    headers
+        .iter()
+        .map(|header| {
+            let value = std::str::from_utf8(header.value).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("received non-UTF-8 HTTP header value: {}", error),
+                )
+            })?;
+            Ok((header.name.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn parse_http_content_length(headers: &[(String, String)]) -> io::Result<Option<usize>> {
+    let mut content_length = None;
+    for (name, value) in headers {
+        if http_header_name_eq(name, "Transfer-Encoding") && !value.eq_ignore_ascii_case("identity")
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Aurora HTTP currently does not support transfer-encoding other than identity",
+            ));
+        }
+        if http_header_name_eq(name, "Content-Length") {
+            let parsed = value.parse::<usize>().map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid HTTP content length `{}`: {}", value, error),
+                )
+            })?;
+            if let Some(existing) = content_length {
+                if existing != parsed {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "conflicting HTTP content-length headers",
+                    ));
+                }
+            } else {
+                content_length = Some(parsed);
+            }
+        }
+    }
+    Ok(content_length)
+}
+
+fn push_http_chunk(buffer: &mut Vec<u8>, chunk: &[u8]) -> io::Result<()> {
+    if buffer.len().saturating_add(chunk.len()) > MAX_HTTP_MESSAGE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "HTTP message exceeds the supported size limit of {} bytes",
+                MAX_HTTP_MESSAGE_BYTES
+            ),
+        ));
+    }
+    buffer.extend_from_slice(chunk);
+    Ok(())
+}
+
+fn parse_http_request_head(
+    buffer: &[u8],
+) -> io::Result<Option<(usize, String, String, Vec<(String, String)>, usize)>> {
+    let mut raw_headers = [httparse::EMPTY_HEADER; MAX_HTTP_HEADERS];
+    let mut request = HttpParseRequest::new(&mut raw_headers);
+    match request.parse(buffer).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid HTTP request: {}", error),
+        )
+    })? {
+        HttpParseStatus::Complete(header_len) => {
+            let method = request
+                .method
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "HTTP request missing method")
+                })?
+                .to_string();
+            let path = request
+                .path
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "HTTP request missing path")
+                })?
+                .to_string();
+            let headers = parse_http_headers(request.headers)?;
+            let content_length = parse_http_content_length(&headers)?.unwrap_or(0);
+            Ok(Some((header_len, method, path, headers, content_length)))
+        }
+        HttpParseStatus::Partial => Ok(None),
+    }
+}
+
+fn parse_http_response_head(
+    buffer: &[u8],
+) -> io::Result<Option<(usize, i32, String, Vec<(String, String)>, Option<usize>)>> {
+    let mut raw_headers = [httparse::EMPTY_HEADER; MAX_HTTP_HEADERS];
+    let mut response = HttpParseResponse::new(&mut raw_headers);
+    match response.parse(buffer).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid HTTP response: {}", error),
+        )
+    })? {
+        HttpParseStatus::Complete(header_len) => {
+            let status = i32::from(response.code.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "HTTP response missing status code",
+                )
+            })?);
+            let reason = response
+                .reason
+                .unwrap_or(http_reason_phrase(status))
+                .to_string();
+            let headers = parse_http_headers(response.headers)?;
+            let content_length = parse_http_content_length(&headers)?;
+            Ok(Some((header_len, status, reason, headers, content_length)))
+        }
+        HttpParseStatus::Partial => Ok(None),
+    }
+}
+
+fn read_http_request_from_stream(
+    stream: &mut StdTcpStream,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<(String, String, Vec<(String, String)>, Vec<u8>)> {
+    let mut buffer = Vec::new();
+    let (header_len, method, path, headers, content_length) = loop {
+        if let Some(parsed) = parse_http_request_head(&buffer)? {
+            break parsed;
+        }
+        let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "stream closed before a complete HTTP request was received",
+            ));
+        };
+        push_http_chunk(&mut buffer, &chunk)?;
+    };
+
+    while buffer.len() < header_len.saturating_add(content_length) {
+        let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "stream closed before the HTTP request body was fully received",
+            ));
+        };
+        push_http_chunk(&mut buffer, &chunk)?;
+    }
+
+    let body_end = header_len.saturating_add(content_length);
+    Ok((method, path, headers, buffer[header_len..body_end].to_vec()))
+}
+
+fn read_http_response_from_stream(
+    stream: &mut StdTcpStream,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<HttpResponseValue> {
+    let mut buffer = Vec::new();
+    let (header_len, status, reason, headers, content_length) = loop {
+        if let Some(parsed) = parse_http_response_head(&buffer)? {
+            break parsed;
+        }
+        let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "stream closed before a complete HTTP response was received",
+            ));
+        };
+        push_http_chunk(&mut buffer, &chunk)?;
+    };
+
+    let body = if let Some(content_length) = content_length {
+        while buffer.len() < header_len.saturating_add(content_length) {
+            let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "stream closed before the HTTP response body was fully received",
+                ));
+            };
+            push_http_chunk(&mut buffer, &chunk)?;
+        }
+        buffer[header_len..header_len.saturating_add(content_length)].to_vec()
+    } else {
+        let mut body = buffer[header_len..].to_vec();
+        let rest = read_all_with_deadline(stream, deadline, cancellation)?;
+        push_http_chunk(&mut body, &rest)?;
+        body
+    };
+
+    Ok(parse_http_response(status, reason, headers, body))
+}
+
+fn build_http_request_bytes(
+    method: &str,
+    url: &Url,
+    body: &[u8],
+    headers: Vec<(String, String)>,
+) -> Vec<u8> {
+    let mut path = if url.path().is_empty() {
+        "/".to_string()
+    } else {
+        url.path().to_string()
+    };
+    if let Some(query) = url.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+
+    let default_port = url.port_or_known_default();
+    let host = match (url.host(), url.port()) {
+        (Some(url::Host::Ipv6(host)), Some(port)) if Some(port) != default_port => {
+            format!("[{}]:{}", host, port)
+        }
+        (Some(url::Host::Ipv6(host)), _) => format!("[{}]", host),
+        (Some(url::Host::Ipv4(host)), Some(port)) if Some(port) != default_port => {
+            format!("{}:{}", host, port)
+        }
+        (Some(url::Host::Ipv4(host)), _) => host.to_string(),
+        (Some(url::Host::Domain(host)), Some(port)) if Some(port) != default_port => {
+            format!("{}:{}", host, port)
+        }
+        (Some(url::Host::Domain(host)), _) => host.to_string(),
+        (None, _) => String::new(),
+    };
+
+    let mut rendered = format!("{} {} HTTP/1.1\r\n", method, path).into_bytes();
+    let mut saw_host = false;
+    let mut saw_content_length = false;
+    let mut saw_connection = false;
+    for (name, value) in headers {
+        if http_header_name_eq(&name, "Host") {
+            saw_host = true;
+        } else if http_header_name_eq(&name, "Content-Length") {
+            saw_content_length = true;
+        } else if http_header_name_eq(&name, "Connection") {
+            saw_connection = true;
+        }
+        rendered.extend_from_slice(name.as_bytes());
+        rendered.extend_from_slice(b": ");
+        rendered.extend_from_slice(value.as_bytes());
+        rendered.extend_from_slice(b"\r\n");
+    }
+    if !saw_host {
+        rendered.extend_from_slice(b"Host: ");
+        rendered.extend_from_slice(host.as_bytes());
+        rendered.extend_from_slice(b"\r\n");
+    }
+    if !saw_content_length {
+        rendered.extend_from_slice(b"Content-Length: ");
+        rendered.extend_from_slice(body.len().to_string().as_bytes());
+        rendered.extend_from_slice(b"\r\n");
+    }
+    if !saw_connection {
+        rendered.extend_from_slice(b"Connection: close\r\n");
+    }
+    rendered.extend_from_slice(b"\r\n");
+    rendered.extend_from_slice(body);
+    rendered
+}
+
+fn write_http_response_to_stream(
+    stream: &mut StdTcpStream,
+    status: i32,
+    headers: Vec<(String, String)>,
+    body: &[u8],
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<()> {
+    let mut rendered =
+        format!("HTTP/1.1 {} {}\r\n", status, http_reason_phrase(status)).into_bytes();
+    let mut saw_content_length = false;
+    let mut saw_connection = false;
+    for (name, value) in headers {
+        if http_header_name_eq(&name, "Content-Length") {
+            saw_content_length = true;
+        } else if http_header_name_eq(&name, "Connection") {
+            saw_connection = true;
+        }
+        rendered.extend_from_slice(name.as_bytes());
+        rendered.extend_from_slice(b": ");
+        rendered.extend_from_slice(value.as_bytes());
+        rendered.extend_from_slice(b"\r\n");
+    }
+    if !saw_content_length {
+        rendered.extend_from_slice(b"Content-Length: ");
+        rendered.extend_from_slice(body.len().to_string().as_bytes());
+        rendered.extend_from_slice(b"\r\n");
+    }
+    if !saw_connection {
+        rendered.extend_from_slice(b"Connection: close\r\n");
+    }
+    rendered.extend_from_slice(b"\r\n");
+    rendered.extend_from_slice(body);
+    write_all_with_deadline(stream, &rendered, deadline, cancellation)
 }
 
 #[cfg(unix)]
@@ -2558,38 +3118,53 @@ impl TlsStreamValue {
 
 impl HttpListenerValue {
     pub(crate) fn bind(address: &str) -> io::Result<Self> {
-        let server = tiny_http::Server::http(address).map_err(io::Error::other)?;
+        let listener = StdTcpListener::bind(address)?;
+        #[cfg(unix)]
+        listener.set_nonblocking(true)?;
         Ok(Self {
             inner: Arc::new(HttpListenerState {
-                server: Mutex::new(Some(Arc::new(server))),
+                listener: Mutex::new(Some(listener)),
             }),
         })
     }
 
-    pub(crate) fn accept(&self, timeout: Option<StdDuration>) -> io::Result<HttpExchangeValue> {
-        let server = lock_mutex(&self.inner.server);
-        let Some(server) = server.as_ref() else {
+    pub(crate) fn accept(
+        &self,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<HttpExchangeValue> {
+        let mut listener = lock_mutex(&self.inner.listener);
+        let Some(listener) = listener.as_mut() else {
             return Err(closed_resource_error());
         };
-        let mut request = match timeout {
-            Some(timeout) => server
-                .recv_timeout(timeout)
-                .map_err(io::Error::other)?
-                .ok_or_else(timeout_resource_error)?,
-            None => server.recv().map_err(io::Error::other)?,
+        let deadline = deadline_from_timeout(timeout);
+        #[cfg(unix)]
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break TcpStreamValue::from_std(stream),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    wait_for_fd_event(listener.as_raw_fd(), libc::POLLIN, deadline, cancellation)?;
+                }
+                Err(error) => return Err(error),
+            }
         };
-        let method = tiny_http_method_name(request.method());
-        let path = request.url().to_string();
-        let headers = request
-            .headers()
-            .iter()
-            .map(|header| (header.field.to_string(), header.value.to_string()))
-            .collect::<Vec<_>>();
-        let mut body = Vec::new();
-        request.as_reader().read_to_end(&mut body)?;
+        #[cfg(not(unix))]
+        let stream = TcpStreamValue::from_std(listener.accept()?.0);
+        let (method, path, headers, body) = {
+            let mut raw_stream = lock_mutex(&stream.inner.stream);
+            let Some(raw_stream) = raw_stream.as_mut() else {
+                return Err(closed_resource_error());
+            };
+            read_http_request_from_stream(raw_stream, deadline, cancellation)?
+        };
         Ok(HttpExchangeValue {
             inner: Arc::new(HttpExchangeState {
-                request: Mutex::new(Some(request)),
+                stream: Mutex::new(Some(stream)),
                 method,
                 path,
                 headers,
@@ -2599,16 +3174,16 @@ impl HttpListenerValue {
     }
 
     pub(crate) fn local_addr(&self) -> io::Result<String> {
-        let server = lock_mutex(&self.inner.server);
-        let Some(server) = server.as_ref() else {
+        let listener = lock_mutex(&self.inner.listener);
+        let Some(listener) = listener.as_ref() else {
             return Err(closed_resource_error());
         };
-        Ok(server.server_addr().to_string())
+        Ok(listener.local_addr()?.to_string())
     }
 
     pub(crate) fn close(&self) {
-        let mut server = lock_mutex(&self.inner.server);
-        *server = None;
+        let mut listener = lock_mutex(&self.inner.listener);
+        *listener = None;
     }
 }
 
@@ -2648,20 +3223,19 @@ impl HttpExchangeValue {
         body: &[u8],
         headers: Vec<(String, String)>,
     ) -> io::Result<()> {
-        let mut request = lock_mutex(&self.inner.request);
-        let Some(request) = request.take() else {
+        let mut stream = lock_mutex(&self.inner.stream);
+        let Some(stream) = stream.take() else {
             return Err(closed_resource_error());
         };
-        let mut response =
-            TinyHttpResponse::from_data(body.to_vec()).with_status_code(status as u16);
-        for (name, value) in headers {
-            response = response.with_header(
-                tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()).map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "invalid HTTP header")
-                })?,
-            );
-        }
-        request.respond(response).map_err(io::Error::other)
+        let result = {
+            let mut raw_stream = lock_mutex(&stream.inner.stream);
+            let Some(raw_stream) = raw_stream.as_mut() else {
+                return Err(closed_resource_error());
+            };
+            write_http_response_to_stream(raw_stream, status, headers, body, None, None)
+        };
+        stream.close();
+        result
     }
 }
 
@@ -2672,8 +3246,9 @@ impl HttpResponseValue {
         body: &str,
         headers: Vec<(String, String)>,
         timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
     ) -> io::Result<Self> {
-        Self::request_bytes(method, url, body.as_bytes(), headers, timeout)
+        Self::request_bytes(method, url, body.as_bytes(), headers, timeout, cancellation)
     }
 
     pub(crate) fn request_bytes(
@@ -2682,38 +3257,53 @@ impl HttpResponseValue {
         body: &[u8],
         headers: Vec<(String, String)>,
         timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
     ) -> io::Result<Self> {
-        let mut agent = AgentBuilder::new();
-        if let Some(timeout) = timeout {
-            agent = agent.timeout(timeout);
+        let url = Url::parse(url).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid URL `{}`: {}", url, error),
+            )
+        })?;
+        if url.scheme() != "http" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "Aurora HTTP requests currently require `http://` URLs, found `{}`",
+                    url
+                ),
+            ));
         }
-        let agent = agent.build();
-        let mut request = agent.request(method, url);
-        for (name, value) in headers {
-            request = request.set(&name, &value);
-        }
-        let response = match request.send_bytes(body) {
-            Ok(response) => response,
-            Err(ureq::Error::Status(_, response)) => response,
-            Err(ureq::Error::Transport(error)) => {
-                return Err(io::Error::new(io::ErrorKind::Other, error.to_string()))
+        let host = match url.host() {
+            Some(url::Host::Ipv6(host)) => {
+                format!("[{}]:{}", host, url.port_or_known_default().unwrap_or(80))
+            }
+            Some(url::Host::Ipv4(host)) => {
+                format!("{}:{}", host, url.port_or_known_default().unwrap_or(80))
+            }
+            Some(url::Host::Domain(host)) => {
+                format!("{}:{}", host, url.port_or_known_default().unwrap_or(80))
+            }
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid URL `{}`: missing host", url),
+                ))
             }
         };
-        let status = i32::from(response.status());
-        let reason = response.status_text().to_string();
-        let headers = response
-            .headers_names()
-            .into_iter()
-            .filter_map(|name| {
-                response
-                    .header(&name)
-                    .map(|value| (name.to_string(), value.to_string()))
-            })
-            .collect::<Vec<_>>();
-        let mut reader = response.into_reader();
-        let mut body = Vec::new();
-        reader.read_to_end(&mut body)?;
-        Ok(parse_http_response(status, reason, headers, body))
+        let request = build_http_request_bytes(method, &url, body, headers);
+        let stream = TcpStreamValue::connect(&host, timeout, cancellation)?;
+        let deadline = deadline_from_timeout(timeout);
+        let response = {
+            let mut raw_stream = lock_mutex(&stream.inner.stream);
+            let Some(raw_stream) = raw_stream.as_mut() else {
+                return Err(closed_resource_error());
+            };
+            write_all_with_deadline(raw_stream, &request, deadline, cancellation)?;
+            read_http_response_from_stream(raw_stream, deadline, cancellation)?
+        };
+        stream.close();
+        Ok(response)
     }
 
     pub(crate) fn status(&self) -> i32 {
@@ -3025,6 +3615,7 @@ impl TaskGroupValue {
 
     pub(crate) fn cancel(&self) {
         self.inner.cancel_flag.store(true, Ordering::SeqCst);
+        runtime_scheduler().notify();
     }
 
     // Invariant: callers drain only after they have finished registering tasks for the group.

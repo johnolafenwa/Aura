@@ -20,6 +20,8 @@ This repository is intended to evolve as a monorepo for the Aurora language and 
   - Markdown tutorials covering the implemented language subset
 - `docs/`
   - language proposal and supporting documentation
+- `architecture_docs/`
+  - implementation-focused architecture and component deep dives for the current Aurora system
 - `work/`
   - persistent task board and implementation notes
 
@@ -28,6 +30,7 @@ Compiler library testing notes live in [crates/aurora-compiler/README.md](crates
 The categorized example library is documented in [examples/README.md](examples/README.md).
 The tutorial track lives in [tutorials/README.md](tutorials/README.md).
 The repo testing strategy is documented in [docs/testing_strategy.md](docs/testing_strategy.md).
+The implementation architecture guide lives in [architecture_docs/README.md](architecture_docs/README.md).
 
 Current editor tooling:
 
@@ -103,7 +106,7 @@ Current bootstrap compiler workflow:
 - `cargo run -p aura -- run examples/io/udp_echo.au`
   - execute UDP binding, datagram receive/send, and `net.UdpDatagram`
 - `cargo run -p aura -- run examples/io/http_roundtrip.au`
-  - execute blocking HTTP listener/request helpers plus `HttpExchange` / `HttpResponse`
+  - execute the maintained HTTP listener/request helpers on the shared evented runtime scheduler
 - `cargo run -p aura -- run examples/io/websocket_roundtrip.au`
   - execute timeout-aware WebSocket listener/connect helpers on the nonblocking socket runtime
 - `cargo run -p aura -- run examples/io/unix_tls_roundtrip.au`

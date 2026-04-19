@@ -4,7 +4,10 @@ Last updated: 2026-04-19
 
 ### Active Session
 
-None.
+- Start: 2026-04-19 11:19:35 BST
+- Elapsed: 0h 00m
+- Target: Replace thread-backed Aurora tasks with scheduler-backed lightweight tasks while preserving the current queue/task/select surface across the maintained runtime paths.
+- Stop rule: Complete the work or reach 12 continuous hours.
 
 ## In Progress
 
@@ -23,6 +26,8 @@ None.
 
 ## Done
 
+- Finished the April 19 async scheduler and HTTP runtime pass: replaced the remaining `sleep(...)`, queue-wait, and `select` polling paths with the shared runtime scheduler; routed the maintained HTTP listener/request helpers onto the same nonblocking evented runtime as the rest of networking; fixed select-cancellation semantics in both MIR and direct runtime paths so cancelled waits fall through promptly instead of waiting for timeout arms; added targeted regressions for scheduler wakeups, nonblocking HTTP resource invariants, and select cancellation; aligned the maintained tutorials/README surface with the new scheduler-backed model; and reverified the final tree with `cargo fmt --all`, `cargo test -p aurora-compiler`, `cargo test -p aura`, `npm run test:lsp`, `npm run check:extension`, and `cargo clippy -p aurora-compiler -p aura -- -D clippy::correctness`.
+- Finished the April 19 architecture documentation pass: reviewed the full Aurora monorepo and added a new `architecture_docs/` documentation set covering the system architecture, AST/source model, lexer, parser, semantic analysis, MIR, MIR runtime, native backend/runtime, package system, CLI/build tooling, editor tooling, testing strategy, and an end-to-end walkthrough, including Mermaid diagrams plus standalone SVGs for the compiler pipeline, runtime layering, and tooling flow; linked the new docs from the root README; verified the markdown links in the new docs; and recorded the work in the dated work log.
 - Finished the April 19 evented networking runtime pass: converted the maintained socket-backed runtime onto nonblocking descriptors plus poll-driven waits, fixed websocket accept/connect handshake resumption on nonblocking sockets, made timeout handling honor the caller’s full budget instead of a single poll slice, tightened TLS socket polling so handshake progress can wait on both read and write readiness, added direct runtime regressions for nonblocking descriptor invariants plus timeout-budget coverage, updated the maintained READMEs/tutorials to describe the new socket model accurately, and reverified the final tree with `cargo fmt --all`, `cargo test -p aurora-compiler`, `cargo test -p aura`, `npm run test:lsp`, and `npm run check:extension`.
 - Finished the April 18-19 networking expansion/stabilization pass: expanded the maintained `io`/`fs`/`net` surface from the initial blocking file/TCP subset to the richer blocking runtime that now covers byte-oriented file and socket I/O, timeout-aware TCP/Unix/TLS/HTTP/WebSocket operations, UDP, Unix sockets, and TLS; filled the compiler-backed builtin-module completion gap for the new resource members; made the maintained Unix/TLS example self-contained with embedded certificate material; stabilized network example timeouts plus the WebSocket accept/handshake path under full-suite load; removed the dead networking helper/runtime warning leftovers; and reverified the final tree with `cargo fmt --all`, `cargo test -p aurora-compiler`, `cargo test -p aura`, `npm run test:lsp`, and `npm run check:extension`.
 - Finished the April 18 I/O and network surface pass: added maintained builtin `io`, `fs`, and `net` modules; introduced `io.Error`, `fs.File`, `net.TcpListener`, and `net.TcpStream`; wired blocking file and TCP I/O through the checker, MIR runtime, native direct backend, public compiler entrypoints, CLI product tests, and language-server analysis/completion surface; added maintained examples plus the `19-io-and-networking` tutorial chapter; aligned root/CLI/tutorial/example documentation with the implemented builtin I/O model; and reverified the final tree with `cargo fmt --all`, `cargo test -p aurora-compiler`, `cargo test -p aura`, `npm run test:lsp`, and `npm run check:extension`.

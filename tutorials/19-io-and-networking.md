@@ -14,7 +14,7 @@ import fs
 import net
 ```
 
-The current runtime model is still thread-based. File operations and higher-level HTTP helpers are still blocking, while the maintained socket-backed network surface now uses nonblocking descriptors plus poll-driven waits under the hood.
+The current runtime model keeps Aurora tasks thread-backed, but queue waits, timer waits, and the maintained socket/HTTP surface now share the same evented runtime scheduler underneath instead of spinning or blocking on per-operation sleeps.
 
 ## Standard Input And Output
 
@@ -299,11 +299,11 @@ The socket runtime also threads task-group cancellation into maintained socket w
 
 ## Current Model
 
-This surface is still deliberately simple:
+This surface is deliberately explicit but no longer relies on the old blocking/polling split:
 
-- file operations block the current task
-- HTTP listener/request helpers are still higher-level blocking convenience APIs
-- socket-backed networking now uses nonblocking descriptors with poll-driven waits and timeout/cancellation support
-- there is still no general async/event-loop scheduler
+- queue waits, `sleep(...)`, `select`, socket waits, and the maintained HTTP helpers all run through the shared runtime scheduler
+- socket-backed networking and HTTP convenience helpers use nonblocking descriptors with timeout and cancellation support
+- Aurora tasks are still thread-backed rather than multiplexed coroutines
+- ordinary file operations still execute synchronously for now
 
-That keeps the runtime model straightforward while still making ordinary text/binary file work, socket programming, request/response servers, and local TLS testing possible today.
+That keeps the execution model straightforward while removing the old timeout-spin loops and blocking HTTP special case.

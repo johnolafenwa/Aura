@@ -1,6 +1,6 @@
 # Concurrency
 
-Aurora's maintained concurrency surface is built around lightweight tasks, structured task groups, typed queues, and `select`. The runtime is still thread-based, but the primary user-facing model is:
+Aurora's maintained concurrency surface is built around lightweight tasks, structured task groups, typed queues, and `select`. Aurora tasks are still thread-backed, but queue waits, timer waits, socket waits, and `select` now share the maintained evented runtime scheduler. The primary user-facing model is:
 
 - `Queue[T]` and `queue()`
 - `spawn ...` for one-off tasks
@@ -222,8 +222,9 @@ See:
 
 The bootstrap concurrency runtime is still intentionally simple:
 
-- queue waits are still blocking and not evented
-- socket waits now use nonblocking polling internally, but there is still no broader async scheduler
+- queue waits, `sleep(...)`, and `select` now use the shared runtime scheduler instead of 1ms polling loops
+- socket and HTTP waits use the same evented scheduler underneath
 - cancellation is still cooperative rather than preemptive
+- tasks are still backed by real threads rather than multiplexed coroutines
 - detached-task ownership restrictions from the full proposal are not implemented yet
 - borrowed spawn parameters are still rejected

@@ -15,8 +15,9 @@ use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_value::{
     cast_numeric_value, io_error, io_read_line, option_none, option_some, render_float, result_err,
-    result_ok, send_error_closed, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, RangeValue, SetValue,
+    result_ok, send_error_closed, sleep_with_runtime_scheduler, wait_for_select_progress,
+    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpListenerValue,
+    HttpResponseValue, InstanceValue, MapValue, RangeValue, RuntimeSchedulerWakeReason, SetValue,
     TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
     TryRecvResult, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
     WebSocketListenerValue, WebSocketValue,
@@ -2252,6 +2253,112 @@ pub extern "C" fn aurora_direct_arg_buffer_store(buffer: *mut i64, index: i64, v
 }
 
 #[no_mangle]
+pub extern "C" fn aurora_direct_i64_buffer_new(count: i64) -> *mut i64 {
+    let count = match usize::try_from(count) {
+        Ok(count) => count,
+        Err(_) => runtime_error("invalid i64 buffer size"),
+    };
+    let mut values = vec![0i64; count].into_boxed_slice();
+    let ptr = values.as_mut_ptr();
+    Box::leak(values);
+    ptr
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_i64_buffer_store(buffer: *mut i64, index: i64, value: i64) {
+    let index = match usize::try_from(index) {
+        Ok(index) => index,
+        Err(_) => runtime_error("invalid i64 buffer index"),
+    };
+    unsafe {
+        *buffer.add(index) = value;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_select_wait(
+    channels_ptr: *mut i64,
+    channel_count: i64,
+    ignore_closed_recv: i64,
+    deadlines_ptr: *mut i64,
+    deadline_count: i64,
+) -> i64 {
+    let channel_count = match usize::try_from(channel_count) {
+        Ok(count) => count,
+        Err(_) => runtime_error("invalid select channel count"),
+    };
+    let deadline_count = match usize::try_from(deadline_count) {
+        Ok(count) => count,
+        Err(_) => runtime_error("invalid select deadline count"),
+    };
+
+    let channels = if channel_count == 0 || channels_ptr.is_null() {
+        Vec::new()
+    } else {
+        let boxed = unsafe {
+            Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                channels_ptr,
+                channel_count,
+            ))
+        };
+        let values = boxed.into_vec();
+        values
+            .into_iter()
+            .filter_map(|value| {
+                if value == 0 {
+                    None
+                } else {
+                    match unsafe { value_ref(value as *mut OpaqueValue) } {
+                        Value::Channel(channel) => Some(channel.clone()),
+                        other => runtime_error(format!(
+                            "expected `Queue`, found `{}`",
+                            value_type_name(other)
+                        )),
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let deadlines = if deadline_count == 0 || deadlines_ptr.is_null() {
+        Vec::new()
+    } else {
+        let boxed = unsafe {
+            Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                deadlines_ptr,
+                deadline_count,
+            ))
+        };
+        let values = boxed.into_vec();
+        values
+            .into_iter()
+            .filter_map(|value| {
+                if value == 0 {
+                    None
+                } else {
+                    let deadline = value as usize as *mut Deadline;
+                    if deadline.is_null() {
+                        None
+                    } else {
+                        Some(unsafe { (*deadline).0 })
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+
+    match wait_for_select_progress(
+        &channels,
+        ignore_closed_recv != 0,
+        &deadlines,
+        Some(&current_cancellation()),
+    ) {
+        RuntimeSchedulerWakeReason::Cancelled => 1,
+        RuntimeSchedulerWakeReason::Ready | RuntimeSchedulerWakeReason::TimedOut => 0,
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn aurora_direct_channel_new() -> *mut OpaqueValue {
     boxed_value(Value::Channel(ChannelValue::new()))
 }
@@ -2292,10 +2399,12 @@ pub extern "C" fn aurora_direct_channel_send(
 #[no_mangle]
 pub extern "C" fn aurora_direct_channel_recv(channel: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(channel) } {
-        Value::Channel(channel) => boxed_value(match channel.recv_blocking() {
-            Some(value) => option_some(value),
-            None => option_none(),
-        }),
+        Value::Channel(channel) => boxed_value(
+            match channel.recv_with_cancellation(None, Some(&current_cancellation())) {
+                Some(value) => option_some(value),
+                None => option_none(),
+            },
+        ),
         other => runtime_error(format!(
             "expected `Queue`, found `{}`",
             value_type_name(other)
@@ -2315,7 +2424,10 @@ pub extern "C" fn aurora_direct_channel_recv_timeout_value(
     };
     match unsafe { value_ref(channel) } {
         Value::Channel(channel) => boxed_value(
-            match channel.recv_timeout(StdDuration::from_millis(millis)) {
+            match channel.recv_with_cancellation(
+                Some(StdDuration::from_millis(millis)),
+                Some(&current_cancellation()),
+            ) {
                 Some(value) => option_some(value),
                 None => option_none(),
             },
@@ -2974,7 +3086,14 @@ pub extern "C" fn aurora_direct_net_http_request_text(
     let url = expect_string_value(&unsafe { value_ref(url) }, "net.http_request_text(...)");
     let body = expect_string_value(&unsafe { value_ref(body) }, "net.http_request_text(...)");
     let headers = expect_headers_map(&unsafe { value_ref(headers) }, "net.http_request_text(...)");
-    match HttpResponseValue::request_text(&method, &url, &body, headers, None) {
+    match HttpResponseValue::request_text(
+        &method,
+        &url,
+        &body,
+        headers,
+        None,
+        Some(&current_cancellation()),
+    ) {
         Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
         Err(error) => boxed_value(result_err(io_error(error))),
     }
@@ -3005,7 +3124,14 @@ pub extern "C" fn aurora_direct_net_http_request_text_timeout(
         "net.http_request_text_timeout(...)",
     );
     let timeout = optional_timeout_from_ptr(timeout, "net.http_request_text_timeout(...)");
-    match HttpResponseValue::request_text(&method, &url, &body, headers, timeout) {
+    match HttpResponseValue::request_text(
+        &method,
+        &url,
+        &body,
+        headers,
+        timeout,
+        Some(&current_cancellation()),
+    ) {
         Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
         Err(error) => boxed_value(result_err(io_error(error))),
     }
@@ -3025,7 +3151,14 @@ pub extern "C" fn aurora_direct_net_http_request_bytes(
         &unsafe { value_ref(headers) },
         "net.http_request_bytes(...)",
     );
-    match HttpResponseValue::request_bytes(&method, &url, &bytes, headers, None) {
+    match HttpResponseValue::request_bytes(
+        &method,
+        &url,
+        &bytes,
+        headers,
+        None,
+        Some(&current_cancellation()),
+    ) {
         Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
         Err(error) => boxed_value(result_err(io_error(error))),
     }
@@ -3056,7 +3189,14 @@ pub extern "C" fn aurora_direct_net_http_request_bytes_timeout(
         "net.http_request_bytes_timeout(...)",
     );
     let timeout = optional_timeout_from_ptr(timeout, "net.http_request_bytes_timeout(...)");
-    match HttpResponseValue::request_bytes(&method, &url, &bytes, headers, timeout) {
+    match HttpResponseValue::request_bytes(
+        &method,
+        &url,
+        &bytes,
+        headers,
+        timeout,
+        Some(&current_cancellation()),
+    ) {
         Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
         Err(error) => boxed_value(result_err(io_error(error))),
     }
@@ -3593,10 +3733,12 @@ pub extern "C" fn aurora_direct_http_listener_accept(
 ) -> *mut OpaqueValue {
     let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
     match unsafe { value_ref(listener) } {
-        Value::HttpListener(listener) => match listener.accept(timeout) {
-            Ok(exchange) => boxed_value(result_ok(Value::HttpExchange(exchange))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
+        Value::HttpListener(listener) => {
+            match listener.accept(timeout, Some(&current_cancellation())) {
+                Ok(exchange) => boxed_value(result_ok(Value::HttpExchange(exchange))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
         other => runtime_error(format!(
             "expected `net.HttpListener`, found `{}`",
             value_type_name(other)
@@ -4232,7 +4374,10 @@ pub extern "C" fn aurora_direct_sleep_ms(duration: i64) {
         Ok(millis) => millis,
         Err(_) => runtime_error("invalid sleep duration"),
     };
-    thread::sleep(StdDuration::from_millis(millis));
+    sleep_with_runtime_scheduler(
+        StdDuration::from_millis(millis),
+        Some(&current_cancellation()),
+    );
 }
 
 #[no_mangle]
@@ -4242,7 +4387,10 @@ pub extern "C" fn aurora_direct_sleep_value(duration: *mut OpaqueValue) -> *mut 
         Ok(millis) => millis,
         Err(_) => runtime_error("invalid sleep duration"),
     };
-    thread::sleep(StdDuration::from_millis(millis));
+    sleep_with_runtime_scheduler(
+        StdDuration::from_millis(millis),
+        Some(&current_cancellation()),
+    );
     boxed_value(Value::Unit)
 }
 

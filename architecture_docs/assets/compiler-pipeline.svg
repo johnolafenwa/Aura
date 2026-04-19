@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="360" viewBox="0 0 1400 360" role="img" aria-labelledby="title desc">
+  <title id="title">Aurora compiler pipeline</title>
+  <desc id="desc">Source text flows through lexing, parsing, semantic analysis, MIR lowering, then either the MIR runtime or native code generation.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2d3e50" />
+    </marker>
+    <style>
+      .bg { fill: #f6f7fb; }
+      .box { fill: #ffffff; stroke: #2d3e50; stroke-width: 2; rx: 14; ry: 14; }
+      .title { font: 700 20px 'Helvetica Neue', Arial, sans-serif; fill: #142033; }
+      .label { font: 700 18px 'Helvetica Neue', Arial, sans-serif; fill: #142033; }
+      .text { font: 14px 'Helvetica Neue', Arial, sans-serif; fill: #31445f; }
+      .line { stroke: #2d3e50; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .branch { stroke: #2d3e50; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .accent { fill: #e7eefc; }
+      .run { fill: #e9f7ef; }
+      .build { fill: #fff3dd; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1400" height="360" />
+  <text class="title" x="40" y="42">Aurora End-to-End Compilation Pipeline</text>
+
+  <rect class="box accent" x="40" y="90" width="170" height="88" />
+  <text class="label" x="85" y="126">Source Text</text>
+  <text class="text" x="62" y="148">`.au` files or editor buffers</text>
+
+  <rect class="box" x="250" y="90" width="170" height="88" />
+  <text class="label" x="312" y="126">Lexer</text>
+  <text class="text" x="276" y="148">Tokens + `Indent` / `Dedent`</text>
+
+  <rect class="box" x="460" y="90" width="170" height="88" />
+  <text class="label" x="517" y="126">Parser</text>
+  <text class="text" x="490" y="148">Recursive descent AST</text>
+
+  <rect class="box" x="670" y="90" width="170" height="88" />
+  <text class="label" x="739" y="126">AST</text>
+  <text class="text" x="696" y="148">`Module`, `Stmt`, `Expr`, `TypeRef`</text>
+
+  <rect class="box" x="880" y="90" width="190" height="88" />
+  <text class="label" x="924" y="126">Semantic Analysis</text>
+  <text class="text" x="904" y="148">Names, types, moves, borrows, traits</text>
+
+  <rect class="box" x="1110" y="90" width="190" height="88" />
+  <text class="label" x="1159" y="126">Typed Program</text>
+  <text class="text" x="1147" y="148">`Program` + symbol tables</text>
+
+  <rect class="box" x="720" y="240" width="190" height="88" />
+  <text class="label" x="793" y="276">MIR</text>
+  <text class="text" x="746" y="298">Blocks, instructions, terminators</text>
+
+  <rect class="box run" x="980" y="240" width="170" height="88" />
+  <text class="label" x="1017" y="276">MIR Runtime</text>
+  <text class="text" x="1005" y="298">Used by `aura run`</text>
+
+  <rect class="box build" x="1190" y="240" width="170" height="88" />
+  <text class="label" x="1216" y="276">Native Codegen</text>
+  <text class="text" x="1216" y="298">Used by `aura build`</text>
+
+  <line class="line" x1="210" y1="134" x2="250" y2="134" />
+  <line class="line" x1="420" y1="134" x2="460" y2="134" />
+  <line class="line" x1="630" y1="134" x2="670" y2="134" />
+  <line class="line" x1="840" y1="134" x2="880" y2="134" />
+  <line class="line" x1="1070" y1="134" x2="1110" y2="134" />
+
+  <path class="branch" d="M 1205 178 L 1205 220 L 815 220 L 815 240" />
+  <line class="line" x1="910" y1="284" x2="980" y2="284" />
+  <line class="line" x1="910" y1="284" x2="1190" y2="284" />
+
+  <text class="text" x="58" y="214">Compiler entrypoints in `crates/aurora-compiler/src/lib.rs` orchestrate these stages.</text>
+  <text class="text" x="58" y="236">The public execution architecture is now MIR runtime for `run` and direct native code generation for `build`.</text>
+</svg>

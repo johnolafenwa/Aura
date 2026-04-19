@@ -1,9 +1,10 @@
 use super::{
     cast_numeric_value, io_decode_utf8, lock_mutex, option_none, option_some, render_float,
-    result_err, result_ok, send_error_closed, CancellationContext, ChannelValue, EnumVariantValue,
-    FileValue, HttpListenerValue, HttpResponseValue, MapValue, RangeValue, SetValue,
-    TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue, TryRecvResult, UdpSocketValue,
-    Value, VecValue, WebSocketListenerValue,
+    result_err, result_ok, send_error_closed, sleep_with_runtime_scheduler,
+    wait_for_select_progress, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpListenerValue, HttpResponseValue, MapValue, RangeValue, SetValue, TaskGroupValue,
+    TaskValue, TcpListenerValue, TcpStreamValue, TryRecvResult, UdpSocketValue, Value, VecValue,
+    WebSocketListenerValue,
 };
 use crate::diag::Span;
 use crate::integer::IntegerValue;
@@ -163,7 +164,7 @@ fn channel_runtime_helpers_cover_send_receive_and_close_paths() {
             .expect_err("closed channel should reject sends"),
         Value::Bool(true)
     );
-    assert!(channel.recv_blocking().is_none());
+    assert!(channel.recv_with_cancellation(None, None).is_none());
 }
 
 #[test]
@@ -211,7 +212,7 @@ fn channel_and_task_helpers_tolerate_poisoned_locks() {
         TryRecvResult::Value(Value::Int(IntegerValue::from_signed(11)))
     );
     channel.close();
-    assert_eq!(channel.recv_blocking(), None);
+    assert_eq!(channel.recv_with_cancellation(None, None), None);
 
     let cancellation = CancellationContext::default();
     let group = TaskGroupValue::new(&cancellation);
@@ -246,6 +247,52 @@ fn channel_and_task_helpers_tolerate_poisoned_locks() {
         task.join_result()
             .expect("poisoned task handle lock should recover"),
         Value::Int(IntegerValue::from_signed(17))
+    );
+}
+
+#[test]
+fn runtime_scheduler_wakes_sleep_on_cancellation() {
+    let parent = CancellationContext::default();
+    let group = TaskGroupValue::new(&parent);
+    let cancellation = group.child_cancellation();
+    let start = Instant::now();
+    let worker = thread::spawn(move || {
+        sleep_with_runtime_scheduler(StdDuration::from_millis(250), Some(&cancellation));
+    });
+
+    thread::sleep(StdDuration::from_millis(20));
+    group.cancel();
+    worker.join().expect("scheduler sleep worker should join");
+    assert!(
+        start.elapsed() < StdDuration::from_millis(100),
+        "scheduler sleep should wake promptly when cancelled; elapsed {:?}",
+        start.elapsed()
+    );
+}
+
+#[test]
+fn runtime_scheduler_wakes_select_wait_on_cancellation() {
+    let parent = CancellationContext::default();
+    let group = TaskGroupValue::new(&parent);
+    let cancellation = group.child_cancellation();
+    let channel = ChannelValue::new();
+    let start = Instant::now();
+    let worker = thread::spawn(move || {
+        wait_for_select_progress(
+            &[channel],
+            true,
+            &[Instant::now() + StdDuration::from_millis(250)],
+            Some(&cancellation),
+        );
+    });
+
+    thread::sleep(StdDuration::from_millis(20));
+    group.cancel();
+    worker.join().expect("scheduler select worker should join");
+    assert!(
+        start.elapsed() < StdDuration::from_millis(100),
+        "scheduler select wait should wake promptly when cancelled; elapsed {:?}",
+        start.elapsed()
     );
 }
 
@@ -436,7 +483,7 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
         let listener = http_listener.clone();
         thread::spawn(move || {
             let exchange = listener
-                .accept(Some(short_timeout))
+                .accept(Some(short_timeout), Some(&CancellationContext::default()))
                 .expect("http accept should succeed");
             assert_eq!(exchange.method(), "POST");
             assert_eq!(exchange.path(), "/echo");
@@ -459,6 +506,7 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
         "aurora",
         vec![("x-test".to_string(), "1".to_string())],
         Some(short_timeout),
+        Some(&cancellation),
     )
     .expect("http request should succeed");
     assert_eq!(response.status(), 200);
@@ -502,6 +550,65 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
         .expect("websocket bytes should be present");
     assert_eq!(ws_reply, b"pong");
     ws_thread.join().expect("websocket thread should join");
+}
+
+#[cfg(unix)]
+#[test]
+fn http_resources_use_nonblocking_descriptors_internally() {
+    let short_timeout = StdDuration::from_secs(5);
+    let listener =
+        HttpListenerValue::bind("127.0.0.1:0").expect("http listener bind should succeed");
+    let listener_fd = lock_mutex(&listener.inner.listener)
+        .as_ref()
+        .expect("http listener should still be open")
+        .as_raw_fd();
+    assert!(
+        fd_is_nonblocking(listener_fd),
+        "http listeners should stay in nonblocking mode internally"
+    );
+
+    let address = listener
+        .local_addr()
+        .expect("http listener local addr should succeed");
+    let server_thread = {
+        let server = listener.clone();
+        thread::spawn(move || {
+            let exchange = server
+                .accept(Some(short_timeout), Some(&CancellationContext::default()))
+                .expect("http accept should succeed");
+            {
+                let stream_guard = lock_mutex(&exchange.inner.stream);
+                let stream = stream_guard
+                    .as_ref()
+                    .expect("http exchange stream should still be open");
+                let stream_fd = lock_mutex(&stream.inner.stream)
+                    .as_ref()
+                    .expect("http exchange stream should still be open")
+                    .as_raw_fd();
+                assert!(
+                    fd_is_nonblocking(stream_fd),
+                    "http exchange streams should stay in nonblocking mode internally"
+                );
+            }
+            exchange
+                .respond_text(200, "ok", Vec::new())
+                .expect("http respond should succeed");
+        })
+    };
+
+    let response = HttpResponseValue::request_text(
+        "GET",
+        &format!("http://{}/nonblocking", address),
+        "",
+        Vec::new(),
+        Some(short_timeout),
+        Some(&CancellationContext::default()),
+    )
+    .expect("http request should succeed");
+    assert_eq!(response.status(), 200);
+    server_thread
+        .join()
+        .expect("http nonblocking server thread should join");
 }
 
 #[cfg(unix)]

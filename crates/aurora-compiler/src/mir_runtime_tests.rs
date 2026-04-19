@@ -2700,6 +2700,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
             },
             label: "recv".to_string(),
         }],
+        "otherwise",
         &mut env,
     ) {
         Ok(_) => panic!("recv select arms should require channel values"),
@@ -2718,6 +2719,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
             },
             label: "send".to_string(),
         }],
+        "otherwise",
         &mut env,
     ) {
         Ok(_) => panic!("send select arms should require channel values"),
@@ -2735,6 +2737,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
             },
             label: "after".to_string(),
         }],
+        "otherwise",
         &mut env,
     ) {
         Ok(_) => panic!("after select arms should require duration-like operands"),

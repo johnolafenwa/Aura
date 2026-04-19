@@ -8,13 +8,14 @@ use super::{
 };
 use crate::ast::TypeRef;
 use crate::diag::Span;
+use crate::integer::IntegerValue;
 use std::collections::BTreeMap;
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 
 const POINT_SOURCE: &str = include_str!("../../../examples/point.au");
 const BASIC_ADDITION_SOURCE: &str = include_str!("../../../examples/basic_addition.au");
@@ -1796,6 +1797,90 @@ def main() -> int32:
 
     assert_eq!(explicit_output.value, public_output.value);
     assert_eq!(explicit_output.stdout, public_output.stdout);
+}
+
+#[test]
+fn cancellation_wakes_sleep_tasks_promptly() {
+    let source = r#"
+def sleeper(started: Queue[String], finished: Queue[String]) -> None:
+    started.put("sleep")
+    sleep(250ms)
+    finished.put("sleep")
+
+def wait_for_one(queue: Queue[String]):
+    while true:
+        match queue.get():
+            case Option.Some(_):
+                return
+            case Option.None:
+                pass
+
+def main() -> int32:
+    started: Queue[String] = queue()
+    finished: Queue[String] = queue()
+    with tasks() as group:
+        group.start(sleeper, started, finished)
+        wait_for_one(started)
+        group.cancel()
+    wait_for_one(finished)
+    return 0
+"#;
+
+    let start = Instant::now();
+    let output = run_source(source).expect("sleep cancellation source should run");
+    let elapsed = start.elapsed();
+
+    assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
+    assert!(
+        elapsed < StdDuration::from_millis(120),
+        "sleep cancellation should return promptly; elapsed {:?}",
+        elapsed
+    );
+}
+
+#[test]
+fn cancellation_wakes_select_tasks_promptly() {
+    let source = r#"
+def waiter(started: Queue[String], jobs: Queue[int32], finished: Queue[String]) -> None:
+    started.put("select")
+    while not cancelled():
+        select:
+            case _ = jobs.get():
+                pass
+            case after(250ms):
+                pass
+    finished.put("select")
+
+def wait_for_one(queue: Queue[String]):
+    while true:
+        match queue.get():
+            case Option.Some(_):
+                return
+            case Option.None:
+                pass
+
+def main() -> int32:
+    started: Queue[String] = queue()
+    finished: Queue[String] = queue()
+    jobs: Queue[int32] = queue()
+    with tasks() as group:
+        group.start(waiter, started, jobs, finished)
+        wait_for_one(started)
+        group.cancel()
+    wait_for_one(finished)
+    return 0
+"#;
+
+    let start = Instant::now();
+    let output = run_source(source).expect("select cancellation source should run");
+    let elapsed = start.elapsed();
+
+    assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
+    assert!(
+        elapsed < StdDuration::from_millis(120),
+        "select cancellation should return promptly; elapsed {:?}",
+        elapsed
+    );
 }
 
 #[test]
