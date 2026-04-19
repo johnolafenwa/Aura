@@ -35,13 +35,40 @@ impl Drop for TempDir {
     }
 }
 
+#[cfg(unix)]
+fn wait_for_path(path: &std::path::Path, timeout_ms: u64) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    while std::time::Instant::now() < deadline {
+        if path.exists() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    path.exists()
+}
+
+#[cfg(unix)]
+fn process_alive(pid: i32) -> bool {
+    let result = unsafe { libc::kill(pid, 0) };
+    if result == 0 {
+        true
+    } else {
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EPERM) => true,
+            Some(libc::ESRCH) => false,
+            _ => false,
+        }
+    }
+}
+
 #[test]
 fn builtin_process_module_type_checks_from_path_context() {
     let temp = TempDir::new("aurora-process-check");
     let entry = temp.path().join("main.au");
     let source = r#"import process
 
-def inspect(child: process.Child, pipe: process.Pipe, completed: process.Completed, status: process.ExitStatus, wait: process.Wait, stdio: process.Stdio, error: process.Error) -> int32:
+def inspect(child: process.Child, pipe: process.Pipe, completed: process.Completed, status: process.ExitStatus, wait: process.Wait, stdio: process.Stdio, error: process.Error, supervisor: process.Supervisor, event: process.SupervisorEvent, supervisor_wait: process.SupervisorWait, restart: process.RestartPolicy) -> int32:
     match child.stdin():
         case Option.Some(stdin_pipe):
             print(stdin_pipe.write_all("hello\n", timeout=10ms))
@@ -79,11 +106,20 @@ def inspect(child: process.Child, pipe: process.Pipe, completed: process.Complet
     print(wait)
     print(stdio)
     print(error)
+    print(supervisor.start(name="checker", command=["/usr/bin/false"], restart=process.RestartPolicy.OnFailure, backoff=10ms, max_restarts=1, group=true))
+    print(supervisor.wait(timeout=10ms))
+    print(supervisor.wait_or_none(timeout=10ms))
+    print(supervisor.stop())
+    print(supervisor.is_empty())
+    supervisor.close()
+    print(event)
+    print(supervisor_wait)
+    print(restart)
     return 0
 
 def boot() -> Result[None, process.Error]:
     env: Map[String, String] = {"AURORA_PROCESS_VAR": "present"}
-    with running = try process.start(["/bin/cat"], cwd=Option.None, env=env.clone(), stdin=process.pipe(), stdout=process.pipe(), stderr=process.null()):
+    with running = try process.start(["/bin/cat"], cwd=Option.None, env=env.clone(), stdin=process.pipe(), stdout=process.pipe(), stderr=process.null(), group=true):
         print(running.stdin())
         print(running.stdout())
         print(running.stderr())
@@ -91,7 +127,7 @@ def boot() -> Result[None, process.Error]:
         print(running.wait_or_none(timeout=10ms))
         print(running.wait_ok(timeout=10ms))
 
-    completed = try process.run(["/usr/bin/printenv", "AURORA_PROCESS_VAR"], cwd=Option.None, env=env, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=1s)
+    completed = try process.run(["/usr/bin/printenv", "AURORA_PROCESS_VAR"], cwd=Option.None, env=env, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)
     print(completed.status())
     print(completed.success())
     print(completed.stdout())
@@ -99,6 +135,7 @@ def boot() -> Result[None, process.Error]:
     print(process.inherit())
     print(process.null())
     print(process.pipe())
+    print(process.supervisor())
     return Result.Ok(None)
 
 def main() -> int32:
@@ -126,14 +163,14 @@ fn builtin_process_module_runs_through_public_api() {
 
 def run_env() -> Result[None, process.Error]:
     env: Map[String, String] = {{"AURORA_PROCESS_VAR": "present"}}
-    completed = try process.run(["/usr/bin/printenv", "AURORA_PROCESS_VAR"], cwd=Option.None, env=env, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=2s)
+    completed = try process.run(["/usr/bin/printenv", "AURORA_PROCESS_VAR"], cwd=Option.None, env=env, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
     print(completed.stdout().trim())
     print(completed.stderr().len())
     print(completed.status())
     return Result.Ok(None)
 
 def run_pwd(cwd: String) -> Result[None, process.Error]:
-    completed = try process.run(["/bin/pwd"], cwd=Option.Some(cwd), env={{}}, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=2s)
+    completed = try process.run(["/bin/pwd"], cwd=Option.Some(cwd), env={{}}, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
     print(completed.stdout().trim())
     print(completed.stderr().len())
     print(completed.status())
@@ -164,6 +201,28 @@ def echo_with_cat() -> Result[None, process.Error]:
                 return Result.Ok(None)
 
         print(try child.wait_ok(timeout=2s))
+    return Result.Ok(None)
+
+def supervise_flaky_process() -> Result[None, process.Error]:
+    with supervisor = process.supervisor():
+        try supervisor.start(name="flaky", command=["/usr/bin/false"], restart=process.RestartPolicy.OnFailure, backoff=10ms, max_restarts=1, group=true)
+        match try supervisor.wait_or_none(timeout=500ms):
+            case Option.Some(event):
+                print(event)
+            case Option.None:
+                print("missing first supervisor event")
+                return Result.Ok(None)
+        match try supervisor.wait_or_none(timeout=500ms):
+            case Option.Some(event):
+                print(event)
+            case Option.None:
+                print("missing second supervisor event")
+                return Result.Ok(None)
+        print(supervisor.is_empty())
+        try supervisor.start(name="sleeper", command=["/bin/sleep", "1"], restart=process.RestartPolicy.Never, group=true)
+        print(supervisor.is_empty())
+        try supervisor.stop()
+        print(supervisor.is_empty())
     return Result.Ok(None)
 
 def main() -> int32:
@@ -197,13 +256,20 @@ def main() -> int32:
 
     match echo_with_cat():
         case Result.Ok(_):
+            pass
+        case Result.Err(error):
+            print(error)
+            return 1
+
+    match supervise_flaky_process():
+        case Result.Ok(_):
             return 0
         case Result.Err(error):
             print(error)
             return 1
 
 def run_checked_echo() -> Result[None, process.Error]:
-    completed = try process.run(["/bin/echo", "checked"], stdout=process.pipe(), stderr=process.pipe(), timeout=2s)
+    completed = try process.run(["/bin/echo", "checked"], stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
     try completed.check()
     print(completed.stdout().trim())
     return Result.Ok(None)
@@ -220,8 +286,85 @@ def wait_for_sleep_timeout() -> Result[None, process.Error]:
     assert_eq!(
         output.stdout,
         format!(
-            "present\n0\nExitStatus.Exited(0)\n{cwd}\n0\nExitStatus.Exited(0)\nchecked\nOption.None\necho from cat\nExitStatus.Exited(0)\n",
+            "present\n0\nExitStatus.Exited(0)\n{cwd}\n0\nExitStatus.Exited(0)\nchecked\nOption.None\necho from cat\nExitStatus.Exited(0)\nSupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1)\nSupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1)\ntrue\nfalse\ntrue\n",
             cwd = cwd,
         )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn grouped_process_close_terminates_descendants() {
+    let temp = TempDir::new("aurora-process-group");
+    let entry = temp.path().join("main.au");
+    let script = temp.path().join("spawn_sleeping_child.py");
+    let pid_file = temp.path().join("descendant.pid");
+    let ready_file = temp.path().join("ready.txt");
+
+    fs::write(
+        &script,
+        r#"import subprocess
+import sys
+import time
+
+pid_file = sys.argv[1]
+ready_file = sys.argv[2]
+child = subprocess.Popen(["/bin/sleep", "30"])
+with open(pid_file, "w", encoding="utf-8") as handle:
+    handle.write(str(child.pid))
+with open(ready_file, "w", encoding="utf-8") as handle:
+    handle.write("ready")
+time.sleep(30)
+"#,
+    )
+    .expect("failed to write process group helper script");
+
+    let source = format!(
+        r#"import fs
+import process
+
+def run_group_cleanup() -> Result[None, process.Error]:
+    with child = try process.start(["/usr/bin/env", "python3", "{script}", "{pid_file}", "{ready_file}"], stdin=process.null(), stdout=process.null(), stderr=process.null(), group=true):
+        for _ in range(200):
+            if fs.exists("{ready_file}"):
+                child.close()
+                return Result.Ok(None)
+            sleep(10ms)
+        child.close()
+        return Result.Ok(None)
+
+def main() -> int32:
+    match run_group_cleanup():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 2
+"#,
+        script = script.display(),
+        pid_file = pid_file.display(),
+        ready_file = ready_file.display(),
+    );
+
+    let output = run_path_with_source(&entry, &source).expect("grouped child program should run");
+    assert_eq!(output.value.render(), "0");
+    assert!(
+        wait_for_path(&pid_file, 1000),
+        "descendant pid file should be written before group shutdown"
+    );
+
+    let pid_text = fs::read_to_string(&pid_file).expect("pid file should be readable");
+    let pid: i32 = pid_text
+        .trim()
+        .parse()
+        .expect("pid file should contain a valid pid");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while process_alive(pid) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        !process_alive(pid),
+        "grouped child close should terminate descendants in the same process group"
     );
 }

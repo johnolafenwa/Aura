@@ -1776,6 +1776,34 @@ impl<'a> AnalysisBuilder<'a> {
                         Type::Named("process.Error".to_string(), Vec::new()),
                     ],
                 )),
+                BuiltinMember::ProcessSupervisorStart | BuiltinMember::ProcessSupervisorStop => {
+                    Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Unit,
+                            Type::Named("process.Error".to_string(), Vec::new()),
+                        ],
+                    ))
+                }
+                BuiltinMember::ProcessSupervisorWait => Some(Type::Named(
+                    "process.SupervisorWait".to_string(),
+                    Vec::new(),
+                )),
+                BuiltinMember::ProcessSupervisorWaitOrNone => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named(
+                            "Option".to_string(),
+                            vec![Type::Named(
+                                "process.SupervisorEvent".to_string(),
+                                Vec::new(),
+                            )],
+                        ),
+                        Type::Named("process.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::ProcessSupervisorIsEmpty => Some(Type::named("bool")),
+                BuiltinMember::ProcessSupervisorClose => Some(Type::Unit),
                 BuiltinMember::FileReadAll => Some(Type::Named(
                     "Result".to_string(),
                     vec![

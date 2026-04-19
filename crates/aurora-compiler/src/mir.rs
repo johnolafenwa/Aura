@@ -2737,7 +2737,13 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
-                if matches!(field.as_str(), "start" | "start_soon") {
+                if matches!(field.as_str(), "start" | "start_soon")
+                    && matches!(
+                        self.infer_expr_type(object),
+                        Some(Type::Named(ref name, ref args))
+                            if name == "TaskGroup" && args.is_empty()
+                    )
+                {
                     let (function, params, _return_type, display_name) = self
                         .resolve_task_start_target(&args[0].value)
                         .expect("task-group start should lower from a supported callable target");

@@ -14,23 +14,26 @@ use crate::mir::{
     MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::runtime_value::{
-    cast_numeric_value, decode_process_stdio, io_error, io_read_line, option_none, option_some,
-    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
-    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
-    process_stdio_pipe, process_wait_cancelled, process_wait_exited, process_wait_failed,
-    process_wait_timed_out, queue_receive_cancelled, queue_receive_closed, queue_receive_item,
-    queue_receive_timed_out, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
-    send_error_cancelled, send_error_closed, send_error_full, send_error_timed_out,
-    sleep_with_runtime_scheduler, spawn_lightweight_task, task_result_cancelled, task_result_ready,
-    task_result_timed_out, wait_all_cancelled, wait_all_ready, wait_all_timed_out,
-    wait_any_cancelled, wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
-    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, ProcessChildValue,
-    ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue, RangeValue, RecvValueResult,
-    RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue, TaskValue,
-    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
-    UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
-    WebSocketListenerValue, WebSocketValue,
+    cast_numeric_value, decode_process_restart_policy, decode_process_stdio, io_error,
+    io_read_line, option_none, option_some, process_error_cancelled, process_error_io,
+    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
+    process_stdio_inherit, process_stdio_null, process_stdio_pipe,
+    process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
+    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
+    queue_receive_item, queue_receive_timed_out, result_err, result_ok, run_blocking_io,
+    run_lightweight_root_task, send_error_cancelled, send_error_closed, send_error_full,
+    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
+    task_result_cancelled, task_result_ready, task_result_timed_out, wait_all_cancelled,
+    wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_ready, wait_any_timed_out,
+    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
+    ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    RecvValueResult, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
+    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
+    TlsStreamValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
+    VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -612,6 +615,9 @@ impl MirRuntime {
             Value::ProcessCompleted(_) => {
                 Some(Type::Named("process.Completed".to_string(), Vec::new()))
             }
+            Value::ProcessSupervisor(_) => {
+                Some(Type::Named("process.Supervisor".to_string(), Vec::new()))
+            }
         }
     }
 
@@ -1111,6 +1117,10 @@ impl MirRuntime {
                 Ok(())
             }
             Value::ProcessCompleted(_) => Ok(()),
+            Value::ProcessSupervisor(supervisor) => {
+                supervisor.close();
+                Ok(())
+            }
             Value::Instance(instance) => {
                 let class = self
                     .classes
@@ -1700,6 +1710,7 @@ impl MirRuntime {
                         | "process::inherit"
                         | "process::null"
                         | "process::pipe"
+                        | "process::supervisor"
                         | "process::start"
                         | "process::run"
                 ) {
@@ -1887,6 +1898,14 @@ impl MirRuntime {
                     Value::ProcessCompleted(completed) => {
                         return self.evaluate_process_completed_method(
                             completed.clone(),
+                            field,
+                            args,
+                            env,
+                        );
+                    }
+                    Value::ProcessSupervisor(supervisor) => {
+                        return self.evaluate_process_supervisor_method(
+                            supervisor.clone(),
                             field,
                             args,
                             env,
@@ -3050,9 +3069,15 @@ impl MirRuntime {
                 bind_builtin_args(&[], values)?;
                 Ok(process_stdio_pipe())
             }
+            "process::supervisor" => {
+                bind_builtin_args(&[], values)?;
+                Ok(Value::ProcessSupervisor(ProcessSupervisorValue::new()))
+            }
             "process::start" => {
                 let bound = bind_builtin_args(
-                    &["command", "cwd", "env", "stdin", "stdout", "stderr"],
+                    &[
+                        "command", "cwd", "env", "stdin", "stdout", "stderr", "group",
+                    ],
                     values,
                 )?;
                 let command = expect_command_vec(&bound[0].value, "process.start(...)")?;
@@ -3064,7 +3089,8 @@ impl MirRuntime {
                 let stdin = decode_process_stdio(&bound[3].value, "process.start(...)")?;
                 let stdout = decode_process_stdio(&bound[4].value, "process.start(...)")?;
                 let stderr = decode_process_stdio(&bound[5].value, "process.start(...)")?;
-                match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr) {
+                let group = expect_bool_value(&bound[6].value, "process.start(...)")?;
+                match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr, group) {
                     Ok(child) => Ok(result_ok(Value::ProcessChild(child))),
                     Err(error) => Ok(result_err(process_error_spawn(error.to_string()))),
                 }
@@ -3072,7 +3098,7 @@ impl MirRuntime {
             "process::run" => {
                 let bound = bind_builtin_args(
                     &[
-                        "command", "cwd", "env", "stdin", "stdout", "stderr", "timeout",
+                        "command", "cwd", "env", "stdin", "stdout", "stderr", "timeout", "group",
                     ],
                     values,
                 )?;
@@ -3086,11 +3112,15 @@ impl MirRuntime {
                 let stdout = decode_process_stdio(&bound[4].value, "process.run(...)")?;
                 let stderr = decode_process_stdio(&bound[5].value, "process.run(...)")?;
                 let timeout = expect_process_optional_timeout(&bound[6].value, "process.run(...)")?;
-                let child = match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr)
-                {
-                    Ok(child) => child,
-                    Err(error) => return Ok(result_err(process_error_spawn(error.to_string()))),
-                };
+                let group = expect_bool_value(&bound[7].value, "process.run(...)")?;
+                let child =
+                    match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr, group)
+                    {
+                        Ok(child) => child,
+                        Err(error) => {
+                            return Ok(result_err(process_error_spawn(error.to_string())))
+                        }
+                    };
                 let stdout_task = child
                     .stdout()
                     .map(|pipe| {
@@ -3802,6 +3832,142 @@ impl MirRuntime {
             }
             _ => Err(Diagnostic::new(format!(
                 "unsupported MIR process completed method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_process_supervisor_method(
+        &mut self,
+        supervisor: ProcessSupervisorValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "start" => {
+                let bound = bind_optional_builtin_args(
+                    &[
+                        "name",
+                        "command",
+                        "cwd",
+                        "env",
+                        "stdin",
+                        "stdout",
+                        "stderr",
+                        "restart",
+                        "backoff",
+                        "max_restarts",
+                        "group",
+                    ],
+                    evaluate_named_args(args, env)?,
+                )?;
+                let required = |index: usize, label: &str| -> Result<&EvaluatedMirArg> {
+                    bound[index].as_ref().ok_or_else(|| {
+                        Diagnostic::new(format!(
+                            "missing MIR argument `{}` for `start(...)`",
+                            label
+                        ))
+                    })
+                };
+                let name = expect_string_value(&required(0, "name")?.value, "start(...)")?;
+                let command = expect_command_vec(&required(1, "command")?.value, "start(...)")?;
+                let cwd = bound[2]
+                    .as_ref()
+                    .map(|argument| expect_optional_string_value(&argument.value, "start(...)"))
+                    .transpose()?
+                    .flatten();
+                let env = match &bound[3] {
+                    Some(argument) => expect_headers_map(&argument.value, "start(...)")?,
+                    None => Vec::new(),
+                };
+                let stdin = match &bound[4] {
+                    Some(argument) => decode_process_stdio(&argument.value, "start(...)")?,
+                    None => crate::runtime_value::ProcessStdioConfig::Null,
+                };
+                let stdout = match &bound[5] {
+                    Some(argument) => decode_process_stdio(&argument.value, "start(...)")?,
+                    None => crate::runtime_value::ProcessStdioConfig::Inherit,
+                };
+                let stderr = match &bound[6] {
+                    Some(argument) => decode_process_stdio(&argument.value, "start(...)")?,
+                    None => crate::runtime_value::ProcessStdioConfig::Inherit,
+                };
+                let restart = match &bound[7] {
+                    Some(argument) => decode_process_restart_policy(&argument.value, "start(...)")?,
+                    None => ProcessRestartPolicy::OnFailure,
+                };
+                let backoff = match &bound[8] {
+                    Some(argument) => expect_duration_value(&argument.value, "start(...)")?,
+                    None => StdDuration::from_millis(100),
+                };
+                let max_restarts = match &bound[9] {
+                    Some(argument) => {
+                        expect_supervisor_max_restarts(&argument.value, "start(...)")?
+                    }
+                    None => None,
+                };
+                let group = match &bound[10] {
+                    Some(argument) => expect_bool_value(&argument.value, "start(...)")?,
+                    None => true,
+                };
+                match supervisor.start(
+                    name,
+                    command,
+                    cwd,
+                    env,
+                    stdin,
+                    stdout,
+                    stderr,
+                    restart,
+                    backoff,
+                    max_restarts,
+                    group,
+                ) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(error)),
+                }
+            }
+            "wait" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_process_optional_timeout(&bound[0].value, "wait(timeout=...)")?;
+                Ok(match supervisor.wait(timeout, Some(&self.cancellation)) {
+                    ProcessSupervisorWaitStatus::Event(event) => {
+                        process_supervisor_wait_event(event)
+                    }
+                    ProcessSupervisorWaitStatus::TimedOut => process_supervisor_wait_timed_out(),
+                    ProcessSupervisorWaitStatus::Cancelled => process_supervisor_wait_cancelled(),
+                })
+            }
+            "wait_or_none" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_process_optional_timeout(&bound[0].value, "wait_or_none(timeout=...)")?;
+                match supervisor.wait_or_none(timeout, Some(&self.cancellation)) {
+                    Ok(Some(event)) => Ok(result_ok(option_some(event))),
+                    Ok(None) => Ok(result_ok(option_none())),
+                    Err(error) => Ok(result_err(error)),
+                }
+            }
+            "stop" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match supervisor.stop() {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(error)),
+                }
+            }
+            "is_empty" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(Value::Bool(supervisor.is_empty()))
+            }
+            "close" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                supervisor.close();
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR process supervisor method `{}`",
                 field
             ))),
         }
@@ -4826,6 +4992,38 @@ fn bind_builtin_args(
         .collect()
 }
 
+fn bind_optional_builtin_args(
+    expected_names: &[&str],
+    args: Vec<EvaluatedMirArg>,
+) -> Result<Vec<Option<EvaluatedMirArg>>> {
+    let mut values = vec![None; expected_names.len()];
+    let mut next_positional = 0;
+
+    for argument in args {
+        if let Some(name) = argument.name.as_deref() {
+            let Some(index) = expected_names
+                .iter()
+                .position(|candidate| *candidate == name)
+            else {
+                return Err(Diagnostic::new(format!("unknown MIR argument `{}`", name)));
+            };
+            values[index] = Some(argument);
+            continue;
+        }
+
+        while next_positional < values.len() && values[next_positional].is_some() {
+            next_positional += 1;
+        }
+        if next_positional >= values.len() {
+            return Err(Diagnostic::new("too many MIR arguments"));
+        }
+        values[next_positional] = Some(argument);
+        next_positional += 1;
+    }
+
+    Ok(values)
+}
+
 fn expect_string_value(value: &Value, label: &str) -> Result<String> {
     match value {
         Value::String(text) => Ok(text.clone()),
@@ -4877,6 +5075,17 @@ fn expect_bytes_value(value: &Value, label: &str) -> Result<Vec<u8>> {
         }
         other => Err(Diagnostic::new(format!(
             "`{}` expects `Vec[uint8]`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
+fn expect_bool_value(value: &Value, label: &str) -> Result<bool> {
+    match value {
+        Value::Bool(value) => Ok(*value),
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `bool`, found `{}`",
             label,
             other.render()
         ))),
@@ -4943,6 +5152,33 @@ fn expect_process_optional_timeout(value: &Value, label: &str) -> Result<Option<
             other.render()
         ))),
     }
+}
+
+fn expect_duration_value(value: &Value, label: &str) -> Result<StdDuration> {
+    match value {
+        Value::Duration(duration) => {
+            let millis = u64::try_from(*duration).map_err(|_| {
+                Diagnostic::new(format!("`{}` duration must be non-negative", label))
+            })?;
+            Ok(StdDuration::from_millis(millis))
+        }
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `Duration`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
+fn expect_supervisor_max_restarts(value: &Value, label: &str) -> Result<Option<i32>> {
+    let value = expect_i32_value(value, label)?;
+    if value < -1 {
+        return Err(Diagnostic::new(format!(
+            "`{}` expects `max_restarts` to be -1 or greater",
+            label
+        )));
+    }
+    Ok((value >= 0).then_some(value))
 }
 
 fn expect_optional_timeout(value: Option<&Value>, label: &str) -> Result<Option<StdDuration>> {

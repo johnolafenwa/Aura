@@ -74,6 +74,13 @@ fn duration_expr(millis: i128) -> Expr {
     }
 }
 
+fn bool_expr(value: bool) -> Expr {
+    Expr {
+        kind: ExprKind::Bool(value),
+        span: builtin_span(),
+    }
+}
+
 fn empty_map_expr() -> Expr {
     Expr {
         kind: ExprKind::Map(Vec::new()),
@@ -455,6 +462,207 @@ fn process_wait_enum_info() -> EnumInfo {
         decl: EnumDecl {
             public: true,
             name: "Wait".to_string(),
+            type_params: Vec::new(),
+            type_param_bounds: BTreeMap::new(),
+            variants: variants
+                .iter()
+                .map(|(name, payloads)| EnumVariantDecl {
+                    name: (*name).to_string(),
+                    payloads: payloads.clone(),
+                    named_payloads: !payloads.is_empty(),
+                    span: builtin_span(),
+                })
+                .collect(),
+            span: builtin_span(),
+        },
+        type_param_bounds: BTreeMap::new(),
+        variants: variants
+            .into_iter()
+            .map(|(name, payloads)| {
+                (
+                    name.to_string(),
+                    EnumVariantInfo {
+                        payloads: payloads
+                            .iter()
+                            .map(|payload| EnumPayloadFieldInfo {
+                                name: payload.name.clone(),
+                                ty: lower_type_ref(&payload.ty),
+                                span: payload.span,
+                            })
+                            .collect(),
+                        named_payloads: !payloads.is_empty(),
+                        span: builtin_span(),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+fn process_restart_policy_enum_info() -> EnumInfo {
+    let variants = vec![
+        ("Never", Vec::new()),
+        ("OnFailure", Vec::new()),
+        ("Always", Vec::new()),
+    ];
+    EnumInfo {
+        module_name: "process".to_string(),
+        decl: EnumDecl {
+            public: true,
+            name: "RestartPolicy".to_string(),
+            type_params: Vec::new(),
+            type_param_bounds: BTreeMap::new(),
+            variants: variants
+                .iter()
+                .map(|(name, payloads)| EnumVariantDecl {
+                    name: (*name).to_string(),
+                    payloads: payloads.clone(),
+                    named_payloads: false,
+                    span: builtin_span(),
+                })
+                .collect(),
+            span: builtin_span(),
+        },
+        type_param_bounds: BTreeMap::new(),
+        variants: variants
+            .into_iter()
+            .map(|(name, _)| {
+                (
+                    name.to_string(),
+                    EnumVariantInfo {
+                        payloads: Vec::new(),
+                        named_payloads: false,
+                        span: builtin_span(),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+fn process_supervisor_event_enum_info() -> EnumInfo {
+    let variants = vec![
+        (
+            "Exited",
+            vec![
+                EnumPayloadFieldDecl {
+                    name: Some("name".to_string()),
+                    ty: type_ref("String", Vec::new()),
+                    span: builtin_span(),
+                },
+                EnumPayloadFieldDecl {
+                    name: Some("status".to_string()),
+                    ty: type_ref("process.ExitStatus", Vec::new()),
+                    span: builtin_span(),
+                },
+                EnumPayloadFieldDecl {
+                    name: Some("restart_count".to_string()),
+                    ty: type_ref("int32", Vec::new()),
+                    span: builtin_span(),
+                },
+            ],
+        ),
+        (
+            "Restarted",
+            vec![
+                EnumPayloadFieldDecl {
+                    name: Some("name".to_string()),
+                    ty: type_ref("String", Vec::new()),
+                    span: builtin_span(),
+                },
+                EnumPayloadFieldDecl {
+                    name: Some("status".to_string()),
+                    ty: type_ref("process.ExitStatus", Vec::new()),
+                    span: builtin_span(),
+                },
+                EnumPayloadFieldDecl {
+                    name: Some("restart_count".to_string()),
+                    ty: type_ref("int32", Vec::new()),
+                    span: builtin_span(),
+                },
+            ],
+        ),
+        (
+            "Failed",
+            vec![
+                EnumPayloadFieldDecl {
+                    name: Some("name".to_string()),
+                    ty: type_ref("String", Vec::new()),
+                    span: builtin_span(),
+                },
+                EnumPayloadFieldDecl {
+                    name: Some("error".to_string()),
+                    ty: process_error_type_ref(),
+                    span: builtin_span(),
+                },
+                EnumPayloadFieldDecl {
+                    name: Some("restart_count".to_string()),
+                    ty: type_ref("int32", Vec::new()),
+                    span: builtin_span(),
+                },
+            ],
+        ),
+    ];
+    EnumInfo {
+        module_name: "process".to_string(),
+        decl: EnumDecl {
+            public: true,
+            name: "SupervisorEvent".to_string(),
+            type_params: Vec::new(),
+            type_param_bounds: BTreeMap::new(),
+            variants: variants
+                .iter()
+                .map(|(name, payloads)| EnumVariantDecl {
+                    name: (*name).to_string(),
+                    payloads: payloads.clone(),
+                    named_payloads: true,
+                    span: builtin_span(),
+                })
+                .collect(),
+            span: builtin_span(),
+        },
+        type_param_bounds: BTreeMap::new(),
+        variants: variants
+            .into_iter()
+            .map(|(name, payloads)| {
+                (
+                    name.to_string(),
+                    EnumVariantInfo {
+                        payloads: payloads
+                            .iter()
+                            .map(|payload| EnumPayloadFieldInfo {
+                                name: payload.name.clone(),
+                                ty: lower_type_ref(&payload.ty),
+                                span: payload.span,
+                            })
+                            .collect(),
+                        named_payloads: true,
+                        span: builtin_span(),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+fn process_supervisor_wait_enum_info() -> EnumInfo {
+    let variants = vec![
+        (
+            "Event",
+            vec![EnumPayloadFieldDecl {
+                name: Some("event".to_string()),
+                ty: type_ref("process.SupervisorEvent", Vec::new()),
+                span: builtin_span(),
+            }],
+        ),
+        ("TimedOut", Vec::new()),
+        ("Cancelled", Vec::new()),
+    ];
+    EnumInfo {
+        module_name: "process".to_string(),
+        decl: EnumDecl {
+            public: true,
+            name: "SupervisorWait".to_string(),
             type_params: Vec::new(),
             type_param_bounds: BTreeMap::new(),
             variants: variants
@@ -912,19 +1120,27 @@ fn process_namespace() -> ModuleNamespace {
     let child = class_info("process", "Child");
     let pipe = class_info("process", "Pipe");
     let completed = class_info("process", "Completed");
+    let supervisor = class_info("process", "Supervisor");
     let mut classes = BTreeMap::new();
     classes.insert(child.decl.name.clone(), child.clone());
     classes.insert(pipe.decl.name.clone(), pipe.clone());
     classes.insert(completed.decl.name.clone(), completed.clone());
+    classes.insert(supervisor.decl.name.clone(), supervisor.clone());
 
     let stdio = process_stdio_enum_info();
     let exit_status = process_exit_status_enum_info();
     let wait = process_wait_enum_info();
+    let restart_policy = process_restart_policy_enum_info();
+    let supervisor_event = process_supervisor_event_enum_info();
+    let supervisor_wait = process_supervisor_wait_enum_info();
     let error = process_error_enum_info();
     let mut enums = BTreeMap::new();
     enums.insert(stdio.decl.name.clone(), stdio.clone());
     enums.insert(exit_status.decl.name.clone(), exit_status.clone());
     enums.insert(wait.decl.name.clone(), wait.clone());
+    enums.insert(restart_policy.decl.name.clone(), restart_policy.clone());
+    enums.insert(supervisor_event.decl.name.clone(), supervisor_event.clone());
+    enums.insert(supervisor_wait.decl.name.clone(), supervisor_wait.clone());
     enums.insert(error.decl.name.clone(), error.clone());
 
     let mut functions = BTreeMap::new();
@@ -946,6 +1162,12 @@ fn process_namespace() -> ModuleNamespace {
             "pipe",
             Vec::new(),
             type_ref("process.Stdio", Vec::new()),
+        ),
+        function_info(
+            "process",
+            "supervisor",
+            Vec::new(),
+            type_ref("process.Supervisor", Vec::new()),
         ),
         function_info(
             "process",
@@ -976,6 +1198,7 @@ fn process_namespace() -> ModuleNamespace {
                     type_ref("process.Stdio", Vec::new()),
                     qualified_zero_arg_call_expr("process", "inherit"),
                 ),
+                value_param_with_default("group", type_ref("bool", Vec::new()), bool_expr(false)),
             ],
             process_result_type_ref(type_ref("process.Child", Vec::new())),
         ),
@@ -1013,6 +1236,7 @@ fn process_namespace() -> ModuleNamespace {
                     type_ref("Duration", Vec::new()),
                     duration_expr(-1),
                 ),
+                value_param_with_default("group", type_ref("bool", Vec::new()), bool_expr(false)),
             ],
             process_result_type_ref(type_ref("process.Completed", Vec::new())),
         ),

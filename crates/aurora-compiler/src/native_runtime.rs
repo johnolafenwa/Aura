@@ -13,23 +13,26 @@ use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_value::{
-    cast_numeric_value, current_lightweight_task_cancellation, decode_process_stdio, io_error,
-    io_read_line, option_none, option_some, process_error_cancelled, process_error_io,
-    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
-    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_wait_cancelled,
-    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
-    queue_receive_closed, queue_receive_item, queue_receive_timed_out, render_float, result_err,
-    result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
+    cast_numeric_value, current_lightweight_task_cancellation, decode_process_restart_policy,
+    decode_process_stdio, io_error, io_read_line, option_none, option_some,
+    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
+    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
+    process_stdio_pipe, process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
+    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
+    queue_receive_item, queue_receive_timed_out, render_float, result_err, result_ok,
+    run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
     send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
     spawn_lightweight_task_with_cancellation, task_result_cancelled, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
     CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpListenerValue,
     HttpResponseValue, InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus,
-    ProcessCompletedValue, RangeValue, RecvValueResult, RuntimeSchedulerWakeReason, SendValueError,
-    SetValue, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue,
-    TlsListenerValue, TlsStreamValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
-    VecValue, WebSocketListenerValue, WebSocketValue,
+    ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    RecvValueResult, RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue,
+    TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
+    UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue,
+    WebSocketValue,
 };
 use crate::sema::Type;
 
@@ -328,6 +331,17 @@ fn expect_bytes_value(value: &Value, label: &str) -> Vec<u8> {
     }
 }
 
+fn expect_bool_value(value: &Value, label: &str) -> bool {
+    match value {
+        Value::Bool(value) => *value,
+        other => runtime_error(format!(
+            "`{}` expects `bool`, found `{}`",
+            label,
+            value_type_name(other)
+        )),
+    }
+}
+
 fn expect_i32_value(value: &Value, label: &str) -> i32 {
     match value {
         Value::Int(number) => number
@@ -409,6 +423,32 @@ fn process_optional_timeout_from_ptr(value: *mut OpaqueValue, label: &str) -> Op
             value_type_name(other)
         )),
     }
+}
+
+fn duration_from_ptr(value: *mut OpaqueValue, label: &str) -> StdDuration {
+    match unsafe { value_ref(value) } {
+        Value::Duration(duration) => u64::try_from(duration)
+            .map(StdDuration::from_millis)
+            .unwrap_or_else(|_| {
+                runtime_error(format!("`{}` duration must be non-negative", label))
+            }),
+        other => runtime_error(format!(
+            "`{}` expects `Duration`, found `{}`",
+            label,
+            value_type_name(other)
+        )),
+    }
+}
+
+fn supervisor_max_restarts_from_ptr(value: *mut OpaqueValue, label: &str) -> Option<i32> {
+    let value = expect_i32_value(&unsafe { value_ref(value) }, label);
+    if value < -1 {
+        runtime_error(format!(
+            "`{}` expects `max_restarts` to be -1 or greater",
+            label
+        ));
+    }
+    (value >= 0).then_some(value)
 }
 
 fn expect_command_vec(value: &Value, label: &str) -> Vec<String> {
@@ -555,6 +595,7 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::ProcessChild(_) => "process.Child".to_string(),
         Value::ProcessPipe(_) => "process.Pipe".to_string(),
         Value::ProcessCompleted(_) => "process.Completed".to_string(),
+        Value::ProcessSupervisor(_) => "process.Supervisor".to_string(),
     }
 }
 
@@ -593,6 +634,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         Value::ProcessChild(_) => Type::named("process.Child"),
         Value::ProcessPipe(_) => Type::named("process.Pipe"),
         Value::ProcessCompleted(_) => Type::named("process.Completed"),
+        Value::ProcessSupervisor(_) => Type::named("process.Supervisor"),
         Value::Int(_) | Value::ModuleNamespace(_) | Value::Unit => Type::named("Unknown"),
     }
 }
@@ -2207,6 +2249,7 @@ pub extern "C" fn aurora_direct_value_type_matches(
         Value::ProcessChild(_) => expected == "process.Child",
         Value::ProcessPipe(_) => expected == "process.Pipe",
         Value::ProcessCompleted(_) => expected == "process.Completed",
+        Value::ProcessSupervisor(_) => expected == "process.Supervisor",
         Value::Duration(_) => expected == "Duration",
         Value::Range(_) => expected == "Range",
         Value::Bool(_) => expected == "bool",
@@ -3392,6 +3435,11 @@ pub extern "C" fn aurora_direct_process_pipe() -> *mut OpaqueValue {
 }
 
 #[no_mangle]
+pub extern "C" fn aurora_direct_process_supervisor() -> *mut OpaqueValue {
+    boxed_value(Value::ProcessSupervisor(ProcessSupervisorValue::new()))
+}
+
+#[no_mangle]
 pub extern "C" fn aurora_direct_process_start(
     command: *mut OpaqueValue,
     cwd: *mut OpaqueValue,
@@ -3399,6 +3447,7 @@ pub extern "C" fn aurora_direct_process_start(
     stdin: *mut OpaqueValue,
     stdout: *mut OpaqueValue,
     stderr: *mut OpaqueValue,
+    group: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     let command = expect_command_vec(&unsafe { value_ref(command) }, "process.start(...)");
     if command.is_empty() {
@@ -3412,7 +3461,8 @@ pub extern "C" fn aurora_direct_process_start(
         .unwrap_or_else(|error| runtime_diagnostic_error(error));
     let stderr = decode_process_stdio(&unsafe { value_ref(stderr) }, "process.start(...)")
         .unwrap_or_else(|error| runtime_diagnostic_error(error));
-    match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr) {
+    let group = expect_bool_value(&unsafe { value_ref(group) }, "process.start(...)");
+    match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr, group) {
         Ok(child) => boxed_value(result_ok(Value::ProcessChild(child))),
         Err(error) => boxed_value(result_err(process_error_spawn(error.to_string()))),
     }
@@ -3427,6 +3477,7 @@ pub extern "C" fn aurora_direct_process_run(
     stdout: *mut OpaqueValue,
     stderr: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
+    group: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     let command = expect_command_vec(&unsafe { value_ref(command) }, "process.run(...)");
     if command.is_empty() {
@@ -3441,8 +3492,9 @@ pub extern "C" fn aurora_direct_process_run(
     let stderr = decode_process_stdio(&unsafe { value_ref(stderr) }, "process.run(...)")
         .unwrap_or_else(|error| runtime_diagnostic_error(error));
     let timeout = process_optional_timeout_from_ptr(timeout, "process.run(...)");
+    let group = expect_bool_value(&unsafe { value_ref(group) }, "process.run(...)");
 
-    let child = match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr) {
+    let child = match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr, group) {
         Ok(child) => child,
         Err(error) => return boxed_value(result_err(process_error_spawn(error.to_string()))),
     };
@@ -3856,6 +3908,145 @@ pub extern "C" fn aurora_direct_process_completed_check(
         },
         other => runtime_error(format!(
             "expected `process.Completed`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_supervisor_start(
+    supervisor: *mut OpaqueValue,
+    name: *mut OpaqueValue,
+    command: *mut OpaqueValue,
+    cwd: *mut OpaqueValue,
+    env: *mut OpaqueValue,
+    stdin: *mut OpaqueValue,
+    stdout: *mut OpaqueValue,
+    stderr: *mut OpaqueValue,
+    restart: *mut OpaqueValue,
+    backoff: *mut OpaqueValue,
+    max_restarts: *mut OpaqueValue,
+    group: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let name = expect_string_value(&unsafe { value_ref(name) }, "start(...)");
+    let command = expect_command_vec(&unsafe { value_ref(command) }, "start(...)");
+    let cwd = expect_optional_string_value(&unsafe { value_ref(cwd) }, "start(...)");
+    let env = expect_headers_map(&unsafe { value_ref(env) }, "start(...)");
+    let stdin = decode_process_stdio(&unsafe { value_ref(stdin) }, "start(...)")
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+    let stdout = decode_process_stdio(&unsafe { value_ref(stdout) }, "start(...)")
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+    let stderr = decode_process_stdio(&unsafe { value_ref(stderr) }, "start(...)")
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+    let restart = decode_process_restart_policy(&unsafe { value_ref(restart) }, "start(...)")
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+    let backoff = duration_from_ptr(backoff, "start(...)");
+    let max_restarts = supervisor_max_restarts_from_ptr(max_restarts, "start(...)");
+    let group = expect_bool_value(&unsafe { value_ref(group) }, "start(...)");
+    match unsafe { value_ref(supervisor) } {
+        Value::ProcessSupervisor(supervisor) => match supervisor.start(
+            name,
+            command,
+            cwd,
+            env,
+            stdin,
+            stdout,
+            stderr,
+            restart,
+            backoff,
+            max_restarts,
+            group,
+        ) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(error)),
+        },
+        other => runtime_error(format!(
+            "expected `process.Supervisor`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_supervisor_wait(
+    supervisor: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = process_optional_timeout_from_ptr(timeout, "wait(timeout=...)");
+    match unsafe { value_ref(supervisor) } {
+        Value::ProcessSupervisor(supervisor) => boxed_value(
+            match supervisor.wait(timeout, Some(&current_cancellation())) {
+                ProcessSupervisorWaitStatus::Event(event) => process_supervisor_wait_event(event),
+                ProcessSupervisorWaitStatus::TimedOut => process_supervisor_wait_timed_out(),
+                ProcessSupervisorWaitStatus::Cancelled => process_supervisor_wait_cancelled(),
+            },
+        ),
+        other => runtime_error(format!(
+            "expected `process.Supervisor`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_supervisor_wait_or_none(
+    supervisor: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = process_optional_timeout_from_ptr(timeout, "wait_or_none(timeout=...)");
+    match unsafe { value_ref(supervisor) } {
+        Value::ProcessSupervisor(supervisor) => {
+            match supervisor.wait_or_none(timeout, Some(&current_cancellation())) {
+                Ok(Some(event)) => boxed_value(result_ok(option_some(event))),
+                Ok(None) => boxed_value(result_ok(option_none())),
+                Err(error) => boxed_value(result_err(error)),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `process.Supervisor`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_supervisor_stop(
+    supervisor: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(supervisor) } {
+        Value::ProcessSupervisor(supervisor) => match supervisor.stop() {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(error)),
+        },
+        other => runtime_error(format!(
+            "expected `process.Supervisor`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_supervisor_is_empty(supervisor: *mut OpaqueValue) -> i64 {
+    match unsafe { value_ref(supervisor) } {
+        Value::ProcessSupervisor(supervisor) => i64::from(supervisor.is_empty()),
+        other => runtime_error(format!(
+            "expected `process.Supervisor`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_supervisor_close(
+    supervisor: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(supervisor) } {
+        Value::ProcessSupervisor(supervisor) => {
+            supervisor.close();
+            boxed_value(Value::Unit)
+        }
+        other => runtime_error(format!(
+            "expected `process.Supervisor`, found `{}`",
             value_type_name(other)
         )),
     }

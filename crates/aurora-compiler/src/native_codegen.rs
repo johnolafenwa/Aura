@@ -308,6 +308,7 @@ struct NativeCodegen<'a> {
     process_inherit: FuncId,
     process_null: FuncId,
     process_pipe: FuncId,
+    process_supervisor: FuncId,
     process_start: FuncId,
     process_run: FuncId,
     process_child_stdin: FuncId,
@@ -331,6 +332,12 @@ struct NativeCodegen<'a> {
     process_completed_stdout: FuncId,
     process_completed_stderr: FuncId,
     process_completed_check: FuncId,
+    process_supervisor_start: FuncId,
+    process_supervisor_wait: FuncId,
+    process_supervisor_wait_or_none: FuncId,
+    process_supervisor_stop: FuncId,
+    process_supervisor_is_empty: FuncId,
+    process_supervisor_close: FuncId,
     net_connect: FuncId,
     net_connect_timeout: FuncId,
     net_listen: FuncId,
@@ -701,8 +708,9 @@ impl<'a> NativeCodegen<'a> {
             process_inherit => ("aurora_direct_process_inherit", [], Some(types::I64)),
             process_null => ("aurora_direct_process_null", [], Some(types::I64)),
             process_pipe => ("aurora_direct_process_pipe", [], Some(types::I64)),
-            process_start => ("aurora_direct_process_start", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            process_run => ("aurora_direct_process_run", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            process_supervisor => ("aurora_direct_process_supervisor", [], Some(types::I64)),
+            process_start => ("aurora_direct_process_start", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            process_run => ("aurora_direct_process_run", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             process_child_stdin => ("aurora_direct_process_child_stdin", [types::I64], Some(types::I64)),
             process_child_stdout => ("aurora_direct_process_child_stdout", [types::I64], Some(types::I64)),
             process_child_stderr => ("aurora_direct_process_child_stderr", [types::I64], Some(types::I64)),
@@ -724,6 +732,12 @@ impl<'a> NativeCodegen<'a> {
             process_completed_stdout => ("aurora_direct_process_completed_stdout", [types::I64], Some(types::I64)),
             process_completed_stderr => ("aurora_direct_process_completed_stderr", [types::I64], Some(types::I64)),
             process_completed_check => ("aurora_direct_process_completed_check", [types::I64], Some(types::I64)),
+            process_supervisor_start => ("aurora_direct_process_supervisor_start", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            process_supervisor_wait => ("aurora_direct_process_supervisor_wait", [types::I64, types::I64], Some(types::I64)),
+            process_supervisor_wait_or_none => ("aurora_direct_process_supervisor_wait_or_none", [types::I64, types::I64], Some(types::I64)),
+            process_supervisor_stop => ("aurora_direct_process_supervisor_stop", [types::I64], Some(types::I64)),
+            process_supervisor_is_empty => ("aurora_direct_process_supervisor_is_empty", [types::I64], Some(types::I64)),
+            process_supervisor_close => ("aurora_direct_process_supervisor_close", [types::I64], Some(types::I64)),
             net_connect => ("aurora_direct_net_connect", [types::I64], Some(types::I64)),
             net_connect_timeout => ("aurora_direct_net_connect_timeout", [types::I64, types::I64], Some(types::I64)),
             net_listen => ("aurora_direct_net_listen", [types::I64], Some(types::I64)),
@@ -1026,6 +1040,7 @@ impl<'a> NativeCodegen<'a> {
             process_inherit,
             process_null,
             process_pipe,
+            process_supervisor,
             process_start,
             process_run,
             process_child_stdin,
@@ -1049,6 +1064,12 @@ impl<'a> NativeCodegen<'a> {
             process_completed_stdout,
             process_completed_stderr,
             process_completed_check,
+            process_supervisor_start,
+            process_supervisor_wait,
+            process_supervisor_wait_or_none,
+            process_supervisor_stop,
+            process_supervisor_is_empty,
+            process_supervisor_close,
             net_connect,
             net_connect_timeout,
             net_listen,
@@ -1767,6 +1788,9 @@ impl<'a> NativeCodegen<'a> {
         let process_pipe = self
             .object
             .declare_func_in_func(self.process_pipe, builder.func);
+        let process_supervisor = self
+            .object
+            .declare_func_in_func(self.process_supervisor, builder.func);
         let process_start = self
             .object
             .declare_func_in_func(self.process_start, builder.func);
@@ -1836,6 +1860,24 @@ impl<'a> NativeCodegen<'a> {
         let process_completed_check = self
             .object
             .declare_func_in_func(self.process_completed_check, builder.func);
+        let process_supervisor_start = self
+            .object
+            .declare_func_in_func(self.process_supervisor_start, builder.func);
+        let process_supervisor_wait = self
+            .object
+            .declare_func_in_func(self.process_supervisor_wait, builder.func);
+        let process_supervisor_wait_or_none = self
+            .object
+            .declare_func_in_func(self.process_supervisor_wait_or_none, builder.func);
+        let process_supervisor_stop = self
+            .object
+            .declare_func_in_func(self.process_supervisor_stop, builder.func);
+        let process_supervisor_is_empty = self
+            .object
+            .declare_func_in_func(self.process_supervisor_is_empty, builder.func);
+        let process_supervisor_close = self
+            .object
+            .declare_func_in_func(self.process_supervisor_close, builder.func);
         let net_connect = self
             .object
             .declare_func_in_func(self.net_connect, builder.func);
@@ -2247,6 +2289,7 @@ impl<'a> NativeCodegen<'a> {
             process_inherit,
             process_null,
             process_pipe,
+            process_supervisor,
             process_start,
             process_run,
             process_child_stdin,
@@ -2270,6 +2313,12 @@ impl<'a> NativeCodegen<'a> {
             process_completed_stdout,
             process_completed_stderr,
             process_completed_check,
+            process_supervisor_start,
+            process_supervisor_wait,
+            process_supervisor_wait_or_none,
+            process_supervisor_stop,
+            process_supervisor_is_empty,
+            process_supervisor_close,
             net_connect,
             net_connect_timeout,
             net_listen,
@@ -2706,6 +2755,7 @@ struct FunctionCompiler<'a> {
     process_inherit: cranelift_codegen::ir::FuncRef,
     process_null: cranelift_codegen::ir::FuncRef,
     process_pipe: cranelift_codegen::ir::FuncRef,
+    process_supervisor: cranelift_codegen::ir::FuncRef,
     process_start: cranelift_codegen::ir::FuncRef,
     process_run: cranelift_codegen::ir::FuncRef,
     process_child_stdin: cranelift_codegen::ir::FuncRef,
@@ -2729,6 +2779,12 @@ struct FunctionCompiler<'a> {
     process_completed_stdout: cranelift_codegen::ir::FuncRef,
     process_completed_stderr: cranelift_codegen::ir::FuncRef,
     process_completed_check: cranelift_codegen::ir::FuncRef,
+    process_supervisor_start: cranelift_codegen::ir::FuncRef,
+    process_supervisor_wait: cranelift_codegen::ir::FuncRef,
+    process_supervisor_wait_or_none: cranelift_codegen::ir::FuncRef,
+    process_supervisor_stop: cranelift_codegen::ir::FuncRef,
+    process_supervisor_is_empty: cranelift_codegen::ir::FuncRef,
+    process_supervisor_close: cranelift_codegen::ir::FuncRef,
     net_connect: cranelift_codegen::ir::FuncRef,
     net_connect_timeout: cranelift_codegen::ir::FuncRef,
     net_listen: cranelift_codegen::ir::FuncRef,
@@ -3766,6 +3822,7 @@ impl<'a> FunctionCompiler<'a> {
                 | "process::inherit"
                 | "process::null"
                 | "process::pipe"
+                | "process::supervisor"
                 | "process::start"
                 | "process::run"
                 | "net::connect"
@@ -4030,10 +4087,12 @@ impl<'a> FunctionCompiler<'a> {
             "fs::exists" | "fs::read_to_string" | "fs::read_bytes" | "fs::create_dir"
             | "fs::read_dir" | "fs::remove_file" | "fs::open" | "fs::create" | "fs::append"
             | "net::unix_listen" | "net::unix_connect" => &["path"],
-            "process::inherit" | "process::null" | "process::pipe" => &[],
-            "process::start" => &["command", "cwd", "env", "stdin", "stdout", "stderr"],
+            "process::inherit" | "process::null" | "process::pipe" | "process::supervisor" => &[],
+            "process::start" => &[
+                "command", "cwd", "env", "stdin", "stdout", "stderr", "group",
+            ],
             "process::run" => &[
-                "command", "cwd", "env", "stdin", "stdout", "stderr", "timeout",
+                "command", "cwd", "env", "stdin", "stdout", "stderr", "timeout", "group",
             ],
             "net::connect"
             | "net::listen"
@@ -4080,6 +4139,7 @@ impl<'a> FunctionCompiler<'a> {
             "process::inherit" => self.process_inherit,
             "process::null" => self.process_null,
             "process::pipe" => self.process_pipe,
+            "process::supervisor" => self.process_supervisor,
             "process::start" => self.process_start,
             "process::run" => self.process_run,
             "net::connect" => self.net_connect,
@@ -4196,6 +4256,10 @@ impl<'a> FunctionCompiler<'a> {
             "process::inherit" | "process::null" | "process::pipe" => Ok(self.owned_opaque_result(
                 results,
                 Type::Named("process.Stdio".to_string(), Vec::new()),
+            )),
+            "process::supervisor" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named("process.Supervisor".to_string(), Vec::new()),
             )),
             "process::start" => Ok(self.owned_opaque_result(
                 results,
@@ -6940,6 +7004,242 @@ impl<'a> FunctionCompiler<'a> {
                     )),
                 };
             }
+            if name == "process.Supervisor" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "start" => {
+                        let bound = ordered_optional_named_args(
+                            &[
+                                "name",
+                                "command",
+                                "cwd",
+                                "env",
+                                "stdin",
+                                "stdout",
+                                "stderr",
+                                "restart",
+                                "backoff",
+                                "max_restarts",
+                                "group",
+                            ],
+                            args,
+                        )?;
+                        let required = |index: usize, label: &str| {
+                            bound[index].ok_or_else(|| {
+                                format!("direct backend expected `start()` to receive `{}`", label)
+                            })
+                        };
+                        let name_loaded = self.load_operand(&required(0, "name")?.value)?;
+                        let name = self.ensure_opaque(name_loaded)?;
+                        let command_loaded = self.load_operand(&required(1, "command")?.value)?;
+                        let command = self.ensure_opaque(command_loaded)?;
+                        let cwd = if let Some(argument) = bound[2] {
+                            let loaded = self.load_operand(&argument.value)?;
+                            self.ensure_opaque(loaded)?
+                        } else {
+                            self.compile_enum_variant("Option", "None", &[])?
+                        };
+                        let env = if let Some(argument) = bound[3] {
+                            let loaded = self.load_operand(&argument.value)?;
+                            self.ensure_opaque(loaded)?
+                        } else {
+                            let init = self.builder.ins().call(self.map_empty, &[]);
+                            self.owned_opaque_result(
+                                self.builder.inst_results(init).to_vec(),
+                                Type::Named(
+                                    "Map".to_string(),
+                                    vec![Type::named("String"), Type::named("String")],
+                                ),
+                            )
+                        };
+                        let stdin = if let Some(argument) = bound[4] {
+                            let loaded = self.load_operand(&argument.value)?;
+                            self.ensure_opaque(loaded)?
+                        } else {
+                            let inst = self.builder.ins().call(self.process_null, &[]);
+                            self.owned_opaque_result(
+                                self.builder.inst_results(inst).to_vec(),
+                                Type::Named("process.Stdio".to_string(), Vec::new()),
+                            )
+                        };
+                        let stdout = if let Some(argument) = bound[5] {
+                            let loaded = self.load_operand(&argument.value)?;
+                            self.ensure_opaque(loaded)?
+                        } else {
+                            let inst = self.builder.ins().call(self.process_inherit, &[]);
+                            self.owned_opaque_result(
+                                self.builder.inst_results(inst).to_vec(),
+                                Type::Named("process.Stdio".to_string(), Vec::new()),
+                            )
+                        };
+                        let stderr = if let Some(argument) = bound[6] {
+                            let loaded = self.load_operand(&argument.value)?;
+                            self.ensure_opaque(loaded)?
+                        } else {
+                            let inst = self.builder.ins().call(self.process_inherit, &[]);
+                            self.owned_opaque_result(
+                                self.builder.inst_results(inst).to_vec(),
+                                Type::Named("process.Stdio".to_string(), Vec::new()),
+                            )
+                        };
+                        let restart = if let Some(argument) = bound[7] {
+                            let loaded = self.load_operand(&argument.value)?;
+                            self.ensure_opaque(loaded)?
+                        } else {
+                            self.compile_enum_variant("process.RestartPolicy", "OnFailure", &[])?
+                        };
+                        let backoff = if let Some(argument) = bound[8] {
+                            let loaded = self.load_operand(&argument.value)?;
+                            self.ensure_opaque(loaded)?
+                        } else {
+                            let millis = self.builder.ins().iconst(types::I64, 100);
+                            let inst = self.builder.ins().call(self.duration_literal, &[millis]);
+                            self.owned_opaque_result(
+                                self.builder.inst_results(inst).to_vec(),
+                                Type::named("Duration"),
+                            )
+                        };
+                        let max_restarts = if let Some(argument) = bound[9] {
+                            let loaded = self.load_operand(&argument.value)?;
+                            self.ensure_opaque(loaded)?
+                        } else {
+                            let minus_one = self.builder.ins().iconst(types::I64, -1);
+                            self.ensure_opaque(ValueRef {
+                                values: vec![minus_one],
+                                ty: DirectType::Scalar(ScalarKind::Int32),
+                            })?
+                        };
+                        let group = if let Some(argument) = bound[10] {
+                            let loaded = self.load_operand(&argument.value)?;
+                            self.ensure_opaque(loaded)?
+                        } else {
+                            let one = self.builder.ins().iconst(types::I64, 1);
+                            self.ensure_opaque(ValueRef {
+                                values: vec![one],
+                                ty: DirectType::Scalar(ScalarKind::Bool),
+                            })?
+                        };
+                        let inst = self.builder.ins().call(
+                            self.process_supervisor_start,
+                            &[
+                                object.values[0],
+                                name.values[0],
+                                command.values[0],
+                                cwd.values[0],
+                                env.values[0],
+                                stdin.values[0],
+                                stdout.values[0],
+                                stderr.values[0],
+                                restart.values[0],
+                                backoff.values[0],
+                                max_restarts.values[0],
+                                group.values[0],
+                            ],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Unit,
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "wait" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_supervisor_wait, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named("process.SupervisorWait".to_string(), Vec::new()),
+                        ))
+                    }
+                    "wait_or_none" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self.builder.ins().call(
+                            self.process_supervisor_wait_or_none,
+                            &[object.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named(
+                                        "Option".to_string(),
+                                        vec![Type::Named(
+                                            "process.SupervisorEvent".to_string(),
+                                            Vec::new(),
+                                        )],
+                                    ),
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "stop" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `stop()` to take no arguments".to_string()
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_supervisor_stop, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Unit,
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "is_empty" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `is_empty()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_supervisor_is_empty, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        })
+                    }
+                    "close" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `close()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_supervisor_close, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Unit),
+                        })
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
             if name == "net.TcpListener" {
                 let object = self.ensure_opaque(object)?;
                 return match field {
@@ -9433,6 +9733,9 @@ fn infer_rvalue_type(
                     Vec::new(),
                 )))
             }
+            CallTarget::Name(name) if name == "process::supervisor" => Some(DirectType::Opaque(
+                Type::Named("process.Supervisor".to_string(), Vec::new()),
+            )),
             CallTarget::Name(name) if name == "process::start" => {
                 Some(DirectType::Opaque(Type::Named(
                     "Result".to_string(),
@@ -9970,6 +10273,38 @@ fn builtin_opaque_member_return_type(
         ("process.Completed", "stdout") | ("process.Completed", "stderr") => {
             direct_type(&Type::named("String"), classes)
         }
+        ("process.Supervisor", "start") | ("process.Supervisor", "stop") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Unit,
+                    Type::Named("process.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("process.Supervisor", "wait") => direct_type(
+            &Type::Named("process.SupervisorWait".to_string(), Vec::new()),
+            classes,
+        ),
+        ("process.Supervisor", "wait_or_none") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named(
+                        "Option".to_string(),
+                        vec![Type::Named(
+                            "process.SupervisorEvent".to_string(),
+                            Vec::new(),
+                        )],
+                    ),
+                    Type::Named("process.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("process.Supervisor", "is_empty") => Some(DirectType::Scalar(ScalarKind::Bool)),
+        ("process.Supervisor", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
         ("net.TcpListener", "accept") => direct_type(
             &Type::Named(
                 "Result".to_string(),

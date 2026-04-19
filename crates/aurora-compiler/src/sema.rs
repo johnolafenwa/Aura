@@ -1495,8 +1495,12 @@ fn lower_type_with_self(
             | "process.Child"
             | "process.Pipe"
             | "process.Completed"
+            | "process.Supervisor"
             | "process.ExitStatus"
             | "process.Wait"
+            | "process.RestartPolicy"
+            | "process.SupervisorEvent"
+            | "process.SupervisorWait"
             | "process.Stdio"
             | "process.Error"
             | "net.TcpStream"
@@ -2127,6 +2131,7 @@ fn is_builtin_io_resource_type(name: &str, args: &[Type]) -> bool {
             "TaskGroup"
                 | "process.Child"
                 | "process.Pipe"
+                | "process.Supervisor"
                 | "fs.File"
                 | "net.TcpStream"
                 | "net.TcpListener"
@@ -7141,6 +7146,173 @@ impl<'a> FunctionChecker<'a> {
                                     vec![Type::Unit, crate::builtin_modules::process_error_type()],
                                 )),
                                 _ => unreachable!("unexpected process completed builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "process.Supervisor" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::ProcessSupervisorStart => {
+                                    self.check_builtin_argument_type(
+                                        self.bound_argument(
+                                            &ordered_args,
+                                            0,
+                                            span,
+                                            "`start` requires a `name` argument",
+                                        )?,
+                                        &Type::named("String"),
+                                        locals,
+                                        "start",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        self.bound_argument(
+                                            &ordered_args,
+                                            1,
+                                            span,
+                                            "`start` requires a `command` argument",
+                                        )?,
+                                        &Type::Named(
+                                            "Vec".to_string(),
+                                            vec![Type::named("String")],
+                                        ),
+                                        locals,
+                                        "start",
+                                    )?;
+                                    if let Some(argument) = ordered_args.get(2).copied().flatten() {
+                                        self.check_builtin_argument_type(
+                                            argument,
+                                            &Type::Named(
+                                                "Option".to_string(),
+                                                vec![Type::named("String")],
+                                            ),
+                                            locals,
+                                            "start",
+                                        )?;
+                                    }
+                                    if let Some(argument) = ordered_args.get(3).copied().flatten() {
+                                        self.check_builtin_argument_type(
+                                            argument,
+                                            &Type::Named(
+                                                "Map".to_string(),
+                                                vec![Type::named("String"), Type::named("String")],
+                                            ),
+                                            locals,
+                                            "start",
+                                        )?;
+                                    }
+                                    if let Some(argument) = ordered_args.get(4).copied().flatten() {
+                                        self.check_builtin_argument_type(
+                                            argument,
+                                            &Type::named("process.Stdio"),
+                                            locals,
+                                            "start",
+                                        )?;
+                                    }
+                                    if let Some(argument) = ordered_args.get(5).copied().flatten() {
+                                        self.check_builtin_argument_type(
+                                            argument,
+                                            &Type::named("process.Stdio"),
+                                            locals,
+                                            "start",
+                                        )?;
+                                    }
+                                    if let Some(argument) = ordered_args.get(6).copied().flatten() {
+                                        self.check_builtin_argument_type(
+                                            argument,
+                                            &Type::named("process.Stdio"),
+                                            locals,
+                                            "start",
+                                        )?;
+                                    }
+                                    if let Some(argument) = ordered_args.get(7).copied().flatten() {
+                                        let expected = Type::named("process.RestartPolicy");
+                                        let actual = self.type_of_expr_hint(
+                                            &argument.value,
+                                            locals,
+                                            Some(&expected),
+                                        )?;
+                                        if actual != expected
+                                            && actual != Type::named("RestartPolicy")
+                                        {
+                                            return Err(Diagnostic::at(
+                                                argument.span,
+                                                format!(
+                                                    "`start` expects `process.RestartPolicy`, found `{}`",
+                                                    actual
+                                                ),
+                                            ));
+                                        }
+                                        self.consume_value_expr(&argument.value, locals)?;
+                                    }
+                                    if let Some(argument) = ordered_args.get(8).copied().flatten() {
+                                        self.check_builtin_argument_type(
+                                            argument,
+                                            &Type::named("Duration"),
+                                            locals,
+                                            "start",
+                                        )?;
+                                    }
+                                    if let Some(argument) = ordered_args.get(9).copied().flatten() {
+                                        self.check_builtin_argument_type(
+                                            argument,
+                                            &Type::named("int32"),
+                                            locals,
+                                            "start",
+                                        )?;
+                                    }
+                                    if let Some(argument) = ordered_args.get(10).copied().flatten()
+                                    {
+                                        self.check_builtin_argument_type(
+                                            argument,
+                                            &Type::named("bool"),
+                                            locals,
+                                            "start",
+                                        )?;
+                                    }
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Unit,
+                                            crate::builtin_modules::process_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::ProcessSupervisorWait => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "wait(timeout=...)",
+                                    )?;
+                                    Ok(Type::named("process.SupervisorWait"))
+                                }
+                                BuiltinMember::ProcessSupervisorWaitOrNone => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "wait_or_none(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Named(
+                                                "Option".to_string(),
+                                                vec![Type::named("process.SupervisorEvent")],
+                                            ),
+                                            crate::builtin_modules::process_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::ProcessSupervisorStop => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![Type::Unit, crate::builtin_modules::process_error_type()],
+                                )),
+                                BuiltinMember::ProcessSupervisorIsEmpty => Ok(Type::named("bool")),
+                                BuiltinMember::ProcessSupervisorClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected process supervisor builtin member"),
                             };
                         }
                     }

@@ -1,0 +1,22 @@
+import process
+
+def supervise() -> Result[None, process.Error]:
+    with supervisor = process.supervisor():
+        try supervisor.start(name="flaky", command=["/usr/bin/false"], restart=process.RestartPolicy.OnFailure, backoff=10ms, max_restarts=1, group=true)
+        print(try supervisor.wait_or_none(timeout=500ms))
+        print(try supervisor.wait_or_none(timeout=500ms))
+        print(supervisor.is_empty())
+
+        try supervisor.start(name="sleeper", command=["/bin/sleep", "1"], restart=process.RestartPolicy.Never, group=true)
+        print(supervisor.is_empty())
+        try supervisor.stop()
+        print(supervisor.is_empty())
+        return Result.Ok(None)
+
+def main() -> int32:
+    match supervise():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

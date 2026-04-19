@@ -308,8 +308,12 @@ test("fallback analysis understands builtin process module imports", () => {
     "import process",
     "",
     "def main() -> int32:",
-    "    child = process.start([\"/bin/echo\", \"aurora\"], stdout=process.pipe())",
-    "    completed = process.run([\"/bin/echo\", \"aurora\"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s)",
+    "    child = process.start([\"/bin/echo\", \"aurora\"], stdout=process.pipe(), group=true)",
+    "    completed = process.run([\"/bin/echo\", \"aurora\"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)",
+    "    supervisor = process.supervisor()",
+    "    started = supervisor.start(name=\"worker\", command=[\"/usr/bin/false\"], restart=process.RestartPolicy.OnFailure, backoff=10ms, max_restarts=1, group=true)",
+    "    waited = supervisor.wait(timeout=10ms)",
+    "    maybe_event = supervisor.wait_or_none(timeout=10ms)",
     "    inherited = process.inherit()",
     "    return 0"
   ].join("\n");
@@ -318,7 +322,11 @@ test("fallback analysis understands builtin process module imports", () => {
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `process`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /type `process` has no member `start`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /type `process` has no member `run`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /type `process` has no member `supervisor`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /type `process` has no member `inherit`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /type `process\.Supervisor` has no member `start`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /type `process\.Supervisor` has no member `wait`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /type `process\.Supervisor` has no member `wait_or_none`/.test(diagnostic.message)));
 });
 
 test("fallback member completion exposes builtin module namespaces", () => {
@@ -379,11 +387,12 @@ test("fallback member completion exposes builtin process module and resource met
   const source = [
     "import process",
     "",
-    "def inspect(child: process.Child, pipe: process.Pipe, completed: process.Completed) -> int32:",
+    "def inspect(child: process.Child, pipe: process.Pipe, completed: process.Completed, supervisor: process.Supervisor) -> int32:",
     "    process.",
     "    child.",
     "    pipe.",
     "    completed.",
+    "    supervisor.",
     "    return 0"
   ].join("\n");
 
@@ -400,6 +409,7 @@ test("fallback member completion exposes builtin process module and resource met
   const processNames = completeNames("    process.");
   assert.ok(processNames.has("start"));
   assert.ok(processNames.has("run"));
+  assert.ok(processNames.has("supervisor"));
   assert.ok(processNames.has("inherit"));
   assert.ok(processNames.has("null"));
   assert.ok(processNames.has("pipe"));
@@ -410,6 +420,10 @@ test("fallback member completion exposes builtin process module and resource met
   assert.ok(processNames.has("Wait"));
   assert.ok(processNames.has("Stdio"));
   assert.ok(processNames.has("Error"));
+  assert.ok(processNames.has("Supervisor"));
+  assert.ok(processNames.has("RestartPolicy"));
+  assert.ok(processNames.has("SupervisorEvent"));
+  assert.ok(processNames.has("SupervisorWait"));
 
   const childNames = completeNames("    child.");
   assert.ok(childNames.has("stdin"));
@@ -434,6 +448,15 @@ test("fallback member completion exposes builtin process module and resource met
   assert.ok(completedNames.has("success"));
   assert.ok(completedNames.has("stdout"));
   assert.ok(completedNames.has("stderr"));
+  assert.ok(completedNames.has("check"));
+
+  const supervisorNames = completeNames("    supervisor.");
+  assert.ok(supervisorNames.has("start"));
+  assert.ok(supervisorNames.has("wait"));
+  assert.ok(supervisorNames.has("wait_or_none"));
+  assert.ok(supervisorNames.has("stop"));
+  assert.ok(supervisorNames.has("is_empty"));
+  assert.ok(supervisorNames.has("close"));
 });
 
 test("fallback completion exposes advanced fs/net modules and resource methods", () => {
@@ -1231,6 +1254,7 @@ test("fallback analysis helper specializes builtin member return types and unres
   const fileMembers = byName("fs.File");
   const processChildMembers = byName("process.Child");
   const processCompletedMembers = byName("process.Completed");
+  const processSupervisorMembers = byName("process.Supervisor");
   const tcpStreamMembers = byName("net.TcpStream");
   const udpMembers = byName("net.UdpSocket");
   const datagramMembers = byName("net.UdpDatagram");
@@ -1414,6 +1438,30 @@ test("fallback analysis helper specializes builtin member return types and unres
   assert.equal(
     _testing.specializeMemberReturnType("process.Completed", processCompletedMembers.get("check")),
     "Result[None, process.Error]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("process.Supervisor", processSupervisorMembers.get("start")),
+    "Result[None, process.Error]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("process.Supervisor", processSupervisorMembers.get("wait")),
+    "process.SupervisorWait"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("process.Supervisor", processSupervisorMembers.get("wait_or_none")),
+    "Result[Option[process.SupervisorEvent], process.Error]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("process.Supervisor", processSupervisorMembers.get("stop")),
+    "Result[None, process.Error]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("process.Supervisor", processSupervisorMembers.get("is_empty")),
+    "bool"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("process.Supervisor", processSupervisorMembers.get("close")),
+    "None"
   );
   assert.equal(
     _testing.specializeMemberReturnType("fs.File", fileMembers.get("read_bytes")),

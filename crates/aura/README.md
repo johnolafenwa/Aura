@@ -48,6 +48,7 @@ After the release build completes, run the binary directly:
 ./target/release/aura run examples/io/bytes_file_io.au
 ./target/release/aura run examples/io/process_run.au
 ./target/release/aura run examples/io/process_pipes.au
+./target/release/aura run examples/io/process_supervisor.au
 ./target/release/aura run examples/io/tcp_echo.au
 ./target/release/aura run examples/io/tcp_bytes.au
 ./target/release/aura run examples/io/udp_echo.au
@@ -82,6 +83,7 @@ You can do the same with the other current examples:
 ./target/release/aura run examples/io/bytes_file_io.au
 ./target/release/aura run examples/io/process_run.au
 ./target/release/aura run examples/io/process_pipes.au
+./target/release/aura run examples/io/process_supervisor.au
 ./target/release/aura run examples/io/tcp_echo.au
 ./target/release/aura run examples/io/tcp_bytes.au
 ./target/release/aura run examples/io/udp_echo.au
@@ -129,7 +131,7 @@ aura deps update util
 - `aura run <file.au>`
   - run a program through the MIR runtime
   - this now includes the maintained `pass` statement and `sleep(duration)` builtin
-  - the maintained user-facing surface now also includes the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, `Set[T]`, bounded `Queue[T]`, scheduler-aware text/binary file I/O plus the maintained socket/networking and shell-free process surface through `io`, `fs`, `net`, and `process`, specialized generic trait bounds, and the current operator-trait subset
+  - the maintained user-facing surface now also includes the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, `Set[T]`, bounded `Queue[T]`, scheduler-aware text/binary file I/O plus the maintained socket/networking and shell-free process/supervisor surface through `io`, `fs`, `net`, and `process`, specialized generic trait bounds, and the current operator-trait subset
   - local file imports and `public` module boundaries now work for file-backed programs
   - manifest-rooted packages now also resolve sibling path dependencies, git dependencies, and workspace members when the entry file lives under a package `src/`
 - `aura build -o <output> <file.au>`
@@ -139,7 +141,7 @@ aura deps update util
   - `direct` forces the new low-level native backend for the full currently implemented Aurora language surface
   - it relies on Cargo/Rust and a host C compiler for the current build step
   - file-backed and stdin-backed programs with local module imports and package dependencies now build correctly through this path
-  - the maintained direct build path now also covers builtin scheduler-aware text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, and shell-free subprocess helpers through `io`, `fs`, `net`, and `process`
+  - the maintained direct build path now also covers builtin scheduler-aware text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, and the shell-free `process` surface including supervised child processes with restart policies
 - `aura ast <file.au>`
   - print the parsed syntax tree
 - `aura ast-json <file.au>`

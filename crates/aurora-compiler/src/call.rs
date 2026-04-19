@@ -233,6 +233,19 @@ const BYTES_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::required("bytes"),
     CallableParam::optional("timeout"),
 ];
+const PROCESS_SUPERVISOR_START_PARAMS: [CallableParam<'static>; 11] = [
+    CallableParam::required("name"),
+    CallableParam::required("command"),
+    CallableParam::optional("cwd"),
+    CallableParam::optional("env"),
+    CallableParam::optional("stdin"),
+    CallableParam::optional("stdout"),
+    CallableParam::optional("stderr"),
+    CallableParam::optional("restart"),
+    CallableParam::optional("backoff"),
+    CallableParam::optional("max_restarts"),
+    CallableParam::optional("group"),
+];
 const ADDRESS_TEXT_TIMEOUT_PARAMS: [CallableParam<'static>; 3] = [
     CallableParam::required("address"),
     CallableParam::required("text"),
@@ -617,6 +630,12 @@ pub enum BuiltinMember {
     ProcessCompletedStdout,
     ProcessCompletedStderr,
     ProcessCompletedCheck,
+    ProcessSupervisorStart,
+    ProcessSupervisorWait,
+    ProcessSupervisorWaitOrNone,
+    ProcessSupervisorStop,
+    ProcessSupervisorIsEmpty,
+    ProcessSupervisorClose,
 }
 
 impl BuiltinMember {
@@ -784,6 +803,12 @@ impl BuiltinMember {
             ("process.Completed", "stdout") => Some(Self::ProcessCompletedStdout),
             ("process.Completed", "stderr") => Some(Self::ProcessCompletedStderr),
             ("process.Completed", "check") => Some(Self::ProcessCompletedCheck),
+            ("process.Supervisor", "start") => Some(Self::ProcessSupervisorStart),
+            ("process.Supervisor", "wait") => Some(Self::ProcessSupervisorWait),
+            ("process.Supervisor", "wait_or_none") => Some(Self::ProcessSupervisorWaitOrNone),
+            ("process.Supervisor", "stop") => Some(Self::ProcessSupervisorStop),
+            ("process.Supervisor", "is_empty") => Some(Self::ProcessSupervisorIsEmpty),
+            ("process.Supervisor", "close") => Some(Self::ProcessSupervisorClose),
             _ => None,
         }
     }
@@ -936,6 +961,12 @@ impl BuiltinMember {
             Self::ProcessCompletedStdout => "stdout",
             Self::ProcessCompletedStderr => "stderr",
             Self::ProcessCompletedCheck => "check",
+            Self::ProcessSupervisorStart => "start",
+            Self::ProcessSupervisorWait => "wait",
+            Self::ProcessSupervisorWaitOrNone => "wait_or_none",
+            Self::ProcessSupervisorStop => "stop",
+            Self::ProcessSupervisorIsEmpty => "is_empty",
+            Self::ProcessSupervisorClose => "close",
         }
     }
 
@@ -1101,6 +1132,16 @@ impl BuiltinMember {
             Self::ProcessCompletedStdout => "stdout() -> String",
             Self::ProcessCompletedStderr => "stderr() -> String",
             Self::ProcessCompletedCheck => "check() -> Result[None, process.Error]",
+            Self::ProcessSupervisorStart => "start(name: String, command: Vec[String], cwd: Option[String] = ..., env: Map[String, String] = ..., stdin: process.Stdio = ..., stdout: process.Stdio = ..., stderr: process.Stdio = ..., restart: process.RestartPolicy = ..., backoff: Duration = ..., max_restarts: int32 = ..., group: bool = ...) -> Result[None, process.Error]",
+            Self::ProcessSupervisorWait => {
+                "wait(timeout: Duration = ...) -> process.SupervisorWait"
+            }
+            Self::ProcessSupervisorWaitOrNone => {
+                "wait_or_none(timeout: Duration = ...) -> Result[Option[process.SupervisorEvent], process.Error]"
+            }
+            Self::ProcessSupervisorStop => "stop() -> Result[None, process.Error]",
+            Self::ProcessSupervisorIsEmpty => "is_empty() -> bool",
+            Self::ProcessSupervisorClose => "close() -> None",
         }
     }
 
@@ -1312,6 +1353,14 @@ impl BuiltinMember {
             Self::ProcessCompletedCheck => {
                 "Returns `Result.Ok(None)` when the completed process exited successfully, or `Result.Err(process.Error)` for abnormal exits."
             }
+            Self::ProcessSupervisorStart => "Starts a named supervised child process using the configured restart policy and process-group behavior.",
+            Self::ProcessSupervisorWait => "Waits for the next supervisor event, timeout, or cancellation outcome.",
+            Self::ProcessSupervisorWaitOrNone => {
+                "Waits for the next supervisor event and returns `Result.Ok(Option.Some(event))`, `Result.Ok(Option.None)` on timeout, or `Result.Err(...)` when the wait was cancelled."
+            }
+            Self::ProcessSupervisorStop => "Stops every supervised child and clears the supervisor.",
+            Self::ProcessSupervisorIsEmpty => "Returns true when the supervisor has no running or pending services.",
+            Self::ProcessSupervisorClose => "Closes the supervisor, stopping all managed children.",
         }
     }
 
@@ -1384,7 +1433,9 @@ impl BuiltinMember {
             | Self::ProcessChildWait
             | Self::ProcessChildWaitOrNone
             | Self::ProcessChildWaitOk
-            | Self::ProcessPipeReadLine => bind_call_arguments(
+            | Self::ProcessPipeReadLine
+            | Self::ProcessSupervisorWait
+            | Self::ProcessSupervisorWaitOrNone => bind_call_arguments(
                 &format!("`{}`", self.name()),
                 &TIMEOUT_ONLY_PARAMS,
                 args,
@@ -1614,6 +1665,13 @@ impl BuiltinMember {
                 span,
                 CallConvention::PositionalOrNamed,
             ),
+            Self::ProcessSupervisorStart => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &PROCESS_SUPERVISOR_START_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
             Self::UdpSocketSendText => bind_call_arguments(
                 &format!("`{}`", self.name()),
                 &ADDRESS_TEXT_TIMEOUT_PARAMS,
@@ -1683,7 +1741,10 @@ impl BuiltinMember {
             | Self::ProcessCompletedSuccess
             | Self::ProcessCompletedStdout
             | Self::ProcessCompletedStderr
-            | Self::ProcessCompletedCheck => bind_call_arguments(
+            | Self::ProcessCompletedCheck
+            | Self::ProcessSupervisorStop
+            | Self::ProcessSupervisorIsEmpty
+            | Self::ProcessSupervisorClose => bind_call_arguments(
                 &format!("`{}`", self.name()),
                 &[],
                 args,

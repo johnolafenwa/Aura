@@ -1,7 +1,7 @@
 import process
 
 def roundtrip() -> Result[None, process.Error]:
-    with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null()):
+    with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null(), group=true):
         match child.stdin():
             case Option.Some(stdin_pipe):
                 try stdin_pipe.write_all("ping\n", timeout=500ms)

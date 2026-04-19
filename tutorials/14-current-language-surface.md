@@ -66,10 +66,14 @@ Builtin scalar and utility type names currently accepted by the compiler:
 - `process.Child`
 - `process.Pipe`
 - `process.Completed`
+- `process.Supervisor`
 - `process.ExitStatus`
 - `process.Wait`
 - `process.Stdio`
 - `process.Error`
+- `process.RestartPolicy`
+- `process.SupervisorEvent`
+- `process.SupervisorWait`
 
 Builtin generic or runtime-facing types currently accepted:
 
@@ -307,6 +311,8 @@ Current builtin I/O, networking, and process surface:
 - `net.tls_connect_timeout(...)`
 - `process.start(...)`
 - `process.run(...)`
+- `process.supervisor()`
+  - both accept `group=true` to place the child in its own process group and make lifecycle cleanup group-aware on maintained Unix hosts
 - `process.inherit()`
 - `process.null()`
 - `process.pipe()`
@@ -393,6 +399,12 @@ Current builtin I/O, networking, and process surface:
 - `process.Completed.stdout()`
 - `process.Completed.stderr()`
 - `process.Completed.check()`
+- `process.Supervisor.start(...)`
+- `process.Supervisor.wait(timeout=...)`
+- `process.Supervisor.wait_or_none(timeout=...)`
+- `process.Supervisor.stop()`
+- `process.Supervisor.is_empty()`
+- `process.Supervisor.close()`
 
 Current builtin member methods include:
 

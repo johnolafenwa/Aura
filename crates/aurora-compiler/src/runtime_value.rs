@@ -33,6 +33,8 @@ use url::Url;
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::{IntegerBounds, IntegerValue};
@@ -69,6 +71,7 @@ pub enum Value {
     ProcessChild(ProcessChildValue),
     ProcessPipe(ProcessPipeValue),
     ProcessCompleted(ProcessCompletedValue),
+    ProcessSupervisor(ProcessSupervisorValue),
     UnixListener(UnixListenerValue),
     UnixStream(UnixStreamValue),
     TlsListener(TlsListenerValue),
@@ -222,6 +225,11 @@ pub struct ProcessCompletedValue {
 }
 
 #[derive(Clone)]
+pub struct ProcessSupervisorValue {
+    inner: Arc<ProcessSupervisorState>,
+}
+
+#[derive(Clone)]
 pub struct UnixListenerValue {
     inner: Arc<UnixListenerState>,
 }
@@ -297,6 +305,7 @@ struct WebSocketState {
 struct ProcessChildState {
     child: Mutex<Option<StdChild>>,
     waited: Mutex<Option<StdExitStatus>>,
+    process_group_id: Option<i32>,
     stdin: Option<ProcessPipeValue>,
     stdout: Option<ProcessPipeValue>,
     stderr: Option<ProcessPipeValue>,
@@ -318,11 +327,43 @@ struct ProcessCompletedState {
     stderr: String,
 }
 
+struct ProcessSupervisorState {
+    services: Mutex<BTreeMap<String, ProcessSupervisorEntry>>,
+}
+
+#[derive(Clone)]
+struct ProcessSupervisorSpec {
+    command: Vec<String>,
+    cwd: Option<String>,
+    env: Vec<(String, String)>,
+    stdin: ProcessStdioConfig,
+    stdout: ProcessStdioConfig,
+    stderr: ProcessStdioConfig,
+    restart: ProcessRestartPolicy,
+    backoff: StdDuration,
+    max_restarts: Option<i32>,
+    group: bool,
+}
+
+struct ProcessSupervisorEntry {
+    spec: ProcessSupervisorSpec,
+    child: Option<ProcessChildValue>,
+    restart_count: i32,
+    pending_restart_status: Option<StdExitStatus>,
+    next_restart_at: Option<Instant>,
+}
+
 pub(crate) enum ProcessChildWaitStatus {
     Exited(StdExitStatus),
     TimedOut,
     Cancelled,
     Failed(io::Error),
+}
+
+pub(crate) enum ProcessSupervisorWaitStatus {
+    Event(Value),
+    TimedOut,
+    Cancelled,
 }
 
 #[derive(Clone, Copy)]
@@ -340,6 +381,13 @@ impl ProcessStdioConfig {
             Self::Pipe => StdProcessStdio::piped(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProcessRestartPolicy {
+    Never,
+    OnFailure,
+    Always,
 }
 
 #[cfg(unix)]
@@ -514,6 +562,7 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
             Value::ProcessChild(_) => "process.Child".to_string(),
             Value::ProcessPipe(_) => "process.Pipe".to_string(),
             Value::ProcessCompleted(_) => "process.Completed".to_string(),
+            Value::ProcessSupervisor(_) => "process.Supervisor".to_string(),
             Value::UnixListener(_) => "net.UnixListener".to_string(),
             Value::UnixStream(_) => "net.UnixStream".to_string(),
             Value::TlsListener(_) => "net.TlsListener".to_string(),
@@ -720,6 +769,12 @@ impl fmt::Debug for ProcessCompletedValue {
     }
 }
 
+impl fmt::Debug for ProcessSupervisorValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ProcessSupervisorValue(..)")
+    }
+}
+
 impl fmt::Debug for UnixListenerValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("UnixListenerValue(..)")
@@ -823,6 +878,12 @@ impl PartialEq for ProcessPipeValue {
 }
 
 impl PartialEq for ProcessCompletedValue {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl PartialEq for ProcessSupervisorValue {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -1638,6 +1699,7 @@ impl PartialEq for Value {
             (Value::ProcessChild(left), Value::ProcessChild(right)) => left == right,
             (Value::ProcessPipe(left), Value::ProcessPipe(right)) => left == right,
             (Value::ProcessCompleted(left), Value::ProcessCompleted(right)) => left == right,
+            (Value::ProcessSupervisor(left), Value::ProcessSupervisor(right)) => left == right,
             (Value::UnixListener(left), Value::UnixListener(right)) => left == right,
             (Value::UnixStream(left), Value::UnixStream(right)) => left == right,
             (Value::TlsListener(left), Value::TlsListener(right)) => left == right,
@@ -1719,6 +1781,7 @@ impl Value {
             Value::ProcessCompleted(completed) => {
                 format!("<process-completed {}>", completed.status().render())
             }
+            Value::ProcessSupervisor(_) => "<process-supervisor>".to_string(),
             Value::UnixListener(_) => "<unix-listener>".to_string(),
             Value::UnixStream(_) => "<unix-stream>".to_string(),
             Value::TlsListener(_) => "<tls-listener>".to_string(),
@@ -3417,6 +3480,275 @@ impl ProcessCompletedValue {
     }
 }
 
+impl ProcessSupervisorValue {
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: Arc::new(ProcessSupervisorState {
+                services: Mutex::new(BTreeMap::new()),
+            }),
+        }
+    }
+
+    pub(crate) fn start(
+        &self,
+        name: String,
+        command: Vec<String>,
+        cwd: Option<String>,
+        env: Vec<(String, String)>,
+        stdin: ProcessStdioConfig,
+        stdout: ProcessStdioConfig,
+        stderr: ProcessStdioConfig,
+        restart: ProcessRestartPolicy,
+        backoff: StdDuration,
+        max_restarts: Option<i32>,
+        group: bool,
+    ) -> std::result::Result<(), Value> {
+        if command.is_empty() {
+            return Err(process_error_no_command());
+        }
+
+        let child = ProcessChildValue::spawn(
+            command.clone(),
+            cwd.clone(),
+            env.clone(),
+            stdin,
+            stdout,
+            stderr,
+            group,
+        )
+        .map_err(|error| process_error_spawn(error.to_string()))?;
+
+        let mut services = lock_mutex(&self.inner.services);
+        if services.contains_key(&name) {
+            return Err(process_error_other(format!(
+                "supervisor already manages a child named `{}`",
+                name
+            )));
+        }
+        services.insert(
+            name,
+            ProcessSupervisorEntry {
+                spec: ProcessSupervisorSpec {
+                    command,
+                    cwd,
+                    env,
+                    stdin,
+                    stdout,
+                    stderr,
+                    restart,
+                    backoff,
+                    max_restarts,
+                    group,
+                },
+                child: Some(child),
+                restart_count: 0,
+                pending_restart_status: None,
+                next_restart_at: None,
+            },
+        );
+        Ok(())
+    }
+
+    pub(crate) fn wait(
+        &self,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> ProcessSupervisorWaitStatus {
+        let deadline = timeout_deadline(timeout);
+        loop {
+            match self.try_collect_event() {
+                Ok(Some(event)) => return ProcessSupervisorWaitStatus::Event(event),
+                Ok(None) => {}
+                Err(error) => {
+                    return ProcessSupervisorWaitStatus::Event(process_supervisor_event_failed(
+                        "<supervisor>".to_string(),
+                        error,
+                        IntegerValue::from_signed(0),
+                    ))
+                }
+            }
+
+            if self.is_empty() {
+                return ProcessSupervisorWaitStatus::TimedOut;
+            }
+            if cancellation.is_some_and(CancellationContext::is_cancelled) {
+                return ProcessSupervisorWaitStatus::Cancelled;
+            }
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return ProcessSupervisorWaitStatus::TimedOut;
+            }
+
+            sleep_with_runtime_scheduler(StdDuration::from_millis(5), cancellation);
+        }
+    }
+
+    pub(crate) fn wait_or_none(
+        &self,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> std::result::Result<Option<Value>, Value> {
+        match self.wait(timeout, cancellation) {
+            ProcessSupervisorWaitStatus::Event(event) => Ok(Some(event)),
+            ProcessSupervisorWaitStatus::TimedOut => Ok(None),
+            ProcessSupervisorWaitStatus::Cancelled => Err(process_error_cancelled()),
+        }
+    }
+
+    pub(crate) fn stop(&self) -> std::result::Result<(), Value> {
+        let drained: Vec<ProcessChildValue> = {
+            let mut services = lock_mutex(&self.inner.services);
+            std::mem::take(&mut *services)
+                .into_iter()
+                .filter_map(|(_, entry)| entry.child)
+                .collect::<Vec<_>>()
+        };
+        for child in drained {
+            child.close();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        lock_mutex(&self.inner.services).is_empty()
+    }
+
+    pub(crate) fn close(&self) {
+        let _ = self.stop();
+    }
+
+    fn try_collect_event(&self) -> std::result::Result<Option<Value>, Value> {
+        let now = Instant::now();
+        let names = {
+            let services = lock_mutex(&self.inner.services);
+            services.keys().cloned().collect::<Vec<_>>()
+        };
+
+        for name in names {
+            enum Action {
+                None,
+                Emit(Value),
+                RemoveAndEmit(Value),
+            }
+
+            let action = {
+                let mut services = lock_mutex(&self.inner.services);
+                let Some(entry) = services.get_mut(&name) else {
+                    continue;
+                };
+
+                if let Some(child) = entry.child.clone() {
+                    match child.try_wait_once() {
+                        Ok(Some(status)) => {
+                            if should_restart_process(
+                                entry.spec.restart,
+                                &status,
+                                entry.restart_count,
+                                entry.spec.max_restarts,
+                            ) {
+                                entry.restart_count += 1;
+                                if entry.spec.backoff.is_zero() {
+                                    match ProcessChildValue::spawn(
+                                        entry.spec.command.clone(),
+                                        entry.spec.cwd.clone(),
+                                        entry.spec.env.clone(),
+                                        entry.spec.stdin,
+                                        entry.spec.stdout,
+                                        entry.spec.stderr,
+                                        entry.spec.group,
+                                    ) {
+                                        Ok(restarted_child) => {
+                                            entry.child = Some(restarted_child);
+                                            Action::Emit(process_supervisor_event_restarted(
+                                                name.clone(),
+                                                status,
+                                                IntegerValue::from_signed(
+                                                    entry.restart_count as i128,
+                                                ),
+                                            ))
+                                        }
+                                        Err(error) => {
+                                            Action::RemoveAndEmit(process_supervisor_event_failed(
+                                                name.clone(),
+                                                process_error_spawn(error.to_string()),
+                                                IntegerValue::from_signed(
+                                                    entry.restart_count as i128,
+                                                ),
+                                            ))
+                                        }
+                                    }
+                                } else {
+                                    entry.child = None;
+                                    entry.pending_restart_status = Some(status);
+                                    entry.next_restart_at =
+                                        now.checked_add(entry.spec.backoff).or(Some(now));
+                                    Action::None
+                                }
+                            } else {
+                                Action::RemoveAndEmit(process_supervisor_event_exited(
+                                    name.clone(),
+                                    status,
+                                    IntegerValue::from_signed(entry.restart_count as i128),
+                                ))
+                            }
+                        }
+                        Ok(None) => Action::None,
+                        Err(error) => Action::RemoveAndEmit(process_supervisor_event_failed(
+                            name.clone(),
+                            process_error_io(error),
+                            IntegerValue::from_signed(entry.restart_count as i128),
+                        )),
+                    }
+                } else if let (Some(status), Some(next_restart_at)) =
+                    (entry.pending_restart_status.clone(), entry.next_restart_at)
+                {
+                    if next_restart_at <= now {
+                        match ProcessChildValue::spawn(
+                            entry.spec.command.clone(),
+                            entry.spec.cwd.clone(),
+                            entry.spec.env.clone(),
+                            entry.spec.stdin,
+                            entry.spec.stdout,
+                            entry.spec.stderr,
+                            entry.spec.group,
+                        ) {
+                            Ok(restarted_child) => {
+                                entry.child = Some(restarted_child);
+                                entry.pending_restart_status = None;
+                                entry.next_restart_at = None;
+                                Action::Emit(process_supervisor_event_restarted(
+                                    name.clone(),
+                                    status,
+                                    IntegerValue::from_signed(entry.restart_count as i128),
+                                ))
+                            }
+                            Err(error) => Action::RemoveAndEmit(process_supervisor_event_failed(
+                                name.clone(),
+                                process_error_spawn(error.to_string()),
+                                IntegerValue::from_signed(entry.restart_count as i128),
+                            )),
+                        }
+                    } else {
+                        Action::None
+                    }
+                } else {
+                    Action::None
+                }
+            };
+
+            match action {
+                Action::None => {}
+                Action::Emit(event) => return Ok(Some(event)),
+                Action::RemoveAndEmit(event) => {
+                    lock_mutex(&self.inner.services).remove(&name);
+                    return Ok(Some(event));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+}
+
 impl ProcessChildValue {
     pub(crate) fn spawn(
         command: Vec<String>,
@@ -3425,6 +3757,7 @@ impl ProcessChildValue {
         stdin: ProcessStdioConfig,
         stdout: ProcessStdioConfig,
         stderr: ProcessStdioConfig,
+        group: bool,
     ) -> io::Result<Self> {
         let Some(program) = command.first().cloned() else {
             return Err(io::Error::new(
@@ -3443,7 +3776,30 @@ impl ProcessChildValue {
         builder.stdin(stdin.as_stdio());
         builder.stdout(stdout.as_stdio());
         builder.stderr(stderr.as_stdio());
+        #[cfg(unix)]
+        if group {
+            // SAFETY: This runs in the child just before exec. It only calls the
+            // async-signal-safe `setpgid(0, 0)` to place the child in its own
+            // process group.
+            unsafe {
+                builder.pre_exec(|| {
+                    if libc::setpgid(0, 0) < 0 {
+                        Err(io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                });
+            }
+        }
+        #[cfg(not(unix))]
+        if group {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "process groups are only supported on Unix hosts",
+            ));
+        }
         let mut child = builder.spawn()?;
+        let process_group_id = if group { Some(child.id() as i32) } else { None };
         let stdin = child
             .stdin
             .take()
@@ -3463,6 +3819,7 @@ impl ProcessChildValue {
             inner: Arc::new(ProcessChildState {
                 child: Mutex::new(Some(child)),
                 waited: Mutex::new(None),
+                process_group_id,
                 stdin,
                 stdout,
                 stderr,
@@ -3556,6 +3913,9 @@ impl ProcessChildValue {
     }
 
     pub(crate) fn kill(&self) -> io::Result<()> {
+        if let Some(process_group_id) = self.inner.process_group_id {
+            return signal_process_group(process_group_id, libc::SIGKILL);
+        }
         let mut child = lock_mutex(&self.inner.child);
         let Some(child) = child.as_mut() else {
             return Ok(());
@@ -3564,6 +3924,9 @@ impl ProcessChildValue {
     }
 
     pub(crate) fn terminate(&self) -> io::Result<()> {
+        if let Some(process_group_id) = self.inner.process_group_id {
+            return signal_process_group(process_group_id, libc::SIGTERM);
+        }
         let mut child = lock_mutex(&self.inner.child);
         let Some(child) = child.as_mut() else {
             return Ok(());
@@ -3583,15 +3946,28 @@ impl ProcessChildValue {
 
     pub(crate) fn close(&self) {
         let _ = self.terminate();
-        if matches!(
+        let wait_timed_out = matches!(
             self.wait(
                 Some(StdDuration::from_millis(100)),
                 current_lightweight_task_cancellation().as_ref(),
             ),
             ProcessChildWaitStatus::TimedOut
-        ) {
+        );
+        let group_wait_timed_out = if wait_timed_out {
+            true
+        } else {
+            !self.wait_for_process_group_exit(
+                Some(StdDuration::from_millis(100)),
+                current_lightweight_task_cancellation().as_ref(),
+            )
+        };
+        if wait_timed_out || group_wait_timed_out {
             let _ = self.kill();
             let _ = self.wait(
+                Some(StdDuration::from_millis(100)),
+                current_lightweight_task_cancellation().as_ref(),
+            );
+            let _ = self.wait_for_process_group_exit(
                 Some(StdDuration::from_millis(100)),
                 current_lightweight_task_cancellation().as_ref(),
             );
@@ -3606,6 +3982,79 @@ impl ProcessChildValue {
             stderr.close();
         }
     }
+
+    fn wait_for_process_group_exit(
+        &self,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> bool {
+        let Some(process_group_id) = self.inner.process_group_id else {
+            return true;
+        };
+        let deadline = timeout_deadline(timeout);
+        loop {
+            if !process_group_alive(process_group_id) {
+                return true;
+            }
+            if cancellation.is_some_and(CancellationContext::is_cancelled) {
+                return false;
+            }
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return false;
+            }
+            sleep_with_runtime_scheduler(StdDuration::from_millis(5), cancellation);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn signal_process_group(process_group_id: i32, signal: libc::c_int) -> io::Result<()> {
+    if unsafe { libc::kill(-process_group_id, signal) } < 0 {
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::ESRCH) => Ok(()),
+            _ => Err(error),
+        }
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(unix))]
+fn signal_process_group(_process_group_id: i32, _signal: libc::c_int) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn process_group_alive(process_group_id: i32) -> bool {
+    if unsafe { libc::kill(-process_group_id, 0) } == 0 {
+        true
+    } else {
+        let error = io::Error::last_os_error();
+        matches!(error.raw_os_error(), Some(libc::EPERM))
+    }
+}
+
+#[cfg(not(unix))]
+fn process_group_alive(_process_group_id: i32) -> bool {
+    false
+}
+
+fn should_restart_process(
+    policy: ProcessRestartPolicy,
+    status: &StdExitStatus,
+    restart_count: i32,
+    max_restarts: Option<i32>,
+) -> bool {
+    let allowed_by_policy = match policy {
+        ProcessRestartPolicy::Never => false,
+        ProcessRestartPolicy::OnFailure => !status.success(),
+        ProcessRestartPolicy::Always => true,
+    };
+    if !allowed_by_policy {
+        return false;
+    }
+    max_restarts.is_none_or(|max_restarts| restart_count < max_restarts)
 }
 
 impl TcpListenerValue {
@@ -5323,6 +5772,74 @@ pub(crate) fn process_wait_failed(error: Value) -> Value {
     })
 }
 
+pub(crate) fn process_supervisor_wait_event(event: Value) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "SupervisorWait".to_string(),
+        variant_name: "Event".to_string(),
+        payloads: vec![event],
+    })
+}
+
+pub(crate) fn process_supervisor_wait_timed_out() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "SupervisorWait".to_string(),
+        variant_name: "TimedOut".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn process_supervisor_wait_cancelled() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "SupervisorWait".to_string(),
+        variant_name: "Cancelled".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn process_supervisor_event_exited(
+    name: String,
+    status: StdExitStatus,
+    restart_count: IntegerValue,
+) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "SupervisorEvent".to_string(),
+        variant_name: "Exited".to_string(),
+        payloads: vec![
+            Value::String(name),
+            process_exit_status(status),
+            Value::Int(restart_count),
+        ],
+    })
+}
+
+pub(crate) fn process_supervisor_event_restarted(
+    name: String,
+    status: StdExitStatus,
+    restart_count: IntegerValue,
+) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "SupervisorEvent".to_string(),
+        variant_name: "Restarted".to_string(),
+        payloads: vec![
+            Value::String(name),
+            process_exit_status(status),
+            Value::Int(restart_count),
+        ],
+    })
+}
+
+pub(crate) fn process_supervisor_event_failed(
+    name: String,
+    error: Value,
+    restart_count: IntegerValue,
+) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "SupervisorEvent".to_string(),
+        variant_name: "Failed".to_string(),
+        payloads: vec![Value::String(name), error, Value::Int(restart_count)],
+    })
+}
+
 pub(crate) fn process_error_no_command() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Error".to_string(),
@@ -5388,6 +5905,35 @@ pub(crate) fn decode_process_stdio(value: &Value, label: &str) -> Result<Process
         }
         other => Err(Diagnostic::new(format!(
             "`{}` expects `process.Stdio`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
+pub(crate) fn decode_process_restart_policy(
+    value: &Value,
+    label: &str,
+) -> Result<ProcessRestartPolicy> {
+    match value {
+        Value::EnumVariant(variant)
+            if matches!(
+                variant.enum_name.as_str(),
+                "RestartPolicy" | "process.RestartPolicy"
+            ) =>
+        {
+            match variant.variant_name.as_str() {
+                "Never" => Ok(ProcessRestartPolicy::Never),
+                "OnFailure" => Ok(ProcessRestartPolicy::OnFailure),
+                "Always" => Ok(ProcessRestartPolicy::Always),
+                _ => Err(Diagnostic::new(format!(
+                    "`{}` received an unknown `process.RestartPolicy` variant `{}`",
+                    label, variant.variant_name
+                ))),
+            }
+        }
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `process.RestartPolicy`, found `{}`",
             label,
             other.render()
         ))),

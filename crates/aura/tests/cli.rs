@@ -3335,16 +3335,16 @@ fn direct_backend_build_supports_process_module_surface() {
 
 def run(cwd: String) -> Result[None, process.Error]:
     env: Map[String, String] = {{"AURORA_PROCESS_VAR": "present"}}
-    completed = try process.run(["/usr/bin/printenv", "AURORA_PROCESS_VAR"], env=env, timeout=2s)
+    completed = try process.run(["/usr/bin/printenv", "AURORA_PROCESS_VAR"], env=env, timeout=2s, group=true)
     print(completed.stdout().trim())
     print(completed.stderr().len())
-    pwd = try process.run(["/bin/pwd"], cwd=Option.Some(cwd), timeout=2s)
+    pwd = try process.run(["/bin/pwd"], cwd=Option.Some(cwd), timeout=2s, group=true)
     print(pwd.stdout().trim())
     print(pwd.stderr().len())
     print(completed.status())
     print(pwd.status())
 
-    with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null()):
+    with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null(), group=true):
         match child.stdin():
             case Option.Some(found_pipe):
                 stdin_pipe: process.Pipe = found_pipe
@@ -3366,6 +3366,15 @@ def run(cwd: String) -> Result[None, process.Error]:
                 return Result.Ok(None)
 
         print(child.wait(timeout=2s))
+    with supervisor = process.supervisor():
+        try supervisor.start(name="flaky", command=["/usr/bin/false"], restart=process.RestartPolicy.OnFailure, backoff=10ms, max_restarts=1, group=true)
+        print(try supervisor.wait_or_none(timeout=500ms))
+        print(try supervisor.wait_or_none(timeout=500ms))
+        print(supervisor.is_empty())
+        try supervisor.start(name="sleeper", command=["/bin/sleep", "1"], restart=process.RestartPolicy.Never, group=true)
+        print(supervisor.is_empty())
+        try supervisor.stop()
+        print(supervisor.is_empty())
     return Result.Ok(None)
 
 def main() -> int32:
@@ -3388,7 +3397,7 @@ def main() -> int32:
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
         format!(
-            "present\n0\n{cwd}\n0\nExitStatus.Exited(0)\nExitStatus.Exited(0)\necho from cat\nWait.Exited(ExitStatus.Exited(0))\n",
+            "present\n0\n{cwd}\n0\nExitStatus.Exited(0)\nExitStatus.Exited(0)\necho from cat\nWait.Exited(ExitStatus.Exited(0))\nOption.Some(SupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1))\nOption.Some(SupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1))\ntrue\nfalse\ntrue\n",
             cwd = cwd,
         )
     );

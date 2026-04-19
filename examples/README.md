@@ -366,16 +366,24 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `5`
     - `68`
 - `process_run.au`
-  - shell-free `process.run(...)`, captured stdout/stderr, and `process.Completed.check()`
+  - shell-free `process.run(..., group=true)`, captured stdout/stderr, and `process.Completed.check()`
   - prints:
     - `aurora process`
     - `0`
     - `ExitStatus.Exited(0)`
 - `process_pipes.au`
-  - interactive `process.start(...)`, `process.Pipe`, and timeout-aware child waiting
+  - interactive `process.start(..., group=true)`, `process.Pipe`, and timeout-aware child waiting
   - prints:
     - `ping`
     - `ExitStatus.Exited(0)`
+- `process_supervisor.au`
+  - `process.supervisor()`, restart policies, restart backoff, and group-aware supervisor shutdown
+  - prints:
+    - `Option.Some(SupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1))`
+    - `Option.Some(SupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1))`
+    - `true`
+    - `false`
+    - `true`
 - `tcp_echo.au`
   - builtin `net.listen(...)`, `net.connect(...)`, `TcpListener.accept()`, `TcpStream.read_line()`, `TcpStream.write_all(...)`, and `with` cleanup on network resources
   - prints `echo:ping`
@@ -619,6 +627,7 @@ cargo run -p aura -- run examples/io/read_text_file.au
 cargo run -p aura -- run examples/io/bytes_file_io.au
 cargo run -p aura -- run examples/io/process_run.au
 cargo run -p aura -- run examples/io/process_pipes.au
+cargo run -p aura -- run examples/io/process_supervisor.au
 cargo run -p aura -- run examples/io/tcp_echo.au
 cargo run -p aura -- run examples/io/tcp_bytes.au
 cargo run -p aura -- run examples/io/udp_echo.au

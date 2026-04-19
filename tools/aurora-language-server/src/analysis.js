@@ -58,6 +58,10 @@ const PRIMITIVE_TYPES = new Set([
   "process.Wait",
   "process.Stdio",
   "process.Error",
+  "process.Supervisor",
+  "process.RestartPolicy",
+  "process.SupervisorEvent",
+  "process.SupervisorWait",
   "net.TcpListener",
   "net.TcpStream",
   "net.UdpSocket",
@@ -544,16 +548,22 @@ const BUILTIN_MEMBERS = {
   ],
   process: [
     {
+      name: "supervisor",
+      kind: "method",
+      detail: "supervisor() -> process.Supervisor",
+      documentation: "Creates a process supervisor for named child processes with restart policies and backoff."
+    },
+    {
       name: "start",
       kind: "method",
-      detail: "start(command: Vec[String], cwd: Option[String] = Option.None, env: Map[String, String] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.inherit(), stderr: process.Stdio = process.inherit()) -> Result[process.Child, process.Error]",
-      documentation: "Starts a child process without waiting for it to complete."
+      detail: "start(command: Vec[String], cwd: Option[String] = Option.None, env: Map[String, String] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.inherit(), stderr: process.Stdio = process.inherit(), group: bool = false) -> Result[process.Child, process.Error]",
+      documentation: "Starts a child process without waiting for it to complete. When `group=true`, the child starts in its own process group and lifecycle operations apply to that group."
     },
     {
       name: "run",
       kind: "method",
-      detail: "run(command: Vec[String], cwd: Option[String] = Option.None, env: Map[String, String] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.pipe(), stderr: process.Stdio = process.pipe(), timeout: Duration = ...) -> Result[process.Completed, process.Error]",
-      documentation: "Runs a child process to completion, optionally capturing stdout and stderr."
+      detail: "run(command: Vec[String], cwd: Option[String] = Option.None, env: Map[String, String] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.pipe(), stderr: process.Stdio = process.pipe(), timeout: Duration = ..., group: bool = false) -> Result[process.Completed, process.Error]",
+      documentation: "Runs a child process to completion, optionally capturing stdout and stderr. When `group=true`, timeout and cleanup behavior apply to the full child process group."
     },
     {
       name: "inherit",
@@ -621,6 +631,34 @@ const BUILTIN_MEMBERS = {
       detail: "Error: process.Error",
       type: "process.Error",
       documentation: "The builtin process error enum."
+    },
+    {
+      name: "Supervisor",
+      kind: "field",
+      detail: "Supervisor: process.Supervisor",
+      type: "process.Supervisor",
+      documentation: "The builtin process supervisor resource type."
+    },
+    {
+      name: "RestartPolicy",
+      kind: "field",
+      detail: "RestartPolicy: process.RestartPolicy",
+      type: "process.RestartPolicy",
+      documentation: "The builtin process supervisor restart-policy enum."
+    },
+    {
+      name: "SupervisorEvent",
+      kind: "field",
+      detail: "SupervisorEvent: process.SupervisorEvent",
+      type: "process.SupervisorEvent",
+      documentation: "The builtin process supervisor event enum."
+    },
+    {
+      name: "SupervisorWait",
+      kind: "field",
+      detail: "SupervisorWait: process.SupervisorWait",
+      type: "process.SupervisorWait",
+      documentation: "The builtin process supervisor wait-result enum."
     }
   ],
   "process.Child": [
@@ -665,19 +703,19 @@ const BUILTIN_MEMBERS = {
       name: "kill",
       kind: "method",
       detail: "kill() -> Result[None, process.Error]",
-      documentation: "Forcefully terminates the child process."
+      documentation: "Forcefully terminates the child process, or the full child process group when the child was started with `group=true`."
     },
     {
       name: "terminate",
       kind: "method",
       detail: "terminate() -> Result[None, process.Error]",
-      documentation: "Requests graceful child termination."
+      documentation: "Requests graceful child termination, or graceful termination of the full child process group when the child was started with `group=true`."
     },
     {
       name: "close",
       kind: "method",
       detail: "close() -> None",
-      documentation: "Closes the child handle and remaining attached pipes."
+      documentation: "Closes the child handle and remaining attached pipes, terminating the full child process group first when the child was started with `group=true`."
     }
   ],
   "process.Pipe": [
@@ -755,6 +793,46 @@ const BUILTIN_MEMBERS = {
       detail: "check() -> Result[None, process.Error]",
       documentation:
         "Returns `Result.Ok(None)` when the child exited successfully and `Result.Err(process.Error)` otherwise."
+    }
+  ],
+  "process.Supervisor": [
+    {
+      name: "start",
+      kind: "method",
+      detail:
+        "start(name: String, command: Vec[String], cwd: Option[String] = Option.None, env: Map[String, String] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.inherit(), stderr: process.Stdio = process.inherit(), restart: process.RestartPolicy = process.RestartPolicy.OnFailure, backoff: Duration = 100ms, max_restarts: int32 = -1, group: bool = true) -> Result[None, process.Error]",
+      documentation:
+        "Starts a named supervised child process. Supervisor children default to `group=true`, and restart policy, backoff, and restart count control automatic restart behavior."
+    },
+    {
+      name: "wait",
+      kind: "method",
+      detail: "wait(timeout: Duration = ...) -> process.SupervisorWait",
+      documentation: "Waits for the next supervisor event, timeout, or cancellation outcome."
+    },
+    {
+      name: "wait_or_none",
+      kind: "method",
+      detail: "wait_or_none(timeout: Duration = ...) -> Result[Option[process.SupervisorEvent], process.Error]",
+      documentation: "Waits for the next supervisor event and returns `Option.None` on timeout."
+    },
+    {
+      name: "stop",
+      kind: "method",
+      detail: "stop() -> Result[None, process.Error]",
+      documentation: "Stops every supervised child process and clears the supervisor."
+    },
+    {
+      name: "is_empty",
+      kind: "method",
+      detail: "is_empty() -> bool",
+      documentation: "Returns true when the supervisor currently has no managed services."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the supervisor and stops every remaining supervised child process."
     }
   ],
   net: [
@@ -1647,6 +1725,78 @@ const BUILTIN_ENUMS = new Map([
         { kind: "variant", name: "Io", returnType: "Error", payloadType: "io.Error", detail: "Io(io.Error) -> Error" },
         { kind: "variant", name: "Spawn", returnType: "Error", payloadType: "String", detail: "Spawn(String) -> Error" },
         { kind: "variant", name: "Other", returnType: "Error", payloadType: "String", detail: "Other(String) -> Error" }
+      ]
+    }
+  ],
+  [
+    "RestartPolicy",
+    {
+      kind: "enum",
+      name: "RestartPolicy",
+      detail: "enum RestartPolicy",
+      documentation: "Supervisor restart policies for managed child processes.",
+      variants: [
+        { kind: "variant", name: "Never", returnType: "RestartPolicy", payloadType: null, detail: "Never -> RestartPolicy" },
+        {
+          kind: "variant",
+          name: "OnFailure",
+          returnType: "RestartPolicy",
+          payloadType: null,
+          detail: "OnFailure -> RestartPolicy"
+        },
+        { kind: "variant", name: "Always", returnType: "RestartPolicy", payloadType: null, detail: "Always -> RestartPolicy" }
+      ]
+    }
+  ],
+  [
+    "SupervisorEvent",
+    {
+      kind: "enum",
+      name: "SupervisorEvent",
+      detail: "enum SupervisorEvent",
+      documentation: "Supervisor lifecycle events for exited, restarted, and failed services.",
+      variants: [
+        {
+          kind: "variant",
+          name: "Exited",
+          returnType: "SupervisorEvent",
+          payloadType: "String, process.ExitStatus, int32",
+          detail: "Exited(String, process.ExitStatus, int32) -> SupervisorEvent"
+        },
+        {
+          kind: "variant",
+          name: "Restarted",
+          returnType: "SupervisorEvent",
+          payloadType: "String, process.ExitStatus, int32",
+          detail: "Restarted(String, process.ExitStatus, int32) -> SupervisorEvent"
+        },
+        {
+          kind: "variant",
+          name: "Failed",
+          returnType: "SupervisorEvent",
+          payloadType: "String, process.Error, int32",
+          detail: "Failed(String, process.Error, int32) -> SupervisorEvent"
+        }
+      ]
+    }
+  ],
+  [
+    "SupervisorWait",
+    {
+      kind: "enum",
+      name: "SupervisorWait",
+      detail: "enum SupervisorWait",
+      documentation: "Supervisor wait outcomes.",
+      variants: [
+        {
+          kind: "variant",
+          name: "Event",
+          returnType: "SupervisorWait",
+          payloadType: "process.SupervisorEvent",
+          detail: "Event(process.SupervisorEvent) -> SupervisorWait"
+        },
+        { kind: "variant", name: "TimedOut", returnType: "SupervisorWait", payloadType: null, detail: "TimedOut -> SupervisorWait" },
+        { kind: "variant", name: "Cancelled", returnType: "SupervisorWait", payloadType: null, detail: "Cancelled -> SupervisorWait" }
       ]
     }
   ],
@@ -3793,6 +3943,28 @@ function specializeMemberReturnType(receiverType, member) {
   if (base === "process.Completed") {
     if (member.name === "check") {
       return "Result[None, process.Error]";
+    }
+    return parseBuiltinDetailReturnType(member.detail);
+  }
+
+  if (base === "process.Supervisor") {
+    if (member.name === "start") {
+      return "Result[None, process.Error]";
+    }
+    if (member.name === "wait") {
+      return "process.SupervisorWait";
+    }
+    if (member.name === "wait_or_none") {
+      return "Result[Option[process.SupervisorEvent], process.Error]";
+    }
+    if (member.name === "stop") {
+      return "Result[None, process.Error]";
+    }
+    if (member.name === "is_empty") {
+      return "bool";
+    }
+    if (member.name === "close") {
+      return "None";
     }
     return parseBuiltinDetailReturnType(member.detail);
   }

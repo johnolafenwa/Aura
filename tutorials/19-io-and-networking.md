@@ -120,13 +120,15 @@ The `process` module provides shell-free subprocess helpers that fit the current
 
 Process constructors:
 
-- `process.start(command, cwd=..., env=..., stdin=..., stdout=..., stderr=...)`
-- `process.run(command, cwd=..., env=..., stdin=..., stdout=..., stderr=..., timeout=...)`
+- `process.supervisor()`
+- `process.start(command, cwd=..., env=..., stdin=..., stdout=..., stderr=..., group=false)`
+- `process.run(command, cwd=..., env=..., stdin=..., stdout=..., stderr=..., timeout=..., group=false)`
 - `process.inherit()`
 - `process.null()`
 - `process.pipe()`
 
 `command` is always an explicit `Vec[String]` argv list. Aurora does not provide a shell-string subprocess API.
+When `group=true`, Aurora starts the child in its own process group and applies terminate/kill/close cleanup to that full group. On current maintained hosts, grouped children are supported on Unix.
 
 `process.start(...)` returns `Result[process.Child, process.Error]`. `process.Child` works with `with` and exposes:
 
@@ -158,7 +160,24 @@ Process constructors:
 - `stderr()`
 - `check()`
 
-`process.Child.close()` is cleanup-oriented: it sends a graceful terminate signal first, waits briefly, and escalates to kill if the child does not exit promptly.
+`process.supervisor()` returns `process.Supervisor`. `process.Supervisor` works with `with` and exposes:
+
+- `start(name, command, cwd=..., env=..., stdin=..., stdout=..., stderr=..., restart=..., backoff=..., max_restarts=..., group=true)`
+- `wait(timeout=...)`
+- `wait_or_none(timeout=...)`
+- `stop()`
+- `is_empty()`
+- `close()`
+
+Related process-supervisor enums:
+
+- `process.RestartPolicy`
+- `process.SupervisorEvent`
+- `process.SupervisorWait`
+
+Supervisor children default to `group=true` so `stop()` and `close()` shut down full child trees instead of only the leader process.
+
+`process.Child.close()` is cleanup-oriented: it sends a graceful terminate signal first, waits briefly, and escalates to kill if the child does not exit promptly. For grouped children it waits for the full child process group to disappear before returning.
 
 One-shot example:
 
@@ -166,7 +185,7 @@ One-shot example:
 import process
 
 def run_echo() -> Result[None, process.Error]:
-    completed = try process.run(["/bin/echo", "aurora process"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s)
+    completed = try process.run(["/bin/echo", "aurora process"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)
     try completed.check()
     print(completed.stdout().trim())
     return Result.Ok(None)
@@ -178,7 +197,7 @@ Interactive pipe example:
 import process
 
 def roundtrip() -> Result[None, process.Error]:
-    with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null()):
+    with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null(), group=true):
         match child.stdin():
             case Option.Some(stdin_pipe):
                 try stdin_pipe.write_all("ping\n", timeout=500ms)
@@ -204,6 +223,26 @@ See:
 
 - [examples/io/process_run.au](../examples/io/process_run.au)
 - [examples/io/process_pipes.au](../examples/io/process_pipes.au)
+- [examples/io/process_supervisor.au](../examples/io/process_supervisor.au)
+
+Supervisor example:
+
+```python
+import process
+
+def supervise() -> Result[None, process.Error]:
+    with supervisor = process.supervisor():
+        try supervisor.start(name="flaky", command=["/usr/bin/false"], restart=process.RestartPolicy.OnFailure, backoff=10ms, max_restarts=1, group=true)
+        print(try supervisor.wait_or_none(timeout=500ms))
+        print(try supervisor.wait_or_none(timeout=500ms))
+        print(supervisor.is_empty())
+
+        try supervisor.start(name="sleeper", command=["/bin/sleep", "1"], restart=process.RestartPolicy.Never, group=true)
+        print(supervisor.is_empty())
+        try supervisor.stop()
+        print(supervisor.is_empty())
+        return Result.Ok(None)
+```
 
 ## TCP
 
@@ -403,7 +442,8 @@ This surface is deliberately explicit but no longer relies on the old blocking/p
 Current process notes:
 
 - subprocess APIs are shell-free and take explicit argv vectors only
+- grouped children are supported through `group=true` on `process.start(...)` and `process.run(...)`
 - there is not yet a PTY surface
-- there are not yet process groups, restart supervisors, or pipeline helpers
+- there are not yet restart supervisors or pipeline helpers
 
 That keeps the execution model straightforward while removing the old timeout-spin loops, the blocking HTTP special case, and the old synchronous file-I/O mismatch.

@@ -101,9 +101,11 @@ Current bootstrap compiler workflow:
 - `cargo run -p aura -- run examples/io/bytes_file_io.au`
   - execute binary file helpers plus `fs.File.read_bytes()` / `write_bytes(...)`
 - `cargo run -p aura -- run examples/io/process_run.au`
-  - execute shell-free subprocess helpers through `process.run(...)`, captured stdio, and `process.Completed.check()`
+  - execute shell-free subprocess helpers through `process.run(..., group=true)`, captured stdio, and `process.Completed.check()`
 - `cargo run -p aura -- run examples/io/process_pipes.au`
-  - execute `process.start(...)`, interactive `process.Pipe` I/O, and `process.Child.wait_ok(...)`
+  - execute `process.start(..., group=true)`, interactive `process.Pipe` I/O, and `process.Child.wait_ok(...)`
+- `cargo run -p aura -- run examples/io/process_supervisor.au`
+  - execute `process.supervisor()`, named child restart policies, backoff, and group-aware supervised shutdown
 - `cargo run -p aura -- run examples/io/tcp_echo.au`
   - execute the maintained builtin TCP networking surface through `net.listen(...)`, `net.connect(...)`, and `TcpStream` / `TcpListener`
 - `cargo run -p aura -- run examples/io/tcp_bytes.au`
@@ -180,7 +182,7 @@ Current `build` status:
 - manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aurora.toml`
 - git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
 - the current package-system milestone writes a local `Aurora.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
-- both maintained execution paths now cover the builtin `io`, `fs`, `net`, and `process` module surface for scheduler-aware text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, and shell-free subprocess execution with captured pipes
+- both maintained execution paths now cover the builtin `io`, `fs`, `net`, and `process` module surface for scheduler-aware text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, shell-free subprocess execution with captured pipes, and supervised child processes with restart policy support
 
 Current `run` status:
 
