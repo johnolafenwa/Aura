@@ -3,8 +3,8 @@ use crate::ast::{
     ContinueStmt, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt,
     FieldDecl, ForStmt, FormatPart, FunctionDecl, IfBranch, IfStmt, ImplDecl, ImportDecl,
     ImportKind, Item, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm,
-    MatchStmt, Module, Param, Pattern, ReceiverKind, ReturnStmt, SelectArm, SelectStmt, Stmt,
-    TraitDecl, TypeRef, UnaryOp, VariantPattern, WhileStmt, WithStmt,
+    MatchStmt, Module, Param, Pattern, ReceiverKind, ReturnStmt, Stmt, TraitDecl, TypeRef, UnaryOp,
+    VariantPattern, WhileStmt, WithStmt,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
@@ -639,8 +639,6 @@ impl Parser {
             self.parse_for_stmt()
         } else if self.at_simple(&TokenKind::KwWith) {
             self.parse_with_stmt()
-        } else if self.at_simple(&TokenKind::KwSelect) {
-            self.parse_select_stmt()
         } else if self.at_simple(&TokenKind::KwWhile) {
             self.parse_while_stmt()
         } else if self.at_simple(&TokenKind::KwBreak) {
@@ -801,48 +799,6 @@ impl Parser {
             body,
             span,
         }))
-    }
-
-    fn parse_select_stmt(&mut self) -> Result<Stmt> {
-        let span = self.expect_keyword(TokenKind::KwSelect)?.span;
-        self.expect_simple(TokenKind::Colon)?;
-        self.expect_newline()?;
-        self.expect_simple(TokenKind::Indent)?;
-
-        let mut arms = Vec::new();
-        while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
-            if self.at_simple(&TokenKind::Newline) {
-                self.bump();
-                continue;
-            }
-            arms.push(self.parse_select_arm()?);
-        }
-
-        self.expect_simple(TokenKind::Dedent)?;
-        Ok(Stmt::Select(SelectStmt { arms, span }))
-    }
-
-    fn parse_select_arm(&mut self) -> Result<SelectArm> {
-        let span = self.expect_keyword(TokenKind::KwCase)?.span;
-        let (binding, expr) = if matches!(self.current_kind(), TokenKind::Identifier(_))
-            && matches!(self.peek_kind(1), Some(TokenKind::Equal))
-        {
-            let binding = self.expect_identifier()?;
-            self.expect_simple(TokenKind::Equal)?;
-            let expr = self.parse_expr()?;
-            (Some(binding), expr)
-        } else {
-            (None, self.parse_expr()?)
-        };
-        self.expect_simple(TokenKind::Colon)?;
-        self.expect_newline()?;
-        let body = self.parse_block()?;
-        Ok(SelectArm {
-            binding,
-            expr,
-            body,
-            span,
-        })
     }
 
     fn parse_match_arm(&mut self) -> Result<MatchArm> {
@@ -1330,18 +1286,6 @@ impl Parser {
             let value = self.parse_prefix()?;
             return Ok(Expr {
                 kind: ExprKind::Try(Box::new(value)),
-                span: token.span,
-            });
-        }
-
-        if let Some(token) = self.eat_simple(&TokenKind::KwSpawn) {
-            let detached = self.eat_simple(&TokenKind::KwDetached).is_some();
-            let value = self.parse_postfix()?;
-            return Ok(Expr {
-                kind: ExprKind::Spawn {
-                    detached,
-                    value: Box::new(value),
-                },
                 span: token.span,
             });
         }
@@ -1974,7 +1918,6 @@ impl Parser {
         match token.kind {
             TokenKind::Identifier(name) => Ok(name),
             TokenKind::KwFrom => Ok("from".to_string()),
-            TokenKind::KwSpawn => Ok("spawn".to_string()),
             other => Err(Diagnostic::at(
                 token.span,
                 format!("expected member name, found {:?}", other),
@@ -2133,9 +2076,7 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
                 offset_type_ref_span(type_arg, line, column_offset);
             }
         }
-        ExprKind::Member { object, .. } | ExprKind::Spawn { value: object, .. } => {
-            offset_expr_span(object, line, column_offset);
-        }
+        ExprKind::Member { object, .. } => offset_expr_span(object, line, column_offset),
         ExprKind::Index { object, index } => {
             offset_expr_span(object, line, column_offset);
             offset_expr_span(index, line, column_offset);

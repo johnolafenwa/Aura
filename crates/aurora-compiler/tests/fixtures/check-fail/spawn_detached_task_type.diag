@@ -1,5 +1,5 @@
-error: binding `task` has annotated type `Task[None]`, but value has type `None`
- --> crates/aurora-compiler/tests/fixtures/check-fail/spawn_detached_task_type.au:7:5
+error: expected Newline
+ --> crates/aurora-compiler/tests/fixtures/check-fail/spawn_detached_task_type.au:7:30
   |
 7 |     task: Task[None] = spawn detached producer(ch)
-  |     ^
+  |                              ^

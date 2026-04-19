@@ -37,24 +37,24 @@ def close(borrow mut self):
 - a builtin `fs.File`
 - a builtin `net.TcpStream`
 - a builtin `net.TcpListener`
-- a `TaskGroup` from `tasks()`
+- a `TaskGroup`
 
 For user-defined classes, `close(...)` must take `borrow mut self`, no extra parameters, and return `None`.
 
 ## `with ... as ...` For Task Groups
 
-The builtin `tasks()` function returns a `TaskGroup`, which is the one non-class value that supports `with`:
+`TaskGroup()` is the one non-class value that supports `with`:
 
 ```python
-with tasks() as group:
+with TaskGroup() as group:
     group.start(worker, out)
     group.start(worker, out)
-# leaving the block joins all spawned child tasks
+# leaving the block waits for all child tasks
 ```
 
 Task groups tie child tasks to a lexical scope. When the `with` block ends, any still-running child tasks are joined. You can also cancel early with `group.cancel()`.
 
-See [examples/concurrency/task_group_select.au](../examples/concurrency/task_group_select.au) and [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_group_cancel.au).
+See [examples/concurrency/task_group_queue_sum.au](../examples/concurrency/task_group_queue_sum.au) and [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_group_cancel.au).
 
 ## Current Limits
 

@@ -1,0 +1,10 @@
+Result.Ok()
+Result.Err(SendError.Full(2))
+1
+closed
+ready
+1
+6
+8
+6
+8

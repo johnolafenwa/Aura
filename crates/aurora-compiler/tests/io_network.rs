@@ -90,7 +90,7 @@ def run() -> Result[None, io.Error]:
     text = try fs.read_to_string("{path}")
     try io.write(text + "\n")
 
-    with tasks() as group:
+    with TaskGroup() as group:
         listener = try net.listen("127.0.0.1:0")
         address = try listener.local_addr()
         server = group.start(serve, listener)
@@ -100,7 +100,15 @@ def run() -> Result[None, io.Error]:
             try client_stream.flush()
             response = try client_stream.read_all()
             try io.write(response)
-        try server.result()
+        match server.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Cancelled:
+                print("server task cancelled")
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                print("server task timed out")
+                return Result.Ok(None)
 
     return Result.Ok(None)
 
@@ -296,7 +304,7 @@ def run() -> Result[None, io.Error]:
     print(read_back[0])
     print(read_back[2])
 
-    with tasks() as group:
+    with TaskGroup() as group:
         udp_listener = try net.udp_bind("127.0.0.1:0")
         udp_addr = try udp_listener.local_addr()
         udp_task = group.start(serve_udp, udp_listener)
@@ -308,7 +316,15 @@ def run() -> Result[None, io.Error]:
                     print(try packet.text())
                 case Option.None:
                     return Result.Ok(None)
-        print(try udp_task.result())
+        match udp_task.result():
+            case TaskResult.Ready(result):
+                print(try result)
+            case TaskResult.Cancelled:
+                print("udp task cancelled")
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                print("udp task timed out")
+                return Result.Ok(None)
 
         http_listener = try net.http_listen("127.0.0.1:0")
         http_addr = try http_listener.local_addr()
@@ -318,7 +334,15 @@ def run() -> Result[None, io.Error]:
         with http_response = response:
             print(http_response.status())
             print(try http_response.text())
-        try http_task.result()
+        match http_task.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Cancelled:
+                print("http task cancelled")
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                print("http task timed out")
+                return Result.Ok(None)
 
         ws_listener = try net.websocket_listen("127.0.0.1:0")
         ws_addr = try ws_listener.local_addr()
@@ -331,7 +355,15 @@ def run() -> Result[None, io.Error]:
                     print(text)
                 case Option.None:
                     return Result.Ok(None)
-        try ws_task.result()
+        match ws_task.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Cancelled:
+                print("websocket task cancelled")
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                print("websocket task timed out")
+                return Result.Ok(None)
 
     return Result.Ok(None)
 
@@ -402,7 +434,7 @@ def serve_tls(listener: net.TlsListener) -> Result[None, io.Error]:
             return Result.Ok(None)
 
 def run() -> Result[None, io.Error]:
-    with tasks() as group:
+    with TaskGroup() as group:
         unix_listener = try net.unix_listen("{unix_path}")
         unix_task = group.start(serve_unix, unix_listener)
         client = try net.unix_connect_timeout("{unix_path}", 1s)
@@ -413,7 +445,15 @@ def run() -> Result[None, io.Error]:
                     print(text)
                 case Option.None:
                     return Result.Ok(None)
-        try unix_task.result()
+        match unix_task.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Cancelled:
+                print("unix task cancelled")
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                print("unix task timed out")
+                return Result.Ok(None)
 
         tls_listener = try net.tls_listen("127.0.0.1:0", "{cert_path}", "{key_path}")
         tls_addr = try tls_listener.local_addr()
@@ -423,7 +463,15 @@ def run() -> Result[None, io.Error]:
             try tls_client.write_all("ping!", timeout=2s)
             reply = try tls_client.read_exact(9, timeout=2s)
             print(reply.len())
-        try tls_task.result()
+        match tls_task.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Cancelled:
+                print("tls task cancelled")
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                print("tls task timed out")
+                return Result.Ok(None)
 
     return Result.Ok(None)
 

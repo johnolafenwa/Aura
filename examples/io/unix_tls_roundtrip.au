@@ -66,7 +66,7 @@ def run() -> Result[None, io.Error]:
     try fs.write_string(cert_path.clone(), tls_cert_pem())
     try fs.write_string(key_path.clone(), tls_key_pem())
 
-    with tasks() as group:
+    with TaskGroup() as group:
         unix_listener = try net.unix_listen(socket_path.clone())
         unix_task = group.start(serve_unix, unix_listener)
         client = try net.unix_connect_timeout(socket_path.clone(), 5s)
@@ -77,7 +77,13 @@ def run() -> Result[None, io.Error]:
                     print(text)
                 case Option.None:
                     return Result.Ok(None)
-        try unix_task.result()
+        match unix_task.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Cancelled:
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                return Result.Ok(None)
 
         tls_listener = try net.tls_listen("127.0.0.1:0", cert_path.clone(), key_path.clone())
         tls_addr = try tls_listener.local_addr()
@@ -87,7 +93,13 @@ def run() -> Result[None, io.Error]:
             try tls_client.write_all("ping!", timeout=5s)
             reply = try tls_client.read_exact(9, timeout=5s)
             print(reply.len())
-        try tls_task.result()
+        match tls_task.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Cancelled:
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                return Result.Ok(None)
 
     match fs.remove_file(socket_path):
         case Result.Ok(_):

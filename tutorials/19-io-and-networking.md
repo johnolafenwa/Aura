@@ -301,7 +301,7 @@ The socket runtime also threads task-group cancellation into maintained socket w
 
 This surface is deliberately explicit but no longer relies on the old blocking/polling split:
 
-- queue waits, `sleep(...)`, `select`, socket waits, and the maintained HTTP helpers all run through the shared runtime scheduler
+- queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all run through the shared runtime scheduler
 - socket-backed networking and HTTP convenience helpers use nonblocking descriptors with timeout and cancellation support
 - Aurora tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
 - ordinary file operations now offload through the shared scheduler-backed runtime instead of pinning a lightweight task on a blocking host thread

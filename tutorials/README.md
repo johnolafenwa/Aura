@@ -53,9 +53,9 @@ The current tutorial set covers:
 - `Aurora.toml` packages with `src/`, local path dependencies, git dependencies, workspaces, and local lockfiles
 - built-in `Result[T, E]`, `Option[T]`, `SendError[T]`, and bare `None`
 - `try expr`
-- `with` using `close(borrow mut self)` and `with tasks() as group:`
+- `with` using `close(borrow mut self)` and `with TaskGroup() as group:`
 - builtin `io`, `fs`, and `net` modules with scheduler-aware file I/O and maintained networking resource types
-- `Queue[T]`, `queue()`, `spawn`, `spawn detached`, `Task[T].result()`, `tasks()`, `select`, send-result errors, and cooperative cancellation
+- `Queue[T]()`, `Task[T].result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `wait_any(...)`, `wait_all(...)`, send-result errors, and cooperative cancellation
 - arithmetic, strings, string parsing/formatting, booleans, comparisons, and duration literals
 - `if`, `elif`, `else`, `for`, `while`, `match`, `break`, and `continue`
 - `print`
@@ -64,4 +64,4 @@ The current tutorial set covers:
 
 Use `14-current-language-surface.md` as the compact truth source for the currently implemented subset. The earlier chapters should explain that surface progressively, but that reference chapter should stay exhaustive for the bootstrap compiler.
 
-It does not yet attempt to teach features that are still only in the proposal, such as detached-task ownership restrictions.
+It does not yet attempt to teach features that are still only in the proposal.

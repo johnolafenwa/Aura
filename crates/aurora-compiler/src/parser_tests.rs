@@ -479,13 +479,7 @@ fn parser_helper_functions_cover_assignment_targets_and_span_offsets() {
                         callee: Box::new(Expr {
                             kind: ExprKind::Member {
                                 object: Box::new(Expr {
-                                    kind: ExprKind::Spawn {
-                                        detached: false,
-                                        value: Box::new(Expr {
-                                            kind: ExprKind::Name("worker".to_string()),
-                                            span,
-                                        }),
-                                    },
+                                    kind: ExprKind::Name("task".to_string()),
                                     span,
                                 }),
                                 field: "join".to_string(),
@@ -694,17 +688,22 @@ fn parse_control_flow_patterns_and_helper_errors_cover_more_branches() {
         Stmt::With(WithStmt { ref binding, .. }) if binding == "handle"
     ));
 
-    let select_stmt = parse_stmt_from(
-        ["select:", "    case ready = jobs.get():", "        pass"]
-            .join("\n")
-            .as_str(),
-    )
-    .expect("select should parse");
-    let Stmt::Select(select_stmt) = select_stmt else {
-        panic!("expected select statement");
-    };
-    assert_eq!(select_stmt.arms.len(), 1);
-    assert_eq!(select_stmt.arms[0].binding.as_deref(), Some("ready"));
+    let start_soon_stmt = parse_stmt_from("group.start_soon(worker)\n")
+        .expect("start_soon expression statements should parse");
+    assert!(matches!(
+        start_soon_stmt,
+        Stmt::Expr(ExprStmt {
+            expr: Expr {
+                kind: ExprKind::Call { .. },
+                ..
+            },
+            ..
+        })
+    ));
+
+    let removed_select = parse_stmt_from("select:\n    case ready = jobs.get():\n        pass\n")
+        .expect_err("select syntax should be rejected");
+    assert!(!removed_select.message.is_empty());
 
     let while_stmt = parse_stmt_from("while true:\n    break\n").expect("while should parse");
     assert!(matches!(while_stmt, Stmt::While(_)));
@@ -802,9 +801,9 @@ fn parser_covers_blank_lines_empty_literals_and_specialization_offsets() {
         .expect("match with blank lines should parse");
     assert!(matches!(match_stmt, Stmt::Match(_)));
 
-    let select_stmt = parse_stmt_from("select:\n\n    case after(1ms):\n        pass\n")
-        .expect("select with blank lines should parse");
-    assert!(matches!(select_stmt, Stmt::Select(_)));
+    let start_soon_stmt = parse_stmt_from("group.start_soon(worker)\n")
+        .expect("start_soon expression statements should parse");
+    assert!(matches!(start_soon_stmt, Stmt::Expr(_)));
 
     let empty_list = parse_expression("[]").expect("empty list should parse");
     assert!(matches!(empty_list.kind, ExprKind::List(ref items) if items.is_empty()));
@@ -960,23 +959,9 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
     };
     assert_eq!(with_stmt.binding, "handle");
 
-    let select_stmt = parse_stmt_from(
-        [
-            "select:",
-            "    case after(1ms):",
-            "        pass",
-            "",
-            "    case after(2ms):",
-            "        pass",
-        ]
-        .join("\n")
-        .as_str(),
-    )
-    .expect("select with blank lines should parse");
-    let Stmt::Select(select_stmt) = select_stmt else {
-        panic!("expected select statement");
-    };
-    assert_eq!(select_stmt.arms.len(), 2);
+    let wait_any_stmt = parse_stmt_from("winner = wait_any(tasks, timeout=1ms)\n")
+        .expect("wait_any assignments should parse");
+    assert!(matches!(wait_any_stmt, Stmt::Assign(_)));
 
     let whitespace_heavy_item = parse_item_from(
         [
@@ -1058,7 +1043,7 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
     .expect("match should tolerate whitespace-only blank lines between arms");
     assert!(matches!(match_with_whitespace_only_gap, Stmt::Match(_)));
 
-    let select_with_whitespace_only_gap = parse_stmt_from(
+    let removed_select = parse_stmt_from(
         [
             "select:",
             "    case after(1ms):",
@@ -1070,8 +1055,8 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
         .join("\n")
         .as_str(),
     )
-    .expect("select should tolerate whitespace-only blank lines between arms");
-    assert!(matches!(select_with_whitespace_only_gap, Stmt::Select(_)));
+    .expect_err("select syntax should stay removed");
+    assert!(!removed_select.message.is_empty());
 
     let with_binding_equals_stmt = parse_stmt_from("with handle = open():\n    pass\n")
         .expect("with binding=value form should parse");

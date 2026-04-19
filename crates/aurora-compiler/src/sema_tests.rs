@@ -668,6 +668,8 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         "Result".to_string(),
         vec![Type::named("int32"), Type::named("String")],
     );
+    let task_int = Type::Named("Task".to_string(), vec![Type::named("int32")]);
+    let task_list_int = Type::Named("Vec".to_string(), vec![task_int.clone()]);
     let mut locals = HashMap::from([
         (
             "moved".to_string(),
@@ -750,6 +752,39 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             "text".to_string(),
             local_binding(
                 Type::named("String"),
+                false,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "group".to_string(),
+            local_binding(
+                Type::named("TaskGroup"),
+                false,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "task".to_string(),
+            local_binding(
+                task_int.clone(),
+                false,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "tasks".to_string(),
+            local_binding(
+                task_list_int.clone(),
                 false,
                 false,
                 ReceiverKind::Value,
@@ -1039,61 +1074,77 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
 
     assert!(checker
         .type_of_expr(
-            &expr(ExprKind::Spawn {
-                detached: false,
-                value: Box::new(expr(ExprKind::Name("work".to_string()))),
-            }),
-            &mut locals,
-        )
-        .expect_err("spawn requires call expressions")
-        .message
-        .contains("requires a function or method call expression"));
-    assert!(checker
-        .type_of_expr(
-            &expr(ExprKind::Spawn {
-                detached: false,
-                value: Box::new(expr(ExprKind::Call {
-                    callee: Box::new(expr(ExprKind::Member {
-                        object: Box::new(expr(ExprKind::Name("flag".to_string()))),
-                        field: "not".to_string(),
-                    })),
-                    args: Vec::new(),
+            &expr(ExprKind::Call {
+                callee: Box::new(expr(ExprKind::Member {
+                    object: Box::new(expr(ExprKind::Name("group".to_string()))),
+                    field: "start".to_string(),
                 })),
+                args: vec![arg(expr(ExprKind::Name("work".to_string())))],
             }),
             &mut locals,
         )
-        .expect_err("spawn should stay limited to supported callable targets")
+        .expect_err("TaskGroup.start should enforce callable arguments")
         .message
-        .contains("associated methods without `self`"));
+        .contains("missing required argument `value`"));
     assert_eq!(
         checker
             .type_of_expr(
-                &expr(ExprKind::Spawn {
-                    detached: false,
-                    value: Box::new(expr(ExprKind::Call {
-                        callee: Box::new(expr(ExprKind::Name("work".to_string()))),
-                        args: vec![arg(expr(ExprKind::Int(1)))],
+                &expr(ExprKind::Call {
+                    callee: Box::new(expr(ExprKind::Member {
+                        object: Box::new(expr(ExprKind::Name("group".to_string()))),
+                        field: "start".to_string(),
                     })),
+                    args: vec![
+                        arg(expr(ExprKind::Name("work".to_string()))),
+                        arg(expr(ExprKind::Int(1))),
+                    ],
                 }),
                 &mut locals,
             )
-            .expect("spawned named function calls should type check"),
+            .expect("task group start should type check"),
         Type::Named("Task".to_string(), vec![Type::named("int32")])
     );
     assert_eq!(
         checker
             .type_of_expr(
-                &expr(ExprKind::Spawn {
-                    detached: true,
-                    value: Box::new(expr(ExprKind::Call {
-                        callee: Box::new(expr(ExprKind::Name("work".to_string()))),
-                        args: vec![arg(expr(ExprKind::Int(1)))],
+                &expr(ExprKind::Call {
+                    callee: Box::new(expr(ExprKind::Member {
+                        object: Box::new(expr(ExprKind::Name("group".to_string()))),
+                        field: "start_soon".to_string(),
                     })),
+                    args: vec![
+                        arg(expr(ExprKind::Name("work".to_string()))),
+                        arg(expr(ExprKind::Int(1))),
+                    ],
                 }),
                 &mut locals,
             )
-            .expect("detached spawn should erase the Task type"),
+            .expect("start_soon should erase the Task handle"),
         Type::Unit
+    );
+    assert_eq!(
+        checker
+            .type_of_expr(
+                &expr(ExprKind::Call {
+                    callee: Box::new(expr(ExprKind::Name("wait_any".to_string()))),
+                    args: vec![arg(expr(ExprKind::Name("tasks".to_string())))],
+                }),
+                &mut locals,
+            )
+            .expect("wait_any should type check"),
+        Type::Named("WaitAny".to_string(), vec![Type::named("int32")])
+    );
+    assert_eq!(
+        checker
+            .type_of_expr(
+                &expr(ExprKind::Call {
+                    callee: Box::new(expr(ExprKind::Name("wait_all".to_string()))),
+                    args: vec![arg(expr(ExprKind::Name("tasks".to_string())))],
+                }),
+                &mut locals,
+            )
+            .expect("wait_all should type check"),
+        Type::Named("WaitAll".to_string(), vec![Type::named("int32")])
     );
 
     checker.current_return_type = Some(result_int_string.clone());
@@ -1897,6 +1948,20 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
                 &[],
             ),
         ),
+        (
+            "tasks".to_string(),
+            local_binding(
+                Type::Named(
+                    "Vec".to_string(),
+                    vec![Type::Named("Task".to_string(), vec![Type::named("int32")])],
+                ),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
     ]);
 
     assert!(checker
@@ -2043,49 +2108,29 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         .contains("`range` arguments must have type `int32`"));
     assert!(checker
         .type_of_call(
-            &expr(ExprKind::Name("queue".to_string())),
-            &[],
+            &expr(ExprKind::Name("wait_any".to_string())),
+            &[arg(expr(ExprKind::Name("count".to_string())))],
             span,
             &mut locals,
             None,
         )
-        .expect_err("queue() requires an expected type")
+        .expect_err("wait_any() requires a Vec[Task[T]]")
         .message
-        .contains("requires an expected `Queue[T]`"));
+        .contains("expects `Vec[Task[T]]`"));
     assert!(checker
         .type_of_call(
-            &expr(ExprKind::Name("queue".to_string())),
-            &[],
-            span,
-            &mut locals,
-            Some(&Type::named("int32")),
-        )
-        .expect_err("queue() rejects non-channel expected types")
-        .message
-        .contains("requires an expected `Queue[T]`"));
-    assert_eq!(
-        checker
-            .type_of_call(
-                &expr(ExprKind::Name("queue".to_string())),
-                &[],
-                span,
-                &mut locals,
-                Some(&channel_string),
-            )
-            .expect("queue() should follow Queue[T] expectations"),
-        channel_string
-    );
-    assert!(checker
-        .type_of_call(
-            &expr(ExprKind::Name("after".to_string())),
-            &[arg(expr(ExprKind::Int(1)))],
+            &expr(ExprKind::Name("wait_all".to_string())),
+            &[
+                arg(expr(ExprKind::Name("tasks".to_string()))),
+                named_arg("timeout", expr(ExprKind::Int(1))),
+            ],
             span,
             &mut locals,
             None,
         )
-        .expect_err("after() requires Duration")
+        .expect_err("wait_all() timeout requires Duration")
         .message
-        .contains("expects a `Duration`"));
+        .contains("`wait_all(timeout=...)` expects `Duration`"));
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Name("sleep".to_string())),
@@ -3269,7 +3314,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "get".to_string(),
             }),
             Vec::new(),
-            Type::Named("Option".to_string(), vec![string_ty.clone()]),
+            Type::Named("QueueReceive".to_string(), vec![string_ty.clone()]),
         ),
         (
             expr(ExprKind::Member {
@@ -3299,7 +3344,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "result".to_string(),
             }),
             Vec::new(),
-            int_ty.clone(),
+            Type::Named("TaskResult".to_string(), vec![int_ty.clone()]),
         ),
         (
             expr(ExprKind::Member {
@@ -3622,12 +3667,16 @@ fn sema_helper_edges_cover_copy_defaults_literal_patterns_and_module_members() {
         default_argument_references_param(&default_expr, &params),
         Some("source".to_string())
     );
-    let spawned_default = expr(ExprKind::Spawn {
-        detached: false,
-        value: Box::new(expr(ExprKind::Name("fallback".to_string()))),
+    let wait_default = expr(ExprKind::Call {
+        callee: Box::new(expr(ExprKind::Name("wait_all".to_string()))),
+        args: vec![Argument {
+            name: None,
+            span: Span::new(1, 1),
+            value: expr(ExprKind::Name("fallback".to_string())),
+        }],
     });
     assert_eq!(
-        default_argument_references_param(&spawned_default, &params),
+        default_argument_references_param(&wait_default, &params),
         Some("fallback".to_string())
     );
 
@@ -4495,72 +4544,47 @@ fn function_signature_helper_constructor_is_used() {
 }
 
 #[test]
-fn select_checker_covers_valid_and_error_paths() {
+fn structured_wait_helpers_cover_valid_and_error_paths() {
     let valid = crate::check_source(
-            "def main() -> int32:\n    jobs: Queue[int32] = queue()\n    select:\n        case received = jobs.get():\n            match received:\n                case Some(value):\n                    print(value)\n                case None:\n                    pass\n        case sent = jobs.put(1):\n            print(sent)\n        case after(1ms):\n            pass\n    return 0\n",
+            "def worker(value: int32) -> int32:\n    return value\n\ndef notify(value: int32):\n    print(value)\n\ndef main() -> int32:\n    jobs = Queue[int32]()\n    with TaskGroup() as group:\n        mut tasks = Vec[Task[int32]]()\n        tasks.push(group.start(worker, 1))\n        group.start_soon(notify, 2)\n        print(wait_any(tasks, timeout=1ms))\n        print(wait_all(tasks))\n    match jobs.get(timeout=1ms):\n        case QueueReceive.TimedOut:\n            pass\n        case _:\n            pass\n    return 0\n",
         )
-        .expect("valid select source should type check");
+        .expect("structured wait helpers should type check");
     assert!(valid.functions.contains_key("main"));
 
-    let all_return = crate::check_source(
-            "def main() -> int32:\n    jobs: Queue[int32] = queue()\n    select:\n        case received = jobs.get():\n            return 1\n        case after(1ms):\n            return 2\n",
-        )
-        .expect("all-return select should type check");
-    assert!(all_return.functions.contains_key("main"));
+    let wait_non_tasks =
+        crate::check_source("def main() -> int32:\n    return wait_any(tasks=true)\n")
+            .expect_err("wait_any should reject non-task vectors");
+    assert!(wait_non_tasks.message.contains("expects `Vec[Task[T]]`"));
 
-    let after_binding = crate::check_source(
-            "def main() -> int32:\n    select:\n        case later = after(1ms):\n            pass\n    return 0\n",
+    let wait_timeout = crate::check_source(
+            "def worker(value: int32) -> int32:\n    return value\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        mut tasks = Vec[Task[int32]]()\n        tasks.push(group.start(worker, 1))\n        return wait_all(tasks, timeout=1)\n",
         )
-        .expect_err("after select bindings should fail");
-    assert!(after_binding
+        .expect_err("wait_all timeout should require Duration");
+    assert!(wait_timeout
         .message
-        .contains("`after(...)` select arms cannot bind a value"));
+        .contains("`wait_all(timeout=...)` expects `Duration`, found `int32`"));
 
-    let recv_non_channel = crate::check_source(
-            "def main() -> int32:\n    value = 1\n    select:\n        case found = value.get():\n            pass\n    return 0\n",
-        )
-        .expect_err("recv on a non-channel should fail");
-    assert!(recv_non_channel
+    let recv_timeout = crate::check_source(
+        "def main() -> int32:\n    jobs = Queue[int32]()\n    return jobs.get(timeout=1)\n",
+    )
+    .expect_err("queue.get timeout should require Duration");
+    assert!(recv_timeout
         .message
-        .contains("`select` receive arms require `Queue[T].get()`"));
-
-    let send_non_channel = crate::check_source(
-            "def main() -> int32:\n    value = 1\n    select:\n        case sent = value.put(1):\n            pass\n    return 0\n",
-        )
-        .expect_err("send on a non-channel should fail");
-    assert!(send_non_channel
-        .message
-        .contains("`select` send arms require `Queue[T].put(value)`"));
-
-    let after_wrong_type = crate::check_source(
-            "def main() -> int32:\n    select:\n        case after(1):\n            pass\n    return 0\n",
-        )
-        .expect_err("after() should require a duration");
-    assert!(after_wrong_type
-        .message
-        .contains("`after(...)` expects a `Duration`, found `int32`"));
-
-    let invalid_select_expr = crate::check_source(
-            "def main() -> int32:\n    jobs: Queue[int32] = queue()\n    select:\n        case jobs:\n            pass\n    return 0\n",
-        )
-        .expect_err("non-call select arms should fail");
-    assert!(invalid_select_expr
-        .message
-        .contains("`select` currently supports `get()`, `put(...)`, and `after(...)` arms"));
+        .contains("`get(timeout=...)` expects `Duration`, found `int32`"));
 
     let send_wrong_type = crate::check_source(
-            "def main() -> int32:\n    jobs: Queue[int32] = queue()\n    select:\n        case status = jobs.put(\"bad\"):\n            pass\n    return 0\n",
-        )
-        .expect_err("send with the wrong type should fail");
-    assert!(send_wrong_type.message.contains("`put()` expects `int32`"));
+        "def main() -> int32:\n    jobs = Queue[int32]()\n    return jobs.put(\"bad\")\n",
+    )
+    .expect_err("queue.put should enforce payload types");
+    assert!(send_wrong_type.message.contains("`put` expects `int32`"));
 
-    let shadow_binding = crate::check_source(
-            "def main() -> int32:\n    jobs: Queue[int32] = queue()\n    value = 1\n    select:\n        case value = jobs.get():\n            pass\n    return 0\n",
+    let start_soon_target = crate::check_source(
+            "def main() -> int32:\n    with TaskGroup() as group:\n        group.start_soon(1)\n    return 0\n",
         )
-        .expect_err("shadowing select bindings should fail");
-    assert!(shadow_binding
-        .message
-        .contains("select binding `value` would shadow an existing name"));
+        .expect_err("start_soon requires a callable");
+    assert!(start_soon_target.message.contains(
+        "task starting currently supports named functions and associated methods without `self`"
+    ));
 }
 
 #[test]
@@ -4873,7 +4897,7 @@ fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_succes
         &imported_modules,
         &module_registry,
     );
-    let span = Span::new(1, 1);
+    let _span = Span::new(1, 1);
 
     let mut locals = HashMap::from([
         (
@@ -4925,28 +4949,16 @@ fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_succes
         ),
     ]);
 
-    let empty_select = checker
-        .check_select(
-            &SelectStmt {
-                arms: Vec::new(),
-                span,
-            },
+    let invalid_wait_any = checker
+        .type_of_expr(
+            &expr(ExprKind::Call {
+                callee: Box::new(expr(ExprKind::Name("wait_any".to_string()))),
+                args: vec![arg(expr(ExprKind::Bool(true)))],
+            }),
             &mut locals,
-            &Type::Unit,
-            0,
-            false,
         )
-        .expect_err("select without arms should fail");
-    assert!(empty_select
-        .message
-        .contains("`select` requires at least one `case` arm"));
-
-    let invalid_select_arm = checker
-        .select_arm_binding_type(&expr(ExprKind::Bool(true)), &mut locals)
-        .expect_err("select helper should reject non-call expressions");
-    assert!(invalid_select_arm
-        .message
-        .contains("`select` currently supports `get()`, `put(...)`, and `after(...)` arms"));
+        .expect_err("wait_any should reject non-task vectors");
+    assert!(invalid_wait_any.message.contains("expects `Vec[Task[T]]`"));
 
     let index_mut_error = checker
         .check_assign(
@@ -5164,15 +5176,18 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
         (
-            "queue",
-            expr(ExprKind::Name("queue".to_string())),
+            "Queue",
+            expr(ExprKind::Specialize {
+                expr: Box::new(expr(ExprKind::Name("Queue".to_string()))),
+                type_args: vec![type_ref("String")],
+            }),
             Vec::new(),
             channel_ty.clone(),
-            Some(channel_ty.clone()),
+            None,
         ),
         (
-            "tasks",
-            expr(ExprKind::Name("tasks".to_string())),
+            "TaskGroup",
+            expr(ExprKind::Name("TaskGroup".to_string())),
             Vec::new(),
             Type::named("TaskGroup"),
             None,
@@ -5182,13 +5197,6 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             expr(ExprKind::Name("cancelled".to_string())),
             Vec::new(),
             Type::named("bool"),
-            None,
-        ),
-        (
-            "after",
-            expr(ExprKind::Name("after".to_string())),
-            vec![named_arg("duration", expr(ExprKind::DurationMillis(1)))],
-            Type::named("Duration"),
             None,
         ),
         (
@@ -5394,12 +5402,12 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "`range` arguments must have type `int32`, found `bool`",
             ),
             (
-                "def main() -> int32:\n    return queue()\n",
-                "`queue()` requires an expected `Queue[T]` type annotation",
+                "def main() -> int32:\n    return wait_any(tasks=true)\n",
+                "`wait_any` expects `Vec[Task[T]]`, found `bool`",
             ),
             (
-                "def main() -> int32:\n    return after(duration=1)\n",
-                "`after(...)` expects a `Duration`, found `int32`",
+                "def main() -> int32:\n    jobs = Queue[int32]()\n    return jobs.get(timeout=1)\n",
+                "`get(timeout=...)` expects `Duration`, found `int32`",
             ),
             (
                 "def main() -> int32:\n    return sleep(duration=1)\n",
@@ -5905,7 +5913,7 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
             "Option",
             "Some",
         ),
-        Some(Some(Type::named("int32")))
+        Some(vec![Type::named("int32")])
     );
     assert_eq!(
         checker.builtin_enum_variant_payload(
@@ -5913,7 +5921,7 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
             "Option",
             "None",
         ),
-        Some(None)
+        Some(Vec::new())
     );
     assert_eq!(
         checker
@@ -6466,10 +6474,10 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
     assert!(bad_with.message.contains("close(borrow mut self)"));
 
     checker
-        .require_spawnable_function("work", &[], span)
-        .expect("by-value params should be spawnable");
-    let spawn_error = checker
-        .require_spawnable_function(
+        .require_task_startable_function("work", &[], span)
+        .expect("by-value params should be task-startable");
+    let task_start_error = checker
+        .require_task_startable_function(
             "work",
             &[Param {
                 name: "value".to_string(),
@@ -6481,8 +6489,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             }],
             span,
         )
-        .expect_err("borrowed params should not be spawnable");
-    assert!(spawn_error
+        .expect_err("borrowed params should not be task-startable");
+    assert!(task_start_error
         .message
         .contains("does not yet support borrowed parameter `value`"));
 }

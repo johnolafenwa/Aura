@@ -1,6 +1,6 @@
 # Aurora
 
-Aurora is a systems programming language designed to have Python-like simplicity, the memory safety of Rust, and the concurrency model of Go.
+Aurora is a systems programming language designed to have Python-like simplicity, the memory safety of Rust, and lightweight structured concurrency.
 
 The goal is to build a systems programming language that is easy to learn and very effective for building agents and ML infrastructure.
 
@@ -30,6 +30,7 @@ Compiler library testing notes live in [crates/aurora-compiler/README.md](crates
 The categorized example library is documented in [examples/README.md](examples/README.md).
 The tutorial track lives in [tutorials/README.md](tutorials/README.md).
 The repo testing strategy is documented in [docs/testing_strategy.md](docs/testing_strategy.md).
+The forward-looking ML systems roadmap lives in [docs/ml_systems_support_plan.md](docs/ml_systems_support_plan.md).
 The implementation architecture guide lives in [architecture_docs/README.md](architecture_docs/README.md).
 
 Current editor tooling:
@@ -113,10 +114,10 @@ Current bootstrap compiler workflow:
   - execute the Unix-socket and TLS surface on Unix hosts using bundled PEM assets
 - `cargo run -p aura -- run examples/resources/with_resource.au`
   - execute deterministic scoped cleanup with `with`
-- `cargo run -p aura -- run examples/concurrency/queues_spawn.au`
+- `cargo run -p aura -- run examples/concurrency/task_group_start.au`
   - execute the maintained queue/task concurrency surface
 - `cargo run -p aura -- run examples/concurrency/bounded_queue.au`
-  - execute bounded queues with `queue(capacity=...)` on the shared scheduler
+  - execute bounded queues with `Queue[T](capacity=...)` on the shared scheduler
 - `cargo run -p aura -- run examples/concurrency/sleep_builtin.au`
   - execute `sleep(duration)` delays in the MIR-backed runtime path
 - `cargo run -p aura -- build -o ./target/aurora-point examples/point.au`
@@ -180,7 +181,7 @@ Current `build` status:
 Current `run` status:
 
 - `aura run` now executes programs through the MIR runtime for the current implemented Aurora surface
-- `spawn`, `select`, queues, task groups, `try`, `with`, scheduler-aware file I/O, and the maintained poll-driven socket networking surface now run through the same MIR-backed public execution path
+- queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, and the maintained poll-driven socket networking surface now run through the same MIR-backed public execution path
 - the maintained execution architecture is now the MIR runtime for `run` plus native direct codegen for `build`
 
 ## VS Code install

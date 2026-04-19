@@ -46,7 +46,7 @@ match find_user(1):
         print("not found")
 ```
 
-You will see `Option[T]` throughout Aurora's standard library -- `Vec.pop()`, `Vec.get()`, `Map.get()`, `String.strip_prefix()`, and `Queue.get()` all return `Option` values.
+You will see `Option[T]` throughout Aurora's standard library -- `Vec.pop()`, `Vec.get()`, `Map.get()`, and `String.strip_prefix()` all return `Option` values.
 
 ## `None` vs `Option.None`
 
@@ -67,7 +67,7 @@ In practice, the distinction is clear from context. When you see `Option.None` i
 `SendError[T]` is the error type returned when a queue send fails because the queue is closed or a waiting send is cancelled. It wraps the value that could not be sent, so you can recover it:
 
 ```python
-ch: Queue[int32] = queue()
+ch = Queue[int32]()
 ch.close()
 
 match ch.put(4):

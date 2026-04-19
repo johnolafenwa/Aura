@@ -394,8 +394,8 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
 
 ### `concurrency/`
 
-- `queues_spawn.au`
-  - typed queues, `queue()`, scheduler-backed `spawn`, `get()`, and `result()`
+- `task_group_start.au`
+  - structured task startup with `TaskGroup.start(...)`, `Queue[T]()`, `QueueReceive[T]`, and `TaskResult[T]`
   - prints:
     - `2`
     - `4`
@@ -406,44 +406,64 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `1`
     - `2`
 - `queue_timeout.au`
-  - `Queue.get(timeout=...)` for the ordinary timeout case without `select`
+  - `Queue.get(timeout=...)` for the ordinary timeout case
   - prints `timeout`
 - `bounded_queue.au`
-  - `queue(capacity=...)` and `Queue.put(...)` waiting for bounded-capacity space on the shared scheduler
+  - `Queue[T](capacity=...)` and `Queue.put(...)` waiting for bounded-capacity space on the shared scheduler
   - prints:
     - `queued 1`
     - `queued 2`
     - `3`
 - `send_result.au`
-  - `Queue.put()` returning `Result[None, SendError[T]]`, including both `Closed(...)` and `Cancelled(...)`
+  - `Queue.put()` returning `Result[None, SendError[T]]`, including `Closed(...)`, `Cancelled(...)`, `TimedOut(...)`, and `Full(...)`
   - prints `7`
-- `spawn_detached.au`
-  - explicit detached background work with `spawn detached`
+- `task_group_start_soon.au`
+  - structured background work with `TaskGroup.start_soon(...)`
   - prints `9`
-- `spawn_associated_method.au`
-  - spawning associated methods without `self` through both `spawn` and `TaskGroup.start(...)`
+- `task_group_associated_method.au`
+  - starting associated methods without `self` through `TaskGroup.start(...)`
   - prints:
     - `5`
     - `7`
-- `select_send.au`
-  - `select` with a queue send arm and a timer fallback
+- `queue_put_timeout.au`
+  - `Queue.put(timeout=...)` with explicit send failure handling
   - prints:
     - `sent`
     - `4`
-- `task_group_select.au`
-  - `with tasks() as group:`, cheap queue handles, and `select`
+- `task_group_queue_sum.au`
+  - queue-driven coordination inside a `TaskGroup()` scope
   - prints `3`
 - `task_group_cancel.au`
   - cooperative cancellation with `group.cancel()` and `cancelled()`
   - prints:
     - `0`
     - `1`
-- `select_timeout.au`
-  - timer-based `select` without queues
+- `task_group_wait_helpers.au`
+  - `TaskResult[T]`, `WaitAny[T]`, `WaitAll[T]`, and bounded `Queue[T]` coordination helpers
+  - prints:
+    - `side-effect`
+    - `11`
+    - `1`
+    - `3`
+    - `2`
+- `queue_get_timeout.au`
+  - short timeout handling through `Queue.get(timeout=...)`
   - prints `timeout`
-- `select_timeout_named.au`
-  - timer-based `select` using `after(duration=...)`
+- `queue_get_timeout_named.au`
+  - named timeout arguments on `Queue.get(timeout=...)`
   - prints `timeout`
+- `task_group_wait_helpers.au`
+  - `wait_any(...)`, `wait_all(...)`, `Task.result(timeout=...)`, and bounded queue send/receive outcomes
+  - prints:
+    - `Ok(None)`
+    - `Err(Full(2))`
+    - `1`
+    - `closed`
+    - `ready`
+    - `1`
+    - `6`
+    - `8`
+    - `6`
 - `sleep_builtin.au`
   - blocking sleep with a `Duration` argument
   - prints:
@@ -592,16 +612,16 @@ cargo run -p aura -- run examples/io/udp_echo.au
 cargo run -p aura -- run examples/io/http_roundtrip.au
 cargo run -p aura -- run examples/io/websocket_roundtrip.au
 cargo run -p aura -- run examples/io/unix_tls_roundtrip.au
-cargo run -p aura -- run examples/concurrency/queues_spawn.au
+cargo run -p aura -- run examples/concurrency/task_group_start.au
 cargo run -p aura -- run examples/concurrency/bounded_queue.au
 cargo run -p aura -- run examples/concurrency/send_result.au
-cargo run -p aura -- run examples/concurrency/spawn_detached.au
-cargo run -p aura -- run examples/concurrency/select_send.au
-cargo run -p aura -- run examples/concurrency/task_group_select.au
+cargo run -p aura -- run examples/concurrency/task_group_start_soon.au
+cargo run -p aura -- run examples/concurrency/queue_put_timeout.au
+cargo run -p aura -- run examples/concurrency/task_group_queue_sum.au
 cargo run -p aura -- run examples/concurrency/task_group_cancel.au
 cargo run -p aura -- run examples/concurrency/queue_timeout.au
-cargo run -p aura -- run examples/concurrency/select_timeout.au
-cargo run -p aura -- run examples/concurrency/select_timeout_named.au
+cargo run -p aura -- run examples/concurrency/queue_get_timeout.au
+cargo run -p aura -- run examples/concurrency/queue_get_timeout_named.au
 cargo run -p aura -- run examples/concurrency/sleep_builtin.au
 cargo run -p aura -- run examples/concurrency/minute_duration.au
 cargo run -p aura -- run examples/numbers/float32_values.au

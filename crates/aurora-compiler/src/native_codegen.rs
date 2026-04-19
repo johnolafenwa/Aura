@@ -16,8 +16,7 @@ use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::Span;
 use crate::mir::{
     BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod,
-    MirModule, MirReceiverKind, MirSelectArm, MirSelectKind, MirTraitImpl, Operand, Rvalue,
-    Terminator,
+    MirModule, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -260,19 +259,22 @@ struct NativeCodegen<'a> {
     instance_set_field: FuncId,
     arg_buffer_new: FuncId,
     arg_buffer_store: FuncId,
-    i64_buffer_new: FuncId,
-    i64_buffer_store: FuncId,
     channel_new: FuncId,
-    channel_can_send: FuncId,
     channel_send: FuncId,
+    channel_send_timeout_value: FuncId,
+    channel_try_send: FuncId,
     channel_recv: FuncId,
     channel_recv_timeout_value: FuncId,
-    channel_try_recv: FuncId,
     channel_close: FuncId,
     task_group_new: FuncId,
     task_group_cancel: FuncId,
     task_group_close: FuncId,
     task_join: FuncId,
+    task_join_timeout_value: FuncId,
+    wait_any: FuncId,
+    wait_any_timeout_value: FuncId,
+    wait_all: FuncId,
+    wait_all_timeout_value: FuncId,
     io_write: FuncId,
     io_flush: FuncId,
     io_read_line: FuncId,
@@ -375,12 +377,8 @@ struct NativeCodegen<'a> {
     tls_stream_write_all: FuncId,
     tls_stream_close: FuncId,
     cancelled: FuncId,
-    deadline_new: FuncId,
-    deadline_ready: FuncId,
-    deadline_drop: FuncId,
-    select_wait: FuncId,
     sleep_value: FuncId,
-    spawn_call: FuncId,
+    start_task_call: FuncId,
     string_data: HashMap<Vec<u8>, DataId>,
 }
 
@@ -620,19 +618,22 @@ impl<'a> NativeCodegen<'a> {
             instance_set_field => ("aurora_direct_instance_set_field", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             arg_buffer_new => ("aurora_direct_arg_buffer_new", [types::I64], Some(types::I64)),
             arg_buffer_store => ("aurora_direct_arg_buffer_store", [types::I64, types::I64, types::I64], None),
-            i64_buffer_new => ("aurora_direct_i64_buffer_new", [types::I64], Some(types::I64)),
-            i64_buffer_store => ("aurora_direct_i64_buffer_store", [types::I64, types::I64, types::I64], None),
             channel_new => ("aurora_direct_channel_new", [types::I64], Some(types::I64)),
-            channel_can_send => ("aurora_direct_channel_can_send", [types::I64], Some(types::I64)),
             channel_send => ("aurora_direct_channel_send", [types::I64, types::I64], Some(types::I64)),
+            channel_send_timeout_value => ("aurora_direct_channel_send_timeout_value", [types::I64, types::I64, types::I64], Some(types::I64)),
+            channel_try_send => ("aurora_direct_channel_try_send", [types::I64, types::I64], Some(types::I64)),
             channel_recv => ("aurora_direct_channel_recv", [types::I64], Some(types::I64)),
             channel_recv_timeout_value => ("aurora_direct_channel_recv_timeout_value", [types::I64, types::I64], Some(types::I64)),
-            channel_try_recv => ("aurora_direct_channel_try_recv", [types::I64], Some(types::I64)),
             channel_close => ("aurora_direct_channel_close", [types::I64], Some(types::I64)),
             task_group_new => ("aurora_direct_task_group_new", [], Some(types::I64)),
             task_group_cancel => ("aurora_direct_task_group_cancel", [types::I64], Some(types::I64)),
             task_group_close => ("aurora_direct_task_group_close", [types::I64, types::I64], Some(types::I64)),
             task_join => ("aurora_direct_task_join", [types::I64], Some(types::I64)),
+            task_join_timeout_value => ("aurora_direct_task_join_timeout_value", [types::I64, types::I64], Some(types::I64)),
+            wait_any => ("aurora_direct_wait_any", [types::I64], Some(types::I64)),
+            wait_any_timeout_value => ("aurora_direct_wait_any_timeout_value", [types::I64, types::I64], Some(types::I64)),
+            wait_all => ("aurora_direct_wait_all", [types::I64], Some(types::I64)),
+            wait_all_timeout_value => ("aurora_direct_wait_all_timeout_value", [types::I64, types::I64], Some(types::I64)),
             io_write => ("aurora_direct_io_write", [types::I64], Some(types::I64)),
             io_flush => ("aurora_direct_io_flush", [], Some(types::I64)),
             io_read_line => ("aurora_direct_io_read_line", [], Some(types::I64)),
@@ -735,12 +736,8 @@ impl<'a> NativeCodegen<'a> {
             tls_stream_write_all => ("aurora_direct_tls_stream_write_all", [types::I64, types::I64, types::I64], Some(types::I64)),
             tls_stream_close => ("aurora_direct_tls_stream_close", [types::I64], Some(types::I64)),
             cancelled => ("aurora_direct_cancelled", [], Some(types::I64)),
-            deadline_new => ("aurora_direct_deadline_new", [types::I64], Some(types::I64)),
-            deadline_ready => ("aurora_direct_deadline_ready", [types::I64], Some(types::I64)),
-            deadline_drop => ("aurora_direct_deadline_drop", [types::I64], None),
-            select_wait => ("aurora_direct_select_wait", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             sleep_value => ("aurora_direct_sleep_value", [types::I64], Some(types::I64)),
-            spawn_call => ("aurora_direct_spawn_call", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            start_task_call => ("aurora_direct_start_task_call", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
         );
 
         let mut functions = HashMap::new();
@@ -912,19 +909,22 @@ impl<'a> NativeCodegen<'a> {
             instance_set_field,
             arg_buffer_new,
             arg_buffer_store,
-            i64_buffer_new,
-            i64_buffer_store,
             channel_new,
-            channel_can_send,
             channel_send,
+            channel_send_timeout_value,
+            channel_try_send,
             channel_recv,
             channel_recv_timeout_value,
-            channel_try_recv,
             channel_close,
             task_group_new,
             task_group_cancel,
             task_group_close,
             task_join,
+            task_join_timeout_value,
+            wait_any,
+            wait_any_timeout_value,
+            wait_all,
+            wait_all_timeout_value,
             io_write,
             io_flush,
             io_read_line,
@@ -1027,12 +1027,8 @@ impl<'a> NativeCodegen<'a> {
             tls_stream_write_all,
             tls_stream_close,
             cancelled,
-            deadline_new,
-            deadline_ready,
-            deadline_drop,
-            select_wait,
             sleep_value,
-            spawn_call,
+            start_task_call,
             string_data: HashMap::new(),
         })
     }
@@ -1045,7 +1041,7 @@ impl<'a> NativeCodegen<'a> {
         } else {
             None
         };
-        let spawn_targets = collect_spawn_targets(self.module);
+        let task_start_targets = collect_task_start_targets(self.module);
         for function in self
             .module
             .functions
@@ -1053,7 +1049,8 @@ impl<'a> NativeCodegen<'a> {
             .chain(self.module.top_level.iter())
         {
             self.define_function(function)?;
-            if spawn_targets.contains(&function.name) || entry_name == Some(function.name.as_str())
+            if task_start_targets.contains(&function.name)
+                || entry_name == Some(function.name.as_str())
             {
                 self.define_function_thunk(function)?;
             }
@@ -1181,34 +1178,6 @@ impl<'a> NativeCodegen<'a> {
                         &mut variables,
                         &mut variable_types,
                         target.clone(),
-                        ty,
-                        None,
-                    );
-                }
-            }
-            if let Terminator::Select { arms, .. } = &block.terminator {
-                for arm in arms {
-                    let Some(binding) = &arm.binding else {
-                        continue;
-                    };
-                    if variables.contains_key(binding) {
-                        continue;
-                    }
-                    let ty = match infer_select_binding_type(arm, &variable_types, &self.classes) {
-                        Some(ty) => ty,
-                        None => {
-                            return Err(format!(
-                                "direct backend could not infer direct type for select binding `{}` in `{}`",
-                                binding, function.name
-                            ));
-                        }
-                    };
-                    declare_root_variables(
-                        &mut builder,
-                        &mut variable_index,
-                        &mut variables,
-                        &mut variable_types,
-                        binding.clone(),
                         ty,
                         None,
                     );
@@ -1551,30 +1520,24 @@ impl<'a> NativeCodegen<'a> {
         let arg_buffer_store = self
             .object
             .declare_func_in_func(self.arg_buffer_store, builder.func);
-        let i64_buffer_new = self
-            .object
-            .declare_func_in_func(self.i64_buffer_new, builder.func);
-        let i64_buffer_store = self
-            .object
-            .declare_func_in_func(self.i64_buffer_store, builder.func);
         let channel_new = self
             .object
             .declare_func_in_func(self.channel_new, builder.func);
-        let channel_can_send = self
-            .object
-            .declare_func_in_func(self.channel_can_send, builder.func);
         let channel_send = self
             .object
             .declare_func_in_func(self.channel_send, builder.func);
+        let channel_send_timeout_value = self
+            .object
+            .declare_func_in_func(self.channel_send_timeout_value, builder.func);
+        let channel_try_send = self
+            .object
+            .declare_func_in_func(self.channel_try_send, builder.func);
         let channel_recv = self
             .object
             .declare_func_in_func(self.channel_recv, builder.func);
         let channel_recv_timeout_value = self
             .object
             .declare_func_in_func(self.channel_recv_timeout_value, builder.func);
-        let channel_try_recv = self
-            .object
-            .declare_func_in_func(self.channel_try_recv, builder.func);
         let channel_close = self
             .object
             .declare_func_in_func(self.channel_close, builder.func);
@@ -1590,6 +1553,21 @@ impl<'a> NativeCodegen<'a> {
         let task_join = self
             .object
             .declare_func_in_func(self.task_join, builder.func);
+        let task_join_timeout_value = self
+            .object
+            .declare_func_in_func(self.task_join_timeout_value, builder.func);
+        let wait_any = self
+            .object
+            .declare_func_in_func(self.wait_any, builder.func);
+        let wait_any_timeout_value = self
+            .object
+            .declare_func_in_func(self.wait_any_timeout_value, builder.func);
+        let wait_all = self
+            .object
+            .declare_func_in_func(self.wait_all, builder.func);
+        let wait_all_timeout_value = self
+            .object
+            .declare_func_in_func(self.wait_all_timeout_value, builder.func);
         let io_write = self
             .object
             .declare_func_in_func(self.io_write, builder.func);
@@ -1894,24 +1872,12 @@ impl<'a> NativeCodegen<'a> {
         let cancelled = self
             .object
             .declare_func_in_func(self.cancelled, builder.func);
-        let deadline_new = self
-            .object
-            .declare_func_in_func(self.deadline_new, builder.func);
-        let deadline_ready = self
-            .object
-            .declare_func_in_func(self.deadline_ready, builder.func);
-        let deadline_drop = self
-            .object
-            .declare_func_in_func(self.deadline_drop, builder.func);
-        let select_wait = self
-            .object
-            .declare_func_in_func(self.select_wait, builder.func);
         let sleep_value = self
             .object
             .declare_func_in_func(self.sleep_value, builder.func);
-        let spawn_call = self
+        let start_task_call = self
             .object
-            .declare_func_in_func(self.spawn_call, builder.func);
+            .declare_func_in_func(self.start_task_call, builder.func);
 
         let mut compiler = FunctionCompiler {
             builder,
@@ -2028,19 +1994,22 @@ impl<'a> NativeCodegen<'a> {
             instance_set_field,
             arg_buffer_new,
             arg_buffer_store,
-            i64_buffer_new,
-            i64_buffer_store,
             channel_new,
-            channel_can_send,
             channel_send,
+            channel_send_timeout_value,
+            channel_try_send,
             channel_recv,
             channel_recv_timeout_value,
-            channel_try_recv,
             channel_close,
             task_group_new,
             task_group_cancel,
             task_group_close,
             task_join,
+            task_join_timeout_value,
+            wait_any,
+            wait_any_timeout_value,
+            wait_all,
+            wait_all_timeout_value,
             io_write,
             io_flush,
             io_read_line,
@@ -2143,12 +2112,8 @@ impl<'a> NativeCodegen<'a> {
             tls_stream_write_all,
             tls_stream_close,
             cancelled,
-            deadline_new,
-            deadline_ready,
-            deadline_drop,
-            select_wait,
             sleep_value,
-            spawn_call,
+            start_task_call,
         };
 
         let return_ty = ensure_direct_type(
@@ -2179,7 +2144,7 @@ impl<'a> NativeCodegen<'a> {
     fn define_function_thunk(&mut self, function: &MirFunction) -> std::result::Result<(), String> {
         if function.receiver.is_some() {
             return Err(format!(
-                "direct backend does not yet support spawn thunks for methods like `{}`",
+                "direct backend does not yet support task-start thunks for methods like `{}`",
                 function.name
             ));
         }
@@ -2454,19 +2419,22 @@ struct FunctionCompiler<'a> {
     instance_set_field: cranelift_codegen::ir::FuncRef,
     arg_buffer_new: cranelift_codegen::ir::FuncRef,
     arg_buffer_store: cranelift_codegen::ir::FuncRef,
-    i64_buffer_new: cranelift_codegen::ir::FuncRef,
-    i64_buffer_store: cranelift_codegen::ir::FuncRef,
     channel_new: cranelift_codegen::ir::FuncRef,
-    channel_can_send: cranelift_codegen::ir::FuncRef,
     channel_send: cranelift_codegen::ir::FuncRef,
+    channel_send_timeout_value: cranelift_codegen::ir::FuncRef,
+    channel_try_send: cranelift_codegen::ir::FuncRef,
     channel_recv: cranelift_codegen::ir::FuncRef,
     channel_recv_timeout_value: cranelift_codegen::ir::FuncRef,
-    channel_try_recv: cranelift_codegen::ir::FuncRef,
     channel_close: cranelift_codegen::ir::FuncRef,
     task_group_new: cranelift_codegen::ir::FuncRef,
     task_group_cancel: cranelift_codegen::ir::FuncRef,
     task_group_close: cranelift_codegen::ir::FuncRef,
     task_join: cranelift_codegen::ir::FuncRef,
+    task_join_timeout_value: cranelift_codegen::ir::FuncRef,
+    wait_any: cranelift_codegen::ir::FuncRef,
+    wait_any_timeout_value: cranelift_codegen::ir::FuncRef,
+    wait_all: cranelift_codegen::ir::FuncRef,
+    wait_all_timeout_value: cranelift_codegen::ir::FuncRef,
     io_write: cranelift_codegen::ir::FuncRef,
     io_flush: cranelift_codegen::ir::FuncRef,
     io_read_line: cranelift_codegen::ir::FuncRef,
@@ -2569,12 +2537,8 @@ struct FunctionCompiler<'a> {
     tls_stream_write_all: cranelift_codegen::ir::FuncRef,
     tls_stream_close: cranelift_codegen::ir::FuncRef,
     cancelled: cranelift_codegen::ir::FuncRef,
-    deadline_new: cranelift_codegen::ir::FuncRef,
-    deadline_ready: cranelift_codegen::ir::FuncRef,
-    deadline_drop: cranelift_codegen::ir::FuncRef,
-    select_wait: cranelift_codegen::ir::FuncRef,
     sleep_value: cranelift_codegen::ir::FuncRef,
-    spawn_call: cranelift_codegen::ir::FuncRef,
+    start_task_call: cranelift_codegen::ir::FuncRef,
 }
 
 impl<'a> FunctionCompiler<'a> {
@@ -2677,12 +2641,6 @@ impl<'a> FunctionCompiler<'a> {
     fn runtime_call_results(&mut self, callee: FuncRef, args: &[Value]) -> Vec<Value> {
         let inst = self.builder.ins().call(callee, args);
         self.builder.inst_results(inst).to_vec()
-    }
-
-    fn drop_deadlines(&mut self, deadlines: &[Value]) {
-        for deadline in deadlines {
-            let _ = self.builder.ins().call(self.deadline_drop, &[*deadline]);
-        }
     }
 
     fn compile_block(
@@ -2812,9 +2770,6 @@ impl<'a> FunctionCompiler<'a> {
                 self.release_all_temporary_owned();
                 self.builder.ins().jump(self.blocks[otherwise], &[]);
             }
-            Terminator::Select { arms, otherwise } => {
-                self.compile_select(arms, otherwise)?;
-            }
             Terminator::ForRange {
                 binding,
                 iterable,
@@ -2934,12 +2889,12 @@ impl<'a> FunctionCompiler<'a> {
                 let scrutinee = self.load_operand(scrutinee)?;
                 self.compile_variant_payload(scrutinee, *index)
             }
-            Rvalue::Spawn {
-                detached,
+            Rvalue::StartTask {
+                returns_handle,
                 task_group,
                 function,
                 args,
-            } => self.compile_spawn(*detached, task_group.as_ref(), function, args),
+            } => self.compile_start_task(*returns_handle, task_group, function, args),
             other => Err(format!(
                 "direct backend does not support MIR rvalue `{:?}`",
                 other
@@ -3372,7 +3327,7 @@ impl<'a> FunctionCompiler<'a> {
         if name == "range" {
             return self.compile_range(args);
         }
-        if name == "queue" {
+        if name == "Queue" {
             if args.len() > 1 {
                 return Err(format!(
                     "direct backend expected `{}()` to take at most one capacity argument",
@@ -3384,7 +3339,7 @@ impl<'a> FunctionCompiler<'a> {
                 [argument] => {
                     if argument.name.as_deref() != Some("capacity") && argument.name.is_some() {
                         return Err(
-                            "direct backend expected `queue()` to receive only `capacity=`"
+                            "direct backend expected `Queue()` to receive only `capacity=`"
                                 .to_string(),
                         );
                     }
@@ -3400,7 +3355,7 @@ impl<'a> FunctionCompiler<'a> {
                 Type::Named("Queue".to_string(), vec![Type::named("Unknown")]),
             ));
         }
-        if name == "tasks" {
+        if name == "TaskGroup" {
             if !args.is_empty() {
                 return Err(format!(
                     "direct backend expected `{}()` to take no arguments",
@@ -3442,6 +3397,81 @@ impl<'a> FunctionCompiler<'a> {
                 values: self.builder.inst_results(inst).to_vec(),
                 ty: DirectType::Scalar(ScalarKind::Unit),
             });
+        }
+        if matches!(name, "wait_any" | "wait_all") {
+            let mut tasks_arg: Option<&MirArg> = None;
+            let mut timeout_arg: Option<&MirArg> = None;
+            for (index, argument) in args.iter().enumerate() {
+                match argument.name.as_deref() {
+                    Some("tasks") => {
+                        if tasks_arg.replace(argument).is_some() {
+                            return Err(format!(
+                                "direct backend expected `{name}(tasks, timeout=...)`"
+                            ));
+                        }
+                    }
+                    Some("timeout") => {
+                        if timeout_arg.replace(argument).is_some() {
+                            return Err(format!(
+                                "direct backend expected `{name}(tasks, timeout=...)`"
+                            ));
+                        }
+                    }
+                    None if index == 0 && tasks_arg.is_none() => tasks_arg = Some(argument),
+                    None if index == 1 && timeout_arg.is_none() => timeout_arg = Some(argument),
+                    _ => {
+                        return Err(format!(
+                            "direct backend expected `{name}(tasks, timeout=...)`"
+                        ))
+                    }
+                }
+            }
+            let tasks_arg = tasks_arg
+                .ok_or_else(|| format!("direct backend expected `{name}(tasks, timeout=...)`"))?;
+            let tasks = self.load_operand(&tasks_arg.value)?;
+            let tasks = self.ensure_opaque(tasks)?;
+            let task_payload_ty =
+                infer_operand_type(&tasks_arg.value, &self.variable_types, &self.classes)
+                    .map(|direct| match direct {
+                        DirectType::Opaque(Type::Named(vec_name, args)) if vec_name == "Vec" => {
+                            match args.as_slice() {
+                                [Type::Named(task_name, task_args)] if task_name == "Task" => {
+                                    task_args.first().cloned().unwrap_or(Type::Unit)
+                                }
+                                _ => Type::named("Unknown"),
+                            }
+                        }
+                        _ => Type::named("Unknown"),
+                    })
+                    .unwrap_or_else(|| Type::named("Unknown"));
+            let inst = if let Some(timeout_arg) = timeout_arg {
+                let timeout = self.load_operand(&timeout_arg.value)?;
+                let timeout = self.ensure_opaque(timeout)?;
+                let callee = if name == "wait_any" {
+                    self.wait_any_timeout_value
+                } else {
+                    self.wait_all_timeout_value
+                };
+                self.builder
+                    .ins()
+                    .call(callee, &[tasks.values[0], timeout.values[0]])
+            } else {
+                let callee = if name == "wait_any" {
+                    self.wait_any
+                } else {
+                    self.wait_all
+                };
+                self.builder.ins().call(callee, &[tasks.values[0]])
+            };
+            let enum_name = if name == "wait_any" {
+                "WaitAny"
+            } else {
+                "WaitAll"
+            };
+            return Ok(self.owned_opaque_result(
+                self.builder.inst_results(inst).to_vec(),
+                Type::Named(enum_name.to_string(), vec![task_payload_ty]),
+            ));
         }
         if matches!(
             name,
@@ -7336,18 +7366,83 @@ impl<'a> FunctionCompiler<'a> {
                 let object = self.ensure_opaque(object)?;
                 return match field {
                     "put" => {
-                        let [argument] = args else {
-                            return Err(format!(
-                                "direct backend expected `{}()` to receive one argument",
-                                field
-                            ));
+                        let mut value_arg: Option<&MirArg> = None;
+                        let mut timeout_arg: Option<&MirArg> = None;
+                        for argument in args {
+                            match argument.name.as_deref() {
+                                Some("value") => value_arg = Some(argument),
+                                Some("timeout") => timeout_arg = Some(argument),
+                                Some(other) => {
+                                    return Err(format!(
+                                        "direct backend expected `put()` arguments to use `value` and optional `timeout`, found `{}`",
+                                        other
+                                    ))
+                                }
+                                None if value_arg.is_none() => value_arg = Some(argument),
+                                None if timeout_arg.is_none() => timeout_arg = Some(argument),
+                                None => {
+                                    return Err(
+                                        "direct backend expected `put(value, timeout=...)`".to_string(),
+                                    )
+                                }
+                            }
+                        }
+                        let Some(argument) = value_arg else {
+                            return Err(
+                                "direct backend expected `put()` to receive a value argument"
+                                    .to_string(),
+                            );
                         };
+                        let loaded = self.load_operand(&argument.value)?;
+                        let value = self.ensure_opaque(loaded)?;
+                        let inst = if let Some(timeout_arg) = timeout_arg {
+                            let timeout = self.load_operand(&timeout_arg.value)?;
+                            let timeout = self.ensure_opaque(timeout)?;
+                            self.builder.ins().call(
+                                self.channel_send_timeout_value,
+                                &[object.values[0], value.values[0], timeout.values[0]],
+                            )
+                        } else {
+                            self.builder
+                                .ins()
+                                .call(self.channel_send, &[object.values[0], value.values[0]])
+                        };
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Unit,
+                                    Type::Named(
+                                        "SendError".to_string(),
+                                        vec![class_args
+                                            .first()
+                                            .cloned()
+                                            .unwrap_or_else(|| Type::named("Unknown"))],
+                                    ),
+                                ],
+                            ),
+                        ))
+                    }
+                    "try_put" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `try_put()` to receive one argument"
+                                    .to_string(),
+                            );
+                        };
+                        if argument.name.as_deref() != Some("value") && argument.name.is_some() {
+                            return Err(
+                                "direct backend expected `try_put()` to receive only `value=`"
+                                    .to_string(),
+                            );
+                        }
                         let loaded = self.load_operand(&argument.value)?;
                         let value = self.ensure_opaque(loaded)?;
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.channel_send, &[object.values[0], value.values[0]]);
+                            .call(self.channel_try_send, &[object.values[0], value.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -7395,7 +7490,7 @@ impl<'a> FunctionCompiler<'a> {
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
-                                "Option".to_string(),
+                                "QueueReceive".to_string(),
                                 vec![class_args
                                     .first()
                                     .cloned()
@@ -7427,16 +7522,37 @@ impl<'a> FunctionCompiler<'a> {
                 let object = self.ensure_opaque(object)?;
                 return match field {
                     "result" => {
-                        if !args.is_empty() {
-                            return Err(format!(
-                                "direct backend expected `{}` to take no arguments",
-                                field
-                            ));
-                        }
-                        let inst = self.builder.ins().call(self.task_join, &[object.values[0]]);
+                        let inst = match args {
+                            [] => self.builder.ins().call(self.task_join, &[object.values[0]]),
+                            [argument] => {
+                                if argument.name.as_deref() != Some("timeout")
+                                    && argument.name.is_some()
+                                {
+                                    return Err(
+                                        "direct backend expected `result()` or `result(timeout=...)`"
+                                            .to_string(),
+                                    );
+                                }
+                                let timeout = self.load_operand(&argument.value)?;
+                                let timeout = self.ensure_opaque(timeout)?;
+                                self.builder.ins().call(
+                                    self.task_join_timeout_value,
+                                    &[object.values[0], timeout.values[0]],
+                                )
+                            }
+                            _ => {
+                                return Err(
+                                    "direct backend expected `result()` or `result(timeout=...)`"
+                                        .to_string(),
+                                )
+                            }
+                        };
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            class_args.first().cloned().unwrap_or(Type::Unit),
+                            Type::Named(
+                                "TaskResult".to_string(),
+                                vec![class_args.first().cloned().unwrap_or(Type::Unit)],
+                            ),
                         ))
                     }
                     _ => Err(format!(
@@ -7591,16 +7707,16 @@ impl<'a> FunctionCompiler<'a> {
         Ok(current)
     }
 
-    fn compile_spawn(
+    fn compile_start_task(
         &mut self,
-        detached: bool,
-        task_group: Option<&Operand>,
+        returns_handle: bool,
+        task_group: &Operand,
         function: &str,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
         let thunk_ref = *self.function_thunk_refs.get(function).ok_or_else(|| {
             format!(
-                "direct backend does not know spawn thunk for `{}`",
+                "direct backend does not know task-start thunk for `{}`",
                 function
             )
         })?;
@@ -7613,7 +7729,7 @@ impl<'a> FunctionCompiler<'a> {
         for (index, arg) in args.iter().enumerate() {
             if arg.writeback_place.is_some() {
                 return Err(
-                    "direct backend does not yet support borrowed spawn arguments".to_string(),
+                    "direct backend does not yet support borrowed task-start arguments".to_string(),
                 );
             }
             let value = self.load_operand(&arg.value)?;
@@ -7625,30 +7741,24 @@ impl<'a> FunctionCompiler<'a> {
             );
         }
         let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk_ref);
-        let detached_value = self
+        let returns_handle_value = self
             .builder
             .ins()
-            .iconst(types::I64, if detached { 1 } else { 0 });
-        let task_group_value = if let Some(group) = task_group {
-            let group = self.load_operand(group)?;
-            let group = self.ensure_opaque(group)?;
-            group.values[0]
-        } else {
-            self.builder.ins().iconst(types::I64, 0)
-        };
+            .iconst(types::I64, if returns_handle { 1 } else { 0 });
+        let group = self.load_operand(task_group)?;
+        let group = self.ensure_opaque(group)?;
+        let task_group_value = group.values[0];
         let call = self.builder.ins().call(
-            self.spawn_call,
+            self.start_task_call,
             &[
                 thunk_ptr,
                 buffer,
                 arg_count_value,
-                detached_value,
+                returns_handle_value,
                 task_group_value,
             ],
         );
-        let ty = if detached {
-            DirectType::Scalar(ScalarKind::Unit)
-        } else {
+        let ty = if returns_handle {
             let return_ty = self
                 .function_return_types
                 .get(function)
@@ -7663,6 +7773,8 @@ impl<'a> FunctionCompiler<'a> {
                 "Task".to_string(),
                 vec![direct_type_to_type(&return_ty)],
             ))
+        } else {
+            DirectType::Scalar(ScalarKind::Unit)
         };
         match ty {
             DirectType::Opaque(ty) => {
@@ -7673,308 +7785,6 @@ impl<'a> FunctionCompiler<'a> {
                 ty,
             }),
         }
-    }
-
-    fn compile_select(
-        &mut self,
-        arms: &[MirSelectArm],
-        otherwise: &str,
-    ) -> std::result::Result<(), String> {
-        let loop_block = self.builder.create_block();
-        let ignore_closed_recv = arms
-            .iter()
-            .any(|arm| matches!(arm.kind, MirSelectKind::After { .. }));
-        let mut initial_deadlines = Vec::new();
-        for arm in arms {
-            if let MirSelectKind::After { duration } = &arm.kind {
-                let duration = self.load_operand(duration)?;
-                let duration = self.ensure_opaque(duration)?;
-                let inst = self
-                    .builder
-                    .ins()
-                    .call(self.deadline_new, &[duration.values[0]]);
-                let deadline = self.builder.inst_results(inst)[0];
-                self.builder.append_block_param(loop_block, types::I64);
-                initial_deadlines.push(deadline);
-            }
-        }
-        self.builder.ins().jump(loop_block, &initial_deadlines);
-        self.builder.switch_to_block(loop_block);
-        let deadline_params = self.builder.block_params(loop_block).to_vec();
-        let mut deadline_index = 0usize;
-
-        for arm in arms {
-            match &arm.kind {
-                MirSelectKind::Recv { channel } => {
-                    let channel = self.load_operand(channel)?;
-                    let channel = self.ensure_opaque(channel)?;
-                    let inst = self
-                        .builder
-                        .ins()
-                        .call(self.channel_try_recv, &[channel.values[0]]);
-                    let result = self.builder.inst_results(inst)[0];
-                    let zero = self.builder.ins().iconst(types::I64, 0);
-                    let one = self.builder.ins().iconst(types::I64, 1);
-                    let ready = if ignore_closed_recv {
-                        self.builder
-                            .ins()
-                            .icmp(IntCC::UnsignedGreaterThan, result, one)
-                    } else {
-                        self.builder.ins().icmp(IntCC::NotEqual, result, zero)
-                    };
-                    let recv_block = self.builder.create_block();
-                    let next_block = self.builder.create_block();
-                    self.builder
-                        .ins()
-                        .brif(ready, recv_block, &[], next_block, &[]);
-                    self.builder.switch_to_block(recv_block);
-                    if let Some(binding) = &arm.binding {
-                        let binding_ty = self.type_of_place(binding)?;
-                        if ignore_closed_recv {
-                            let received = ValueRef {
-                                values: vec![result],
-                                ty: binding_ty.clone(),
-                            };
-                            if matches!(binding_ty, DirectType::Opaque(_)) {
-                                self.mark_temporary_opaque_owned(&received);
-                            }
-                            self.store_place(binding, received)?;
-                        } else {
-                            let closed_block = self.builder.create_block();
-                            let value_block = self.builder.create_block();
-                            let join_block = self.builder.create_block();
-                            let is_closed = self.builder.ins().icmp(IntCC::Equal, result, one);
-                            self.builder
-                                .ins()
-                                .brif(is_closed, closed_block, &[], value_block, &[]);
-
-                            self.builder.switch_to_block(closed_block);
-                            let none_value = self.compile_enum_variant("Option", "None", &[])?;
-                            self.store_place(
-                                binding,
-                                ValueRef {
-                                    values: none_value.values,
-                                    ty: binding_ty.clone(),
-                                },
-                            )?;
-                            self.builder.ins().jump(join_block, &[]);
-                            self.builder.seal_block(closed_block);
-
-                            self.builder.switch_to_block(value_block);
-                            let received = ValueRef {
-                                values: vec![result],
-                                ty: binding_ty.clone(),
-                            };
-                            if matches!(binding_ty, DirectType::Opaque(_)) {
-                                self.mark_temporary_opaque_owned(&received);
-                            }
-                            self.store_place(binding, received)?;
-                            self.builder.ins().jump(join_block, &[]);
-                            self.builder.seal_block(value_block);
-
-                            self.builder.switch_to_block(join_block);
-                            self.builder.seal_block(join_block);
-                        }
-                    }
-                    self.drop_deadlines(&deadline_params);
-                    self.builder.ins().jump(self.blocks[&arm.label], &[]);
-                    self.builder.seal_block(recv_block);
-                    self.builder.switch_to_block(next_block);
-                }
-                MirSelectKind::Send { channel, value } => {
-                    let channel = self.load_operand(channel)?;
-                    let channel = self.ensure_opaque(channel)?;
-                    let ready = self
-                        .builder
-                        .ins()
-                        .call(self.channel_can_send, &[channel.values[0]]);
-                    let ready = self.builder.inst_results(ready)[0];
-                    let zero = self.builder.ins().iconst(types::I64, 0);
-                    let ready = self.builder.ins().icmp(IntCC::NotEqual, ready, zero);
-                    let send_block = self.builder.create_block();
-                    let next_block = self.builder.create_block();
-                    self.builder
-                        .ins()
-                        .brif(ready, send_block, &[], next_block, &[]);
-                    self.builder.switch_to_block(send_block);
-                    let value = self.load_operand(value)?;
-                    let value = self.ensure_opaque(value)?;
-                    let inst = self
-                        .builder
-                        .ins()
-                        .call(self.channel_send, &[channel.values[0], value.values[0]]);
-                    if let Some(binding) = &arm.binding {
-                        let binding_ty = self.type_of_place(binding)?;
-                        let sent = ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: binding_ty.clone(),
-                        };
-                        if matches!(binding_ty, DirectType::Opaque(_)) {
-                            self.mark_temporary_opaque_owned(&sent);
-                        }
-                        self.store_place(binding, sent)?;
-                    }
-                    self.drop_deadlines(&deadline_params);
-                    self.builder.ins().jump(self.blocks[&arm.label], &[]);
-                    self.builder.seal_block(send_block);
-                    self.builder.switch_to_block(next_block);
-                }
-                MirSelectKind::After { .. } => {
-                    let deadline = deadline_params[deadline_index];
-                    deadline_index += 1;
-                    let inst = self.builder.ins().call(self.deadline_ready, &[deadline]);
-                    let ready = self.builder.inst_results(inst)[0];
-                    let zero = self.builder.ins().iconst(types::I64, 0);
-                    let ready = self.builder.ins().icmp(IntCC::NotEqual, ready, zero);
-                    let next_block = self.builder.create_block();
-                    let ready_block = self.builder.create_block();
-                    self.builder
-                        .ins()
-                        .brif(ready, ready_block, &[], next_block, &[]);
-                    self.builder.switch_to_block(ready_block);
-                    self.drop_deadlines(&deadline_params);
-                    self.builder.ins().jump(self.blocks[&arm.label], &[]);
-                    self.builder.seal_block(ready_block);
-                    self.builder.switch_to_block(next_block);
-                }
-            }
-        }
-
-        let recv_arm_count = arms
-            .iter()
-            .filter(|arm| matches!(arm.kind, MirSelectKind::Recv { .. }))
-            .count();
-        let send_arm_count = arms
-            .iter()
-            .filter(|arm| matches!(arm.kind, MirSelectKind::Send { .. }))
-            .count();
-        let recv_buffer = if recv_arm_count == 0 {
-            self.builder.ins().iconst(types::I64, 0)
-        } else {
-            let count_value = self.builder.ins().iconst(
-                types::I64,
-                i64::try_from(recv_arm_count)
-                    .map_err(|_| "direct backend select recv arm count overflowed i64")?,
-            );
-            let call = self.builder.ins().call(self.i64_buffer_new, &[count_value]);
-            let buffer = self.builder.inst_results(call)[0];
-            let mut recv_index = 0usize;
-            for arm in arms {
-                if let MirSelectKind::Recv { channel } = &arm.kind {
-                    let channel = self.load_operand(channel)?;
-                    let channel = self.ensure_opaque(channel)?;
-                    let index = self.builder.ins().iconst(
-                        types::I64,
-                        i64::try_from(recv_index)
-                            .map_err(|_| "direct backend select recv index overflowed i64")?,
-                    );
-                    self.builder
-                        .ins()
-                        .call(self.i64_buffer_store, &[buffer, index, channel.values[0]]);
-                    recv_index += 1;
-                }
-            }
-            buffer
-        };
-
-        let send_buffer = if send_arm_count == 0 {
-            self.builder.ins().iconst(types::I64, 0)
-        } else {
-            let count_value = self.builder.ins().iconst(
-                types::I64,
-                i64::try_from(send_arm_count)
-                    .map_err(|_| "direct backend select send arm count overflowed i64")?,
-            );
-            let call = self.builder.ins().call(self.i64_buffer_new, &[count_value]);
-            let buffer = self.builder.inst_results(call)[0];
-            let mut send_index = 0usize;
-            for arm in arms {
-                if let MirSelectKind::Send { channel, .. } = &arm.kind {
-                    let channel = self.load_operand(channel)?;
-                    let channel = self.ensure_opaque(channel)?;
-                    let index = self.builder.ins().iconst(
-                        types::I64,
-                        i64::try_from(send_index)
-                            .map_err(|_| "direct backend select send index overflowed i64")?,
-                    );
-                    self.builder
-                        .ins()
-                        .call(self.i64_buffer_store, &[buffer, index, channel.values[0]]);
-                    send_index += 1;
-                }
-            }
-            buffer
-        };
-
-        let deadline_buffer = if deadline_params.is_empty() {
-            self.builder.ins().iconst(types::I64, 0)
-        } else {
-            let count_value = self.builder.ins().iconst(
-                types::I64,
-                i64::try_from(deadline_params.len())
-                    .map_err(|_| "direct backend select deadline count overflowed i64")?,
-            );
-            let call = self.builder.ins().call(self.i64_buffer_new, &[count_value]);
-            let buffer = self.builder.inst_results(call)[0];
-            for (index, deadline) in deadline_params.iter().enumerate() {
-                let index = self.builder.ins().iconst(
-                    types::I64,
-                    i64::try_from(index)
-                        .map_err(|_| "direct backend select deadline index overflowed i64")?,
-                );
-                self.builder
-                    .ins()
-                    .call(self.i64_buffer_store, &[buffer, index, *deadline]);
-            }
-            buffer
-        };
-
-        let recv_count_value = self.builder.ins().iconst(
-            types::I64,
-            i64::try_from(recv_arm_count)
-                .map_err(|_| "direct backend select recv arm count overflowed i64")?,
-        );
-        let send_count_value = self.builder.ins().iconst(
-            types::I64,
-            i64::try_from(send_arm_count)
-                .map_err(|_| "direct backend select send arm count overflowed i64")?,
-        );
-        let deadline_count_value = self.builder.ins().iconst(
-            types::I64,
-            i64::try_from(deadline_params.len())
-                .map_err(|_| "direct backend select deadline count overflowed i64")?,
-        );
-        let ignore_closed = self
-            .builder
-            .ins()
-            .iconst(types::I64, if ignore_closed_recv { 1 } else { 0 });
-        let call = self.builder.ins().call(
-            self.select_wait,
-            &[
-                recv_buffer,
-                recv_count_value,
-                send_buffer,
-                send_count_value,
-                ignore_closed,
-                deadline_buffer,
-                deadline_count_value,
-            ],
-        );
-        let cancelled = self.builder.inst_results(call)[0];
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        let cancelled = self.builder.ins().icmp(IntCC::NotEqual, cancelled, zero);
-        let cancelled_block = self.builder.create_block();
-        let continue_block = self.builder.create_block();
-        self.builder
-            .ins()
-            .brif(cancelled, cancelled_block, &[], continue_block, &[]);
-        self.builder.switch_to_block(cancelled_block);
-        self.drop_deadlines(&deadline_params);
-        self.builder.ins().jump(self.blocks[otherwise], &[]);
-        self.builder.seal_block(cancelled_block);
-        self.builder.switch_to_block(continue_block);
-        self.builder.ins().jump(loop_block, &deadline_params);
-        Ok(())
     }
 
     fn value_matches_type(
@@ -8386,18 +8196,6 @@ fn validate_function(
             Terminator::Branch { condition, .. } => validate_operand(condition)?,
             Terminator::ForRange { iterable, .. } => validate_operand(iterable)?,
             Terminator::Match { scrutinee, .. } => validate_operand(scrutinee)?,
-            Terminator::Select { arms, .. } => {
-                for arm in arms {
-                    match &arm.kind {
-                        MirSelectKind::Recv { channel } => validate_operand(channel)?,
-                        MirSelectKind::Send { channel, value } => {
-                            validate_operand(channel)?;
-                            validate_operand(value)?;
-                        }
-                        MirSelectKind::After { duration } => validate_operand(duration)?,
-                    }
-                }
-            }
             other => {
                 return Err(format!(
                     "direct backend does not yet support MIR terminator `{:?}`",
@@ -8490,12 +8288,10 @@ fn validate_rvalue(
         }
         Rvalue::VariantPayload { scrutinee, .. } => validate_operand(scrutinee),
         Rvalue::Try { value } => validate_operand(value),
-        Rvalue::Spawn {
+        Rvalue::StartTask {
             task_group, args, ..
         } => {
-            if let Some(group) = task_group {
-                validate_operand(group)?;
-            }
+            validate_operand(task_group)?;
             for argument in args {
                 validate_operand(&argument.value)?;
             }
@@ -8638,12 +8434,12 @@ fn infer_rvalue_type(
                 infer_operand_type(left, variable_types, classes)
             }
         },
-        Rvalue::Call { callee, .. } => match callee {
+        Rvalue::Call { callee, args } => match callee {
             CallTarget::Name(name) if name == "print" => Some(DirectType::Scalar(ScalarKind::Unit)),
             CallTarget::Name(name) if name == "range" => {
                 Some(DirectType::Opaque(Type::named("Range")))
             }
-            CallTarget::Name(name) if name == "queue" => Some(DirectType::Opaque(Type::Named(
+            CallTarget::Name(name) if name == "Queue" => Some(DirectType::Opaque(Type::Named(
                 "Queue".to_string(),
                 vec![Type::named("Unknown")],
             ))),
@@ -8659,13 +8455,40 @@ fn infer_rvalue_type(
                 "Map".to_string(),
                 vec![Type::named("Unknown"), Type::named("Unknown")],
             ))),
-            CallTarget::Name(name) if name == "tasks" => {
+            CallTarget::Name(name) if name == "TaskGroup" => {
                 Some(DirectType::Opaque(Type::named("TaskGroup")))
             }
             CallTarget::Name(name) if name == "cancelled" => {
                 Some(DirectType::Scalar(ScalarKind::Bool))
             }
             CallTarget::Name(name) if name == "sleep" => Some(DirectType::Scalar(ScalarKind::Unit)),
+            CallTarget::Name(name) if matches!(name.as_str(), "wait_any" | "wait_all") => {
+                let task_payload = args
+                    .first()
+                    .and_then(|argument| {
+                        infer_operand_type(&argument.value, variable_types, classes)
+                    })
+                    .map(|direct| match direct {
+                        DirectType::Opaque(Type::Named(vec_name, args)) if vec_name == "Vec" => {
+                            match args.as_slice() {
+                                [Type::Named(task_name, task_args)] if task_name == "Task" => {
+                                    task_args.first().cloned().unwrap_or(Type::Unit)
+                                }
+                                _ => Type::named("Unknown"),
+                            }
+                        }
+                        _ => Type::named("Unknown"),
+                    })
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                Some(DirectType::Opaque(Type::Named(
+                    if name == "wait_any" {
+                        "WaitAny".to_string()
+                    } else {
+                        "WaitAll".to_string()
+                    },
+                    vec![task_payload],
+                )))
+            }
             CallTarget::Name(name) if name == "io::write" || name == "io::flush" => {
                 Some(DirectType::Opaque(Type::Named(
                     "Result".to_string(),
@@ -8940,77 +8763,21 @@ fn infer_rvalue_type(
         }
         Rvalue::Try { value } => infer_try_type(value, variable_types, classes)
             .or_else(|| Some(DirectType::Opaque(Type::named("Unknown")))),
-        Rvalue::Spawn {
-            detached, function, ..
+        Rvalue::StartTask {
+            returns_handle,
+            function,
+            ..
         } => {
-            if *detached {
-                Some(DirectType::Scalar(ScalarKind::Unit))
-            } else {
+            if *returns_handle {
                 function_return_types.get(function).map(|ty| {
                     DirectType::Opaque(Type::Named(
                         "Task".to_string(),
                         vec![direct_type_to_type(ty)],
                     ))
                 })
+            } else {
+                Some(DirectType::Scalar(ScalarKind::Unit))
             }
-        }
-    }
-}
-
-fn infer_select_binding_type(
-    arm: &MirSelectArm,
-    variable_types: &HashMap<String, DirectType>,
-    classes: &HashMap<String, MirClass>,
-) -> Option<DirectType> {
-    match &arm.kind {
-        MirSelectKind::Recv { channel } => {
-            let channel_ty = infer_operand_type(channel, variable_types, classes)?;
-            match channel_ty {
-                DirectType::Opaque(Type::Named(name, args)) if name == "Queue" => {
-                    Some(DirectType::Opaque(Type::Named(
-                        "Option".to_string(),
-                        vec![args
-                            .first()
-                            .cloned()
-                            .unwrap_or_else(|| Type::named("Unknown"))],
-                    )))
-                }
-                _ => Some(DirectType::Opaque(Type::Named(
-                    "Option".to_string(),
-                    vec![Type::named("Unknown")],
-                ))),
-            }
-        }
-        MirSelectKind::Send { channel, .. } => {
-            let channel_ty = infer_operand_type(channel, variable_types, classes)?;
-            match channel_ty {
-                DirectType::Opaque(Type::Named(name, args)) if name == "Queue" => {
-                    Some(DirectType::Opaque(Type::Named(
-                        "Result".to_string(),
-                        vec![
-                            Type::Unit,
-                            Type::Named(
-                                "SendError".to_string(),
-                                vec![args
-                                    .first()
-                                    .cloned()
-                                    .unwrap_or_else(|| Type::named("Unknown"))],
-                            ),
-                        ],
-                    )))
-                }
-                _ => Some(DirectType::Opaque(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Unit,
-                        Type::Named("SendError".to_string(), vec![Type::named("Unknown")]),
-                    ],
-                ))),
-            }
-        }
-        MirSelectKind::After { duration } => {
-            infer_operand_type(duration, variable_types, classes)?;
-            Some(DirectType::Scalar(ScalarKind::Unit))
         }
     }
 }
@@ -9169,7 +8936,7 @@ fn builtin_opaque_member_return_type(
             ),
             classes,
         ),
-        ("Queue", "put") => direct_type(
+        ("Queue", "put") | ("Queue", "try_put") => direct_type(
             &Type::Named(
                 "Result".to_string(),
                 vec![
@@ -9187,7 +8954,7 @@ fn builtin_opaque_member_return_type(
         ),
         ("Queue", "get") => direct_type(
             &Type::Named(
-                "Option".to_string(),
+                "QueueReceive".to_string(),
                 vec![args
                     .first()
                     .cloned()
@@ -9198,7 +8965,13 @@ fn builtin_opaque_member_return_type(
         ("Queue", "close") | ("TaskGroup", "cancel") | ("TaskGroup", "close") => {
             Some(DirectType::Scalar(ScalarKind::Unit))
         }
-        ("Task", "result") => direct_type(args.first().unwrap_or(&Type::Unit), classes),
+        ("Task", "result") => direct_type(
+            &Type::Named(
+                "TaskResult".to_string(),
+                vec![args.first().cloned().unwrap_or(Type::Unit)],
+            ),
+            classes,
+        ),
         ("fs.File", "read_all") => direct_type(
             &Type::Named(
                 "Result".to_string(),
@@ -9583,6 +9356,11 @@ fn infer_variant_payload_type(
         ("Option", [inner], 0) => inner.clone(),
         ("Result", [ok, _], 0) => ok.clone(),
         ("SendError", [inner], 0) => inner.clone(),
+        ("QueueReceive", [inner], 0) => inner.clone(),
+        ("TaskResult", [inner], 0) => inner.clone(),
+        ("WaitAny", [_, _inner], 0) => Type::named("int32"),
+        ("WaitAny", [_, inner], 1) => inner.clone(),
+        ("WaitAll", [inner], 0) => Type::Named("Vec".to_string(), vec![inner.clone()]),
         _ => return None,
     };
     direct_type(&payload_ty, classes)
@@ -9711,7 +9489,7 @@ fn box_thunk_value(
     match ty {
         DirectType::Opaque(_) => values.first().copied().ok_or_else(|| {
             format!(
-                "spawn thunk expected an opaque value for `{}`",
+                "task-start thunk expected an opaque value for `{}`",
                 render_direct_type(ty)
             )
         }),
@@ -9893,13 +9671,13 @@ fn runtime_type_is_wildcard(ty: &Type) -> bool {
     }
 }
 
-fn collect_spawn_targets(module: &MirModule) -> BTreeSet<String> {
+fn collect_task_start_targets(module: &MirModule) -> BTreeSet<String> {
     let mut targets = BTreeSet::new();
     for function in module.functions.iter().chain(module.top_level.iter()) {
         for block in &function.blocks {
             for instruction in &block.instructions {
                 if let Instruction::Assign {
-                    value: Rvalue::Spawn { function, .. },
+                    value: Rvalue::StartTask { function, .. },
                     ..
                 } = instruction
                 {

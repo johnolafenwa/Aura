@@ -242,7 +242,7 @@ def main() -> int32:
 
 #[test]
 fn spawned_module_functions_and_associated_methods_run_across_modules() {
-    let temp = TempDir::new("aurora-modules-spawn-targets");
+    let temp = TempDir::new("aurora-modules-task-start-targets");
     temp.write(
         "helpers/work.au",
         r#"public def add_one(value: int32) -> int32:
@@ -258,15 +258,31 @@ public class Worker:
         r#"import helpers.work
 
 def main() -> int32:
-    first = spawn helpers.work.add_one(4)
-    second = spawn helpers.work.Worker.run(5)
-    print(first.result())
-    print(second.result())
-    with tasks() as group:
+    with TaskGroup() as group:
+        first = group.start(helpers.work.add_one, 4)
+        second = group.start(helpers.work.Worker.run, 5)
         third = group.start(helpers.work.add_one, 6)
         fourth = group.start(helpers.work.Worker.run, 7)
-        print(third.result())
-        print(fourth.result())
+        match first.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case _:
+                print("unexpected")
+        match second.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case _:
+                print("unexpected")
+        match third.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case _:
+                print("unexpected")
+        match fourth.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case _:
+                print("unexpected")
     return 0
 "#,
     );

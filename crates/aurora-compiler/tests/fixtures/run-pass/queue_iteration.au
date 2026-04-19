@@ -1,5 +1,5 @@
 def main() -> int32:
-    jobs: Queue[int32] = queue()
+    jobs = Queue[int32]()
     send_one = jobs.put(1)
     send_two = jobs.put(2)
     jobs.close()

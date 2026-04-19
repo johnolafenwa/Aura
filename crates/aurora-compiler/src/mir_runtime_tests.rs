@@ -2,19 +2,21 @@ use super::{
     bind_args, bind_builtin_args, build_range, collect_runtime_type_substitutions,
     collect_type_params_from_type, eval_ordering, evaluate_named_args, option_none, option_some,
     render_runtime_error, result_err, result_ok, run_serialized_mir, send_error_closed,
-    write_stream, CancellationContext, Env, EvaluatedMirArg, MirRuntime, TaskGroupValue, TaskValue,
+    task_result_ready, write_stream, CancellationContext, Env, EvaluatedMirArg, MirRuntime,
+    TaskGroupValue, TaskValue,
 };
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::mir::{
     BasicBlock, Instruction, MirArg, MirClass, MirFunction, MirLocalType, MirMatchArm, MirMethod,
-    MirModule, MirParam, MirSelectArm, MirSelectKind, MirTraitImpl, Operand, Rvalue, Terminator,
+    MirModule, MirParam, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::runtime_value::{ChannelValue, EnumVariantValue, InstanceValue, RangeValue, Value};
 use crate::sema::Type;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
+use std::time::Duration as StdDuration;
 
 fn test_runtime() -> MirRuntime {
     MirRuntime::new(
@@ -377,7 +379,7 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
 
 #[test]
 fn mir_runtime_deadline_helper_rejects_overflowing_instants() {
-    let error = super::deadline_after_millis_with(u64::MAX, |_| None)
+    let error = super::runtime_deadline_after_timeout(Some(StdDuration::MAX))
         .expect_err("overflowing instant deadlines should be rejected");
     assert!(error
         .message
@@ -507,10 +509,10 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
         blocks: Vec::new(),
     };
     runtime
-        .require_spawnable_function(&by_value)
-        .expect("by-value MIR functions should be spawnable");
-    let spawn_error = runtime
-        .require_spawnable_function(&MirFunction {
+        .require_task_startable_function(&by_value)
+        .expect("by-value MIR functions should be task-startable");
+    let task_start_error = runtime
+        .require_task_startable_function(&MirFunction {
             params: vec![MirParam {
                 name: "value".to_string(),
                 passing: crate::mir::MirReceiverKind::Borrow,
@@ -518,8 +520,8 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
             }],
             ..by_value
         })
-        .expect_err("borrowed params should not be spawnable in MIR");
-    assert!(spawn_error
+        .expect_err("borrowed params should not be task-startable in MIR");
+    assert!(task_start_error
         .message
         .contains("does not yet support borrowed parameter `value`"));
 }
@@ -597,11 +599,11 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
     assert!(matches!(
         runtime
             .evaluate_call(
-                &crate::mir::CallTarget::Name("tasks".to_string()),
+                &crate::mir::CallTarget::Name("TaskGroup".to_string()),
                 &[],
                 &mut env
             )
-            .expect("tasks() should succeed"),
+            .expect("TaskGroup() should succeed"),
         Value::TaskGroup(_)
     ));
     assert_eq!(
@@ -614,29 +616,6 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
             .expect("cancelled() should succeed"),
         Value::Bool(false)
     );
-    assert_eq!(
-        runtime
-            .evaluate_call(
-                &crate::mir::CallTarget::Name("after".to_string()),
-                &[MirArg {
-                    name: Some("duration".to_string()),
-                    value: Operand::Place("delay".to_string()),
-                    writeback_place: None,
-                }],
-                &mut env,
-            )
-            .expect("after() should accept duration values"),
-        Value::Duration(0)
-    );
-    let after_error = runtime
-        .evaluate_call(
-            &crate::mir::CallTarget::Name("after".to_string()),
-            &[mir_arg(Some("duration"), Operand::Bool(true))],
-            &mut env,
-        )
-        .expect_err("after() should reject non-duration values");
-    assert!(after_error.message.contains("expects a duration value"));
-
     assert_eq!(
         runtime
             .evaluate_call(
@@ -756,14 +735,14 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
     );
     let queue_error = runtime
         .evaluate_call(
-            &crate::mir::CallTarget::Name("queue".to_string()),
+            &crate::mir::CallTarget::Name("Queue".to_string()),
             &[
                 mir_arg(None, Operand::Int(1)),
                 mir_arg(None, Operand::Int(2)),
             ],
             &mut env,
         )
-        .expect_err("queue() should reject extra arguments");
+        .expect_err("Queue() should reject extra arguments");
     assert!(queue_error
         .message
         .contains("expects at most one optional `capacity` argument"));
@@ -1042,7 +1021,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
                 &mut env,
             )
             .expect("task member calls should dispatch"),
-        Value::Bool(true)
+        task_result_ready(Value::Bool(true))
     );
     assert_eq!(
         runtime
@@ -1128,28 +1107,6 @@ fn mir_runtime_builtin_error_surface_covers_additional_builtin_branches() {
         Type::named("Duration"),
         Value::Duration(-1),
     );
-
-    let after_overflow = runtime
-        .evaluate_call(
-            &crate::mir::CallTarget::Name("after".to_string()),
-            &[mir_arg(None, Operand::Place("huge_unsigned".to_string()))],
-            &mut env,
-        )
-        .expect_err("after() should reject integer durations outside signed range");
-    assert!(after_overflow
-        .message
-        .contains("must fit in signed timer range"));
-
-    let after_type = runtime
-        .evaluate_call(
-            &crate::mir::CallTarget::Name("after".to_string()),
-            &[mir_arg(None, Operand::Place("flag".to_string()))],
-            &mut env,
-        )
-        .expect_err("after() should reject non-duration values");
-    assert!(after_type
-        .message
-        .contains("expects a duration value in MIR runtime"));
 
     let sleep_range = runtime
         .evaluate_call(
@@ -2218,7 +2175,14 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &env,
         )
         .expect("queue get should succeed");
-    assert_eq!(recv, option_some(Value::Int(IntegerValue::from_signed(5))));
+    assert_eq!(
+        recv,
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "QueueReceive".to_string(),
+            variant_name: "Item".to_string(),
+            payloads: vec![Value::Int(IntegerValue::from_signed(5))],
+        })
+    );
 
     let close = runtime
         .evaluate_channel_method(
@@ -2473,6 +2437,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Unit))),
             "clone",
             &[],
+            &env,
         )
         .expect_err("task clone should be unsupported");
     assert!(task_clone
@@ -2484,15 +2449,17 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Bool(true)))),
             "result",
             &[],
+            &env,
         )
         .expect("task result should succeed");
-    assert_eq!(task_join, Value::Bool(true));
+    assert_eq!(task_join, task_result_ready(Value::Bool(true)));
 
     let task_error = runtime
         .evaluate_task_method(
             TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Unit))),
             "cancel",
             &[],
+            &env,
         )
         .expect_err("unsupported task method should fail");
     assert!(task_error.message.contains("unsupported task method"));
@@ -2691,61 +2658,6 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     assert!(set_missing_place
         .message
         .contains("requires a mutable set place"));
-
-    let recv_error = match runtime.execute_select(
-        &[MirSelectArm {
-            binding: None,
-            kind: MirSelectKind::Recv {
-                channel: Operand::Place("flag".to_string()),
-            },
-            label: "recv".to_string(),
-        }],
-        "otherwise",
-        &mut env,
-    ) {
-        Ok(_) => panic!("recv select arms should require channel values"),
-        Err(error) => error,
-    };
-    assert!(recv_error
-        .message
-        .contains("MIR `select` recv arm requires a channel value"));
-
-    let send_error = match runtime.execute_select(
-        &[MirSelectArm {
-            binding: None,
-            kind: MirSelectKind::Send {
-                channel: Operand::Place("flag".to_string()),
-                value: Operand::Int(1),
-            },
-            label: "send".to_string(),
-        }],
-        "otherwise",
-        &mut env,
-    ) {
-        Ok(_) => panic!("send select arms should require channel values"),
-        Err(error) => error,
-    };
-    assert!(send_error
-        .message
-        .contains("MIR `select` send arm requires a channel value"));
-
-    let after_error = match runtime.execute_select(
-        &[MirSelectArm {
-            binding: None,
-            kind: MirSelectKind::After {
-                duration: Operand::Place("text".to_string()),
-            },
-            label: "after".to_string(),
-        }],
-        "otherwise",
-        &mut env,
-    ) {
-        Ok(_) => panic!("after select arms should require duration-like operands"),
-        Err(error) => error,
-    };
-    assert!(after_error
-        .message
-        .contains("MIR `after(...)` expects a duration-like value"));
 }
 
 #[test]
@@ -2895,18 +2807,26 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
     assert!(float_mod_zero.message.contains("division by zero"));
 
     let task = TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Bool(true))));
+    let env = Env::default();
     let clone_error = runtime
-        .evaluate_task_method(task.clone(), "clone", &[])
+        .evaluate_task_method(task.clone(), "clone", &[], &env)
         .expect_err("task clone should be unsupported");
     assert!(clone_error
         .message
         .contains("unsupported task method `clone`"));
     let join_args = runtime
-        .evaluate_task_method(task.clone(), "result", &[mir_arg(None, Operand::Int(1))])
+        .evaluate_task_method(
+            task.clone(),
+            "result",
+            &[mir_arg(None, Operand::Int(1))],
+            &env,
+        )
         .expect_err("result should reject arguments");
-    assert!(join_args.message.contains("does not take arguments"));
+    assert!(join_args
+        .message
+        .contains("`result(timeout=...)` expects `Duration`, found `1`"));
     let bad_task_member = runtime
-        .evaluate_task_method(task, "missing", &[])
+        .evaluate_task_method(task, "missing", &[], &env)
         .expect_err("unknown task members should fail");
     assert!(bad_task_member
         .message

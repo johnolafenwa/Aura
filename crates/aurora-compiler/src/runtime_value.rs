@@ -301,11 +301,11 @@ struct TlsStreamState {
     stream: Mutex<Option<TlsStreamKind>>,
 }
 
-type TaskResult = std::result::Result<Value, Diagnostic>;
+type TaskExecutionResult = std::result::Result<Value, Diagnostic>;
 
 enum TaskHandle {
     Running { waiters: Vec<u64> },
-    Completed(TaskResult),
+    Completed(TaskExecutionResult),
 }
 
 #[derive(Clone, Default)]
@@ -323,6 +323,7 @@ struct TaskWaitRegistration {
     recv_channels: Vec<ChannelValue>,
     ignore_closed_recv_channels: bool,
     send_channels: Vec<ChannelValue>,
+    task_waits: Vec<TaskValue>,
     deadline: Option<Instant>,
     cancellation: Option<CancellationContext>,
     fd_wait: Option<FdWaitRegistration>,
@@ -344,7 +345,7 @@ struct LightweightTaskContext {
 struct LightweightTaskRecord {
     state: Arc<TaskState>,
     context: Box<LightweightTaskContext>,
-    coroutine: Coroutine<RuntimeSchedulerWakeReason, TaskYield, TaskResult>,
+    coroutine: Coroutine<RuntimeSchedulerWakeReason, TaskYield, TaskExecutionResult>,
 }
 
 struct LightweightTaskScheduler {
@@ -361,6 +362,7 @@ struct RuntimeSchedulerRegistration {
     recv_channels: Vec<ChannelValue>,
     ignore_closed_recv_channels: bool,
     send_channels: Vec<ChannelValue>,
+    task_waits: Vec<TaskValue>,
     deadline: Option<Instant>,
     cancellation: Option<CancellationContext>,
     waiter: Arc<RuntimeSchedulerWaiter>,
@@ -820,6 +822,7 @@ impl RuntimeScheduler {
         recv_channels: Vec<ChannelValue>,
         ignore_closed_recv_channels: bool,
         send_channels: Vec<ChannelValue>,
+        task_waits: Vec<TaskValue>,
         deadline: Option<Instant>,
         cancellation: Option<CancellationContext>,
     ) -> RuntimeSchedulerHandle {
@@ -832,6 +835,7 @@ impl RuntimeScheduler {
             recv_channels,
             ignore_closed_recv_channels,
             send_channels,
+            task_waits,
             deadline,
             cancellation,
             waiter: waiter.clone(),
@@ -887,6 +891,10 @@ impl RuntimeScheduler {
                     .send_channels
                     .iter()
                     .any(ChannelValue::is_ready_for_scheduler_send)
+                    || registration
+                        .task_waits
+                        .iter()
+                        .any(|task| task.completed_result().is_some())
                 {
                     registration
                         .waiter
@@ -980,10 +988,11 @@ fn blocking_io_pool() -> &'static Arc<BlockingIoPool> {
     POOL.get_or_init(BlockingIoPool::start)
 }
 
-fn wait_for_runtime_scheduler(
+pub(crate) fn wait_for_runtime_scheduler(
     recv_channels: Vec<ChannelValue>,
     ignore_closed_recv_channels: bool,
     send_channels: Vec<ChannelValue>,
+    task_waits: Vec<TaskValue>,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> RuntimeSchedulerWakeReason {
@@ -996,6 +1005,9 @@ fn wait_for_runtime_scheduler(
         || send_channels
             .iter()
             .any(ChannelValue::is_ready_for_scheduler_send)
+        || task_waits
+            .iter()
+            .any(|task| task.completed_result().is_some())
     {
         return RuntimeSchedulerWakeReason::Ready;
     }
@@ -1007,6 +1019,7 @@ fn wait_for_runtime_scheduler(
         recv_channels: recv_channels.clone(),
         ignore_closed_recv_channels,
         send_channels: send_channels.clone(),
+        task_waits: task_waits.clone(),
         deadline,
         cancellation: cancellation.cloned(),
         fd_wait: None,
@@ -1019,27 +1032,11 @@ fn wait_for_runtime_scheduler(
             recv_channels,
             ignore_closed_recv_channels,
             send_channels,
+            task_waits,
             deadline,
             cancellation.cloned(),
         )
         .wait()
-}
-
-pub(crate) fn wait_for_select_progress(
-    recv_channels: &[ChannelValue],
-    ignore_closed_recv_channels: bool,
-    send_channels: &[ChannelValue],
-    deadlines: &[Instant],
-    cancellation: Option<&CancellationContext>,
-) -> RuntimeSchedulerWakeReason {
-    let deadline = deadlines.iter().copied().min();
-    wait_for_runtime_scheduler(
-        recv_channels.to_vec(),
-        ignore_closed_recv_channels,
-        send_channels.to_vec(),
-        deadline,
-        cancellation,
-    )
 }
 
 pub(crate) fn sleep_with_runtime_scheduler(
@@ -1047,7 +1044,14 @@ pub(crate) fn sleep_with_runtime_scheduler(
     cancellation: Option<&CancellationContext>,
 ) {
     let deadline = Instant::now().checked_add(duration);
-    let _ = wait_for_runtime_scheduler(Vec::new(), false, Vec::new(), deadline, cancellation);
+    let _ = wait_for_runtime_scheduler(
+        Vec::new(),
+        false,
+        Vec::new(),
+        Vec::new(),
+        deadline,
+        cancellation,
+    );
 }
 
 thread_local! {
@@ -1183,6 +1187,10 @@ impl TaskWaitRegistration {
                 .send_channels
                 .iter()
                 .any(ChannelValue::is_ready_for_scheduler_send)
+            || self
+                .task_waits
+                .iter()
+                .any(|task| task.completed_result().is_some())
         {
             return Some(RuntimeSchedulerWakeReason::Ready);
         }
@@ -1215,7 +1223,7 @@ impl LightweightTaskScheduler {
         entry: F,
     ) -> std::result::Result<TaskValue, Diagnostic>
     where
-        F: FnOnce() -> TaskResult + 'static,
+        F: FnOnce() -> TaskExecutionResult + 'static,
     {
         let task_id = self.next_task_id;
         self.next_task_id += 1;
@@ -1256,7 +1264,12 @@ impl LightweightTaskScheduler {
         Ok(TaskValue { inner: state })
     }
 
-    fn complete_task(&mut self, task_id: u64, task_state: &Arc<TaskState>, result: TaskResult) {
+    fn complete_task(
+        &mut self,
+        task_id: u64,
+        task_state: &Arc<TaskState>,
+        result: TaskExecutionResult,
+    ) {
         self.waiting.remove(&task_id);
         let waiters = {
             let mut state = lock_mutex(&task_state.handle);
@@ -1273,6 +1286,7 @@ impl LightweightTaskScheduler {
             self.ready
                 .push_back((waiter, RuntimeSchedulerWakeReason::Ready));
         }
+        runtime_scheduler().notify();
     }
 
     fn resume_task(&mut self, task_id: u64, reason: RuntimeSchedulerWakeReason) {
@@ -1380,7 +1394,7 @@ impl LightweightTaskScheduler {
         self.promote_ready_waiters(Some(&fd_ready));
     }
 
-    fn run_until_root(&mut self, root: &TaskValue) -> TaskResult {
+    fn run_until_root(&mut self, root: &TaskValue) -> TaskExecutionResult {
         loop {
             if let Some(result) = root.completed_result() {
                 return result;
@@ -1398,11 +1412,11 @@ impl LightweightTaskScheduler {
 
 pub(crate) fn spawn_lightweight_task<F>(entry: F) -> std::result::Result<TaskValue, Diagnostic>
 where
-    F: FnOnce() -> TaskResult + 'static,
+    F: FnOnce() -> TaskExecutionResult + 'static,
 {
     let Some(context) = current_lightweight_task_context() else {
         return Err(Diagnostic::new(
-            "lightweight Aurora task spawn requires an active task scheduler",
+            "lightweight Aurora task start requires an active task scheduler",
         ));
     };
     let scheduler = unsafe { &mut *context.scheduler };
@@ -1414,20 +1428,20 @@ pub(crate) fn spawn_lightweight_task_with_cancellation<F>(
     entry: F,
 ) -> std::result::Result<TaskValue, Diagnostic>
 where
-    F: FnOnce() -> TaskResult + 'static,
+    F: FnOnce() -> TaskExecutionResult + 'static,
 {
     let Some(context) = current_lightweight_task_context() else {
         return Err(Diagnostic::new(
-            "lightweight Aurora task spawn requires an active task scheduler",
+            "lightweight Aurora task start requires an active task scheduler",
         ));
     };
     let scheduler = unsafe { &mut *context.scheduler };
     scheduler.spawn_task(Some(cancellation), entry)
 }
 
-pub(crate) fn run_lightweight_root_task<F>(entry: F) -> TaskResult
+pub(crate) fn run_lightweight_root_task<F>(entry: F) -> TaskExecutionResult
 where
-    F: FnOnce() -> TaskResult + 'static,
+    F: FnOnce() -> TaskExecutionResult + 'static,
 {
     let mut scheduler = Box::new(LightweightTaskScheduler::new());
     let root = scheduler.spawn_task(None, entry)?;
@@ -1678,6 +1692,23 @@ pub(crate) enum TrySendResult {
 pub(crate) enum SendValueError {
     Closed(Value),
     Cancelled(Value),
+    TimedOut(Value),
+    Full(Value),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum RecvValueResult {
+    Value(Value),
+    Closed,
+    TimedOut,
+    Cancelled,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum TaskWaitStatus {
+    Ready(TaskExecutionResult),
+    TimedOut,
+    Cancelled,
 }
 
 impl ChannelValue {
@@ -1727,21 +1758,52 @@ impl ChannelValue {
     pub(crate) fn send(&self, value: Value) -> std::result::Result<(), Value> {
         match self.send_with_cancellation(value, None) {
             Ok(()) => Ok(()),
-            Err(SendValueError::Closed(value)) | Err(SendValueError::Cancelled(value)) => {
-                Err(value)
-            }
+            Err(SendValueError::Closed(value))
+            | Err(SendValueError::Cancelled(value))
+            | Err(SendValueError::TimedOut(value))
+            | Err(SendValueError::Full(value)) => Err(value),
         }
     }
 
     pub(crate) fn send_with_cancellation(
         &self,
-        mut value: Value,
+        value: Value,
         cancellation: Option<&CancellationContext>,
+    ) -> std::result::Result<(), SendValueError> {
+        self.send_with_deadline(value, None, cancellation, false)
+    }
+
+    pub(crate) fn try_send_result(&self, value: Value) -> std::result::Result<(), SendValueError> {
+        match self.try_send(value) {
+            TrySendResult::Sent => Ok(()),
+            TrySendResult::Closed(value) => Err(SendValueError::Closed(value)),
+            TrySendResult::Full(value) => Err(SendValueError::Full(value)),
+        }
+    }
+
+    pub(crate) fn send_with_timeout(
+        &self,
+        value: Value,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> std::result::Result<(), SendValueError> {
+        self.send_with_deadline(value, deadline_from_timeout(timeout), cancellation, false)
+    }
+
+    fn send_with_deadline(
+        &self,
+        mut value: Value,
+        deadline: Option<Instant>,
+        cancellation: Option<&CancellationContext>,
+        fail_on_full: bool,
     ) -> std::result::Result<(), SendValueError> {
         loop {
             value = match self.try_send(value) {
                 TrySendResult::Sent => return Ok(()),
                 TrySendResult::Closed(value) => return Err(SendValueError::Closed(value)),
+                TrySendResult::Full(value) if fail_on_full => {
+                    return Err(SendValueError::Full(value));
+                }
                 TrySendResult::Full(value) => value,
             };
 
@@ -1749,11 +1811,14 @@ impl ChannelValue {
                 Vec::new(),
                 false,
                 vec![self.clone()],
-                None,
+                Vec::new(),
+                deadline,
                 cancellation,
             ) {
                 RuntimeSchedulerWakeReason::Ready => {}
-                RuntimeSchedulerWakeReason::TimedOut => {}
+                RuntimeSchedulerWakeReason::TimedOut => {
+                    return Err(SendValueError::TimedOut(value));
+                }
                 RuntimeSchedulerWakeReason::Cancelled => {
                     return Err(SendValueError::Cancelled(value));
                 }
@@ -1766,11 +1831,24 @@ impl ChannelValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> Option<Value> {
+        match self.recv_result_with_cancellation(timeout, cancellation) {
+            RecvValueResult::Value(value) => Some(value),
+            RecvValueResult::Closed | RecvValueResult::TimedOut | RecvValueResult::Cancelled => {
+                None
+            }
+        }
+    }
+
+    pub(crate) fn recv_result_with_cancellation(
+        &self,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> RecvValueResult {
         let deadline = deadline_from_timeout(timeout);
         loop {
             match self.try_recv() {
-                TryRecvResult::Value(value) => return Some(value),
-                TryRecvResult::Closed => return None,
+                TryRecvResult::Value(value) => return RecvValueResult::Value(value),
+                TryRecvResult::Closed => return RecvValueResult::Closed,
                 TryRecvResult::Empty => {}
             }
 
@@ -1778,13 +1856,13 @@ impl ChannelValue {
                 vec![self.clone()],
                 false,
                 Vec::new(),
+                Vec::new(),
                 deadline,
                 cancellation,
             ) {
                 RuntimeSchedulerWakeReason::Ready => {}
-                RuntimeSchedulerWakeReason::TimedOut | RuntimeSchedulerWakeReason::Cancelled => {
-                    return None;
-                }
+                RuntimeSchedulerWakeReason::TimedOut => return RecvValueResult::TimedOut,
+                RuntimeSchedulerWakeReason::Cancelled => return RecvValueResult::Cancelled,
             }
         }
     }
@@ -1902,6 +1980,7 @@ fn wait_for_fd_event(
         recv_channels: Vec::new(),
         ignore_closed_recv_channels: false,
         send_channels: Vec::new(),
+        task_waits: Vec::new(),
         deadline,
         cancellation: cancellation.cloned(),
         fd_wait: Some(FdWaitRegistration { fd, events }),
@@ -4285,7 +4364,7 @@ impl TaskGroupValue {
 }
 
 impl TaskValue {
-    fn completed_result(&self) -> Option<TaskResult> {
+    pub(crate) fn completed_result(&self) -> Option<TaskExecutionResult> {
         let state = lock_mutex(&self.inner.handle);
         match &*state {
             TaskHandle::Completed(result) => Some(result.clone()),
@@ -4294,7 +4373,7 @@ impl TaskValue {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_handle(handle: thread::JoinHandle<TaskResult>) -> Self {
+    pub(crate) fn from_handle(handle: thread::JoinHandle<TaskExecutionResult>) -> Self {
         let inner = Arc::new(TaskState {
             handle: Mutex::new(TaskHandle::Running {
                 waiters: Vec::new(),
@@ -4311,11 +4390,12 @@ impl TaskValue {
             let mut task_state = lock_mutex(&state.handle);
             *task_state = TaskHandle::Completed(result);
             state.ready.notify_all();
+            runtime_scheduler().notify();
         });
         Self { inner }
     }
 
-    pub(crate) fn join_result(&self) -> TaskResult {
+    pub(crate) fn join_result(&self) -> TaskExecutionResult {
         loop {
             if let Some(result) = self.completed_result() {
                 return result;
@@ -4347,6 +4427,32 @@ impl TaskValue {
                         state = wait_condvar(&self.inner.ready, state);
                     }
                 }
+            }
+        }
+    }
+
+    pub(crate) fn wait_result_with_cancellation(
+        &self,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> TaskWaitStatus {
+        let deadline = deadline_from_timeout(timeout);
+        loop {
+            if let Some(result) = self.completed_result() {
+                return TaskWaitStatus::Ready(result);
+            }
+
+            match wait_for_runtime_scheduler(
+                Vec::new(),
+                false,
+                Vec::new(),
+                vec![self.clone()],
+                deadline,
+                cancellation,
+            ) {
+                RuntimeSchedulerWakeReason::Ready => {}
+                RuntimeSchedulerWakeReason::TimedOut => return TaskWaitStatus::TimedOut,
+                RuntimeSchedulerWakeReason::Cancelled => return TaskWaitStatus::Cancelled,
             }
         }
     }
@@ -4397,6 +4503,129 @@ pub(crate) fn send_error_cancelled(value: Value) -> Value {
         enum_name: "SendError".to_string(),
         variant_name: "Cancelled".to_string(),
         payloads: vec![value],
+    })
+}
+
+pub(crate) fn send_error_timed_out(value: Value) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "SendError".to_string(),
+        variant_name: "TimedOut".to_string(),
+        payloads: vec![value],
+    })
+}
+
+pub(crate) fn send_error_full(value: Value) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "SendError".to_string(),
+        variant_name: "Full".to_string(),
+        payloads: vec![value],
+    })
+}
+
+pub(crate) fn queue_receive_item(value: Value) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "QueueReceive".to_string(),
+        variant_name: "Item".to_string(),
+        payloads: vec![value],
+    })
+}
+
+pub(crate) fn queue_receive_closed() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "QueueReceive".to_string(),
+        variant_name: "Closed".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn queue_receive_timed_out() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "QueueReceive".to_string(),
+        variant_name: "TimedOut".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn queue_receive_cancelled() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "QueueReceive".to_string(),
+        variant_name: "Cancelled".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn task_result_ready(value: Value) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "TaskResult".to_string(),
+        variant_name: "Ready".to_string(),
+        payloads: vec![value],
+    })
+}
+
+pub(crate) fn task_result_timed_out() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "TaskResult".to_string(),
+        variant_name: "TimedOut".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn task_result_cancelled() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "TaskResult".to_string(),
+        variant_name: "Cancelled".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn wait_any_ready(index: i32, value: Value) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "WaitAny".to_string(),
+        variant_name: "Ready".to_string(),
+        payloads: vec![Value::Int(IntegerValue::from_signed(index as i128)), value],
+    })
+}
+
+pub(crate) fn wait_any_timed_out() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "WaitAny".to_string(),
+        variant_name: "TimedOut".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn wait_any_cancelled() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "WaitAny".to_string(),
+        variant_name: "Cancelled".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn wait_all_ready(values: Vec<Value>) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "WaitAll".to_string(),
+        variant_name: "Ready".to_string(),
+        payloads: vec![Value::Vec(VecValue {
+            element_type: Type::named("Unknown"),
+            elements: values,
+        })],
+    })
+}
+
+pub(crate) fn wait_all_timed_out() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "WaitAll".to_string(),
+        variant_name: "TimedOut".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn wait_all_cancelled() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "WaitAll".to_string(),
+        variant_name: "Cancelled".to_string(),
+        payloads: Vec::new(),
     })
 }
 

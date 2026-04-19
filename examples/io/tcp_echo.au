@@ -14,7 +14,7 @@ def serve(listener: net.TcpListener) -> Result[None, io.Error]:
         return Result.Ok(None)
 
 def main() -> int32:
-    with group = tasks():
+    with TaskGroup() as group:
         match net.listen("127.0.0.1:0"):
             case Result.Ok(listener):
                 match listener.local_addr():
@@ -45,9 +45,15 @@ def main() -> int32:
                             case Result.Err(_):
                                 return 1
                         match server.result():
-                            case Result.Ok(_):
-                                return 0
-                            case Result.Err(_):
+                            case TaskResult.Ready(result):
+                                match result:
+                                    case Result.Ok(_):
+                                        return 0
+                                    case Result.Err(_):
+                                        return 1
+                            case TaskResult.Cancelled:
+                                return 1
+                            case TaskResult.TimedOut:
                                 return 1
                     case Result.Err(_):
                         return 1

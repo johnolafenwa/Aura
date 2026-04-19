@@ -673,32 +673,7 @@ struct NativeRuntimeArtifacts {
 }
 
 fn ensure_native_runtime_artifacts() -> std::result::Result<NativeRuntimeArtifacts, String> {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut command = Command::new(cargo);
-    command.current_dir(repo_root());
-    command
-        .arg("rustc")
-        .arg("-q")
-        .arg("-p")
-        .arg("aurora-compiler")
-        .arg("--lib");
-    if current_profile() == "release" {
-        command.arg("--release");
-    }
-    command.arg("--").arg("--print").arg("native-static-libs");
-
-    let output = command
-        .output()
-        .map_err(|error| format!("failed to build Aurora runtime artifacts: {}", error))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "failed to build Aurora runtime artifacts:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    let staticlib = parse_static_library_artifact_path(&output.stdout)
+    let staticlib = build_native_runtime_staticlib()?
         .or_else(|| resolve_static_library_path(repo_root(), current_profile()).ok())
         .ok_or_else(|| {
             format!(
@@ -717,12 +692,71 @@ fn ensure_native_runtime_artifacts() -> std::result::Result<NativeRuntimeArtifac
         ));
     }
 
-    let native_link_args = parse_native_static_libs(&String::from_utf8_lossy(&output.stderr));
+    let native_link_args = query_native_runtime_link_args()?;
 
     Ok(NativeRuntimeArtifacts {
         staticlib,
         native_link_args,
     })
+}
+
+fn build_native_runtime_staticlib() -> std::result::Result<Option<PathBuf>, String> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut command = Command::new(cargo);
+    command.current_dir(repo_root());
+    command
+        .arg("build")
+        .arg("-q")
+        .arg("-p")
+        .arg("aurora-compiler")
+        .arg("--lib")
+        .arg("--message-format=json-render-diagnostics");
+    if current_profile() == "release" {
+        command.arg("--release");
+    }
+
+    let output = command
+        .output()
+        .map_err(|error| format!("failed to build Aurora runtime artifacts: {}", error))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "failed to build Aurora runtime artifacts:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    Ok(parse_static_library_artifact_path(&output.stdout))
+}
+
+fn query_native_runtime_link_args() -> std::result::Result<Vec<String>, String> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut command = Command::new(cargo);
+    command.current_dir(repo_root());
+    command
+        .arg("rustc")
+        .arg("-q")
+        .arg("-p")
+        .arg("aurora-compiler")
+        .arg("--lib");
+    if current_profile() == "release" {
+        command.arg("--release");
+    }
+    command.arg("--").arg("--print").arg("native-static-libs");
+
+    let output = command
+        .output()
+        .map_err(|error| format!("failed to query Aurora runtime link args: {}", error))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to query Aurora runtime link args:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    Ok(parse_native_static_libs(&String::from_utf8_lossy(
+        &output.stderr,
+    )))
 }
 
 fn parse_static_library_artifact_path(stdout: &[u8]) -> Option<PathBuf> {

@@ -14,15 +14,12 @@ const KEYWORDS = [
   "match",
   "case",
   "with",
-  "select",
   "return",
   "try",
-  "spawn",
   "as",
   "and",
   "or",
   "not",
-  "detached",
   "public",
   "mut",
   "borrow",
@@ -68,7 +65,12 @@ const PRIMITIVE_TYPES = new Set([
   "net.TlsListener",
   "net.TlsStream",
   "Queue",
+  "QueueReceive",
+  "SendError",
   "Task",
+  "TaskResult",
+  "WaitAny",
+  "WaitAll",
   "TaskGroup"
 ]);
 
@@ -1148,15 +1150,22 @@ const BUILTIN_MEMBERS = {
     {
       name: "put",
       kind: "method",
-      detail: "put(value) -> Result[None, SendError[T]]",
+      detail: "put(value, timeout: Duration = ...) -> Result[None, SendError[T]]",
       documentation:
-        "Puts a value into the queue, waiting for free capacity when needed, or returns `SendError.Closed(value)` / `SendError.Cancelled(value)` if the send cannot complete."
+        "Puts a value into the queue, waiting for free capacity when needed, or returns `SendError.Closed(value)`, `SendError.Cancelled(value)`, `SendError.TimedOut(value)`, or `SendError.Full(value)` if the send cannot complete."
+    },
+    {
+      name: "try_put",
+      kind: "method",
+      detail: "try_put(value) -> Result[None, SendError[T]]",
+      documentation: "Attempts a non-blocking queue send and returns the unsent value on failure."
     },
     {
       name: "get",
       kind: "method",
-      detail: "get(timeout: Duration = ...) -> Option[T]",
-      documentation: "Receives the next value from the queue, or `Option.None` when the queue is closed or the optional timeout expires."
+      detail: "get(timeout: Duration = ...) -> QueueReceive[T]",
+      documentation:
+        "Receives the next value from the queue and reports `QueueReceive.Item(value)`, `QueueReceive.Closed`, `QueueReceive.TimedOut`, or `QueueReceive.Cancelled`."
     },
     {
       name: "close",
@@ -1169,8 +1178,9 @@ const BUILTIN_MEMBERS = {
     {
       name: "result",
       kind: "method",
-      detail: "result() -> T",
-      documentation: "Waits for the spawned task to finish and returns its value."
+      detail: "result(timeout: Duration = ...) -> TaskResult[T]",
+      documentation:
+        "Waits for the task to finish and reports `TaskResult.Ready(value)`, `TaskResult.TimedOut`, or `TaskResult.Cancelled`."
     }
   ],
   TaskGroup: [
@@ -1179,6 +1189,12 @@ const BUILTIN_MEMBERS = {
       kind: "method",
       detail: "start(function, ...) -> Task[T]",
       documentation: "Starts a child task in the current task group."
+    },
+    {
+      name: "start_soon",
+      kind: "method",
+      detail: "start_soon(function, ...) -> None",
+      documentation: "Starts a child task in the current task group without returning a task handle."
     },
     {
       name: "cancel",
@@ -1204,15 +1220,15 @@ const BUILTIN_FUNCTIONS = [
       "Builds an integer range from 0 up to, but not including, `stop`, or from `start` up to, but not including, `stop`."
   },
   {
-    name: "queue",
+    name: "Queue",
     kind: "function",
-    detail: "queue(capacity: int32 = ...) -> Queue[T]",
-    documentation: "Creates a typed queue when the surrounding annotation or expectation provides `T`."
+    detail: "Queue(capacity: int32 = ...) -> Queue[T]",
+    documentation: "Creates a typed queue, optionally with bounded capacity."
   },
   {
-    name: "tasks",
+    name: "TaskGroup",
     kind: "function",
-    detail: "tasks() -> TaskGroup",
+    detail: "TaskGroup() -> TaskGroup",
     documentation: "Creates a managed structured-concurrency task group for use with `with`."
   },
   {
@@ -1222,10 +1238,16 @@ const BUILTIN_FUNCTIONS = [
     documentation: "Returns true when the current task has been cancelled."
   },
   {
-    name: "after",
+    name: "wait_any",
     kind: "function",
-    detail: "after(duration: Duration) -> Duration",
-    documentation: "Builds a timeout/select timer expression from a duration literal or duration value."
+    detail: "wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]",
+    documentation: "Waits for the first task in a task list to finish, or returns a timeout/cancelled result."
+  },
+  {
+    name: "wait_all",
+    kind: "function",
+    detail: "wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]",
+    documentation: "Waits for every task in a task list to finish, or returns a timeout/cancelled result."
   },
   {
     name: "sleep",
@@ -1280,6 +1302,45 @@ const BUILTIN_FUNCTIONS = [
 const BUILTIN_FUNCTION_MAP = new Map(BUILTIN_FUNCTIONS.map((item) => [item.name, item]));
 const BUILTIN_MODULE_NAMES = new Set(["io", "fs", "net"]);
 const BUILTIN_ENUMS = new Map([
+  [
+    "QueueReceive",
+    {
+      kind: "enum",
+      name: "QueueReceive",
+      detail: "enum QueueReceive[T]",
+      documentation: "Queue receive outcomes that distinguish values, closure, timeouts, and cancellation.",
+      variants: [
+        {
+          kind: "variant",
+          name: "Item",
+          returnType: "QueueReceive",
+          payloadType: "T",
+          detail: "Item(T) -> QueueReceive"
+        },
+        {
+          kind: "variant",
+          name: "Closed",
+          returnType: "QueueReceive",
+          payloadType: null,
+          detail: "Closed -> QueueReceive"
+        },
+        {
+          kind: "variant",
+          name: "TimedOut",
+          returnType: "QueueReceive",
+          payloadType: null,
+          detail: "TimedOut -> QueueReceive"
+        },
+        {
+          kind: "variant",
+          name: "Cancelled",
+          returnType: "QueueReceive",
+          payloadType: null,
+          detail: "Cancelled -> QueueReceive"
+        }
+      ]
+    }
+  ],
   [
     "Option",
     {
@@ -1351,6 +1412,116 @@ const BUILTIN_ENUMS = new Map([
           returnType: "SendError",
           payloadType: "T",
           detail: "Cancelled(T) -> SendError"
+        },
+        {
+          kind: "variant",
+          name: "TimedOut",
+          returnType: "SendError",
+          payloadType: "T",
+          detail: "TimedOut(T) -> SendError"
+        },
+        {
+          kind: "variant",
+          name: "Full",
+          returnType: "SendError",
+          payloadType: "T",
+          detail: "Full(T) -> SendError"
+        }
+      ]
+    }
+  ],
+  [
+    "TaskResult",
+    {
+      kind: "enum",
+      name: "TaskResult",
+      detail: "enum TaskResult[T]",
+      documentation: "Task completion outcomes for structured task waits.",
+      variants: [
+        {
+          kind: "variant",
+          name: "Ready",
+          returnType: "TaskResult",
+          payloadType: "T",
+          detail: "Ready(T) -> TaskResult"
+        },
+        {
+          kind: "variant",
+          name: "TimedOut",
+          returnType: "TaskResult",
+          payloadType: null,
+          detail: "TimedOut -> TaskResult"
+        },
+        {
+          kind: "variant",
+          name: "Cancelled",
+          returnType: "TaskResult",
+          payloadType: null,
+          detail: "Cancelled -> TaskResult"
+        }
+      ]
+    }
+  ],
+  [
+    "WaitAny",
+    {
+      kind: "enum",
+      name: "WaitAny",
+      detail: "enum WaitAny[T]",
+      documentation: "Waits for the first task in a list to finish.",
+      variants: [
+        {
+          kind: "variant",
+          name: "Ready",
+          returnType: "WaitAny",
+          payloadType: "int32, T",
+          detail: "Ready(int32, T) -> WaitAny"
+        },
+        {
+          kind: "variant",
+          name: "TimedOut",
+          returnType: "WaitAny",
+          payloadType: null,
+          detail: "TimedOut -> WaitAny"
+        },
+        {
+          kind: "variant",
+          name: "Cancelled",
+          returnType: "WaitAny",
+          payloadType: null,
+          detail: "Cancelled -> WaitAny"
+        }
+      ]
+    }
+  ],
+  [
+    "WaitAll",
+    {
+      kind: "enum",
+      name: "WaitAll",
+      detail: "enum WaitAll[T]",
+      documentation: "Waits for every task in a list to finish.",
+      variants: [
+        {
+          kind: "variant",
+          name: "Ready",
+          returnType: "WaitAll",
+          payloadType: "Vec[T]",
+          detail: "Ready(Vec[T]) -> WaitAll"
+        },
+        {
+          kind: "variant",
+          name: "TimedOut",
+          returnType: "WaitAll",
+          payloadType: null,
+          detail: "TimedOut -> WaitAll"
+        },
+        {
+          kind: "variant",
+          name: "Cancelled",
+          returnType: "WaitAll",
+          payloadType: null,
+          detail: "Cancelled -> WaitAll"
         }
       ]
     }
@@ -1963,7 +2134,7 @@ function populateFunctionLocals(functionInfo, lines, moduleInfo) {
     if (caseBindingMatch) {
       const bindingName = caseBindingMatch[1];
       if (!functionInfo.locals.has(bindingName)) {
-        const inferredType = inferCaseBindingType(trimmed, moduleInfo) || "Unknown";
+        const inferredType = inferCaseBindingType(trimmed, moduleInfo, functionInfo, lines, i) || "Unknown";
         functionInfo.locals.set(bindingName, {
           kind: "local",
           name: bindingName,
@@ -2845,19 +3016,6 @@ function inferExpressionType(expression, moduleInfo, functionInfo) {
     }
   }
 
-  const detachedSpawnMatch = expr.match(/^spawn\s+detached\s+(.+)$/);
-  if (detachedSpawnMatch) {
-    return "None";
-  }
-
-  const spawnMatch = expr.match(/^spawn\s+(.+)$/);
-  if (spawnMatch) {
-    const innerType = inferExpressionType(spawnMatch[1], moduleInfo, functionInfo);
-    if (innerType) {
-      return `Task[${innerType}]`;
-    }
-  }
-
   if (/^".*"$/.test(expr)) {
     return "String";
   }
@@ -3281,9 +3439,9 @@ function specializeMemberReturnType(receiverType, member) {
     }
     const inner = normalizeType(match[1]);
     if (member.name === "get") {
-      return `Option[${inner}]`;
+      return `QueueReceive[${inner}]`;
     }
-    if (member.name === "put") {
+    if (member.name === "put" || member.name === "try_put") {
       return `Result[None, SendError[${inner}]]`;
     }
     return "None";
@@ -3295,7 +3453,7 @@ function specializeMemberReturnType(receiverType, member) {
       return parseBuiltinDetailReturnType(member.detail);
     }
     if (member.name === "result") {
-      return normalizeType(match[1]);
+      return `TaskResult[${normalizeType(match[1])}]`;
     }
   }
 
@@ -3328,13 +3486,14 @@ function isUnresolvedTypeParamType(moduleInfo, typeName) {
   return !moduleInfo.classes.has(base) && !moduleInfo.enums.has(base);
 }
 
-function inferCaseBindingType(trimmed, moduleInfo) {
+function inferCaseBindingType(trimmed, moduleInfo, functionInfo, lines, lineIndex) {
   const match = trimmed.match(
     /^case\s+(?:([A-Z][A-Za-z0-9_]*)\.)?([A-Z][A-Za-z0-9_]*)\([a-zA-Z_][A-Za-z0-9_]*\)\s*:/
   );
   if (!match) {
     return null;
   }
+  const enclosingMatchType = inferEnclosingMatchType(lines, lineIndex, moduleInfo, functionInfo);
   if (match[1]) {
     const enumInfo = moduleInfo.enums.get(match[1]);
     if (enumInfo) {
@@ -3346,7 +3505,9 @@ function inferCaseBindingType(trimmed, moduleInfo) {
       return null;
     }
     const variant = builtinEnum.variants.find((item) => item.name === match[2]);
-    return variant ? variant.payloadType : null;
+    return variant
+      ? specializeBuiltinEnumPayloadType(match[1], variant.payloadType, enclosingMatchType)
+      : null;
   }
 
   for (const enumInfo of moduleInfo.enums.values()) {
@@ -3358,10 +3519,83 @@ function inferCaseBindingType(trimmed, moduleInfo) {
   for (const builtinEnum of BUILTIN_ENUMS.values()) {
     const variant = builtinEnum.variants.find((item) => item.name === match[2]);
     if (variant && variant.payloadType) {
-      return variant.payloadType;
+      return specializeBuiltinEnumPayloadType(builtinEnum.name, variant.payloadType, enclosingMatchType);
     }
   }
   return null;
+}
+
+function inferEnclosingMatchType(lines, lineIndex, moduleInfo, functionInfo) {
+  if (!Array.isArray(lines) || typeof lineIndex !== "number" || lineIndex < 0) {
+    return null;
+  }
+  const currentLine = lines[lineIndex] || "";
+  const currentIndent = currentLine.match(/^\s*/)[0].length;
+  for (let i = lineIndex - 1; i >= 0; i -= 1) {
+    const line = lines[i] || "";
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const indent = line.match(/^\s*/)[0].length;
+    if (indent >= currentIndent) {
+      continue;
+    }
+    const match = trimmed.match(/^match\s+(.+)\s*:\s*$/);
+    if (!match) {
+      continue;
+    }
+    return inferExpressionType(match[1], moduleInfo, functionInfo);
+  }
+  return null;
+}
+
+function builtinEnumTypeParamMap(enumName, matchedType) {
+  const normalized = matchedType ? normalizeType(matchedType) : null;
+  if (!normalized) {
+    return null;
+  }
+  const names = {
+    Option: ["T"],
+    Result: ["T", "E"],
+    SendError: ["T"],
+    QueueReceive: ["T"],
+    TaskResult: ["T"],
+    WaitAny: ["T"],
+    WaitAll: ["T"]
+  };
+  const params = names[enumName];
+  if (!params) {
+    return null;
+  }
+  const match = normalized.match(/^([A-Za-z0-9_.]+)\[(.+)\]$/);
+  if (!match || match[1] !== enumName) {
+    return null;
+  }
+  const args = splitTopLevelCommaSeparated(match[2]).map(normalizeType);
+  if (args.length < params.length) {
+    return null;
+  }
+  const replacements = new Map();
+  params.forEach((param, index) => {
+    replacements.set(param, args[index]);
+  });
+  return replacements;
+}
+
+function specializeBuiltinEnumPayloadType(enumName, payloadType, matchedType) {
+  if (!payloadType) {
+    return null;
+  }
+  const replacements = builtinEnumTypeParamMap(enumName, matchedType);
+  if (!replacements) {
+    return payloadType;
+  }
+  let specialized = payloadType;
+  for (const [param, value] of replacements.entries()) {
+    specialized = specialized.replace(new RegExp(`\\b${param}\\b`, "g"), value);
+  }
+  return specialized;
 }
 
 function inferForBindingType(iterableExpression, moduleInfo, functionInfo) {

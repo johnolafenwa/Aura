@@ -77,9 +77,6 @@ pub enum TokenKind {
     KwTry,
     KwWith,
     KwAs,
-    KwSelect,
-    KwSpawn,
-    KwDetached,
 }
 
 pub fn lex(source: &str) -> Result<Vec<Token>> {
@@ -597,9 +594,6 @@ fn tokenize_line(
                     "try" => TokenKind::KwTry,
                     "with" => TokenKind::KwWith,
                     "as" => TokenKind::KwAs,
-                    "select" => TokenKind::KwSelect,
-                    "spawn" => TokenKind::KwSpawn,
-                    "detached" => TokenKind::KwDetached,
                     "true" => TokenKind::BoolLiteral(true),
                     "false" => TokenKind::BoolLiteral(false),
                     _ => TokenKind::Identifier(text.to_string()),

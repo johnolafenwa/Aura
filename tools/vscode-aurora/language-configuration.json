@@ -25,11 +25,11 @@
     "offSide": true
   },
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*(class|enum|trait|def|if|elif|else|while|for|match|case|with|select|impl)\\b.*:\\s*$"
+    "increaseIndentPattern": "^\\s*(class|enum|trait|def|if|elif|else|while|for|match|case|with|impl)\\b.*:\\s*$"
   },
   "onEnterRules": [
     {
-      "beforeText": "^\\s*(class|enum|trait|def|if|elif|else|while|for|match|case|with|select|impl)\\b.*:\\s*$",
+      "beforeText": "^\\s*(class|enum|trait|def|if|elif|else|while|for|match|case|with|impl)\\b.*:\\s*$",
       "action": {
         "indent": "indent"
       }

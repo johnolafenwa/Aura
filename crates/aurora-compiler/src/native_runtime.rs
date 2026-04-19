@@ -14,12 +14,16 @@ use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_value::{
     cast_numeric_value, current_lightweight_task_cancellation, io_error, io_read_line, option_none,
-    option_some, render_float, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
-    send_error_cancelled, send_error_closed, sleep_with_runtime_scheduler,
-    spawn_lightweight_task_with_cancellation, wait_for_select_progress, CancellationContext,
-    ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue,
-    MapValue, RangeValue, RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue,
-    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TryRecvResult,
+    option_some, queue_receive_cancelled, queue_receive_closed, queue_receive_item,
+    queue_receive_timed_out, render_float, result_err, result_ok, run_blocking_io,
+    run_lightweight_root_task, send_error_cancelled, send_error_closed, send_error_full,
+    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
+    task_result_cancelled, task_result_ready, task_result_timed_out, wait_all_cancelled,
+    wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_ready, wait_any_timed_out,
+    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, RangeValue, RecvValueResult,
+    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue, TaskValue,
+    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
     UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue,
     WebSocketValue,
 };
@@ -135,9 +139,6 @@ thread_local! {
 }
 
 static DIRECT_PROGRAM_SOURCE: OnceLock<ProgramSourceContext> = OnceLock::new();
-
-#[repr(transparent)]
-struct Deadline(Instant);
 
 fn current_cancellation() -> CancellationContext {
     if let Some(cancellation) = current_lightweight_task_cancellation() {
@@ -2276,147 +2277,6 @@ pub extern "C" fn aurora_direct_arg_buffer_store(buffer: *mut i64, index: i64, v
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_i64_buffer_new(count: i64) -> *mut i64 {
-    let count = match usize::try_from(count) {
-        Ok(count) => count,
-        Err(_) => runtime_error("invalid i64 buffer size"),
-    };
-    let mut values = vec![0i64; count].into_boxed_slice();
-    let ptr = values.as_mut_ptr();
-    Box::leak(values);
-    ptr
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_i64_buffer_store(buffer: *mut i64, index: i64, value: i64) {
-    let index = match usize::try_from(index) {
-        Ok(index) => index,
-        Err(_) => runtime_error("invalid i64 buffer index"),
-    };
-    unsafe {
-        *buffer.add(index) = value;
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_select_wait(
-    recv_channels_ptr: *mut i64,
-    recv_channel_count: i64,
-    send_channels_ptr: *mut i64,
-    send_channel_count: i64,
-    ignore_closed_recv: i64,
-    deadlines_ptr: *mut i64,
-    deadline_count: i64,
-) -> i64 {
-    let recv_channel_count = match usize::try_from(recv_channel_count) {
-        Ok(count) => count,
-        Err(_) => runtime_error("invalid select recv channel count"),
-    };
-    let send_channel_count = match usize::try_from(send_channel_count) {
-        Ok(count) => count,
-        Err(_) => runtime_error("invalid select send channel count"),
-    };
-    let deadline_count = match usize::try_from(deadline_count) {
-        Ok(count) => count,
-        Err(_) => runtime_error("invalid select deadline count"),
-    };
-
-    let recv_channels = if recv_channel_count == 0 || recv_channels_ptr.is_null() {
-        Vec::new()
-    } else {
-        let boxed = unsafe {
-            Box::from_raw(std::ptr::slice_from_raw_parts_mut(
-                recv_channels_ptr,
-                recv_channel_count,
-            ))
-        };
-        let values = boxed.into_vec();
-        values
-            .into_iter()
-            .filter_map(|value| {
-                if value == 0 {
-                    None
-                } else {
-                    match unsafe { value_ref(value as *mut OpaqueValue) } {
-                        Value::Channel(channel) => Some(channel.clone()),
-                        other => runtime_error(format!(
-                            "expected `Queue`, found `{}`",
-                            value_type_name(other)
-                        )),
-                    }
-                }
-            })
-            .collect::<Vec<_>>()
-    };
-
-    let send_channels = if send_channel_count == 0 || send_channels_ptr.is_null() {
-        Vec::new()
-    } else {
-        let boxed = unsafe {
-            Box::from_raw(std::ptr::slice_from_raw_parts_mut(
-                send_channels_ptr,
-                send_channel_count,
-            ))
-        };
-        let values = boxed.into_vec();
-        values
-            .into_iter()
-            .filter_map(|value| {
-                if value == 0 {
-                    None
-                } else {
-                    match unsafe { value_ref(value as *mut OpaqueValue) } {
-                        Value::Channel(channel) => Some(channel.clone()),
-                        other => runtime_error(format!(
-                            "expected `Queue`, found `{}`",
-                            value_type_name(other)
-                        )),
-                    }
-                }
-            })
-            .collect::<Vec<_>>()
-    };
-
-    let deadlines = if deadline_count == 0 || deadlines_ptr.is_null() {
-        Vec::new()
-    } else {
-        let boxed = unsafe {
-            Box::from_raw(std::ptr::slice_from_raw_parts_mut(
-                deadlines_ptr,
-                deadline_count,
-            ))
-        };
-        let values = boxed.into_vec();
-        values
-            .into_iter()
-            .filter_map(|value| {
-                if value == 0 {
-                    None
-                } else {
-                    let deadline = value as usize as *mut Deadline;
-                    if deadline.is_null() {
-                        None
-                    } else {
-                        Some(unsafe { (*deadline).0 })
-                    }
-                }
-            })
-            .collect::<Vec<_>>()
-    };
-
-    match wait_for_select_progress(
-        &recv_channels,
-        ignore_closed_recv != 0,
-        &send_channels,
-        &deadlines,
-        Some(&current_cancellation()),
-    ) {
-        RuntimeSchedulerWakeReason::Cancelled => 1,
-        RuntimeSchedulerWakeReason::Ready | RuntimeSchedulerWakeReason::TimedOut => 0,
-    }
-}
-
-#[no_mangle]
 pub extern "C" fn aurora_direct_channel_new(capacity: *mut OpaqueValue) -> *mut OpaqueValue {
     if capacity.is_null() {
         return boxed_value(Value::Channel(ChannelValue::new()));
@@ -2466,6 +2326,10 @@ pub extern "C" fn aurora_direct_channel_send(
                 Err(SendValueError::Cancelled(value)) => {
                     boxed_value(result_err(send_error_cancelled(value)))
                 }
+                Err(SendValueError::TimedOut(value)) => {
+                    boxed_value(result_err(send_error_timed_out(value)))
+                }
+                Err(SendValueError::Full(value)) => boxed_value(result_err(send_error_full(value))),
             }
         }
         other => runtime_error(format!(
@@ -2476,9 +2340,56 @@ pub extern "C" fn aurora_direct_channel_send(
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_channel_can_send(channel: *mut OpaqueValue) -> i64 {
+pub extern "C" fn aurora_direct_channel_send_timeout_value(
+    channel: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+    duration: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let millis = extract_duration_millis(unsafe { value_ref(duration) });
+    let millis = match u64::try_from(millis) {
+        Ok(millis) => millis,
+        Err(_) => runtime_error("invalid queue timeout duration"),
+    };
     match unsafe { value_ref(channel) } {
-        Value::Channel(channel) => i64::from(channel.is_ready_for_scheduler_send()),
+        Value::Channel(channel) => match channel.send_with_timeout(
+            unsafe { take_value(value) },
+            Some(StdDuration::from_millis(millis)),
+            Some(&current_cancellation()),
+        ) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(SendValueError::Closed(value)) => boxed_value(result_err(send_error_closed(value))),
+            Err(SendValueError::Cancelled(value)) => {
+                boxed_value(result_err(send_error_cancelled(value)))
+            }
+            Err(SendValueError::TimedOut(value)) => {
+                boxed_value(result_err(send_error_timed_out(value)))
+            }
+            Err(SendValueError::Full(value)) => boxed_value(result_err(send_error_full(value))),
+        },
+        other => runtime_error(format!(
+            "expected `Queue`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_channel_try_send(
+    channel: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(channel) } {
+        Value::Channel(channel) => match channel.try_send_result(unsafe { take_value(value) }) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(SendValueError::Closed(value)) => boxed_value(result_err(send_error_closed(value))),
+            Err(SendValueError::TimedOut(value)) => {
+                boxed_value(result_err(send_error_timed_out(value)))
+            }
+            Err(SendValueError::Cancelled(value)) => {
+                boxed_value(result_err(send_error_cancelled(value)))
+            }
+            Err(SendValueError::Full(value)) => boxed_value(result_err(send_error_full(value))),
+        },
         other => runtime_error(format!(
             "expected `Queue`, found `{}`",
             value_type_name(other)
@@ -2490,9 +2401,11 @@ pub extern "C" fn aurora_direct_channel_can_send(channel: *mut OpaqueValue) -> i
 pub extern "C" fn aurora_direct_channel_recv(channel: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(channel) } {
         Value::Channel(channel) => boxed_value(
-            match channel.recv_with_cancellation(None, Some(&current_cancellation())) {
-                Some(value) => option_some(value),
-                None => option_none(),
+            match channel.recv_result_with_cancellation(None, Some(&current_cancellation())) {
+                RecvValueResult::Value(value) => queue_receive_item(value),
+                RecvValueResult::Closed => queue_receive_closed(),
+                RecvValueResult::TimedOut => queue_receive_timed_out(),
+                RecvValueResult::Cancelled => queue_receive_cancelled(),
             },
         ),
         other => runtime_error(format!(
@@ -2514,29 +2427,16 @@ pub extern "C" fn aurora_direct_channel_recv_timeout_value(
     };
     match unsafe { value_ref(channel) } {
         Value::Channel(channel) => boxed_value(
-            match channel.recv_with_cancellation(
+            match channel.recv_result_with_cancellation(
                 Some(StdDuration::from_millis(millis)),
                 Some(&current_cancellation()),
             ) {
-                Some(value) => option_some(value),
-                None => option_none(),
+                RecvValueResult::Value(value) => queue_receive_item(value),
+                RecvValueResult::Closed => queue_receive_closed(),
+                RecvValueResult::TimedOut => queue_receive_timed_out(),
+                RecvValueResult::Cancelled => queue_receive_cancelled(),
             },
         ),
-        other => runtime_error(format!(
-            "expected `Queue`, found `{}`",
-            value_type_name(other)
-        )),
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_channel_try_recv(channel: *mut OpaqueValue) -> i64 {
-    match unsafe { value_ref(channel) } {
-        Value::Channel(channel) => match channel.try_recv() {
-            TryRecvResult::Value(value) => boxed_value(option_some(value)) as i64,
-            TryRecvResult::Closed => 1,
-            TryRecvResult::Empty => 0,
-        },
         other => runtime_error(format!(
             "expected `Queue`, found `{}`",
             value_type_name(other)
@@ -2561,14 +2461,183 @@ pub extern "C" fn aurora_direct_channel_close(channel: *mut OpaqueValue) -> *mut
 #[no_mangle]
 pub extern "C" fn aurora_direct_task_join(task: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(task) } {
-        Value::Task(task) => match task.join_result() {
-            Ok(value) => boxed_value(value),
-            Err(error) => runtime_diagnostic_error(error),
+        Value::Task(task) => {
+            match task.wait_result_with_cancellation(None, Some(&current_cancellation())) {
+                TaskWaitStatus::Ready(result) => match result {
+                    Ok(value) => boxed_value(task_result_ready(value)),
+                    Err(error) => runtime_diagnostic_error(error),
+                },
+                TaskWaitStatus::TimedOut => boxed_value(task_result_timed_out()),
+                TaskWaitStatus::Cancelled => boxed_value(task_result_cancelled()),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `Task`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_task_join_timeout_value(
+    task: *mut OpaqueValue,
+    duration: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let millis = extract_duration_millis(unsafe { value_ref(duration) });
+    let millis = match u64::try_from(millis) {
+        Ok(millis) => millis,
+        Err(_) => runtime_error("invalid task result timeout duration"),
+    };
+    match unsafe { value_ref(task) } {
+        Value::Task(task) => match task.wait_result_with_cancellation(
+            Some(StdDuration::from_millis(millis)),
+            Some(&current_cancellation()),
+        ) {
+            TaskWaitStatus::Ready(result) => match result {
+                Ok(value) => boxed_value(task_result_ready(value)),
+                Err(error) => runtime_diagnostic_error(error),
+            },
+            TaskWaitStatus::TimedOut => boxed_value(task_result_timed_out()),
+            TaskWaitStatus::Cancelled => boxed_value(task_result_cancelled()),
         },
         other => runtime_error(format!(
             "expected `Task`, found `{}`",
             value_type_name(other)
         )),
+    }
+}
+
+fn expect_task_vec(value: &Value, context: &str) -> Vec<TaskValue> {
+    match value {
+        Value::Vec(vector) => vector
+            .elements
+            .iter()
+            .map(|value| match value {
+                Value::Task(task) => task.clone(),
+                other => runtime_error(format!(
+                    "expected `{}` tasks to be `Task`, found `{}`",
+                    context,
+                    value_type_name(other)
+                )),
+            })
+            .collect(),
+        other => runtime_error(format!(
+            "expected `{}` to receive `Vec[Task]`, found `{}`",
+            context,
+            value_type_name(other)
+        )),
+    }
+}
+
+fn wait_any_tasks(
+    tasks: Vec<TaskValue>,
+    timeout: Option<StdDuration>,
+) -> Result<Value, Diagnostic> {
+    let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
+    let cancellation = current_cancellation();
+    loop {
+        for (index, task) in tasks.iter().enumerate() {
+            if let Some(result) = task.completed_result() {
+                let index = i32::try_from(index)
+                    .map_err(|_| Diagnostic::new("wait_any result index exceeds int32 range"))?;
+                return Ok(wait_any_ready(index, result?));
+            }
+        }
+
+        match wait_for_runtime_scheduler(
+            Vec::new(),
+            false,
+            Vec::new(),
+            tasks.clone(),
+            deadline,
+            Some(&cancellation),
+        ) {
+            RuntimeSchedulerWakeReason::Ready => {}
+            RuntimeSchedulerWakeReason::TimedOut => return Ok(wait_any_timed_out()),
+            RuntimeSchedulerWakeReason::Cancelled => return Ok(wait_any_cancelled()),
+        }
+    }
+}
+
+fn wait_all_tasks(
+    tasks: Vec<TaskValue>,
+    timeout: Option<StdDuration>,
+) -> Result<Value, Diagnostic> {
+    let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
+    let cancellation = current_cancellation();
+    let mut results = Vec::with_capacity(tasks.len());
+    for task in tasks {
+        let remaining = deadline.and_then(|deadline| {
+            deadline
+                .checked_duration_since(Instant::now())
+                .or(Some(StdDuration::from_millis(0)))
+        });
+        match task.wait_result_with_cancellation(remaining, Some(&cancellation)) {
+            TaskWaitStatus::Ready(result) => results.push(result?),
+            TaskWaitStatus::TimedOut => return Ok(wait_all_timed_out()),
+            TaskWaitStatus::Cancelled => return Ok(wait_all_cancelled()),
+        }
+    }
+    Ok(wait_all_ready(results))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_wait_any(tasks: *mut OpaqueValue) -> *mut OpaqueValue {
+    match wait_any_tasks(
+        expect_task_vec(unsafe { &value_ref(tasks) }, "wait_any"),
+        None,
+    ) {
+        Ok(value) => boxed_value(value),
+        Err(error) => runtime_diagnostic_error(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_wait_any_timeout_value(
+    tasks: *mut OpaqueValue,
+    duration: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let millis = extract_duration_millis(unsafe { value_ref(duration) });
+    let millis = match u64::try_from(millis) {
+        Ok(millis) => millis,
+        Err(_) => runtime_error("invalid wait_any timeout duration"),
+    };
+    match wait_any_tasks(
+        expect_task_vec(unsafe { &value_ref(tasks) }, "wait_any"),
+        Some(StdDuration::from_millis(millis)),
+    ) {
+        Ok(value) => boxed_value(value),
+        Err(error) => runtime_diagnostic_error(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_wait_all(tasks: *mut OpaqueValue) -> *mut OpaqueValue {
+    match wait_all_tasks(
+        expect_task_vec(unsafe { &value_ref(tasks) }, "wait_all"),
+        None,
+    ) {
+        Ok(value) => boxed_value(value),
+        Err(error) => runtime_diagnostic_error(error),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_wait_all_timeout_value(
+    tasks: *mut OpaqueValue,
+    duration: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let millis = extract_duration_millis(unsafe { value_ref(duration) });
+    let millis = match u64::try_from(millis) {
+        Ok(millis) => millis,
+        Err(_) => runtime_error("invalid wait_all timeout duration"),
+    };
+    match wait_all_tasks(
+        expect_task_vec(unsafe { &value_ref(tasks) }, "wait_all"),
+        Some(StdDuration::from_millis(millis)),
+    ) {
+        Ok(value) => boxed_value(value),
+        Err(error) => runtime_diagnostic_error(error),
     }
 }
 
@@ -4444,49 +4513,6 @@ pub extern "C" fn aurora_direct_tls_stream_close(stream: *mut OpaqueValue) -> *m
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_deadline_new(duration: *mut OpaqueValue) -> i64 {
-    let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis = match u64::try_from(millis) {
-        Ok(millis) => millis,
-        Err(_) => runtime_error("invalid deadline duration"),
-    };
-    let deadline = Deadline(
-        match Instant::now().checked_add(StdDuration::from_millis(millis)) {
-            Some(deadline) => deadline,
-            None => runtime_error(format!(
-                "duration `{}ms` overflows the direct runtime deadline range",
-                millis
-            )),
-        },
-    );
-    Box::into_raw(Box::new(deadline)) as usize as i64
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_deadline_ready(deadline: i64) -> i64 {
-    let deadline = deadline as usize as *mut Deadline;
-    if deadline.is_null() {
-        return 1;
-    }
-    let ready = unsafe { Instant::now() >= (*deadline).0 };
-    if ready {
-        1
-    } else {
-        0
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_deadline_drop(deadline: i64) {
-    let deadline = deadline as usize as *mut Deadline;
-    if !deadline.is_null() {
-        unsafe {
-            drop(Box::from_raw(deadline));
-        }
-    }
-}
-
-#[no_mangle]
 pub extern "C" fn aurora_direct_sleep_ms(duration: i64) {
     let millis = match u64::try_from(duration) {
         Ok(millis) => millis,
@@ -4513,17 +4539,17 @@ pub extern "C" fn aurora_direct_sleep_value(duration: *mut OpaqueValue) -> *mut 
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_spawn_call(
+pub extern "C" fn aurora_direct_start_task_call(
     thunk_ptr: i64,
     args_ptr: *const i64,
     arg_count: i64,
-    detached: i64,
+    returns_handle: i64,
     task_group: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
     let arg_count = match usize::try_from(arg_count) {
         Ok(arg_count) => arg_count,
-        Err(_) => runtime_error("invalid spawn arg count"),
+        Err(_) => runtime_error("invalid task-start arg count"),
     };
     let args = unsafe {
         let boxed = Box::from_raw(std::ptr::slice_from_raw_parts_mut(
@@ -4533,23 +4559,17 @@ pub extern "C" fn aurora_direct_spawn_call(
         boxed.into_vec()
     };
     let group = if task_group.is_null() {
-        None
+        runtime_error("task starting requires a `TaskGroup`")
     } else {
         match unsafe { value_ref(task_group) } {
-            Value::TaskGroup(group) => Some(group.clone()),
+            Value::TaskGroup(group) => group.clone(),
             other => runtime_error(format!(
                 "expected `TaskGroup`, found `{}`",
                 value_type_name(other)
             )),
         }
     };
-    let cancellation = if let Some(group) = &group {
-        group.child_cancellation()
-    } else if detached != 0 {
-        CancellationContext::default()
-    } else {
-        current_cancellation()
-    };
+    let cancellation = group.child_cancellation();
     let task = spawn_lightweight_task_with_cancellation(cancellation.clone(), move || {
         with_cancellation_scope(cancellation, || {
             let result_ptr = unsafe { thunk(args.as_ptr(), args.len()) };
@@ -4558,12 +4578,10 @@ pub extern "C" fn aurora_direct_spawn_call(
     })
     .unwrap_or_else(|error| runtime_diagnostic_error(error));
 
-    if detached != 0 {
-        return boxed_value(Value::Unit);
-    }
+    group.register_task(task.clone());
 
-    if let Some(group) = group {
-        group.register_task(task.clone());
+    if returns_handle == 0 {
+        return boxed_value(Value::Unit);
     }
     boxed_value(Value::Task(task))
 }

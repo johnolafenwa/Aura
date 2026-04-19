@@ -8,21 +8,20 @@ use cranelift_codegen::Context;
 use cranelift_frontend::FunctionBuilderContext;
 
 use super::{
-    box_thunk_value, builtin_opaque_member_return_type, collect_spawn_targets,
-    collect_type_params_from_type, direct_field_type, direct_type, direct_type_to_type,
-    emit_host_object, emit_host_object_with_metadata, ensure_direct_type, infer_operand_type,
-    infer_rvalue_type, infer_select_binding_type, infer_try_type, is_numeric_type_name,
-    main_signature, mangle_symbol, mangle_thunk_symbol, render_direct_type,
-    runtime_type_is_wildcard, signature_for, thunk_signature, thunk_string_constant,
-    unbox_thunk_value, validate_function, validate_operand, DirectType, NativeCodegen,
-    PlainClassField, PlainClassType, ScalarKind,
+    box_thunk_value, builtin_opaque_member_return_type, collect_type_params_from_type,
+    direct_field_type, direct_type, direct_type_to_type, emit_host_object,
+    emit_host_object_with_metadata, ensure_direct_type, infer_operand_type, infer_rvalue_type,
+    infer_try_type, is_numeric_type_name, main_signature, mangle_symbol, mangle_thunk_symbol,
+    render_direct_type, runtime_type_is_wildcard, signature_for, thunk_signature,
+    thunk_string_constant, unbox_thunk_value, validate_function, validate_operand, DirectType,
+    NativeCodegen, PlainClassField, PlainClassType, ScalarKind,
 };
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::Span;
 use crate::mir::MirReceiverKind;
 use crate::mir::{
     BasicBlock, CallTarget, Instruction, MirArg, MirFormatPart, MirFunction, MirLocalType,
-    MirMapEntry, MirParam, MirSelectArm, MirSelectKind, Operand, Rvalue, Terminator,
+    MirMapEntry, MirParam, Operand, Rvalue, Terminator,
 };
 use crate::sema::Type;
 use crate::{lower_path_to_mir, lower_source_to_mir};
@@ -111,16 +110,16 @@ fn direct_backend_emits_object_for_extended_feature_examples() {
             include_str!("../../../examples/control_flow/match_literals.au"),
         ),
         (
-            "concurrency/queues_spawn",
-            include_str!("../../../examples/concurrency/queues_spawn.au"),
+            "concurrency/task_group_start",
+            include_str!("../../../examples/concurrency/task_group_start.au"),
         ),
         (
             "concurrency/queue_timeout",
             include_str!("../../../examples/concurrency/queue_timeout.au"),
         ),
         (
-            "concurrency/select_timeout_named",
-            include_str!("../../../examples/concurrency/select_timeout_named.au"),
+            "concurrency/queue_get_timeout_named",
+            include_str!("../../../examples/concurrency/queue_get_timeout_named.au"),
         ),
         (
             "error_handling/try_result",
@@ -242,17 +241,16 @@ def main() -> int32:
     print(seen.remove("x"))
     print(seen.contains("y"))
 
-    jobs: Queue[int32] = queue()
+    jobs = Queue[int32]()
     jobs_copy = jobs
     print(jobs_copy.put(1))
     print(jobs.get())
     jobs.close()
 
-    task = spawn worker(4)
-    task_copy = task
-    print(task_copy.result())
-
-    with tasks() as group:
+    with TaskGroup() as group:
+        task = group.start(worker, 4)
+        task_copy = task
+        print(task_copy.result())
         group.cancel()
 
     return 0
@@ -303,13 +301,17 @@ def main() -> int32:
     print(parse_int32("12"))
     print(cancelled())
 
-    jobs: Queue[int32] = queue()
+    jobs = Queue[int32]()
     print(jobs.put(7))
-    select:
-        case value = jobs.get():
+    match jobs.get(timeout=1ms):
+        case QueueReceive.Item(value):
             print(value)
-        case after(duration=1ms):
+        case QueueReceive.TimedOut:
             print(99)
+        case QueueReceive.Closed:
+            print(98)
+        case QueueReceive.Cancelled:
+            print(97)
     jobs.close()
 
     sleep(0ms)
@@ -317,10 +319,9 @@ def main() -> int32:
     with Resource() as resource:
         print(resource.closed)
 
-    task = spawn worker(4)
-    print(task.result())
-
-    with tasks() as group:
+    with TaskGroup() as group:
+        task = group.start(worker, 4)
+        print(task.result())
         group.cancel()
 
     return second.value
@@ -343,7 +344,7 @@ def main() -> int32:
     with Resource() as resource:
         print(resource.closed)
 
-    with tasks() as group:
+    with TaskGroup() as group:
         group.cancel()
 
     return 0
@@ -727,12 +728,12 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
     };
     let channel_ty = Type::Named("Queue".to_string(), vec![Type::named("int32")]);
     let channel_value = Rvalue::Call {
-        callee: CallTarget::Name("queue".to_string()),
+        callee: CallTarget::Name("Queue".to_string()),
         args: Vec::new(),
     };
     let task_group_ty = Type::named("TaskGroup");
     let task_group_value = Rvalue::Call {
-        callee: CallTarget::Name("tasks".to_string()),
+        callee: CallTarget::Name("TaskGroup".to_string()),
         args: Vec::new(),
     };
 
@@ -1376,12 +1377,12 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
     };
     let channel_ty = Type::Named("Queue".to_string(), vec![Type::named("int32")]);
     let channel_value = Rvalue::Call {
-        callee: CallTarget::Name("queue".to_string()),
+        callee: CallTarget::Name("Queue".to_string()),
         args: Vec::new(),
     };
     let task_group_ty = Type::named("TaskGroup");
     let task_group_value = Rvalue::Call {
-        callee: CallTarget::Name("tasks".to_string()),
+        callee: CallTarget::Name("TaskGroup".to_string()),
         args: Vec::new(),
     };
 
@@ -1736,168 +1737,81 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
 }
 
 #[test]
-fn direct_backend_manual_select_surface_compiles() {
-    let channel_ty = Type::Named("Queue".to_string(), vec![Type::named("int32")]);
-    let recv_binding_ty = Type::Named("Option".to_string(), vec![Type::named("int32")]);
-    let send_binding_ty = Type::Named(
-        "Result".to_string(),
-        vec![
-            Type::Unit,
-            Type::Named("SendError".to_string(), vec![Type::named("int32")]),
-        ],
-    );
+fn direct_backend_manual_wait_surface_compiles() {
+    let source = r#"
+def worker(queue: Queue[int32], value: int32) -> int32:
+    match queue.put(value, timeout=2ms):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+    return value + 1
 
-    let module = crate::mir::MirModule {
-        functions: vec![MirFunction {
-            name: "main".to_string(),
-            module_name: "<test>".to_string(),
-            span: Span::new(1, 1),
-            receiver: None,
-            params: Vec::new(),
-            local_types: vec![
-                MirLocalType {
-                    name: "jobs".to_string(),
-                    ty: channel_ty.clone(),
-                },
-                MirLocalType {
-                    name: "received".to_string(),
-                    ty: recv_binding_ty.clone(),
-                },
-                MirLocalType {
-                    name: "sent".to_string(),
-                    ty: send_binding_ty.clone(),
-                },
-            ],
-            return_type: Type::named("int32"),
-            entry: "entry".to_string(),
-            blocks: vec![
-                BasicBlock {
-                    label: "entry".to_string(),
-                    instructions: vec![Instruction::Assign {
-                        target: "jobs".to_string(),
-                        value: Rvalue::Call {
-                            callee: CallTarget::Name("queue".to_string()),
-                            args: Vec::new(),
-                        },
-                    }],
-                    terminator: Terminator::Select {
-                        arms: vec![
-                            MirSelectArm {
-                                binding: Some("received".to_string()),
-                                kind: MirSelectKind::Recv {
-                                    channel: Operand::Place("jobs".to_string()),
-                                },
-                                label: "recv".to_string(),
-                            },
-                            MirSelectArm {
-                                binding: Some("sent".to_string()),
-                                kind: MirSelectKind::Send {
-                                    channel: Operand::Place("jobs".to_string()),
-                                    value: Operand::Int(7),
-                                },
-                                label: "send".to_string(),
-                            },
-                        ],
-                        otherwise: "otherwise".to_string(),
-                    },
-                },
-                BasicBlock {
-                    label: "recv".to_string(),
-                    instructions: Vec::new(),
-                    terminator: Terminator::Return(Operand::Int(0)),
-                },
-                BasicBlock {
-                    label: "send".to_string(),
-                    instructions: Vec::new(),
-                    terminator: Terminator::Return(Operand::Int(0)),
-                },
-                BasicBlock {
-                    label: "otherwise".to_string(),
-                    instructions: Vec::new(),
-                    terminator: Terminator::Return(Operand::Int(0)),
-                },
-            ],
-        }],
-        classes: Vec::new(),
-        trait_impls: Vec::new(),
-        top_level: None,
-    };
+def main() -> int32:
+    jobs = Queue[int32](capacity=1)
+    with TaskGroup() as group:
+        task = group.start(worker, jobs, 7)
+        receive = jobs.get(timeout=5ms)
+        one = wait_any([task], timeout=5ms)
+        all = wait_all([task], timeout=5ms)
+        match receive:
+            case QueueReceive.Item(value):
+                print(value)
+            case QueueReceive.Closed:
+                print("closed")
+            case QueueReceive.TimedOut:
+                print("timedout")
+            case QueueReceive.Cancelled:
+                print("cancelled")
+        match one:
+            case WaitAny.Ready(index, result):
+                print(index)
+                print(result)
+            case WaitAny.TimedOut:
+                print("timedout")
+            case WaitAny.Cancelled:
+                print("cancelled")
+        match all:
+            case WaitAll.Ready(_):
+                print("ready")
+            case WaitAll.TimedOut:
+                print("timedout")
+            case WaitAll.Cancelled:
+                print("cancelled")
+    return 0
+"#;
+
+    let module = lower_source_to_mir(source).expect("manual wait source should lower");
     assert!(!emit_host_object(&module)
-        .expect("manual recv/send select should compile directly")
+        .expect("manual queue/task wait surface should compile directly")
         .is_empty());
+}
 
-    let timeout_module = crate::mir::MirModule {
-        functions: vec![MirFunction {
-            name: "main".to_string(),
-            module_name: "<test>".to_string(),
-            span: Span::new(1, 1),
-            receiver: None,
-            params: Vec::new(),
-            local_types: vec![
-                MirLocalType {
-                    name: "jobs".to_string(),
-                    ty: channel_ty,
-                },
-                MirLocalType {
-                    name: "received".to_string(),
-                    ty: recv_binding_ty,
-                },
-            ],
-            return_type: Type::named("int32"),
-            entry: "entry".to_string(),
-            blocks: vec![
-                BasicBlock {
-                    label: "entry".to_string(),
-                    instructions: vec![Instruction::Assign {
-                        target: "jobs".to_string(),
-                        value: Rvalue::Call {
-                            callee: CallTarget::Name("queue".to_string()),
-                            args: Vec::new(),
-                        },
-                    }],
-                    terminator: Terminator::Select {
-                        arms: vec![
-                            MirSelectArm {
-                                binding: Some("received".to_string()),
-                                kind: MirSelectKind::Recv {
-                                    channel: Operand::Place("jobs".to_string()),
-                                },
-                                label: "recv".to_string(),
-                            },
-                            MirSelectArm {
-                                binding: None,
-                                kind: MirSelectKind::After {
-                                    duration: Operand::Duration(1),
-                                },
-                                label: "after".to_string(),
-                            },
-                        ],
-                        otherwise: "otherwise".to_string(),
-                    },
-                },
-                BasicBlock {
-                    label: "recv".to_string(),
-                    instructions: Vec::new(),
-                    terminator: Terminator::Return(Operand::Int(0)),
-                },
-                BasicBlock {
-                    label: "after".to_string(),
-                    instructions: Vec::new(),
-                    terminator: Terminator::Return(Operand::Int(0)),
-                },
-                BasicBlock {
-                    label: "otherwise".to_string(),
-                    instructions: Vec::new(),
-                    terminator: Terminator::Return(Operand::Int(0)),
-                },
-            ],
-        }],
-        classes: Vec::new(),
-        trait_impls: Vec::new(),
-        top_level: None,
-    };
-    assert!(!emit_host_object(&timeout_module)
-        .expect("manual recv/after select should compile directly")
+#[test]
+fn direct_backend_task_result_payloads_support_plain_class_values() {
+    let source = r#"
+class Box:
+    value: int32
+
+def make_box() -> Box:
+    return Box(value=7)
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(make_box)
+        match task.result():
+            case TaskResult.Ready(box):
+                print(box.value)
+            case TaskResult.TimedOut:
+                print(0)
+            case TaskResult.Cancelled:
+                print(0)
+    return 0
+"#;
+
+    let module = lower_source_to_mir(source).expect("plain-class task result source should lower");
+    assert!(!emit_host_object(&module)
+        .expect("plain-class task result source should compile directly")
         .is_empty());
 }
 
@@ -1941,8 +1855,8 @@ def main() -> int32:
         .expect("codegen should initialize");
     let thunk_error = method_codegen
         .define_function_thunk(&method)
-        .expect_err("methods should still reject direct spawn thunks");
-    assert!(thunk_error.contains("does not yet support spawn thunks for methods"));
+        .expect_err("methods should still reject direct task-start thunks");
+    assert!(thunk_error.contains("does not yet support task-start thunks for methods"));
 
     let mut broken_main = main.clone();
     broken_main.entry = "missing_block".to_string();
@@ -1985,8 +1899,8 @@ def main() -> int32:
     text = "  Aurora repo  "
     print(text)
     print(f"value={text}")
-    jobs: Queue[int32] = queue()
-    group = tasks()
+    jobs = Queue[int32]()
+    group = TaskGroup()
     ready = cancelled()
     sleep(0ms)
     value = abs(-7)
@@ -2022,7 +1936,7 @@ def main() -> int32:
         (
             "channel extra arg",
             module_with_main_call(Rvalue::Call {
-                callee: CallTarget::Name("queue".to_string()),
+                callee: CallTarget::Name("Queue".to_string()),
                 args: vec![
                     MirArg {
                         name: None,
@@ -2036,19 +1950,19 @@ def main() -> int32:
                     },
                 ],
             }),
-            "expected `queue()` to take at most one capacity argument",
+            "expected `Queue()` to take at most one capacity argument",
         ),
         (
             "tasks extra arg",
             module_with_main_call(Rvalue::Call {
-                callee: CallTarget::Name("tasks".to_string()),
+                callee: CallTarget::Name("TaskGroup".to_string()),
                 args: vec![MirArg {
                     name: None,
                     value: Operand::Int(1),
                     writeback_place: None,
                 }],
             }),
-            "expected `tasks()` to take no arguments",
+            "expected `TaskGroup()` to take no arguments",
         ),
         (
             "cancelled extra arg",
@@ -2231,42 +2145,64 @@ fn direct_backend_for_range_and_spawn_error_surface_reports_expected_diagnostics
         .expect_err("non-place for-range iterables should be rejected");
     assert!(for_range_error.contains("requires `for range` iterables to live in a place"));
 
-    let spawn_source = r#"
+    let task_start_source = r#"
 def worker(value: int32) -> int32:
     return value
 
 def main() -> int32:
-    return 0
+    with TaskGroup() as group:
+        task = group.start(worker, 1)
+        match task.result():
+            case TaskResult.Ready(value):
+                return value
+            case TaskResult.TimedOut:
+                return 0
+            case TaskResult.Cancelled:
+                return 0
 "#;
-    let mut spawn_mir = lower_source_to_mir(spawn_source).expect("spawn source should lower");
-    let main = spawn_mir
+    let mut task_start_mir =
+        lower_source_to_mir(task_start_source).expect("task-start source should lower");
+    let main = task_start_mir
         .functions
         .iter_mut()
         .find(|function| function.name == "main")
         .expect("main function should exist");
+    main.local_types.push(MirLocalType {
+        name: "%group".to_string(),
+        ty: Type::named("TaskGroup"),
+    });
     main.blocks = vec![BasicBlock {
         label: "entry".to_string(),
-        instructions: vec![Instruction::Assign {
-            target: "%task".to_string(),
-            value: Rvalue::Spawn {
-                detached: false,
-                task_group: None,
-                function: "worker".to_string(),
-                args: vec![MirArg {
-                    name: None,
-                    value: Operand::Int(1),
-                    writeback_place: None,
-                }],
+        instructions: vec![
+            Instruction::Assign {
+                target: "%group".to_string(),
+                value: Rvalue::Call {
+                    callee: CallTarget::Name("TaskGroup".to_string()),
+                    args: vec![],
+                },
             },
-        }],
+            Instruction::Assign {
+                target: "%task".to_string(),
+                value: Rvalue::StartTask {
+                    returns_handle: true,
+                    task_group: Operand::Place("%group".to_string()),
+                    function: "worker".to_string(),
+                    args: vec![MirArg {
+                        name: None,
+                        value: Operand::Int(1),
+                        writeback_place: None,
+                    }],
+                },
+            },
+        ],
         terminator: Terminator::Return(Operand::Int(0)),
     }];
-    main.local_types = vec![MirLocalType {
+    main.local_types.push(MirLocalType {
         name: "%task".to_string(),
         ty: Type::Named("Task".to_string(), vec![Type::named("int32")]),
-    }];
+    });
 
-    let main = spawn_mir
+    let main = task_start_mir
         .functions
         .iter()
         .find(|function| function.name == "main")
@@ -2274,21 +2210,21 @@ def main() -> int32:
         .expect("main function should exist");
 
     let mut missing_thunk_codegen = NativeCodegen::new(
-        &spawn_mir,
-        "/tmp/direct_spawn_missing_thunk.au",
-        spawn_source,
+        &task_start_mir,
+        "/tmp/direct_task_start_missing_thunk.au",
+        task_start_source,
     )
     .expect("codegen should initialize");
     missing_thunk_codegen.function_thunks.remove("worker");
     let missing_thunk_error = missing_thunk_codegen
         .define_function(&main)
-        .expect_err("spawn should reject missing thunks");
-    assert!(missing_thunk_error.contains("does not know spawn thunk for `worker`"));
+        .expect_err("task start should reject missing thunks");
+    assert!(missing_thunk_error.contains("does not know task-start thunk for `worker`"));
 
     let mut missing_return_codegen = NativeCodegen::new(
-        &spawn_mir,
-        "/tmp/direct_spawn_missing_return.au",
-        spawn_source,
+        &task_start_mir,
+        "/tmp/direct_task_start_missing_return.au",
+        task_start_source,
     )
     .expect("codegen should initialize");
     missing_return_codegen
@@ -2296,20 +2232,20 @@ def main() -> int32:
         .remove("worker");
     let missing_return_error = missing_return_codegen
         .define_function(&main)
-        .expect_err("spawn should reject missing task return metadata");
+        .expect_err("task start should reject missing task return metadata");
     assert!(missing_return_error.contains("does not know return type for `worker`"));
 
-    let mut borrowed_spawn_mir = spawn_mir.clone();
-    let borrowed_main_mut = borrowed_spawn_mir
+    let mut borrowed_task_start_mir = task_start_mir.clone();
+    let borrowed_main_mut = borrowed_task_start_mir
         .functions
         .iter_mut()
         .find(|function| function.name == "main")
         .expect("main function should exist");
-    borrowed_main_mut.blocks[0].instructions[0] = Instruction::Assign {
+    borrowed_main_mut.blocks[0].instructions[1] = Instruction::Assign {
         target: "%task".to_string(),
-        value: Rvalue::Spawn {
-            detached: false,
-            task_group: None,
+        value: Rvalue::StartTask {
+            returns_handle: true,
+            task_group: Operand::Place("%group".to_string()),
             function: "worker".to_string(),
             args: vec![MirArg {
                 name: None,
@@ -2318,22 +2254,22 @@ def main() -> int32:
             }],
         },
     };
-    let borrowed_main = borrowed_spawn_mir
+    let borrowed_main = borrowed_task_start_mir
         .functions
         .iter()
         .find(|function| function.name == "main")
         .cloned()
         .expect("main function should exist");
-    let mut borrowed_spawn_codegen = NativeCodegen::new(
-        &borrowed_spawn_mir,
-        "/tmp/direct_spawn_borrowed_arg.au",
-        spawn_source,
+    let mut borrowed_task_start_codegen = NativeCodegen::new(
+        &borrowed_task_start_mir,
+        "/tmp/direct_task_start_borrowed_arg.au",
+        task_start_source,
     )
     .expect("codegen should initialize");
-    let borrowed_error = borrowed_spawn_codegen
+    let borrowed_error = borrowed_task_start_codegen
         .define_function(&borrowed_main)
-        .expect_err("spawn should reject borrowed arguments");
-    assert!(borrowed_error.contains("does not yet support borrowed spawn arguments"));
+        .expect_err("task start should reject borrowed arguments");
+    assert!(borrowed_error.contains("does not yet support borrowed task-start arguments"));
 }
 
 #[test]
@@ -2419,16 +2355,16 @@ def main() -> int32:
     has_name = names.contains("aurora")
     removed_name = names.remove("repo")
 
-    jobs: Queue[int32] = queue()
+    jobs = Queue[int32]()
     send_result = jobs.put(1)
     recv_result = jobs.get()
     jobs.close()
 
-    group = tasks()
-    group.cancel()
-
-    task = spawn worker(value=1)
-    joined_task = task.result()
+    with TaskGroup() as group:
+        group.cancel()
+        task = group.start(worker, value=1)
+        joined_task = task.result()
+        print(joined_task)
 
     mut counter = Counter(value=1)
     current_value = counter.read()
@@ -2459,7 +2395,6 @@ def main() -> int32:
     print(has_name)
     print(current_value)
     print(latest)
-    print(joined_task)
     return direct + direct_count
 "#;
     let mir = lower_source_to_mir(source).expect("member-call matrix source should lower");
@@ -2504,7 +2439,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
         elements: vec![Operand::String("aurora".to_string())],
     };
     let channel_object = || Rvalue::Call {
-        callee: CallTarget::Name("queue".to_string()),
+        callee: CallTarget::Name("Queue".to_string()),
         args: vec![],
     };
 
@@ -2656,7 +2591,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "put",
                 vec![],
             ),
-            "expected `put()` to receive one argument",
+            "expected `put()` to receive a value argument",
         ),
         (
             "vec swap missing arg",
@@ -3095,7 +3030,7 @@ fn native_codegen_thunk_helpers_cover_roundtrip_paths() {
         &DirectType::Opaque(Type::named("String")),
     )
     .expect_err("opaque thunk boxing should require a raw value");
-    assert!(opaque_missing.contains("spawn thunk expected an opaque value"));
+    assert!(opaque_missing.contains("task-start thunk expected an opaque value"));
 
     let pair_ty = DirectType::PlainClass(PlainClassType {
         class_name: "Pair".to_string(),
@@ -3196,13 +3131,13 @@ fn direct_backend_emits_object_for_broad_maintained_example_surface() {
         "examples/strings/borrow_str.au",
         "examples/strings/string_methods.au",
         "examples/strings/string_parsing_and_formatting.au",
-        "examples/concurrency/queues_spawn.au",
+        "examples/concurrency/task_group_start.au",
         "examples/concurrency/queue_iteration.au",
-        "examples/concurrency/select_send.au",
-        "examples/concurrency/select_timeout_named.au",
-        "examples/concurrency/spawn_detached.au",
+        "examples/concurrency/queue_put_timeout.au",
+        "examples/concurrency/queue_get_timeout_named.au",
+        "examples/concurrency/task_group_start_soon.au",
         "examples/concurrency/task_group_cancel.au",
-        "examples/concurrency/task_group_select.au",
+        "examples/concurrency/task_group_queue_sum.au",
         "examples/resources/with_resource.au",
         "examples/modules/namespace_import_types.au",
         "examples/modules/trait_impl_imports.au",
@@ -3464,7 +3399,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
     for (name, expected) in [
         ("range", DirectType::Opaque(Type::named("Range"))),
         (
-            "queue",
+            "Queue",
             DirectType::Opaque(Type::Named(
                 "Queue".to_string(),
                 vec![Type::named("Unknown")],
@@ -3485,7 +3420,7 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
                 vec![Type::named("Unknown"), Type::named("Unknown")],
             )),
         ),
-        ("tasks", DirectType::Opaque(Type::named("TaskGroup"))),
+        ("TaskGroup", DirectType::Opaque(Type::named("TaskGroup"))),
         ("cancelled", DirectType::Scalar(ScalarKind::Bool)),
         ("sleep", DirectType::Scalar(ScalarKind::Unit)),
         (
@@ -3632,7 +3567,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
 }
 
 #[test]
-fn builtin_member_and_select_type_helpers_cover_collection_runtime_surface() {
+fn builtin_member_type_helpers_cover_collection_runtime_surface() {
     let classes = HashMap::new();
 
     assert_eq!(
@@ -3705,7 +3640,10 @@ fn builtin_member_and_select_type_helpers_cover_collection_runtime_surface() {
             "result",
             &classes,
         ),
-        Some(DirectType::Scalar(ScalarKind::Int32))
+        Some(DirectType::Opaque(Type::Named(
+            "TaskResult".to_string(),
+            vec![Type::named("int32")],
+        )))
     );
     assert_eq!(
         builtin_opaque_member_return_type(
@@ -3790,7 +3728,18 @@ fn builtin_member_and_select_type_helpers_cover_collection_runtime_surface() {
         (
             Type::Named("Task".to_string(), vec![Type::named("int32")]),
             "result",
-            DirectType::Scalar(ScalarKind::Int32),
+            DirectType::Opaque(Type::Named(
+                "TaskResult".to_string(),
+                vec![Type::named("int32")],
+            )),
+        ),
+        (
+            Type::Named("Queue".to_string(), vec![Type::named("int32")]),
+            "get",
+            DirectType::Opaque(Type::Named(
+                "QueueReceive".to_string(),
+                vec![Type::named("int32")],
+            )),
         ),
     ] {
         assert_eq!(
@@ -3799,104 +3748,10 @@ fn builtin_member_and_select_type_helpers_cover_collection_runtime_surface() {
             "expected `{object_ty}.{field}` to infer correctly",
         );
     }
-
-    let recv_arm = MirSelectArm {
-        binding: Some("value".to_string()),
-        kind: MirSelectKind::Recv {
-            channel: Operand::Place("jobs".to_string()),
-        },
-        label: "recv".to_string(),
-    };
-    let send_arm = MirSelectArm {
-        binding: Some("status".to_string()),
-        kind: MirSelectKind::Send {
-            channel: Operand::Place("jobs".to_string()),
-            value: Operand::Int(7),
-        },
-        label: "send".to_string(),
-    };
-    let after_arm = MirSelectArm {
-        binding: None,
-        kind: MirSelectKind::After {
-            duration: Operand::Duration(10),
-        },
-        label: "after".to_string(),
-    };
-    let variable_types = HashMap::from([(
-        "jobs".to_string(),
-        DirectType::Opaque(Type::Named("Queue".to_string(), vec![Type::named("int32")])),
-    )]);
-
-    assert_eq!(
-        infer_select_binding_type(&recv_arm, &variable_types, &classes),
-        Some(DirectType::Opaque(Type::Named(
-            "Option".to_string(),
-            vec![Type::named("int32")],
-        )))
-    );
-    assert_eq!(
-        infer_select_binding_type(&send_arm, &variable_types, &classes),
-        Some(DirectType::Opaque(Type::Named(
-            "Result".to_string(),
-            vec![
-                Type::Unit,
-                Type::Named("SendError".to_string(), vec![Type::named("int32")]),
-            ],
-        )))
-    );
-    assert_eq!(
-        infer_select_binding_type(&after_arm, &variable_types, &classes),
-        Some(DirectType::Scalar(ScalarKind::Unit))
-    );
-    let fallback_send_arm = MirSelectArm {
-        binding: Some("status".to_string()),
-        kind: MirSelectKind::Send {
-            channel: Operand::Place("flag".to_string()),
-            value: Operand::Int(7),
-        },
-        label: "send".to_string(),
-    };
-    let fallback_types =
-        HashMap::from([("flag".to_string(), DirectType::Scalar(ScalarKind::Bool))]);
-    assert_eq!(
-        infer_select_binding_type(&fallback_send_arm, &fallback_types, &classes),
-        Some(DirectType::Opaque(Type::Named(
-            "Result".to_string(),
-            vec![
-                Type::Unit,
-                Type::Named("SendError".to_string(), vec![Type::named("Unknown")]),
-            ],
-        )))
-    );
-    let fallback_recv_arm = MirSelectArm {
-        binding: Some("value".to_string()),
-        kind: MirSelectKind::Recv {
-            channel: Operand::Place("flag".to_string()),
-        },
-        label: "recv".to_string(),
-    };
-    assert_eq!(
-        infer_select_binding_type(&fallback_recv_arm, &fallback_types, &classes),
-        Some(DirectType::Opaque(Type::Named(
-            "Option".to_string(),
-            vec![Type::named("Unknown")],
-        )))
-    );
-    let invalid_after_arm = MirSelectArm {
-        binding: None,
-        kind: MirSelectKind::After {
-            duration: Operand::Place("missing".to_string()),
-        },
-        label: "after".to_string(),
-    };
-    assert_eq!(
-        infer_select_binding_type(&invalid_after_arm, &fallback_types, &classes),
-        None
-    );
 }
 
 #[test]
-fn direct_field_try_and_spawn_helpers_cover_remaining_direct_inference_paths() {
+fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
     let classes = HashMap::from([(
         "Entry".to_string(),
         crate::mir::MirClass {
@@ -4007,37 +3862,6 @@ fn direct_field_try_and_spawn_helpers_cover_remaining_direct_inference_paths() {
             &classes,
         ),
         Some(DirectType::Opaque(Type::named("Entry")))
-    );
-    assert_eq!(
-        collect_spawn_targets(&crate::mir::MirModule {
-            functions: vec![MirFunction {
-                name: "main".to_string(),
-                module_name: "<test>".to_string(),
-                span: Span::new(1, 1),
-                receiver: None,
-                params: Vec::new(),
-                local_types: Vec::new(),
-                return_type: Type::named("int32"),
-                entry: "entry".to_string(),
-                blocks: vec![BasicBlock {
-                    label: "entry".to_string(),
-                    instructions: vec![Instruction::Assign {
-                        target: "%t0".to_string(),
-                        value: Rvalue::Spawn {
-                            detached: false,
-                            task_group: None,
-                            function: "worker".to_string(),
-                            args: Vec::new(),
-                        },
-                    }],
-                    terminator: Terminator::Return(Operand::Int(0)),
-                }],
-            }],
-            classes: Vec::new(),
-            trait_impls: Vec::new(),
-            top_level: None,
-        }),
-        BTreeSet::from(["worker".to_string()])
     );
 }
 
@@ -4319,14 +4143,17 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
             Type::Named("Queue".to_string(), vec![Type::named("int32")]),
             "get",
             Some(DirectType::Opaque(Type::Named(
-                "Option".to_string(),
+                "QueueReceive".to_string(),
                 vec![Type::named("int32")],
             ))),
         ),
         (
             Type::Named("Task".to_string(), vec![Type::named("int32")]),
             "result",
-            Some(DirectType::Scalar(ScalarKind::Int32)),
+            Some(DirectType::Opaque(Type::Named(
+                "TaskResult".to_string(),
+                vec![Type::named("int32")],
+            ))),
         ),
         (
             Type::Named("TaskGroup".to_string(), vec![]),

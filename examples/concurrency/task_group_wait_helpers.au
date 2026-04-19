@@ -1,0 +1,89 @@
+def worker_fast(value: int32) -> int32:
+    sleep(1ms)
+    return value * 2
+
+def worker_slow(value: int32) -> int32:
+    sleep(3ms)
+    return value * 2
+
+def announce(queue: Queue[String]) -> None:
+    queue.put("ready")
+
+def print_string_receive(value: QueueReceive[String]):
+    match value:
+        case QueueReceive.Item(text):
+            print(text)
+        case QueueReceive.Closed:
+            print("closed")
+        case QueueReceive.TimedOut:
+            print("timedout")
+        case QueueReceive.Cancelled:
+            print("cancelled")
+
+def print_any(value: WaitAny[int32]):
+    match value:
+        case WaitAny.Ready(index, result):
+            print(index)
+            print(result)
+        case WaitAny.TimedOut:
+            print("timedout")
+        case WaitAny.Cancelled:
+            print("cancelled")
+
+def print_all(value: WaitAll[int32]):
+    match value:
+        case WaitAll.Ready(results):
+            for result in results:
+                print(result)
+        case WaitAll.TimedOut:
+            print("timedout")
+        case WaitAll.Cancelled:
+            print("cancelled")
+
+def print_task_result(value: TaskResult[int32]):
+    match value:
+        case TaskResult.Ready(result):
+            print(result)
+        case TaskResult.TimedOut:
+            print("timedout")
+        case TaskResult.Cancelled:
+            print("cancelled")
+
+def main() -> int32:
+    started = Queue[String]()
+    bounded = Queue[int32](capacity=1)
+    print(bounded.put(1))
+    print(bounded.try_put(2))
+    match bounded.get():
+        case QueueReceive.Item(value):
+            print(value)
+        case QueueReceive.Closed:
+            print("closed")
+        case QueueReceive.TimedOut:
+            print("timedout")
+        case QueueReceive.Cancelled:
+            print("cancelled")
+
+    empty = Queue[int32]()
+    empty.close()
+    match empty.get():
+        case QueueReceive.Item(value):
+            print(value)
+        case QueueReceive.Closed:
+            print("closed")
+        case QueueReceive.TimedOut:
+            print("timedout")
+        case QueueReceive.Cancelled:
+            print("cancelled")
+
+    with TaskGroup() as group:
+        group.start_soon(announce, started)
+        task_list = Vec[Task[int32]]()
+        task_list.push(group.start(worker_slow, 4))
+        task_list.push(group.start(worker_fast, 3))
+        print_string_receive(started.get(timeout=20ms))
+        print_any(wait_any(task_list, timeout=20ms))
+        print_all(wait_all(task_list, timeout=20ms))
+        print_task_result(task_list[0].result(timeout=20ms))
+
+    return 0

@@ -202,23 +202,33 @@ fn builtin_function_metadata_and_binding_surface_are_stable() {
         .unwrap_err();
     assert!(range_error.message.contains("expects 1 or 2 arguments"));
 
-    let queue_one_arg_input = [dummy_arg(None)];
-    let queue_one_arg = BuiltinFunction::Queue
-        .bind_args(&queue_one_arg_input, Span::new(1, 1))
+    let wait_one_arg_input = [dummy_arg(None)];
+    let wait_any_one_arg = BuiltinFunction::WaitAny
+        .bind_args(&wait_one_arg_input, Span::new(1, 1))
         .unwrap();
-    assert_eq!(queue_one_arg.len(), 1);
+    assert_eq!(wait_any_one_arg.len(), 2);
 
-    let queue_error = BuiltinFunction::Queue
-        .bind_args(&[dummy_arg(None), dummy_arg(None)], Span::new(1, 1))
+    let wait_two_arg_input = [dummy_arg(None), dummy_arg(Some("timeout"))];
+    let wait_all_two_arg = BuiltinFunction::WaitAll
+        .bind_args(&wait_two_arg_input, Span::new(1, 1))
+        .unwrap();
+    assert_eq!(wait_all_two_arg.len(), 2);
+
+    let wait_error = BuiltinFunction::WaitAny
+        .bind_args(
+            &[dummy_arg(None), dummy_arg(None), dummy_arg(None)],
+            Span::new(1, 1),
+        )
         .unwrap_err();
-    assert!(queue_error.message.contains("expects 1 argument, found 2"));
+    assert!(wait_error
+        .message
+        .contains("`wait_any` expects 2 arguments"));
 }
 
 #[test]
 fn builtin_function_bind_args_cover_remaining_variants() {
     for builtin in [
         BuiltinFunction::Print,
-        BuiltinFunction::After,
         BuiltinFunction::Sleep,
         BuiltinFunction::Abs,
         BuiltinFunction::Sqrt,
@@ -241,11 +251,19 @@ fn builtin_function_bind_args_cover_remaining_variants() {
         assert_eq!(bound.len(), 2);
     }
 
-    for builtin in [BuiltinFunction::Tasks, BuiltinFunction::Cancelled] {
+    for builtin in [BuiltinFunction::Cancelled] {
         let bound = builtin
             .bind_args(&[], Span::new(1, 1))
             .expect("builtin should bind");
         assert!(bound.is_empty());
+    }
+
+    for builtin in [BuiltinFunction::WaitAny, BuiltinFunction::WaitAll] {
+        let args = [dummy_arg(None), dummy_arg(Some("timeout"))];
+        let bound = builtin
+            .bind_args(&args, Span::new(1, 1))
+            .expect("builtin should bind");
+        assert_eq!(bound.len(), 2);
     }
 }
 
@@ -272,7 +290,7 @@ fn call_binding_helpers_cover_argument_count_and_decl_metadata_paths() {
     .expect_err("too many arguments should fail");
     assert!(single_error.message.contains("expects 1 argument, found 2"));
 
-    let zero_error = BuiltinFunction::Tasks
+    let zero_error = BuiltinFunction::Cancelled
         .bind_args(&[dummy_arg(None)], Span::new(1, 1))
         .expect_err("zero-arg builtin should reject positional args");
     assert!(zero_error.message.contains("expects 0 arguments, found 1"));
@@ -287,15 +305,23 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
         BuiltinFunction::ParseFloat64.detail(),
         "parse_float64(text: String) -> Result[float64, String]"
     );
-    assert!(BuiltinFunction::Tasks
+    assert!(BuiltinFunction::WaitAny
         .docs()
-        .contains("structured-concurrency"));
+        .contains("first task to complete"));
 
     assert_eq!(
         BuiltinMember::StringContains.detail(),
         "contains(text: String) -> bool"
     );
     assert!(BuiltinMember::MapEntries.docs().contains("MapEntry"));
+    assert_eq!(
+        BuiltinMember::QueueTryPut.detail(),
+        "try_put(value: T) -> Result[None, SendError[T]]"
+    );
+    assert_eq!(
+        BuiltinMember::TaskGroupStartSoon.detail(),
+        "start_soon(function, ...) -> None"
+    );
 }
 
 #[test]
@@ -364,10 +390,12 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         ("Set", "insert", BuiltinMember::SetInsert),
         ("Set", "remove", BuiltinMember::SetRemove),
         ("Queue", "put", BuiltinMember::QueuePut),
+        ("Queue", "try_put", BuiltinMember::QueueTryPut),
         ("Queue", "get", BuiltinMember::QueueGet),
         ("Queue", "close", BuiltinMember::QueueClose),
         ("Task", "result", BuiltinMember::TaskResult),
         ("TaskGroup", "start", BuiltinMember::TaskGroupStart),
+        ("TaskGroup", "start_soon", BuiltinMember::TaskGroupStartSoon),
         ("TaskGroup", "cancel", BuiltinMember::TaskGroupCancel),
     ];
 
@@ -409,7 +437,11 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
     let send_args = BuiltinMember::QueuePut
         .bind_args(&send_args_input, Span::new(1, 1))
         .unwrap();
-    assert_eq!(send_args.len(), 1);
+    assert_eq!(send_args.len(), 2);
+    let try_send_args = BuiltinMember::QueueTryPut
+        .bind_args(&send_args_input, Span::new(1, 1))
+        .unwrap();
+    assert_eq!(try_send_args.len(), 1);
 
     for member in [
         BuiltinMember::FloatSqrt,
@@ -435,7 +467,6 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         BuiltinMember::SetClone,
         BuiltinMember::StringClone,
         BuiltinMember::QueueClose,
-        BuiltinMember::TaskResult,
         BuiltinMember::TaskGroupCancel,
     ] {
         let bound = member
@@ -443,6 +474,11 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
             .expect("member should bind");
         assert!(bound.is_empty());
     }
+
+    let task_result_args = BuiltinMember::TaskResult
+        .bind_args(&[], Span::new(1, 1))
+        .expect("task.result should bind with an optional timeout slot");
+    assert_eq!(task_result_args.len(), 1);
 
     for member in [
         BuiltinMember::StringContains,
@@ -464,6 +500,7 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         BuiltinMember::SetContains,
         BuiltinMember::SetInsert,
         BuiltinMember::SetRemove,
+        BuiltinMember::TaskGroupStartSoon,
     ] {
         let args = [dummy_arg(None)];
         let bound = member
@@ -485,4 +522,44 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
             .expect("member should bind");
         assert_eq!(bound.len(), 2);
     }
+}
+
+#[test]
+fn concurrency_builtin_surface_uses_structured_wait_helpers_only() {
+    assert_eq!(BuiltinFunction::from_name("queue"), None);
+    assert_eq!(BuiltinFunction::from_name("tasks"), None);
+    assert_eq!(BuiltinFunction::from_name("after"), None);
+    assert_eq!(
+        BuiltinFunction::from_name("wait_any"),
+        Some(BuiltinFunction::WaitAny)
+    );
+    assert_eq!(
+        BuiltinFunction::from_name("wait_all"),
+        Some(BuiltinFunction::WaitAll)
+    );
+
+    assert_eq!(
+        BuiltinMember::resolve("Queue", "try_put"),
+        Some(BuiltinMember::QueueTryPut)
+    );
+    assert_eq!(
+        BuiltinMember::resolve("TaskGroup", "start_soon"),
+        Some(BuiltinMember::TaskGroupStartSoon)
+    );
+    assert_eq!(
+        BuiltinMember::QueueGet.detail(),
+        "get(timeout: Duration = ...) -> QueueReceive[T]"
+    );
+    assert_eq!(
+        BuiltinMember::TaskResult.detail(),
+        "result(timeout: Duration = ...) -> TaskResult[T]"
+    );
+    assert_eq!(
+        BuiltinMember::TaskGroupStartSoon.detail(),
+        "start_soon(function, ...) -> None"
+    );
+    assert!(BuiltinFunction::WaitAny
+        .docs()
+        .contains("first task to complete"));
+    assert!(BuiltinFunction::WaitAll.docs().contains("every task"));
 }

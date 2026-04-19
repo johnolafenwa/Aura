@@ -13,7 +13,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn is_known_enum_name(program: &Program, name: &str) -> bool {
-    program.enums.contains_key(name) || matches!(name, "Result" | "Option" | "SendError")
+    program.enums.contains_key(name)
+        || matches!(
+            name,
+            "Result"
+                | "Option"
+                | "SendError"
+                | "QueueReceive"
+                | "TaskResult"
+                | "WaitAny"
+                | "WaitAll"
+        )
 }
 
 const INTERNAL_VEC_INDEX_FIELD: &str = "__index";
@@ -229,9 +239,9 @@ pub enum Rvalue {
     Try {
         value: Operand,
     },
-    Spawn {
-        detached: bool,
-        task_group: Option<Operand>,
+    StartTask {
+        returns_handle: bool,
+        task_group: Operand,
         function: String,
         args: Vec<MirArg>,
     },
@@ -320,20 +330,6 @@ pub struct MirMatchArm {
     pub label: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MirSelectArm {
-    pub binding: Option<String>,
-    pub kind: MirSelectKind,
-    pub label: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum MirSelectKind {
-    Recv { channel: Operand },
-    Send { channel: Operand, value: Operand },
-    After { duration: Operand },
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Operand {
     Place(String),
@@ -363,10 +359,6 @@ pub enum Terminator {
     Match {
         scrutinee: Operand,
         arms: Vec<MirMatchArm>,
-        otherwise: String,
-    },
-    Select {
-        arms: Vec<MirSelectArm>,
         otherwise: String,
     },
     Unreachable,
@@ -1186,10 +1178,6 @@ impl<'a> Lowerer<'a> {
                 self.with_stack.pop();
                 !self.current_terminated()
             }
-            Stmt::Select(select_stmt) => {
-                self.lower_select(select_stmt);
-                true
-            }
             Stmt::While(while_stmt) => {
                 self.lower_while(while_stmt);
                 true
@@ -1642,8 +1630,10 @@ impl<'a> Lowerer<'a> {
             }
             Some(Type::Named(name, args)) if name == "Queue" && args.len() == 1 => {
                 let element_ty = args[0].clone();
-                let next_value = self
-                    .new_typed_temp(Type::Named("Option".to_string(), vec![element_ty.clone()]));
+                let next_value = self.new_typed_temp(Type::Named(
+                    "QueueReceive".to_string(),
+                    vec![element_ty.clone()],
+                ));
                 self.local_types
                     .insert(for_stmt.binding.clone(), element_ty);
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
@@ -1663,14 +1653,20 @@ impl<'a> Lowerer<'a> {
                     scrutinee: Operand::Place(next_value.clone()),
                     arms: vec![
                         MirMatchArm {
-                            enum_name: Some("Option".to_string()),
-                            variant_name: Some("Some".to_string()),
+                            enum_name: Some("QueueReceive".to_string()),
+                            variant_name: Some("Item".to_string()),
                             wildcard: false,
                             label: self.label(body_block),
                         },
                         MirMatchArm {
-                            enum_name: Some("Option".to_string()),
-                            variant_name: Some("None".to_string()),
+                            enum_name: Some("QueueReceive".to_string()),
+                            variant_name: Some("Closed".to_string()),
+                            wildcard: false,
+                            label: self.label(after_block),
+                        },
+                        MirMatchArm {
+                            enum_name: Some("QueueReceive".to_string()),
+                            variant_name: Some("Cancelled".to_string()),
                             wildcard: false,
                             label: self.label(after_block),
                         },
@@ -1962,40 +1958,6 @@ impl<'a> Lowerer<'a> {
         });
     }
 
-    fn lower_select(&mut self, select_stmt: &crate::ast::SelectStmt) {
-        let after_block = self.new_block("select_end");
-        let arms = select_stmt
-            .arms
-            .iter()
-            .map(|arm| {
-                let arm_block = self.new_block("select_arm");
-                (
-                    arm_block,
-                    MirSelectArm {
-                        binding: arm.binding.clone(),
-                        kind: self.lower_select_kind(&arm.expr),
-                        label: self.label(arm_block),
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-
-        self.terminate(Terminator::Select {
-            arms: arms.iter().map(|(_, arm)| arm.clone()).collect(),
-            otherwise: self.label(after_block),
-        });
-
-        for ((arm_block, _), arm) in arms.iter().zip(&select_stmt.arms) {
-            self.switch_to(*arm_block);
-            self.lower_stmts(&arm.body);
-            if !self.current_terminated() {
-                self.terminate(Terminator::Goto(self.label(after_block)));
-            }
-        }
-
-        self.switch_to(after_block);
-    }
-
     fn lower_while(&mut self, while_stmt: &WhileStmt) {
         let condition_block = self.new_block("while_cond");
         let body_block = self.new_block("while_body");
@@ -2024,26 +1986,6 @@ impl<'a> Lowerer<'a> {
         self.loop_stack.pop();
 
         self.switch_to(after_block);
-    }
-
-    fn lower_select_kind(&mut self, expr: &Expr) -> MirSelectKind {
-        let ExprKind::Call { callee, args } = &expr.kind else {
-            panic!("select arm should lower from a call expression");
-        };
-
-        match &callee.kind {
-            ExprKind::Name(name) if name == "after" => MirSelectKind::After {
-                duration: self.lower_expr(&args[0].value),
-            },
-            ExprKind::Member { object, field } if field == "get" => MirSelectKind::Recv {
-                channel: self.lower_expr(object),
-            },
-            ExprKind::Member { object, field } if field == "put" => MirSelectKind::Send {
-                channel: self.lower_expr(object),
-                value: self.lower_expr(&args[0].value),
-            },
-            _ => panic!("unsupported select arm kind"),
-        }
     }
 
     fn lower_expr(&mut self, expr: &Expr) -> Operand {
@@ -2195,7 +2137,6 @@ impl<'a> Lowerer<'a> {
                 });
                 Operand::Place(temp)
             }
-            ExprKind::Spawn { detached, value } => self.lower_spawn(*detached, value),
             ExprKind::Try(inner) => {
                 let value = self.lower_expr(inner);
                 let temp = self.new_temp_for_expr(expr);
@@ -2424,28 +2365,10 @@ impl<'a> Lowerer<'a> {
         Operand::Place(result)
     }
 
-    fn lower_spawn(&mut self, detached: bool, value: &Expr) -> Operand {
-        let ExprKind::Call { callee, args } = &value.kind else {
-            panic!("spawn should lower from a call expression");
-        };
-        let (function, params, display_name) = self
-            .resolve_spawn_target(callee)
-            .expect("spawn should lower from a supported callable target");
-        let lowered_args = self.lower_user_args(&display_name, &params, args, callee.span);
-        let temp = self.new_temp();
-        self.emit(Instruction::Assign {
-            target: temp.clone(),
-            value: Rvalue::Spawn {
-                detached,
-                task_group: None,
-                function: function.clone(),
-                args: lowered_args,
-            },
-        });
-        Operand::Place(temp)
-    }
-
-    fn resolve_spawn_target(&self, callee: &Expr) -> Option<(String, Vec<Param>, String)> {
+    fn resolve_task_start_target(
+        &self,
+        callee: &Expr,
+    ) -> Option<(String, Vec<Param>, Type, String)> {
         let base_callee = match &callee.kind {
             ExprKind::Specialize { expr, .. } => &**expr,
             _ => callee,
@@ -2455,6 +2378,7 @@ impl<'a> Lowerer<'a> {
                 (
                     function.clone(),
                     function_info.decl.params.clone(),
+                    function_info.signature.return_type.clone(),
                     format!("function `{}`", function),
                 )
             }),
@@ -2467,6 +2391,7 @@ impl<'a> Lowerer<'a> {
                                     return Some((
                                         format!("{}::{}.{}", module_path, item_name, field),
                                         method.decl.params.clone(),
+                                        method.signature.return_type.clone(),
                                         format!("method `{}.{}`", item_name, field),
                                     ));
                                 }
@@ -2484,6 +2409,7 @@ impl<'a> Lowerer<'a> {
                             return Some((
                                 imported_module_function_name(&module_path, &function_name),
                                 function.decl.params.clone(),
+                                function.signature.return_type.clone(),
                                 format!("function `{}.{}`", module_path, function_name),
                             ));
                         }
@@ -2500,6 +2426,7 @@ impl<'a> Lowerer<'a> {
                                 return Some((
                                     format!("{}.{}", class_name, field),
                                     method.decl.params.clone(),
+                                    method.signature.return_type.clone(),
                                     format!("method `{}.{}`", class_name, field),
                                 ));
                             }
@@ -2578,12 +2505,22 @@ impl<'a> Lowerer<'a> {
                     },
                 });
             }
-            ExprKind::Name(name) if matches!(name.as_str(), "Queue" | "queue") => {
+            ExprKind::Name(name) if name == "Queue" => {
                 let lowered_args = self.lower_args(args);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::Call {
-                        callee: CallTarget::Name("queue".to_string()),
+                        callee: CallTarget::Name("Queue".to_string()),
+                        args: lowered_args,
+                    },
+                });
+            }
+            ExprKind::Name(name) if name == "TaskGroup" => {
+                let lowered_args = self.lower_args(args);
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name("TaskGroup".to_string()),
                         args: lowered_args,
                     },
                 });
@@ -2591,23 +2528,37 @@ impl<'a> Lowerer<'a> {
             ExprKind::Name(name)
                 if matches!(
                     name.as_str(),
-                    "Some" | "Ok" | "Err" | "Closed" | "Cancelled"
+                    "Some"
+                        | "None"
+                        | "Ok"
+                        | "Err"
+                        | "Closed"
+                        | "Cancelled"
+                        | "TimedOut"
+                        | "Full"
+                        | "Item"
+                        | "Ready"
                 ) =>
             {
                 let payloads = args
                     .iter()
                     .map(|argument| self.lower_expr(&argument.value))
                     .collect::<Vec<_>>();
-                let enum_name = match name.as_str() {
-                    "Some" => "Option",
-                    "Ok" | "Err" => "Result",
-                    "Closed" | "Cancelled" => "SendError",
-                    _ => unreachable!(),
+                let enum_name = match self.infer_expr_type(expr) {
+                    Some(Type::Named(enum_name, _)) => enum_name,
+                    _ => match name.as_str() {
+                        "Some" | "None" => "Option".to_string(),
+                        "Ok" | "Err" => "Result".to_string(),
+                        "Closed" | "Cancelled" | "TimedOut" | "Full" => "SendError".to_string(),
+                        "Item" => "QueueReceive".to_string(),
+                        "Ready" => "TaskResult".to_string(),
+                        _ => unreachable!(),
+                    },
                 };
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::EnumVariant {
-                        enum_name: enum_name.to_string(),
+                        enum_name,
                         variant_name: name.clone(),
                         payloads,
                     },
@@ -2786,18 +2737,18 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
-                if field == "start" {
-                    let (function, params, display_name) = self
-                        .resolve_spawn_target(&args[0].value)
+                if matches!(field.as_str(), "start" | "start_soon") {
+                    let (function, params, _return_type, display_name) = self
+                        .resolve_task_start_target(&args[0].value)
                         .expect("task-group start should lower from a supported callable target");
                     let group = self.lower_expr(object);
                     let lowered_args =
                         self.lower_user_args(&display_name, &params, &args[1..], callee.span);
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
-                        value: Rvalue::Spawn {
-                            detached: false,
-                            task_group: Some(group),
+                        value: Rvalue::StartTask {
+                            returns_handle: field == "start",
+                            task_group: group,
                             function,
                             args: lowered_args,
                         },
@@ -3142,14 +3093,6 @@ impl<'a> Lowerer<'a> {
                 }
                 _ => None,
             },
-            ExprKind::Spawn { detached, value } => {
-                if *detached {
-                    Some(Type::Unit)
-                } else {
-                    self.infer_expr_type(value)
-                        .map(|inner| Type::Named("Task".to_string(), vec![inner]))
-                }
-            }
             ExprKind::Call { callee, args } => {
                 let (base_callee, explicit_type_args) = match &callee.kind {
                     ExprKind::Specialize { expr, type_args } => {
@@ -3162,17 +3105,55 @@ impl<'a> Lowerer<'a> {
                         if name == "range" {
                             return Some(Type::named("Range"));
                         }
-                        if name == "tasks" {
-                            return Some(Type::named("TaskGroup"));
-                        }
                         if name == "cancelled" {
                             return Some(Type::named("bool"));
                         }
-                        if name == "after" {
-                            return Some(Type::named("Duration"));
-                        }
                         if name == "sleep" {
                             return Some(Type::Unit);
+                        }
+                        if name == "wait_any" {
+                            return args.first().and_then(|argument| {
+                                match self.infer_expr_type(&argument.value) {
+                                    Some(Type::Named(container, container_args))
+                                        if container == "Vec" && container_args.len() == 1 =>
+                                    {
+                                        match &container_args[0] {
+                                            Type::Named(task, task_args)
+                                                if task == "Task" && task_args.len() == 1 =>
+                                            {
+                                                Some(Type::Named(
+                                                    "WaitAny".to_string(),
+                                                    vec![task_args[0].clone()],
+                                                ))
+                                            }
+                                            _ => None,
+                                        }
+                                    }
+                                    _ => None,
+                                }
+                            });
+                        }
+                        if name == "wait_all" {
+                            return args.first().and_then(|argument| {
+                                match self.infer_expr_type(&argument.value) {
+                                    Some(Type::Named(container, container_args))
+                                        if container == "Vec" && container_args.len() == 1 =>
+                                    {
+                                        match &container_args[0] {
+                                            Type::Named(task, task_args)
+                                                if task == "Task" && task_args.len() == 1 =>
+                                            {
+                                                Some(Type::Named(
+                                                    "WaitAll".to_string(),
+                                                    vec![task_args[0].clone()],
+                                                ))
+                                            }
+                                            _ => None,
+                                        }
+                                    }
+                                    _ => None,
+                                }
+                            });
                         }
                         if name == "abs" || name == "min" || name == "max" || name == "sqrt" {
                             return args
@@ -3204,6 +3185,9 @@ impl<'a> Lowerer<'a> {
                                     type_args.iter().map(lower_type_ref).collect(),
                                 )
                             });
+                        }
+                        if name == "TaskGroup" {
+                            return Some(Type::named("TaskGroup"));
                         }
                         if name == "Vec" {
                             return explicit_type_args.map(|type_args| {
@@ -3353,6 +3337,21 @@ impl<'a> Lowerer<'a> {
                                     return Some(method.signature.return_type.clone());
                                 }
                             }
+                        }
+                        if matches!(&receiver_type, Type::Named(name, _) if name == "TaskGroup")
+                            && matches!(field.as_str(), "start" | "start_soon")
+                        {
+                            return if field == "start_soon" {
+                                Some(Type::Unit)
+                            } else {
+                                args.first().and_then(|argument| {
+                                    self.resolve_task_start_target(&argument.value).map(
+                                        |(_function, _params, return_type, _display_name)| {
+                                            Type::Named("Task".to_string(), vec![return_type])
+                                        },
+                                    )
+                                })
+                            };
                         }
                         if let Some(runtime_ty) =
                             self.builtin_runtime_member_return_type(&receiver_type, field)
@@ -3740,7 +3739,35 @@ impl<'a> Lowerer<'a> {
                 }
                 Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
                     return Some(match variant_name {
-                        "Closed" | "Cancelled" => vec![args[0].clone()],
+                        "Closed" | "Cancelled" | "TimedOut" | "Full" => vec![args[0].clone()],
+                        _ => return None,
+                    });
+                }
+                Type::Named(name, args) if name == "QueueReceive" && args.len() == 1 => {
+                    return Some(match variant_name {
+                        "Item" => vec![args[0].clone()],
+                        "Closed" | "TimedOut" | "Cancelled" => Vec::new(),
+                        _ => return None,
+                    });
+                }
+                Type::Named(name, args) if name == "TaskResult" && args.len() == 1 => {
+                    return Some(match variant_name {
+                        "Ready" => vec![args[0].clone()],
+                        "TimedOut" | "Cancelled" => Vec::new(),
+                        _ => return None,
+                    });
+                }
+                Type::Named(name, args) if name == "WaitAny" && args.len() == 1 => {
+                    return Some(match variant_name {
+                        "Ready" => vec![Type::named("int32"), args[0].clone()],
+                        "TimedOut" | "Cancelled" => Vec::new(),
+                        _ => return None,
+                    });
+                }
+                Type::Named(name, args) if name == "WaitAll" && args.len() == 1 => {
+                    return Some(match variant_name {
+                        "Ready" => vec![Type::Named("Vec".to_string(), vec![args[0].clone()])],
+                        "TimedOut" | "Cancelled" => Vec::new(),
                         _ => return None,
                     });
                 }
@@ -3890,7 +3917,7 @@ impl<'a> Lowerer<'a> {
                     .unwrap_or_else(|| Type::named("Unknown"))],
             )),
             ("Queue", "get") => Some(Type::Named(
-                "Option".to_string(),
+                "QueueReceive".to_string(),
                 vec![args
                     .first()
                     .cloned()
@@ -3909,14 +3936,31 @@ impl<'a> Lowerer<'a> {
                     ),
                 ],
             )),
+            ("Queue", "try_put") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Unit,
+                    Type::Named(
+                        "SendError".to_string(),
+                        vec![args
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| Type::named("Unknown"))],
+                    ),
+                ],
+            )),
             ("Queue", "close") | ("TaskGroup", "cancel") | ("TaskGroup", "close") => {
                 Some(Type::Unit)
             }
-            ("Task", "result") => Some(args.first().cloned().unwrap_or(Type::Unit)),
+            ("Task", "result") => Some(Type::Named(
+                "TaskResult".to_string(),
+                vec![args.first().cloned().unwrap_or(Type::Unit)],
+            )),
             ("TaskGroup", "start") => Some(Type::Named(
                 "Task".to_string(),
                 vec![Type::named("Unknown")],
             )),
+            ("TaskGroup", "start_soon") => Some(Type::Unit),
             ("fs.File", "read_all") => Some(Type::Named(
                 "Result".to_string(),
                 vec![Type::named("String"), io_error_ty.clone()],

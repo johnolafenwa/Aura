@@ -1,4 +1,4 @@
-error: `queue()` requires an expected `Queue[T]` type annotation in the bootstrap compiler
+error: unsupported call target
  --> crates/aurora-compiler/tests/fixtures/check-fail/queue_requires_annotation.au:2:10
   |
 2 |     ch = queue()

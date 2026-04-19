@@ -1,0 +1,15 @@
+def main() -> int32:
+    jobs = Queue[int32]()
+    mut ticks = 0
+    while ticks < 3:
+        match jobs.get(timeout=1ms):
+            case QueueReceive.TimedOut:
+                print("timeout")
+                ticks += 1
+            case QueueReceive.Item(value):
+                print(value)
+            case QueueReceive.Closed:
+                print("closed")
+            case QueueReceive.Cancelled:
+                print("cancelled")
+    return 0

@@ -172,11 +172,17 @@ const MIN_MAX_PARAMS: [CallableParam<'static>; 2] = [
 ];
 const SQRT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
 const PARSE_TEXT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
-const AFTER_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("duration")];
 const SLEEP_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("duration")];
 const FILE_WRITE_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
 const FILE_WRITE_BYTES_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("bytes")];
-const QUEUE_PUT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
+const TASK_LIST_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
+    CallableParam::required("tasks"),
+    CallableParam::optional("timeout"),
+];
+const VALUE_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
+    CallableParam::required("value"),
+    CallableParam::optional("timeout"),
+];
 const QUEUE_GET_PARAMS: [CallableParam<'static>; 1] = [CallableParam::optional("timeout")];
 const TIMEOUT_ONLY_PARAMS: [CallableParam<'static>; 1] = [CallableParam::optional("timeout")];
 const VEC_INDEX_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("index")];
@@ -248,11 +254,10 @@ const STATUS_BYTES_HEADERS_PARAMS: [CallableParam<'static>; 3] = [
 pub enum BuiltinFunction {
     Print,
     Range,
-    Queue,
-    Tasks,
     Cancelled,
-    After,
     Sleep,
+    WaitAny,
+    WaitAll,
     Abs,
     Min,
     Max,
@@ -265,11 +270,10 @@ pub enum BuiltinFunction {
 pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction::Print,
     BuiltinFunction::Range,
-    BuiltinFunction::Queue,
-    BuiltinFunction::Tasks,
     BuiltinFunction::Cancelled,
-    BuiltinFunction::After,
     BuiltinFunction::Sleep,
+    BuiltinFunction::WaitAny,
+    BuiltinFunction::WaitAll,
     BuiltinFunction::Abs,
     BuiltinFunction::Min,
     BuiltinFunction::Max,
@@ -284,11 +288,10 @@ impl BuiltinFunction {
         match name {
             "print" => Some(Self::Print),
             "range" => Some(Self::Range),
-            "queue" => Some(Self::Queue),
-            "tasks" => Some(Self::Tasks),
             "cancelled" => Some(Self::Cancelled),
-            "after" => Some(Self::After),
             "sleep" => Some(Self::Sleep),
+            "wait_any" => Some(Self::WaitAny),
+            "wait_all" => Some(Self::WaitAll),
             "abs" => Some(Self::Abs),
             "min" => Some(Self::Min),
             "max" => Some(Self::Max),
@@ -304,11 +307,10 @@ impl BuiltinFunction {
         match self {
             Self::Print => "print",
             Self::Range => "range",
-            Self::Queue => "queue",
-            Self::Tasks => "tasks",
             Self::Cancelled => "cancelled",
-            Self::After => "after",
             Self::Sleep => "sleep",
+            Self::WaitAny => "wait_any",
+            Self::WaitAll => "wait_all",
             Self::Abs => "abs",
             Self::Min => "min",
             Self::Max => "max",
@@ -323,11 +325,10 @@ impl BuiltinFunction {
         match self {
             Self::Print => "print(value) -> None",
             Self::Range => "range(stop: int32) -> Range; range(start: int32, stop: int32) -> Range",
-            Self::Queue => "queue(capacity: int32 = ...) -> Queue[T]",
-            Self::Tasks => "tasks() -> TaskGroup",
             Self::Cancelled => "cancelled() -> bool",
-            Self::After => "after(duration: Duration) -> Duration",
             Self::Sleep => "sleep(duration: Duration) -> None",
+            Self::WaitAny => "wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]",
+            Self::WaitAll => "wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]",
             Self::Abs => "abs(value: number) -> number",
             Self::Min => "min(left: number, right: number) -> number",
             Self::Max => "max(left: number, right: number) -> number",
@@ -344,17 +345,14 @@ impl BuiltinFunction {
             Self::Range => {
                 "Builds an integer range from 0 up to, but not including, `stop`, or from `start` up to, but not including, `stop`."
             }
-            Self::Queue => {
-                "Creates a typed queue when the surrounding annotation or expectation provides `T`."
-            }
-            Self::Tasks => {
-                "Creates a managed structured-concurrency task group for use with `with`."
-            }
             Self::Cancelled => "Returns true when the current task has been cancelled.",
-            Self::After => {
-                "Builds a timeout/select timer expression from a duration literal or duration value."
-            }
             Self::Sleep => "Blocks the current task for the requested duration.",
+            Self::WaitAny => {
+                "Waits for the first task to complete and reports either the ready index/value pair, a timeout, or cancellation."
+            }
+            Self::WaitAll => {
+                "Waits for every task to complete and reports either the collected results, a timeout, or cancellation."
+            }
             Self::Abs => "Returns the absolute value of an integer or float.",
             Self::Min => "Returns the smaller of two numeric values of the same type.",
             Self::Max => "Returns the larger of two numeric values of the same type.",
@@ -405,16 +403,6 @@ impl BuiltinFunction {
                     )
                 }
             }
-            Self::Queue => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &[CallableParam::optional("capacity")],
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
-            Self::Tasks => {
-                bind_call_arguments("`tasks`", &[], args, span, CallConvention::PositionalOnly)
-            }
             Self::Cancelled => bind_call_arguments(
                 "`cancelled`",
                 &[],
@@ -422,16 +410,16 @@ impl BuiltinFunction {
                 span,
                 CallConvention::PositionalOnly,
             ),
-            Self::After => bind_call_arguments(
-                "`after`",
-                &AFTER_PARAMS,
+            Self::Sleep => bind_call_arguments(
+                "`sleep`",
+                &SLEEP_PARAMS,
                 args,
                 span,
                 CallConvention::PositionalOrNamed,
             ),
-            Self::Sleep => bind_call_arguments(
-                "`sleep`",
-                &SLEEP_PARAMS,
+            Self::WaitAny | Self::WaitAll => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &TASK_LIST_TIMEOUT_PARAMS,
                 args,
                 span,
                 CallConvention::PositionalOrNamed,
@@ -526,10 +514,12 @@ pub enum BuiltinMember {
     SetRemove,
     StringClone,
     QueuePut,
+    QueueTryPut,
     QueueGet,
     QueueClose,
     TaskResult,
     TaskGroupStart,
+    TaskGroupStartSoon,
     TaskGroupCancel,
     FileReadAll,
     FileReadBytes,
@@ -666,10 +656,12 @@ impl BuiltinMember {
             ("String", "join") => Some(Self::StringJoin),
             ("String", "clone") => Some(Self::StringClone),
             ("Queue", "put") => Some(Self::QueuePut),
+            ("Queue", "try_put") => Some(Self::QueueTryPut),
             ("Queue", "get") => Some(Self::QueueGet),
             ("Queue", "close") => Some(Self::QueueClose),
             ("Task", "result") => Some(Self::TaskResult),
             ("TaskGroup", "start") => Some(Self::TaskGroupStart),
+            ("TaskGroup", "start_soon") => Some(Self::TaskGroupStartSoon),
             ("TaskGroup", "cancel") => Some(Self::TaskGroupCancel),
             ("fs.File", "read_all") => Some(Self::FileReadAll),
             ("fs.File", "read_bytes") => Some(Self::FileReadBytes),
@@ -791,10 +783,12 @@ impl BuiltinMember {
             Self::SetInsert => "insert",
             Self::SetRemove => "remove",
             Self::QueuePut => "put",
+            Self::QueueTryPut => "try_put",
             Self::QueueGet => "get",
             Self::QueueClose => "close",
             Self::TaskResult => "result",
             Self::TaskGroupStart => "start",
+            Self::TaskGroupStartSoon => "start_soon",
             Self::TaskGroupCancel => "cancel",
             Self::FileReadAll => "read_all",
             Self::FileReadBytes => "read_bytes",
@@ -916,11 +910,13 @@ impl BuiltinMember {
             Self::SetInsert => "insert(value: T) -> bool",
             Self::SetRemove => "remove(value: T) -> bool",
             Self::StringClone => "clone() -> String",
-            Self::QueuePut => "put(value) -> Result[None, SendError[T]]",
-            Self::QueueGet => "get(timeout: Duration = ...) -> Option[T]",
+            Self::QueuePut => "put(value: T, timeout: Duration = ...) -> Result[None, SendError[T]]",
+            Self::QueueTryPut => "try_put(value: T) -> Result[None, SendError[T]]",
+            Self::QueueGet => "get(timeout: Duration = ...) -> QueueReceive[T]",
             Self::QueueClose => "close() -> None",
-            Self::TaskResult => "result() -> T",
+            Self::TaskResult => "result(timeout: Duration = ...) -> TaskResult[T]",
             Self::TaskGroupStart => "start(function, ...) -> Task[T]",
+            Self::TaskGroupStartSoon => "start_soon(function, ...) -> None",
             Self::TaskGroupCancel => "cancel() -> None",
             Self::FileReadAll => "read_all() -> Result[String, io.Error]",
             Self::FileReadBytes => "read_bytes() -> Result[Vec[uint8], io.Error]",
@@ -1075,14 +1071,22 @@ impl BuiltinMember {
             Self::SetRemove => "Removes `value`, returning false when it is absent.",
             Self::StringClone => "Creates a new owned `String` with the same contents.",
             Self::QueuePut => {
-                "Puts a value into the queue, waiting for capacity when needed, or returns `SendError.Closed(value)` / `SendError.Cancelled(value)` if the send cannot complete."
+                "Puts a value into the queue, waiting for capacity when needed, or returns `SendError.Closed(value)`, `SendError.Cancelled(value)`, or `SendError.TimedOut(value)` if the send cannot complete."
+            }
+            Self::QueueTryPut => {
+                "Attempts to put a value into the queue without waiting and returns `SendError.Full(value)` when the queue is already at capacity."
             }
             Self::QueueGet => {
-                "Receives the next value from the queue, or `Option.None` when the queue is closed or the optional timeout expires."
+                "Receives the next queue outcome as `QueueReceive.Item(value)`, `QueueReceive.Closed`, `QueueReceive.TimedOut`, or `QueueReceive.Cancelled`."
             }
             Self::QueueClose => "Closes the queue and wakes blocked receivers.",
-            Self::TaskResult => "Waits for the spawned task to finish and returns its value.",
+            Self::TaskResult => {
+                "Waits for the task to finish and reports `TaskResult.Ready(value)`, `TaskResult.TimedOut`, or `TaskResult.Cancelled`."
+            }
             Self::TaskGroupStart => "Starts a child task in the current task group.",
+            Self::TaskGroupStartSoon => {
+                "Starts a child task in the current task group without returning a task handle."
+            }
             Self::TaskGroupCancel => {
                 "Signals cancellation to child tasks in the current task group."
             }
@@ -1186,7 +1190,6 @@ impl BuiltinMember {
             | Self::SetClone
             | Self::VecPop
             | Self::StringClone
-            | Self::TaskResult
             | Self::QueueClose
             | Self::TaskGroupCancel
             | Self::FileReadAll
@@ -1228,6 +1231,13 @@ impl BuiltinMember {
             Self::QueueGet => bind_call_arguments(
                 "`get`",
                 &QUEUE_GET_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::TaskResult => bind_call_arguments(
+                "`result`",
+                &TIMEOUT_ONLY_PARAMS,
                 args,
                 span,
                 CallConvention::PositionalOrNamed,
@@ -1343,7 +1353,14 @@ impl BuiltinMember {
             ),
             Self::QueuePut => bind_call_arguments(
                 &format!("`{}`", self.name()),
-                &QUEUE_PUT_PARAMS,
+                &VALUE_TIMEOUT_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::QueueTryPut => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &[CallableParam::required("value")],
                 args,
                 span,
                 CallConvention::PositionalOrNamed,
@@ -1462,8 +1479,8 @@ impl BuiltinMember {
                 span,
                 CallConvention::PositionalOnly,
             ),
-            Self::TaskGroupStart => bind_call_arguments(
-                "`start`",
+            Self::TaskGroupStart | Self::TaskGroupStartSoon => bind_call_arguments(
+                &format!("`{}`", self.name()),
                 &[CallableParam::required("function")],
                 args,
                 span,

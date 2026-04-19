@@ -56,11 +56,11 @@ const withSource = fs.readFileSync(
   "utf8"
 );
 const concurrencySource = fs.readFileSync(
-  path.join(__dirname, "../../../examples/concurrency/queues_spawn.au"),
+  path.join(__dirname, "../../../examples/concurrency/task_group_start.au"),
   "utf8"
 );
 const structuredConcurrencySource = fs.readFileSync(
-  path.join(__dirname, "../../../examples/concurrency/task_group_select.au"),
+  path.join(__dirname, "../../../examples/concurrency/task_group_queue_sum.au"),
   "utf8"
 );
 const cancellationSource = fs.readFileSync(
@@ -72,11 +72,11 @@ const sendResultSource = fs.readFileSync(
   "utf8"
 );
 const detachedSource = fs.readFileSync(
-  path.join(__dirname, "../../../examples/concurrency/spawn_detached.au"),
+  path.join(__dirname, "../../../examples/concurrency/task_group_start_soon.au"),
   "utf8"
 );
 const selectSendSource = fs.readFileSync(
-  path.join(__dirname, "../../../examples/concurrency/select_send.au"),
+  path.join(__dirname, "../../../examples/concurrency/queue_put_timeout.au"),
   "utf8"
 );
 const namedBuiltinSource = fs.readFileSync(
@@ -96,7 +96,7 @@ const sleepBuiltinSource = fs.readFileSync(
   "utf8"
 );
 const selectTimeoutNamedSource = fs.readFileSync(
-  path.join(__dirname, "../../../examples/concurrency/select_timeout_named.au"),
+  path.join(__dirname, "../../../examples/concurrency/queue_get_timeout_named.au"),
   "utf8"
 );
 const stringCloneSource = fs.readFileSync(
@@ -723,8 +723,8 @@ test("with example tracks scoped bindings for diagnostics and hover", () => {
 
 test("queue and task builtins appear in completions and diagnostics", () => {
   const diagnostics = diagnosticsForDocument(concurrencySource);
-  assert.ok(!diagnostics.some((diagnostic) => /unknown name `queue`/.test(diagnostic.message)));
-  assert.ok(!diagnostics.some((diagnostic) => /unknown name `spawn`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /unknown name `Queue`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /unknown name `TaskGroup`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `task`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `jobs`/.test(diagnostic.message)));
 
@@ -747,7 +747,7 @@ test("queue and task builtins appear in completions and diagnostics", () => {
 
 test("structured concurrency bindings and builtins do not report false diagnostics", () => {
   const diagnostics = diagnosticsForDocument(structuredConcurrencySource);
-  assert.ok(!diagnostics.some((diagnostic) => /unknown name `tasks`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /unknown name `TaskGroup`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `group`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `value`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `cancelled`/.test(diagnostic.message)));
@@ -766,23 +766,25 @@ test("task-group member completion suggests structured concurrency methods", () 
   assert.ok(names.has("cancel"));
 });
 
-test("select arm bindings resolve in hover", () => {
+test("queue receive payload bindings resolve in hover", () => {
   const lineIndex = structuredConcurrencySource
     .split("\n")
-    .findIndex((line) => line.includes("match value:"));
+    .findIndex((line) => line.includes("case QueueReceive.Item(next):"));
   const lineText = structuredConcurrencySource.split("\n")[lineIndex];
-  const character = lineText.indexOf("value");
+  const character = lineText.indexOf("next");
   const hover = hoverForPosition(structuredConcurrencySource, lineIndex, character);
 
   assert.ok(hover);
-  assert.match(hover.value, /local value: Option\[int32\]/);
+  assert.match(hover.value, /local next: int32/);
 });
 
 test("structured concurrency helpers appear in top-level completions", () => {
   const items = completionsForDocument(cancellationSource, 0, 0, null);
   const names = new Set(items.map((item) => item.name));
 
-  assert.ok(names.has("tasks"));
+  assert.ok(names.has("TaskGroup"));
+  assert.ok(names.has("wait_any"));
+  assert.ok(names.has("wait_all"));
   assert.ok(names.has("cancelled"));
 });
 
@@ -800,38 +802,22 @@ test("send-result example infers Result and SendError types without false diagno
   assert.match(hover.value, /local send_result: Result\[None, SendError\[int32\]\]/);
 });
 
-test("detached spawn example does not report false diagnostics and exposes the keyword", () => {
+test("start_soon example does not report false diagnostics", () => {
   const diagnostics = diagnosticsForDocument(detachedSource);
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `producer`/.test(diagnostic.message)));
-  assert.ok(!diagnostics.some((diagnostic) => /unknown name `spawn`/.test(diagnostic.message)));
-
-  const items = completionsForDocument(detachedSource, 0, 0, null);
-  const names = new Set(items.map((item) => item.name));
-  assert.ok(names.has("detached"));
+  assert.ok(!diagnostics.some((diagnostic) => /unknown name `TaskGroup`/.test(diagnostic.message)));
 });
 
-test("select send bindings resolve with result types", () => {
+test("queue timeout send expression accepts named timeouts without false diagnostics", () => {
   const diagnostics = diagnosticsForDocument(selectSendSource);
-  assert.ok(!diagnostics.some((diagnostic) => /unknown name `send_result`/.test(diagnostic.message)));
-  assert.ok(!diagnostics.some((diagnostic) => /unknown name `after`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `ms`/.test(diagnostic.message)));
-
-  const lineIndex = selectSendSource.split("\n").findIndex((line) => line.includes("match send_result:"));
-  const lineText = selectSendSource.split("\n")[lineIndex];
-  const character = lineText.indexOf("send_result");
-  const hover = hoverForPosition(selectSendSource, lineIndex, character);
-  assert.ok(hover);
-  assert.match(hover.value, /local send_result: Result\[None, SendError\[int32\]\]/);
 });
 
-test("after duration expressions resolve as builtins without false diagnostics", () => {
-  const lineIndex = selectSendSource.split("\n").findIndex((line) => line.includes("case after(5ms):"));
-  const lineText = selectSendSource.split("\n")[lineIndex];
-  const character = lineText.indexOf("after");
-
-  const hover = hoverForPosition(selectSendSource, lineIndex, character);
-  assert.ok(hover);
-  assert.match(hover.value, /after\(duration: Duration\) -> Duration/);
+test("wait helper builtins appear in completions", () => {
+  const items = completionsForDocument(structuredConcurrencySource, 0, 0, null);
+  const names = new Set(items.map((item) => item.name));
+  assert.ok(names.has("wait_any"));
+  assert.ok(names.has("wait_all"));
 });
 
 test("builtin named arguments do not report false diagnostics", () => {
@@ -840,19 +826,10 @@ test("builtin named arguments do not report false diagnostics", () => {
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `print`/.test(diagnostic.message)));
 });
 
-test("named after duration expressions resolve as builtins without false diagnostics", () => {
+test("named queue timeout arguments resolve without false diagnostics", () => {
   const diagnostics = diagnosticsForDocument(selectTimeoutNamedSource);
-  assert.ok(!diagnostics.some((diagnostic) => /unknown name `after`/.test(diagnostic.message)));
-
-  const lineIndex = selectTimeoutNamedSource
-    .split("\n")
-    .findIndex((line) => line.includes("case after(duration=5ms):"));
-  const lineText = selectTimeoutNamedSource.split("\n")[lineIndex];
-  const character = lineText.indexOf("after");
-
-  const hover = hoverForPosition(selectTimeoutNamedSource, lineIndex, character);
-  assert.ok(hover);
-  assert.match(hover.value, /after\(duration: Duration\) -> Duration/);
+  assert.ok(!diagnostics.some((diagnostic) => /unknown name `QueueReceive`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /unknown name `ms`/.test(diagnostic.message)));
 });
 
 test("for-range example does not report false diagnostics for loop bindings", () => {
@@ -1280,11 +1257,11 @@ test("fallback analysis helper specializes builtin member return types and unres
   );
   assert.equal(
     _testing.specializeMemberReturnType("Queue", queueMembers.get("get")),
-    "Option[T]"
+    "QueueReceive[T]"
   );
   assert.equal(
     _testing.specializeMemberReturnType("Queue[int32]", queueMembers.get("get")),
-    "Option[int32]"
+    "QueueReceive[int32]"
   );
   assert.equal(
     _testing.specializeMemberReturnType("Queue[int32]", { name: "close", detail: "close() -> None" }),
@@ -1295,15 +1272,17 @@ test("fallback analysis helper specializes builtin member return types and unres
   assert.ok(sendError);
   assert.ok(sendError.variants.some((variant) => variant.name === "Closed"));
   assert.ok(sendError.variants.some((variant) => variant.name === "Cancelled"));
+  assert.ok(sendError.variants.some((variant) => variant.name === "TimedOut"));
+  assert.ok(sendError.variants.some((variant) => variant.name === "Full"));
 
   const taskMembers = byName("Task");
   assert.equal(
     _testing.specializeMemberReturnType("Task[int32]", taskMembers.get("result")),
-    "int32"
+    "TaskResult[int32]"
   );
   assert.equal(
     _testing.specializeMemberReturnType("Task", taskMembers.get("result")),
-    "T"
+    "TaskResult[T]"
   );
 
   const taskGroupMembers = byName("TaskGroup");
@@ -1314,6 +1293,10 @@ test("fallback analysis helper specializes builtin member return types and unres
   assert.equal(
     _testing.specializeMemberReturnType("TaskGroup", taskGroupMembers.get("start")),
     "Task[T]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("TaskGroup", taskGroupMembers.get("start_soon")),
+    "None"
   );
   assert.equal(
     _testing.specializeMemberReturnType("fs.File", fileMembers.get("read_bytes")),
@@ -1355,8 +1338,8 @@ test("fallback analysis helper specializes builtin member return types and unres
   assert.equal(_testing.isUnresolvedTypeParamType(moduleInfo, "Status"), false);
   assert.equal(_testing.isUnresolvedTypeParamType(moduleInfo, "widget"), false);
   assert.equal(
-    _testing.parseBuiltinDetailReturnType("spawn(function, ...) -> Task[T]"),
-    "Task[T]"
+    _testing.parseBuiltinDetailReturnType("wait_all(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAll[T]"),
+    "WaitAll[T]"
   );
 });
 

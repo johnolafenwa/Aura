@@ -1,5 +1,5 @@
-error: `after(...)` select arms cannot bind a value
- --> crates/aurora-compiler/tests/fixtures/check-fail/select_after_binding.au:3:9
+error: expected Newline
+ --> crates/aurora-compiler/tests/fixtures/check-fail/select_after_binding.au:2:11
   |
-3 |         case value = after(1s):
-  |         ^
+2 |     select:
+  |           ^

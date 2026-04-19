@@ -23,7 +23,7 @@ test("language configuration indents block headers on enter without blank-line d
 
   assert.match(
     configuration.indentationRules.increaseIndentPattern,
-    /class\|enum\|trait\|def\|if\|elif\|else\|while\|for\|match\|case\|with\|select\|impl/
+    /class\|enum\|trait\|def\|if\|elif\|else\|while\|for\|match\|case\|with\|impl/
   );
   assert.equal(
     Object.prototype.hasOwnProperty.call(configuration.indentationRules, "decreaseIndentPattern"),

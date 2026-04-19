@@ -76,7 +76,7 @@ This rule prevents subtle bugs where a function reads from and writes to the sam
 
 See [examples/basics/borrow_parameters.au](../examples/basics/borrow_parameters.au).
 
-Borrowed parameters are supported on ordinary calls. `spawn` and `tasks().start(...)` still require by-value parameters because task capture does not yet model borrowed argument lifetimes.
+Borrowed parameters are supported on ordinary calls. `TaskGroup.start(...)` and `TaskGroup.start_soon(...)` still require by-value parameters because task capture does not yet model borrowed argument lifetimes.
 
 ## Calling Functions
 

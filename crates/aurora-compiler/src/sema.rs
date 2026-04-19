@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, EnumDecl, Expr, ExprKind,
     FunctionDecl, ImplDecl, Item, LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt,
-    Module, Param, Pattern, ReceiverKind, SelectStmt, Stmt, TraitDecl, TypeRef, UnaryOp, WithStmt,
+    Module, Param, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp, WithStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinFunction, BuiltinMember, CallConvention,
@@ -352,6 +352,21 @@ fn type_is_copy_in_context(
         Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
             type_is_copy_in_context(&args[0], classes, enums)
         }
+        Type::Named(name, args) if name == "QueueReceive" && args.len() == 1 => {
+            type_is_copy_in_context(&args[0], classes, enums)
+        }
+        Type::Named(name, args) if name == "TaskResult" && args.len() == 1 => {
+            type_is_copy_in_context(&args[0], classes, enums)
+        }
+        Type::Named(name, args) if name == "WaitAny" && args.len() == 1 => {
+            type_is_copy_in_context(&Type::named("int32"), classes, enums)
+                && type_is_copy_in_context(&args[0], classes, enums)
+        }
+        Type::Named(name, args) if name == "WaitAll" && args.len() == 1 => type_is_copy_in_context(
+            &Type::Named("Vec".to_string(), vec![args[0].clone()]),
+            classes,
+            enums,
+        ),
         Type::Named(name, args) => {
             if let Some(class_info) = classes.get(name) {
                 return class_info.decl.copy
@@ -1406,6 +1421,10 @@ fn lower_type_with_self(
     if type_name == "Queue"
         || type_name == "Task"
         || type_name == "SendError"
+        || type_name == "QueueReceive"
+        || type_name == "TaskResult"
+        || type_name == "WaitAny"
+        || type_name == "WaitAll"
         || type_name == "Vec"
         || type_name == "Set"
     {
@@ -1649,7 +1668,6 @@ fn default_argument_references_param(expr: &Expr, param_names: &[String]) -> Opt
         ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } => {
             default_argument_references_param(expr, param_names)
         }
-        ExprKind::Spawn { value, .. } => default_argument_references_param(value, param_names),
         ExprKind::Specialize { expr, .. } => default_argument_references_param(expr, param_names),
         ExprKind::Member { object, .. } => default_argument_references_param(object, param_names),
         ExprKind::Index { object, index } => default_argument_references_param(object, param_names)
@@ -2028,6 +2046,10 @@ fn is_builtin_type(name: &str) -> bool {
             | "Option"
             | "Result"
             | "SendError"
+            | "QueueReceive"
+            | "TaskResult"
+            | "WaitAny"
+            | "WaitAll"
             | "TaskGroup"
             | "Duration"
     )
@@ -3276,19 +3298,6 @@ impl<'a> FunctionChecker<'a> {
                         break;
                     }
                 }
-                Stmt::Select(select_stmt) => {
-                    let select_flow = self.check_select(
-                        select_stmt,
-                        locals,
-                        return_type,
-                        loop_depth,
-                        allow_return,
-                    )?;
-                    if select_flow == BlockFlow::AlwaysReturns {
-                        flow = BlockFlow::AlwaysReturns;
-                        break;
-                    }
-                }
                 Stmt::While(while_stmt) => {
                     let condition_ty = self.type_of_expr(&while_stmt.condition, locals)?;
                     if condition_ty != Type::named("bool") {
@@ -3376,186 +3385,6 @@ impl<'a> FunctionChecker<'a> {
             loop_depth,
             allow_return,
         )
-    }
-
-    fn check_select(
-        &self,
-        select_stmt: &SelectStmt,
-        locals: &mut HashMap<String, LocalBinding>,
-        return_type: &Type,
-        loop_depth: usize,
-        allow_return: bool,
-    ) -> Result<BlockFlow> {
-        if select_stmt.arms.is_empty() {
-            return Err(Diagnostic::at(
-                select_stmt.span,
-                "`select` requires at least one `case` arm",
-            ));
-        }
-
-        let mut all_return = true;
-        for arm in &select_stmt.arms {
-            let binding_ty = self.select_arm_binding_type(&arm.expr, locals)?;
-            match (&arm.binding, binding_ty) {
-                (Some(_), None) => {
-                    return Err(Diagnostic::at(
-                        arm.span,
-                        "`after(...)` select arms cannot bind a value",
-                    ));
-                }
-                (None, _) => {}
-                (Some(binding), Some(ty)) => {
-                    let mut arm_locals = locals.clone();
-                    if arm_locals.contains_key(binding) {
-                        return Err(Diagnostic::at(
-                            arm.span,
-                            format!("select binding `{}` would shadow an existing name", binding),
-                        ));
-                    }
-                    arm_locals.insert(
-                        binding.clone(),
-                        LocalBinding {
-                            ty,
-                            assignable: false,
-                            mutable_place: false,
-                            passing: ReceiverKind::Value,
-                            borrow_origin: None,
-                            borrow_label: None,
-                            moved: false,
-                            moved_fields: BTreeSet::new(),
-                        },
-                    );
-                    let arm_flow = self.check_block(
-                        &arm.body,
-                        &mut arm_locals,
-                        return_type,
-                        loop_depth,
-                        allow_return,
-                    )?;
-                    if arm_flow != BlockFlow::AlwaysReturns {
-                        all_return = false;
-                    }
-                    continue;
-                }
-            }
-
-            let mut arm_locals = locals.clone();
-            let arm_flow = self.check_block(
-                &arm.body,
-                &mut arm_locals,
-                return_type,
-                loop_depth,
-                allow_return,
-            )?;
-            if arm_flow != BlockFlow::AlwaysReturns {
-                all_return = false;
-            }
-        }
-
-        if all_return {
-            Ok(BlockFlow::AlwaysReturns)
-        } else {
-            Ok(BlockFlow::FallsThrough)
-        }
-    }
-
-    fn select_arm_binding_type(
-        &self,
-        expr: &Expr,
-        locals: &mut HashMap<String, LocalBinding>,
-    ) -> Result<Option<Type>> {
-        let ExprKind::Call { callee, args } = &expr.kind else {
-            return Err(Diagnostic::at(
-                expr.span,
-                "`select` currently supports `get()`, `put(...)`, and `after(...)` arms",
-            ));
-        };
-
-        match &callee.kind {
-            ExprKind::Name(name) if name == "after" => {
-                let ordered_args = BuiltinFunction::After.bind_args(args, expr.span)?;
-                let duration_arg = ordered_args[0].ok_or_else(|| {
-                    Diagnostic::at(
-                        expr.span,
-                        "internal error: `after` should bind exactly one argument in `select`",
-                    )
-                })?;
-                let duration_ty = self.type_of_expr(&duration_arg.value, locals)?;
-                if duration_ty != Type::named("Duration") {
-                    return Err(Diagnostic::at(
-                        duration_arg.span,
-                        format!("`after(...)` expects a `Duration`, found `{}`", duration_ty),
-                    ));
-                }
-                Ok(None)
-            }
-            ExprKind::Member { object, field } if matches!(field.as_str(), "recv" | "get") => {
-                if !args.is_empty() {
-                    return Err(Diagnostic::at(
-                        expr.span,
-                        "`select` receive arms require `Queue[T].get()` with no arguments",
-                    ));
-                }
-                let receiver_ty = self.type_of_expr(object, locals)?;
-                let Type::Named(name, type_args) = receiver_ty else {
-                    return Err(Diagnostic::at(
-                        expr.span,
-                        "`select` receive arms require `Queue[T].get()`",
-                    ));
-                };
-                if name != "Queue" || type_args.len() != 1 {
-                    return Err(Diagnostic::at(
-                        expr.span,
-                        "`select` receive arms require `Queue[T].get()`",
-                    ));
-                }
-                Ok(Some(Type::Named(
-                    "Option".to_string(),
-                    vec![type_args[0].clone()],
-                )))
-            }
-            ExprKind::Member { object, field } if matches!(field.as_str(), "send" | "put") => {
-                let ordered_args = BuiltinMember::QueuePut.bind_args(args, expr.span)?;
-                let send_arg = ordered_args[0].ok_or_else(|| {
-                    Diagnostic::at(
-                        expr.span,
-                        "internal error: `put` should bind exactly one argument in `select`",
-                    )
-                })?;
-                let receiver_ty = self.type_of_expr(object, locals)?;
-                let Type::Named(name, type_args) = receiver_ty else {
-                    return Err(Diagnostic::at(
-                        expr.span,
-                        "`select` send arms require `Queue[T].put(value)`",
-                    ));
-                };
-                if name != "Queue" || type_args.len() != 1 {
-                    return Err(Diagnostic::at(
-                        expr.span,
-                        "`select` send arms require `Queue[T].put(value)`",
-                    ));
-                }
-                let actual =
-                    self.type_of_expr_hint(&send_arg.value, locals, Some(&type_args[0]))?;
-                if actual != type_args[0] {
-                    return Err(Diagnostic::at(
-                        send_arg.span,
-                        format!("`put()` expects `{}`, found `{}`", type_args[0], actual),
-                    ));
-                }
-                Ok(Some(Type::Named(
-                    "Result".to_string(),
-                    vec![
-                        Type::Unit,
-                        Type::Named("SendError".to_string(), vec![type_args[0].clone()]),
-                    ],
-                )))
-            }
-            _ => Err(Diagnostic::at(
-                expr.span,
-                "`select` currently supports `get()`, `put(...)`, and `after(...)` arms",
-            )),
-        }
     }
 
     fn check_assign(
@@ -4086,7 +3915,16 @@ impl<'a> FunctionChecker<'a> {
                 let lowered = self.lower_explicit_type_args(type_args)?;
                 match &base.kind {
                     ExprKind::Name(name)
-                        if matches!(name.as_str(), "Option" | "Result" | "SendError") =>
+                        if matches!(
+                            name.as_str(),
+                            "Option"
+                                | "Result"
+                                | "SendError"
+                                | "QueueReceive"
+                                | "TaskResult"
+                                | "WaitAny"
+                                | "WaitAll"
+                        ) =>
                     {
                         self.explicit_builtin_type(name, &lowered, expr.span)
                     }
@@ -4230,38 +4068,6 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
             },
-            ExprKind::Spawn { detached, value } => {
-                let ExprKind::Call { callee, args } = &value.kind else {
-                    return Err(Diagnostic::at(
-                        expr.span,
-                        "`spawn` requires a function or method call expression",
-                    ));
-                };
-                let callable = self.resolve_spawn_callable(callee)?;
-                self.require_spawnable_function(
-                    &callable.display_name,
-                    &callable.decl.params,
-                    callee.span,
-                )?;
-                let return_ty = self.type_check_callable_args(
-                    &callable.display_name,
-                    &callable.decl.type_params,
-                    &callable.decl.params,
-                    &callable.signature.params,
-                    &callable.signature.return_type,
-                    &callable.type_param_bounds,
-                    args,
-                    value.span,
-                    locals,
-                    None,
-                    HashMap::new(),
-                )?;
-                if *detached {
-                    Ok(Type::Unit)
-                } else {
-                    Ok(Type::Named("Task".to_string(), vec![return_ty]))
-                }
-            }
             ExprKind::Try(inner) => {
                 let current_return_type = self.current_return_type.as_ref().ok_or_else(|| {
                     Diagnostic::at(expr.span, "`try` is only allowed inside a function body")
@@ -4362,10 +4168,10 @@ impl<'a> FunctionChecker<'a> {
                         if let Ok(explicit_ty) =
                             self.explicit_builtin_type(enum_name, &explicit_args, expr.span)
                         {
-                            if let Some(payload_ty) =
+                            if let Some(payload_tys) =
                                 self.builtin_enum_variant_payload(&explicit_ty, enum_name, field)
                             {
-                                if payload_ty.is_some() {
+                                if !payload_tys.is_empty() {
                                     return Err(Diagnostic::at(
                                         expr.span,
                                         format!(
@@ -4437,10 +4243,10 @@ impl<'a> FunctionChecker<'a> {
                 }
                 if let ExprKind::Name(enum_name) = &object.kind {
                     if let Some(expected_ty) = expected {
-                        if let Some(payload_ty) =
+                        if let Some(payload_tys) =
                             self.builtin_enum_variant_payload(expected_ty, enum_name, field)
                         {
-                            if payload_ty.is_some() {
+                            if !payload_tys.is_empty() {
                                 return Err(Diagnostic::at(
                                     expr.span,
                                     format!(
@@ -4840,6 +4646,18 @@ impl<'a> FunctionChecker<'a> {
     ) -> Result<Type> {
         let (base_callee, explicit_type_args) = self.peel_specialization(callee);
 
+        if matches!(&base_callee.kind, ExprKind::Name(name) if name == "TaskGroup")
+            && explicit_type_args.is_none()
+        {
+            if !args.is_empty() {
+                return Err(Diagnostic::at(
+                    span,
+                    "`TaskGroup` does not take constructor arguments",
+                ));
+            }
+            return Ok(Type::named("TaskGroup"));
+        }
+
         if let (ExprKind::Name(name), Some(type_args)) = (&base_callee.kind, explicit_type_args) {
             if name == "Queue" {
                 let explicit_args = self.lower_explicit_type_args(type_args)?;
@@ -4936,27 +4754,46 @@ impl<'a> FunctionChecker<'a> {
                 }
                 return Ok(Type::Named("Map".to_string(), explicit_args));
             }
+            if name == "TaskGroup" {
+                if !type_args.is_empty() {
+                    return Err(Diagnostic::at(
+                        span,
+                        "`TaskGroup` does not take type arguments",
+                    ));
+                }
+                if !args.is_empty() {
+                    return Err(Diagnostic::at(
+                        span,
+                        "`TaskGroup` does not take constructor arguments",
+                    ));
+                }
+                return Ok(Type::named("TaskGroup"));
+            }
         }
 
         match &base_callee.kind {
-            ExprKind::Name(name)
-                if matches!(
-                    name.as_str(),
-                    "Some" | "Ok" | "Err" | "Closed" | "Cancelled"
-                ) =>
-            {
-                let enum_name = match name.as_str() {
-                    "Some" => "Option",
-                    "Ok" | "Err" => "Result",
-                    "Closed" | "Cancelled" => "SendError",
-                    _ => unreachable!(),
-                };
+            ExprKind::Name(name) if self.is_builtin_enum_variant_name(name) => {
                 let Some(expected_ty) = expected else {
                     return Err(Diagnostic::at(
                         span,
                         "bare enum variants require an expected enum type or a qualified form such as `Result.Ok(...)`",
                     ));
                 };
+                let Type::Named(enum_name, _) = expected_ty else {
+                    return Err(Diagnostic::at(
+                        span,
+                        "bare enum variants require an expected enum type or a qualified form such as `Result.Ok(...)`",
+                    ));
+                };
+                if !self
+                    .builtin_enum_variant_payload(expected_ty, enum_name, name)
+                    .is_some()
+                {
+                    return Err(Diagnostic::at(
+                        span,
+                        "bare enum variants require an expected enum type or a qualified form such as `Result.Ok(...)`",
+                    ));
+                }
                 self.type_check_builtin_enum_variant_constructor(
                     enum_name,
                     name,
@@ -5003,90 +4840,7 @@ impl<'a> FunctionChecker<'a> {
                         }
                         Ok(Type::named("Range"))
                     }
-                    BuiltinFunction::Queue => {
-                        if let Some(capacity_arg) =
-                            ordered_args.first().and_then(|arg| arg.as_ref())
-                        {
-                            let actual = self.type_of_expr_hint(
-                                &capacity_arg.value,
-                                locals,
-                                Some(&Type::named("int32")),
-                            )?;
-                            if actual != Type::named("int32") {
-                                return Err(Diagnostic::at(
-                                    capacity_arg.span,
-                                    format!(
-                                        "`queue(capacity=...)` expects `int32`, found `{}`",
-                                        actual
-                                    ),
-                                ));
-                            }
-                        }
-                        if let Some(type_args) = explicit_type_args {
-                            let explicit_args = self.lower_explicit_type_args(type_args)?;
-                            if explicit_args.len() != 1 {
-                                return Err(Diagnostic::at(
-                                    span,
-                                    format!(
-                                        "`{}[...]()` expects exactly one type argument, found {}",
-                                        builtin.name(),
-                                        explicit_args.len()
-                                    ),
-                                ));
-                            }
-                            Ok(Type::Named("Queue".to_string(), explicit_args))
-                        } else {
-                            let Some(expected_ty) = expected else {
-                                return Err(Diagnostic::at(
-                                    span,
-                                    format!(
-                                        "`{}()` requires an expected `Queue[T]` type annotation in the bootstrap compiler",
-                                        builtin.name()
-                                    ),
-                                ));
-                            };
-                            let Type::Named(name, args) = expected_ty else {
-                                return Err(Diagnostic::at(
-                                    span,
-                                    format!(
-                                        "`{}()` requires an expected `Queue[T]` type annotation in the bootstrap compiler",
-                                        builtin.name()
-                                    ),
-                                ));
-                            };
-                            if name != "Queue" || args.len() != 1 {
-                                return Err(Diagnostic::at(
-                                    span,
-                                    format!(
-                                        "`{}()` requires an expected `Queue[T]` type annotation in the bootstrap compiler",
-                                        builtin.name()
-                                    ),
-                                ));
-                            }
-                            Ok(expected_ty.clone())
-                        }
-                    }
-                    BuiltinFunction::Tasks => Ok(Type::named("TaskGroup")),
                     BuiltinFunction::Cancelled => Ok(Type::named("bool")),
-                    BuiltinFunction::After => {
-                        let duration_arg = ordered_args[0].ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                "internal error: `after` should bind exactly one argument",
-                            )
-                        })?;
-                        let duration_ty = self.type_of_expr(&duration_arg.value, locals)?;
-                        if duration_ty != Type::named("Duration") {
-                            return Err(Diagnostic::at(
-                                duration_arg.span,
-                                format!(
-                                    "`after(...)` expects a `Duration`, found `{}`",
-                                    duration_ty
-                                ),
-                            ));
-                        }
-                        Ok(Type::named("Duration"))
-                    }
                     BuiltinFunction::Sleep => {
                         let duration_arg = ordered_args[0].ok_or_else(|| {
                             Diagnostic::at(
@@ -5105,6 +4859,83 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         Ok(Type::Unit)
+                    }
+                    BuiltinFunction::WaitAny | BuiltinFunction::WaitAll => {
+                        let tasks_arg = ordered_args[0].ok_or_else(|| {
+                            Diagnostic::at(
+                                span,
+                                format!(
+                                    "internal error: `{}` should bind the `tasks` argument",
+                                    builtin.name()
+                                ),
+                            )
+                        })?;
+                        let tasks_ty = self.type_of_expr(&tasks_arg.value, locals)?;
+                        let Type::Named(ref container_name, ref container_args) = tasks_ty else {
+                            return Err(Diagnostic::at(
+                                tasks_arg.span,
+                                format!(
+                                    "`{}` expects `Vec[Task[T]]`, found `{}`",
+                                    builtin.name(),
+                                    tasks_ty
+                                ),
+                            ));
+                        };
+                        if container_name != "Vec" || container_args.len() != 1 {
+                            return Err(Diagnostic::at(
+                                tasks_arg.span,
+                                format!(
+                                    "`{}` expects `Vec[Task[T]]`, found `{}`",
+                                    builtin.name(),
+                                    tasks_ty
+                                ),
+                            ));
+                        }
+                        let Type::Named(task_name, task_args) = &container_args[0] else {
+                            return Err(Diagnostic::at(
+                                tasks_arg.span,
+                                format!(
+                                    "`{}` expects `Vec[Task[T]]`, found `{}`",
+                                    builtin.name(),
+                                    tasks_ty
+                                ),
+                            ));
+                        };
+                        if task_name != "Task" || task_args.len() != 1 {
+                            return Err(Diagnostic::at(
+                                tasks_arg.span,
+                                format!(
+                                    "`{}` expects `Vec[Task[T]]`, found `{}`",
+                                    builtin.name(),
+                                    tasks_ty
+                                ),
+                            ));
+                        }
+                        if let Some(timeout_arg) = ordered_args[1] {
+                            let actual = self.type_of_expr_hint(
+                                &timeout_arg.value,
+                                locals,
+                                Some(&Type::named("Duration")),
+                            )?;
+                            if actual != Type::named("Duration") {
+                                return Err(Diagnostic::at(
+                                    timeout_arg.span,
+                                    format!(
+                                        "`{}(timeout=...)` expects `Duration`, found `{}`",
+                                        builtin.name(),
+                                        actual
+                                    ),
+                                ));
+                            }
+                        }
+                        Ok(Type::Named(
+                            match builtin {
+                                BuiltinFunction::WaitAny => "WaitAny".to_string(),
+                                BuiltinFunction::WaitAll => "WaitAll".to_string(),
+                                _ => unreachable!(),
+                            },
+                            vec![task_args[0].clone()],
+                        ))
                     }
                     BuiltinFunction::Abs => {
                         let value_arg = ordered_args[0].ok_or_else(|| {
@@ -5595,39 +5426,48 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
                     if let Some(expected_ty) = expected {
-                        if let Some(variant_payload) =
+                        if let Some(variant_payloads) =
                             self.builtin_enum_variant_payload(expected_ty, enum_name, field)
                         {
-                            match variant_payload {
-                                Some(payload_ty) => {
-                                    let argument = self
-                                        .variant_payload_argument(args, span, field, enum_name)?;
-                                    let actual = self.type_of_expr_hint(
-                                        &argument.value,
-                                        locals,
-                                        Some(&payload_ty),
-                                    )?;
-                                    if actual != payload_ty {
-                                        return Err(Diagnostic::at(
-                                            argument.span,
-                                            format!(
-                                                "variant `{}` of enum `{}` expects `{}`, found `{}`",
-                                                field, enum_name, payload_ty, actual
-                                            ),
-                                        ));
-                                    }
-                                    if !self.is_copy_type(&payload_ty) {
-                                        self.consume_value_expr(&argument.value, locals)?;
-                                    }
-                                }
-                                None => {
+                            if variant_payloads.is_empty() {
+                                return Err(Diagnostic::at(
+                                    span,
+                                    format!(
+                                        "variant `{}` of enum `{}` does not take a payload",
+                                        field, enum_name
+                                    ),
+                                ));
+                            }
+                            if args.len() != variant_payloads.len() {
+                                return Err(Diagnostic::at(
+                                    span,
+                                    format!(
+                                        "variant `{}` of enum `{}` expects {} payload argument{}, found {}",
+                                        field,
+                                        enum_name,
+                                        variant_payloads.len(),
+                                        if variant_payloads.len() == 1 { "" } else { "s" },
+                                        args.len()
+                                    ),
+                                ));
+                            }
+                            for (payload_ty, argument) in variant_payloads.iter().zip(args) {
+                                let actual = self.type_of_expr_hint(
+                                    &argument.value,
+                                    locals,
+                                    Some(payload_ty),
+                                )?;
+                                if actual != *payload_ty {
                                     return Err(Diagnostic::at(
-                                        span,
+                                        argument.span,
                                         format!(
-                                            "variant `{}` of enum `{}` does not take a payload",
-                                            field, enum_name
+                                            "variant `{}` of enum `{}` expects `{}`, found `{}`",
+                                            field, enum_name, payload_ty, actual
                                         ),
                                     ));
+                                }
+                                if !self.is_copy_type(payload_ty) {
+                                    self.consume_value_expr(&argument.value, locals)?;
                                 }
                             }
                             return Ok(expected_ty.clone());
@@ -6729,7 +6569,7 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
-                                BuiltinMember::QueuePut => {
+                                BuiltinMember::QueuePut | BuiltinMember::QueueTryPut => {
                                     let send_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -6752,6 +6592,26 @@ impl<'a> FunctionChecker<'a> {
                                     }
                                     if !self.is_copy_type(&receiver_args[0]) {
                                         self.consume_value_expr(&send_arg.value, locals)?;
+                                    }
+                                    if matches!(builtin_member, BuiltinMember::QueuePut) {
+                                        if let Some(timeout_arg) =
+                                            ordered_args.get(1).and_then(|arg| *arg)
+                                        {
+                                            let actual = self.type_of_expr_hint(
+                                                &timeout_arg.value,
+                                                locals,
+                                                Some(&Type::named("Duration")),
+                                            )?;
+                                            if actual != Type::named("Duration") {
+                                                return Err(Diagnostic::at(
+                                                    timeout_arg.span,
+                                                    format!(
+                                                        "`put(timeout=...)` expects `Duration`, found `{}`",
+                                                        actual
+                                                    ),
+                                                ));
+                                            }
+                                        }
                                     }
                                     Ok(Type::Named(
                                         "Result".to_string(),
@@ -6782,7 +6642,7 @@ impl<'a> FunctionChecker<'a> {
                                         }
                                     }
                                     Ok(Type::Named(
-                                        "Option".to_string(),
+                                        "QueueReceive".to_string(),
                                         vec![receiver_args[0].clone()],
                                     ))
                                 }
@@ -6794,9 +6654,30 @@ impl<'a> FunctionChecker<'a> {
 
                     if receiver_name == "Task" && receiver_args.len() == 1 {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
-                            builtin_member.bind_args(args, span)?;
+                            let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
-                                BuiltinMember::TaskResult => Ok(receiver_args[0].clone()),
+                                BuiltinMember::TaskResult => {
+                                    if let Some(timeout_arg) = ordered_args[0] {
+                                        let actual = self.type_of_expr_hint(
+                                            &timeout_arg.value,
+                                            locals,
+                                            Some(&Type::named("Duration")),
+                                        )?;
+                                        if actual != Type::named("Duration") {
+                                            return Err(Diagnostic::at(
+                                                timeout_arg.span,
+                                                format!(
+                                                    "`result(timeout=...)` expects `Duration`, found `{}`",
+                                                    actual
+                                                ),
+                                            ));
+                                        }
+                                    }
+                                    Ok(Type::Named(
+                                        "TaskResult".to_string(),
+                                        vec![receiver_args[0].clone()],
+                                    ))
+                                }
                                 _ => unreachable!("unexpected task builtin member"),
                             };
                         }
@@ -6804,7 +6685,7 @@ impl<'a> FunctionChecker<'a> {
 
                     if receiver_name == "TaskGroup" && receiver_args.is_empty() {
                         match field.as_str() {
-                            "start" => {
+                            "start" | "start_soon" => {
                                 if args.is_empty() {
                                     return Err(Diagnostic::at(
                                         span,
@@ -6821,7 +6702,7 @@ impl<'a> FunctionChecker<'a> {
                                     ));
                                 }
                                 let callable = self.resolve_spawn_callable(&args[0].value)?;
-                                self.require_spawnable_function(
+                                self.require_task_startable_function(
                                     &callable.display_name,
                                     &callable.decl.params,
                                     args[0].span,
@@ -6840,10 +6721,14 @@ impl<'a> FunctionChecker<'a> {
                                     None,
                                     HashMap::new(),
                                 )?;
-                                return Ok(Type::Named(
-                                    "Task".to_string(),
-                                    vec![callable.signature.return_type.clone()],
-                                ));
+                                return Ok(if field == "start" {
+                                    Type::Named(
+                                        "Task".to_string(),
+                                        vec![callable.signature.return_type.clone()],
+                                    )
+                                } else {
+                                    Type::Unit
+                                });
                             }
                             "cancel" => {
                                 BuiltinMember::TaskGroupCancel.bind_args(args, span)?;
@@ -8867,13 +8752,13 @@ impl<'a> FunctionChecker<'a> {
             }
         };
 
-        if let Some(variant_payload) = self.builtin_enum_variant_payload(object_ty, name, field) {
-            return match variant_payload {
-                Some(_) => Err(Diagnostic::at(
+        if let Some(variant_payloads) = self.builtin_enum_variant_payload(object_ty, name, field) {
+            return match variant_payloads.is_empty() {
+                false => Err(Diagnostic::at(
                     span,
                     format!("variant `{}` of enum `{}` requires a payload", field, name),
                 )),
-                None => Ok(object_ty.clone()),
+                true => Ok(object_ty.clone()),
             };
         }
 
@@ -9094,8 +8979,16 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Member { object, field } => {
                 if let ExprKind::Name(enum_name) = &object.kind {
-                    if matches!(enum_name.as_str(), "Option" | "Result" | "SendError")
-                        || self.resolve_enum_info(enum_name).is_some()
+                    if matches!(
+                        enum_name.as_str(),
+                        "Option"
+                            | "Result"
+                            | "SendError"
+                            | "QueueReceive"
+                            | "TaskResult"
+                            | "WaitAny"
+                            | "WaitAll"
+                    ) || self.resolve_enum_info(enum_name).is_some()
                     {
                         return Ok(None);
                     }
@@ -9823,7 +9716,7 @@ impl<'a> FunctionChecker<'a> {
                     Diagnostic::at(
                         callee.span,
                         format!(
-                            "spawn target must be a callable function, found `{}`",
+                            "task start target must be a callable function, found `{}`",
                             function_name
                         ),
                     )
@@ -9891,12 +9784,12 @@ impl<'a> FunctionChecker<'a> {
 
                 Err(Diagnostic::at(
                     callee.span,
-                    "`spawn` currently supports named functions and associated methods without `self`",
+                    "task starting currently supports named functions and associated methods without `self`",
                 ))
             }
             _ => Err(Diagnostic::at(
                 callee.span,
-                "`spawn` currently supports named functions and associated methods without `self`",
+                "task starting currently supports named functions and associated methods without `self`",
             )),
         }
     }
@@ -10144,6 +10037,35 @@ impl<'a> FunctionChecker<'a> {
             Type::Named(name, args) if name == "SendError" && args.len() == 1 => Some(vec![
                 ("Closed".to_string(), vec![args[0].clone()]),
                 ("Cancelled".to_string(), vec![args[0].clone()]),
+                ("TimedOut".to_string(), vec![args[0].clone()]),
+                ("Full".to_string(), vec![args[0].clone()]),
+            ]),
+            Type::Named(name, args) if name == "QueueReceive" && args.len() == 1 => Some(vec![
+                ("Item".to_string(), vec![args[0].clone()]),
+                ("Closed".to_string(), Vec::new()),
+                ("TimedOut".to_string(), Vec::new()),
+                ("Cancelled".to_string(), Vec::new()),
+            ]),
+            Type::Named(name, args) if name == "TaskResult" && args.len() == 1 => Some(vec![
+                ("Ready".to_string(), vec![args[0].clone()]),
+                ("TimedOut".to_string(), Vec::new()),
+                ("Cancelled".to_string(), Vec::new()),
+            ]),
+            Type::Named(name, args) if name == "WaitAny" && args.len() == 1 => Some(vec![
+                (
+                    "Ready".to_string(),
+                    vec![Type::named("int32"), args[0].clone()],
+                ),
+                ("TimedOut".to_string(), Vec::new()),
+                ("Cancelled".to_string(), Vec::new()),
+            ]),
+            Type::Named(name, args) if name == "WaitAll" && args.len() == 1 => Some(vec![
+                (
+                    "Ready".to_string(),
+                    vec![Type::Named("Vec".to_string(), vec![args[0].clone()])],
+                ),
+                ("TimedOut".to_string(), Vec::new()),
+                ("Cancelled".to_string(), Vec::new()),
             ]),
             Type::Named(name, args) => self.resolve_enum_info(name).map(|enum_info| {
                 let substitutions =
@@ -10178,7 +10100,7 @@ impl<'a> FunctionChecker<'a> {
         expected: &Type,
         enum_name: &str,
         variant_name: &str,
-    ) -> Option<Option<Type>> {
+    ) -> Option<Vec<Type>> {
         let Type::Named(expected_name, args) = expected else {
             return None;
         };
@@ -10186,11 +10108,21 @@ impl<'a> FunctionChecker<'a> {
             return None;
         }
         match (enum_name, variant_name, args.as_slice()) {
-            ("Option", "Some", [inner]) => Some(Some(inner.clone())),
-            ("Option", "None", [_]) => Some(None),
-            ("Result", "Ok", [ok, _err]) => Some(Some(ok.clone())),
-            ("Result", "Err", [_ok, err]) => Some(Some(err.clone())),
-            ("SendError", "Closed" | "Cancelled", [value]) => Some(Some(value.clone())),
+            ("Option", "Some", [inner]) => Some(vec![inner.clone()]),
+            ("Option", "None", [_]) => Some(Vec::new()),
+            ("Result", "Ok", [ok, _err]) => Some(vec![ok.clone()]),
+            ("Result", "Err", [_ok, err]) => Some(vec![err.clone()]),
+            ("SendError", "Closed" | "Cancelled" | "TimedOut" | "Full", [value]) => {
+                Some(vec![value.clone()])
+            }
+            ("QueueReceive", "Item", [value]) => Some(vec![value.clone()]),
+            ("QueueReceive", "Closed" | "TimedOut" | "Cancelled", [_]) => Some(Vec::new()),
+            ("TaskResult", "Ready", [value]) => Some(vec![value.clone()]),
+            ("TaskResult", "TimedOut" | "Cancelled", [_]) => Some(Vec::new()),
+            ("WaitAny", "Ready", [index, value]) => Some(vec![index.clone(), value.clone()]),
+            ("WaitAny", "TimedOut" | "Cancelled", [_]) => Some(Vec::new()),
+            ("WaitAll", "Ready", [values]) => Some(vec![values.clone()]),
+            ("WaitAll", "TimedOut" | "Cancelled", [_]) => Some(Vec::new()),
             _ => None,
         }
     }
@@ -10205,6 +10137,10 @@ impl<'a> FunctionChecker<'a> {
             "Option" => 1,
             "Result" => 2,
             "SendError" => 1,
+            "QueueReceive" => 1,
+            "TaskResult" => 1,
+            "WaitAny" => 1,
+            "WaitAll" => 1,
             _ => return Err(Diagnostic::at(span, format!("unknown name `{}`", name))),
         };
         if explicit_args.len() != expected_len {
@@ -10236,11 +10172,36 @@ impl<'a> FunctionChecker<'a> {
 
     fn is_builtin_enum_constructor_expr(&self, expr: &Expr) -> bool {
         match &expr.kind {
-            ExprKind::Name(name) => matches!(name.as_str(), "Option" | "Result" | "SendError"),
+            ExprKind::Name(name) => matches!(
+                name.as_str(),
+                "Option"
+                    | "Result"
+                    | "SendError"
+                    | "QueueReceive"
+                    | "TaskResult"
+                    | "WaitAny"
+                    | "WaitAll"
+            ),
             ExprKind::Specialize { expr, .. } => self.is_builtin_enum_constructor_expr(expr),
             ExprKind::Group(inner) => self.is_builtin_enum_constructor_expr(inner),
             _ => false,
         }
+    }
+
+    fn is_builtin_enum_variant_name(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "Some"
+                | "None"
+                | "Ok"
+                | "Err"
+                | "Closed"
+                | "Cancelled"
+                | "TimedOut"
+                | "Full"
+                | "Item"
+                | "Ready"
+        )
     }
 
     fn type_check_builtin_enum_variant_constructor(
@@ -10260,12 +10221,33 @@ impl<'a> FunctionChecker<'a> {
                 format!("enum `{}` has no variant `{}`", enum_name, variant_name),
             ));
         };
-        match variant_payload {
-            Some(payload_ty) => {
-                let argument =
-                    self.variant_payload_argument(args, span, variant_name, enum_name)?;
-                let actual = self.type_of_expr_hint(&argument.value, locals, Some(&payload_ty))?;
-                if actual != payload_ty {
+        if variant_payload.is_empty() {
+            if !args.is_empty() {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "variant `{}` of enum `{}` does not take a payload",
+                        variant_name, enum_name
+                    ),
+                ));
+            }
+        } else {
+            if args.len() != variant_payload.len() {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "variant `{}` of enum `{}` expects {} payload argument{}, found {}",
+                        variant_name,
+                        enum_name,
+                        variant_payload.len(),
+                        if variant_payload.len() == 1 { "" } else { "s" },
+                        args.len()
+                    ),
+                ));
+            }
+            for (payload_ty, argument) in variant_payload.iter().zip(args) {
+                let actual = self.type_of_expr_hint(&argument.value, locals, Some(payload_ty))?;
+                if actual != *payload_ty {
                     return Err(Diagnostic::at(
                         argument.span,
                         format!(
@@ -10274,19 +10256,8 @@ impl<'a> FunctionChecker<'a> {
                         ),
                     ));
                 }
-                if !self.is_copy_type(&payload_ty) {
+                if !self.is_copy_type(payload_ty) {
                     self.consume_value_expr(&argument.value, locals)?;
-                }
-            }
-            None => {
-                if !args.is_empty() {
-                    return Err(Diagnostic::at(
-                        span,
-                        format!(
-                            "variant `{}` of enum `{}` does not take a payload",
-                            variant_name, enum_name
-                        ),
-                    ));
                 }
             }
         }
@@ -10346,7 +10317,7 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
-    fn require_spawnable_function(
+    fn require_task_startable_function(
         &self,
         function_name: &str,
         params: &[Param],
@@ -10359,7 +10330,7 @@ impl<'a> FunctionChecker<'a> {
             return Err(Diagnostic::at(
                 span,
                 format!(
-                    "`spawn` does not yet support borrowed parameter `{}` on function `{}`",
+                    "task starting does not yet support borrowed parameter `{}` on function `{}`",
                     param.name, function_name
                 ),
             ));

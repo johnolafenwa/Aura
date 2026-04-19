@@ -92,6 +92,23 @@ fn expect_int(ptr: *mut OpaqueValue) -> i128 {
     }
 }
 
+fn expect_task_result_ready_int(ptr: *mut OpaqueValue) -> i128 {
+    match unsafe { take_value(ptr) } {
+        Value::EnumVariant(variant)
+            if variant.enum_name == "TaskResult" && variant.variant_name == "Ready" =>
+        {
+            match variant
+                .single_payload()
+                .expect("expected task result payload")
+            {
+                Value::Int(value) => value.as_i128().expect("expected signed integer"),
+                other => panic!("expected int payload, found {:?}", other),
+            }
+        }
+        other => panic!("expected TaskResult.Ready(int), found {:?}", other),
+    }
+}
+
 fn expect_float(ptr: *mut OpaqueValue) -> f64 {
     match unsafe { take_value(ptr) } {
         Value::Float(value) => value,
@@ -167,6 +184,31 @@ fn expect_option_none(ptr: *mut OpaqueValue) {
         Value::EnumVariant(variant)
             if variant.enum_name == "Option" && variant.variant_name == "None" => {}
         other => panic!("expected Option.None, found {:?}", other),
+    }
+}
+
+fn expect_queue_receive_item_int(ptr: *mut OpaqueValue) -> i128 {
+    match unsafe { take_value(ptr) } {
+        Value::EnumVariant(variant)
+            if variant.enum_name == "QueueReceive" && variant.variant_name == "Item" =>
+        {
+            match variant
+                .single_payload()
+                .expect("expected queue receive payload")
+            {
+                Value::Int(value) => value.as_i128().expect("expected signed integer"),
+                other => panic!("expected int payload, found {:?}", other),
+            }
+        }
+        other => panic!("expected QueueReceive.Item(int), found {:?}", other),
+    }
+}
+
+fn expect_queue_receive_closed(ptr: *mut OpaqueValue) {
+    match unsafe { take_value(ptr) } {
+        Value::EnumVariant(variant)
+            if variant.enum_name == "QueueReceive" && variant.variant_name == "Closed" => {}
+        other => panic!("expected QueueReceive.Closed, found {:?}", other),
     }
 }
 
@@ -1066,18 +1108,19 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
     let buffer = super::aurora_direct_arg_buffer_new(2);
     super::aurora_direct_arg_buffer_store(buffer, 0, int_value(20) as i64);
     super::aurora_direct_arg_buffer_store(buffer, 1, int_value(22) as i64);
-    let spawned_sum = run_lightweight_root_task(move || {
+    let started_sum = run_lightweight_root_task(move || {
+        let group = super::aurora_direct_task_group_new();
         let task = unsafe {
-            take_value(super::aurora_direct_spawn_call(
+            take_value(super::aurora_direct_start_task_call(
                 test_native_thunk as usize as i64,
                 buffer,
                 2,
-                0,
-                std::ptr::null_mut(),
+                1,
+                group,
             ))
         };
         let Value::Task(task) = task else {
-            panic!("spawn call should return a task value");
+            panic!("task start should return a task value");
         };
         Ok(unsafe {
             take_value(super::aurora_direct_task_join(boxed_value(Value::Task(
@@ -1085,8 +1128,8 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
             ))))
         })
     })
-    .expect("spawn call should run inside lightweight scheduler");
-    assert_eq!(expect_int(boxed_value(spawned_sum)), 42);
+    .expect("task start should run inside lightweight scheduler");
+    assert_eq!(expect_task_result_ready_int(boxed_value(started_sum)), 42);
 
     let channel = super::aurora_direct_channel_new(std::ptr::null_mut());
     let send_ok = unsafe { take_value(super::aurora_direct_channel_send(channel, int_value(9))) };
@@ -1096,10 +1139,9 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
         other => panic!("expected Result.Ok(Unit), found {:?}", other),
     }
     assert_eq!(
-        expect_option_some_int(super::aurora_direct_channel_recv(channel)),
+        expect_queue_receive_item_int(super::aurora_direct_channel_recv(channel)),
         9
     );
-    assert_eq!(super::aurora_direct_channel_try_recv(channel), 0);
     expect_unit(super::aurora_direct_channel_close(channel));
     match unsafe { take_value(super::aurora_direct_channel_send(channel, int_value(7))) } {
         Value::EnumVariant(variant)
@@ -1109,9 +1151,7 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
             other
         ),
     }
-    expect_option_none(super::aurora_direct_channel_recv(channel));
-    assert_eq!(super::aurora_direct_channel_try_recv(channel), 1);
-
+    expect_queue_receive_closed(super::aurora_direct_channel_recv(channel));
     let group = super::aurora_direct_task_group_new();
     expect_unit(super::aurora_direct_task_group_cancel(group));
     assert_eq!(super::aurora_direct_cancelled(), 0);
@@ -1123,12 +1163,6 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
         group_value.register_task(TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit))));
     }
     expect_unit(super::aurora_direct_task_group_close(group, 1));
-
-    let deadline = super::aurora_direct_deadline_new(duration_value(0));
-    assert_eq!(super::aurora_direct_deadline_ready(deadline), 1);
-    assert_eq!(super::aurora_direct_deadline_ready(0), 1);
-    super::aurora_direct_deadline_drop(deadline);
-    super::aurora_direct_deadline_drop(0);
     super::aurora_direct_sleep_ms(0);
     expect_unit(super::aurora_direct_sleep_value(duration_value(0)));
 }

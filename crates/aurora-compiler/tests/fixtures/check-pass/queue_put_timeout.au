@@ -1,0 +1,20 @@
+def main() -> int32:
+    jobs = Queue[int32]()
+
+    match jobs.put(4, timeout=5ms):
+        case Result.Ok(_):
+            print("sent")
+        case Result.Err(err):
+            print("failed")
+
+    match jobs.get():
+        case QueueReceive.Item(value):
+            print(value)
+        case QueueReceive.Closed:
+            print(0)
+        case QueueReceive.TimedOut:
+            print(0)
+        case QueueReceive.Cancelled:
+            print(0)
+
+    return 0

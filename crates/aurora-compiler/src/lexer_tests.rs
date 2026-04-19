@@ -44,9 +44,9 @@ fn lexes_keywords_operators_and_delimiters() {
     assert!(tokens.contains(&TokenKind::KwTry));
     assert!(tokens.contains(&TokenKind::KwWith));
     assert!(tokens.contains(&TokenKind::KwAs));
-    assert!(tokens.contains(&TokenKind::KwSelect));
-    assert!(tokens.contains(&TokenKind::KwSpawn));
-    assert!(tokens.contains(&TokenKind::KwDetached));
+    assert!(tokens.contains(&TokenKind::Identifier("select".to_string())));
+    assert!(tokens.contains(&TokenKind::Identifier("spawn".to_string())));
+    assert!(tokens.contains(&TokenKind::Identifier("detached".to_string())));
     assert!(tokens.contains(&TokenKind::BoolLiteral(true)));
     assert!(tokens.contains(&TokenKind::BoolLiteral(false)));
     assert!(tokens.contains(&TokenKind::Identifier("name".to_string())));

@@ -1,7 +1,7 @@
 use super::{
     cast_numeric_value, io_decode_utf8, lock_mutex, option_none, option_some, render_float,
     result_err, result_ok, send_error_cancelled, send_error_closed, sleep_with_runtime_scheduler,
-    wait_for_select_progress, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
     HttpListenerValue, HttpResponseValue, MapValue, RangeValue, SetValue, TaskGroupValue,
     TaskValue, TcpListenerValue, TcpStreamValue, TryRecvResult, UdpSocketValue, Value, VecValue,
     WebSocketListenerValue,
@@ -319,21 +319,23 @@ fn runtime_scheduler_wakes_select_wait_on_cancellation() {
     let channel = ChannelValue::new();
     let start = Instant::now();
     let worker = thread::spawn(move || {
-        wait_for_select_progress(
-            &[channel],
+        let deadline = Instant::now() + StdDuration::from_millis(250);
+        let _ = wait_for_runtime_scheduler(
+            vec![channel],
             true,
-            &[],
-            &[Instant::now() + StdDuration::from_millis(250)],
+            Vec::new(),
+            Vec::new(),
+            Some(deadline),
             Some(&cancellation),
         );
     });
 
     thread::sleep(StdDuration::from_millis(20));
     group.cancel();
-    worker.join().expect("scheduler select worker should join");
+    worker.join().expect("scheduler wait worker should join");
     assert!(
         start.elapsed() < StdDuration::from_millis(100),
-        "scheduler select wait should wake promptly when cancelled; elapsed {:?}",
+        "scheduler wait should wake promptly when cancelled; elapsed {:?}",
         start.elapsed()
     );
 }

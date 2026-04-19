@@ -7,22 +7,24 @@ def worker(out: Queue[int32]):
         i += 1
 
 def main() -> int32:
-    out: Queue[int32] = queue()
+    out = Queue[int32]()
 
-    with tasks() as group:
+    with TaskGroup() as group:
         group.start(worker, out)
         mut seen: int32 = 0
 
         while seen < 2:
-            select:
-                case value = out.get():
-                    match value:
-                        case Option.Some(next):
-                            print(next)
-                            seen += 1
-                            if seen == 2:
-                                group.cancel()
-                        case Option.None:
-                            break
+            match out.get(timeout=5ms):
+                case QueueReceive.Item(next):
+                    print(next)
+                    seen += 1
+                    if seen == 2:
+                        group.cancel()
+                case QueueReceive.Closed:
+                    break
+                case QueueReceive.TimedOut:
+                    pass
+                case QueueReceive.Cancelled:
+                    break
 
     return 0

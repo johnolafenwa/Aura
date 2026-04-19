@@ -158,7 +158,6 @@ The current compiler supports these statement forms:
 - `for value in jobs:`
 - `match`
 - `with`
-- `select`
 - `break`
 - `continue`
 - `pass`
@@ -183,8 +182,6 @@ The current compiler supports these expression forms:
 - function and method calls
 - explicit type arguments on call targets such as `Box[int32](...)` and `Result[int32, String].Ok(...)`
 - enum and built-in enum variant construction
-- `spawn ...`
-- `spawn detached ...`
 - `try expr`
 - parenthesized expressions
 
@@ -206,9 +203,9 @@ Ordinary functions, instance methods, and associated methods support:
 - mixed calls where positional arguments come first and named arguments come after
 - default parameter values on ordinary functions and class methods
 - ordinary borrowed parameters with `value: borrow T` and `value: borrow mut T`
-- builtin named arguments for `print(value=...)`, `range(...)`, and `after(duration=...)`
+- builtin named arguments for `print(value=...)`, `range(...)`, `wait_any(...)`, and `wait_all(...)`
 
-Borrowed ordinary parameters currently work for normal calls, but `spawn` and `TaskGroup.start(...)` still require by-value parameters.
+Borrowed ordinary parameters currently work for normal calls, but `TaskGroup.start(...)` and `TaskGroup.start_soon(...)` still require by-value parameters.
 Calls also reject overlapping borrowed arguments whenever a `borrow mut` parameter participates, including a `borrow mut self` receiver overlapping another borrowed argument in the same method call.
 Empty list literals currently require an expected `Vec[T]` type such as `values: Vec[int32] = []`, or you can use `Vec[int32]()` explicitly.
 Empty map literals currently require an expected `Map[K, V]` type such as `counts: Map[String, int32] = {}`.
@@ -234,11 +231,10 @@ Current builtin functions:
 
 - `print`
 - `range`
-- `queue`
-- `tasks`
 - `cancelled`
-- `after`
 - `sleep`
+- `wait_any`
+- `wait_all`
 - `abs`
 - `min`
 - `max`
@@ -415,10 +411,12 @@ Current builtin member methods include:
 - `Set.insert(...)`
 - `Set.remove(...)`
 - `Queue.put(...)`
+- `Queue.try_put(...)`
 - `Queue.get(...)`
 - `Queue.close()`
-- `Task.result()`
+- `Task.result(timeout=...)`
 - `TaskGroup.start(...)`
+- `TaskGroup.start_soon(...)`
 - `TaskGroup.cancel()`
 
 ## Pattern Matching
@@ -446,11 +444,13 @@ The current bootstrap concurrency surface includes:
 
 - typed queues
 - `for` iteration over queues until close
-- spawned tasks
-- detached tasks
 - task groups
+- `TaskGroup.start(...)`
+- `TaskGroup.start_soon(...)`
+- `Task.result(timeout=...)`
+- `wait_any(...)`
+- `wait_all(...)`
 - cooperative cancellation
-- `select` over send, receive, and timer arms
 - duration literals with `ms`, `s`, and `m`
 
 Current collection notes:
@@ -466,10 +466,11 @@ Current collection notes:
 - `Set[T]` supports literal construction with `Set{...}` and the maintained method surface `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`
 - `for value in set:` and `for value in borrow set:` are supported for `Set[T]`
 - `for value in borrow mut set:` is not currently supported
-- `Queue[T]` supports `queue(capacity=...)` for bounded-capacity queues on the shared runtime scheduler
-- `Queue.put(...)` returns `Result[None, SendError[T]]`, where `SendError[T]` currently includes `Closed(value)` and `Cancelled(value)`
-
-Timed `select` loops now treat closed receive arms as inactive when an `after(...)` arm is present, so timeout arms can still fire as an escape path. `Queue.get(timeout=...)` is also available for the ordinary single-queue timeout case.
+- `Queue[T]` supports `Queue[T](capacity=...)` for bounded-capacity queues on the shared runtime scheduler
+- `Queue.put(...)` returns `Result[None, SendError[T]]`, where `SendError[T]` currently includes `Closed(value)`, `Cancelled(value)`, `TimedOut(value)`, and `Full(value)`
+- `Queue.get(timeout=...)` returns `QueueReceive[T]`, distinguishing `Item(value)`, `Closed`, `TimedOut`, and `Cancelled`
+- `wait_any(...)` returns `WaitAny[T]`
+- `wait_all(...)` returns `WaitAll[T]`
 
 ## Tooling
 
@@ -520,11 +521,9 @@ Current expression/ergonomics limitations:
 - empty list literals still require an expected `Vec[T]` type such as `values: Vec[int32] = []`
 - strings use quoted literals; `String(...)` is not a constructor
 - enum variants may be called by bare built-in name when an expected type is available, for example `ok: Result[int32, String] = Ok(7)`
-- `queue()` still requires an expected `Queue[T]` type annotation in the bootstrap compiler
-- `queue[T]()` is supported when you want to avoid relying on expected type context
-- `spawn` and `TaskGroup.start(...)` support named functions plus associated methods without `self`
-- concurrency uses only the maintained `Queue[T]`, `queue()`, `Task.result()`, `tasks()`, and `TaskGroup.start(...)` surface
-- queue waits, `sleep(...)`, `select`, socket waits, and the maintained HTTP helpers all use the shared evented runtime scheduler
+- `TaskGroup.start(...)` and `TaskGroup.start_soon(...)` support named functions plus associated methods without `self`
+- concurrency uses only the maintained `Queue[T]()`, `Task.result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `wait_any(...)`, and `wait_all(...)` surface
+- queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all use the shared evented runtime scheduler
 - Aurora tasks are scheduler-backed lightweight tasks, and ordinary file I/O now also offloads through the shared scheduler instead of pinning a task on a blocking host thread
 - Unix domain sockets require a Unix host at runtime
 - borrowed return labels such as `borrow[shared]` are supported on borrowed parameters and returns for advanced zero-copy APIs

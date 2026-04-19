@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::ast::{
     AssignStmt, AssignTarget, BinaryOp, Expr, ExprKind, FunctionDecl, ImportKind, Item, MatchArm,
-    Module, Pattern, SelectArm, Stmt, TypeRef, VariantPattern,
+    Module, Pattern, Stmt, TypeRef, VariantPattern,
 };
 use crate::call::{BuiltinFunction, BuiltinMember, ALL_BUILTIN_FUNCTIONS};
 use crate::diag::{Diagnostic, Result, Span};
@@ -459,25 +459,6 @@ impl<'a> AnalysisBuilder<'a> {
                         );
                         self.accumulate_scope_from_stmts(&with_stmt.body, target_line, scope);
                         return;
-                    }
-                }
-                Stmt::Select(select_stmt) => {
-                    for arm in &select_stmt.arms {
-                        if block_contains_line(&arm.body, target_line) {
-                            if let Some(binding) = &arm.binding {
-                                let binding_ty =
-                                    self.infer_expr_type(&arm.expr, scope).unwrap_or(Type::Unit);
-                                self.insert_scope_binding(
-                                    binding,
-                                    binding_ty,
-                                    arm.span.line,
-                                    "local",
-                                    scope,
-                                );
-                            }
-                            self.accumulate_scope_from_stmts(&arm.body, target_line, scope);
-                            return;
-                        }
                     }
                 }
                 Stmt::While(while_stmt) => {
@@ -1107,11 +1088,6 @@ impl<'a> AnalysisBuilder<'a> {
                 );
                 self.visit_stmts(&with_stmt.body, &mut body_scope);
             }
-            Stmt::Select(select_stmt) => {
-                for arm in &select_stmt.arms {
-                    self.visit_select_arm(arm, scope);
-                }
-            }
             Stmt::While(while_stmt) => {
                 self.visit_expr(&while_stmt.condition, scope);
                 let mut loop_scope = scope.clone();
@@ -1158,16 +1134,6 @@ impl<'a> AnalysisBuilder<'a> {
                 self.visit_expr(index, scope);
             }
         }
-    }
-
-    fn visit_select_arm(&mut self, arm: &SelectArm, scope: &mut BTreeMap<String, BindingInfo>) {
-        self.visit_expr(&arm.expr, scope);
-        let mut arm_scope = scope.clone();
-        if let Some(binding) = &arm.binding {
-            let binding_ty = self.infer_expr_type(&arm.expr, scope).unwrap_or(Type::Unit);
-            self.bind_named_value(binding, binding_ty, arm.span.line, "local", &mut arm_scope);
-        }
-        self.visit_stmts(&arm.body, &mut arm_scope);
     }
 
     fn bind_match_arm(
@@ -1316,7 +1282,6 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::Cast { expr, .. } => self.visit_expr(expr, scope),
             ExprKind::Unary { expr, .. } => self.visit_expr(expr, scope),
-            ExprKind::Spawn { value, .. } => self.visit_expr(value, scope),
             ExprKind::Try(inner) | ExprKind::Group(inner) => self.visit_expr(inner, scope),
             ExprKind::List(elements) | ExprKind::Set(elements) => {
                 for element in elements {
@@ -1674,7 +1639,7 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::SetContains
                 | BuiltinMember::SetInsert
                 | BuiltinMember::SetRemove => Some(Type::named("bool")),
-                BuiltinMember::QueuePut => {
+                BuiltinMember::QueuePut | BuiltinMember::QueueTryPut => {
                     let payload = receiver_type
                         .type_arguments()
                         .first()
@@ -1694,13 +1659,21 @@ impl<'a> AnalysisBuilder<'a> {
                         .first()
                         .cloned()
                         .unwrap_or(Type::Unit);
-                    Some(Type::Named("Option".to_string(), vec![payload]))
+                    Some(Type::Named("QueueReceive".to_string(), vec![payload]))
                 }
                 BuiltinMember::QueueClose | BuiltinMember::TaskGroupCancel => Some(Type::Unit),
-                BuiltinMember::TaskResult => receiver_type.type_arguments().first().cloned(),
+                BuiltinMember::TaskResult => Some(Type::Named(
+                    "TaskResult".to_string(),
+                    vec![receiver_type
+                        .type_arguments()
+                        .first()
+                        .cloned()
+                        .unwrap_or(Type::Unit)],
+                )),
                 BuiltinMember::TaskGroupStart => {
                     Some(Type::Named("Task".to_string(), vec![Type::Unit]))
                 }
+                BuiltinMember::TaskGroupStartSoon => Some(Type::Unit),
                 BuiltinMember::FileReadAll => Some(Type::Named(
                     "Result".to_string(),
                     vec![
@@ -1986,6 +1959,14 @@ impl<'a> AnalysisBuilder<'a> {
                 definition: None,
                 ty: Some(Type::Named("Task".to_string(), vec![Type::Unit])),
             }),
+            "TaskGroup" if field == "start_soon" => Some(ResolvedMember {
+                hover: builtin_function_hover(
+                    "start_soon(function, ...) -> None",
+                    "Starts a child task in the current task group without returning a task handle.",
+                ),
+                definition: None,
+                ty: Some(Type::Unit),
+            }),
             "Option" if field == "Some" => Some(ResolvedMember {
                 hover: format_variant_hover("Option", "Some", Some(&Type::named("T"))),
                 definition: None,
@@ -2006,10 +1987,54 @@ impl<'a> AnalysisBuilder<'a> {
                 definition: None,
                 ty: Some(Type::named("Result")),
             }),
-            "SendError" if matches!(field, "Closed" | "Cancelled") => Some(ResolvedMember {
-                hover: format_variant_hover("SendError", field, Some(&Type::named("T"))),
+            "SendError" if matches!(field, "Closed" | "Cancelled" | "TimedOut" | "Full") => {
+                Some(ResolvedMember {
+                    hover: format_variant_hover("SendError", field, Some(&Type::named("T"))),
+                    definition: None,
+                    ty: Some(Type::named("SendError")),
+                })
+            }
+            "QueueReceive" if field == "Item" => Some(ResolvedMember {
+                hover: format_variant_hover("QueueReceive", field, Some(&Type::named("T"))),
                 definition: None,
-                ty: Some(Type::named("SendError")),
+                ty: Some(Type::named("QueueReceive")),
+            }),
+            "QueueReceive" if matches!(field, "Closed" | "TimedOut" | "Cancelled") => {
+                Some(ResolvedMember {
+                    hover: format_variant_hover("QueueReceive", field, None),
+                    definition: None,
+                    ty: Some(Type::named("QueueReceive")),
+                })
+            }
+            "TaskResult" if field == "Ready" => Some(ResolvedMember {
+                hover: format_variant_hover("TaskResult", field, Some(&Type::named("T"))),
+                definition: None,
+                ty: Some(Type::named("TaskResult")),
+            }),
+            "TaskResult" if matches!(field, "TimedOut" | "Cancelled") => Some(ResolvedMember {
+                hover: format_variant_hover("TaskResult", field, None),
+                definition: None,
+                ty: Some(Type::named("TaskResult")),
+            }),
+            "WaitAny" if field == "Ready" => Some(ResolvedMember {
+                hover: "Ready(int32, T) -> WaitAny".to_string(),
+                definition: None,
+                ty: Some(Type::named("WaitAny")),
+            }),
+            "WaitAny" if matches!(field, "TimedOut" | "Cancelled") => Some(ResolvedMember {
+                hover: format_variant_hover("WaitAny", field, None),
+                definition: None,
+                ty: Some(Type::named("WaitAny")),
+            }),
+            "WaitAll" if field == "Ready" => Some(ResolvedMember {
+                hover: "Ready(Vec[T]) -> WaitAll".to_string(),
+                definition: None,
+                ty: Some(Type::named("WaitAll")),
+            }),
+            "WaitAll" if matches!(field, "TimedOut" | "Cancelled") => Some(ResolvedMember {
+                hover: format_variant_hover("WaitAll", field, None),
+                definition: None,
+                ty: Some(Type::named("WaitAll")),
             }),
             _ => None,
         }
@@ -2091,14 +2116,6 @@ impl<'a> AnalysisBuilder<'a> {
                     _ => None,
                 }
             }
-            ExprKind::Spawn { detached, value } => {
-                if *detached {
-                    Some(Type::Unit)
-                } else {
-                    let inner = self.infer_expr_type(value, scope).unwrap_or(Type::Unit);
-                    Some(Type::Named("Task".to_string(), vec![inner]))
-                }
-            }
             ExprKind::Name(name) => {
                 if let Some(binding) = scope.get(name) {
                     return Some(binding.ty.clone());
@@ -2108,7 +2125,18 @@ impl<'a> AnalysisBuilder<'a> {
                 }
                 if self.program.classes.contains_key(name)
                     || self.program.enums.contains_key(name)
-                    || matches!(name.as_str(), "Option" | "Result" | "SendError" | "Queue")
+                    || matches!(
+                        name.as_str(),
+                        "Option"
+                            | "Result"
+                            | "SendError"
+                            | "QueueReceive"
+                            | "TaskResult"
+                            | "WaitAny"
+                            | "WaitAll"
+                            | "Queue"
+                            | "TaskGroup"
+                    )
                 {
                     return Some(Type::named(name));
                 }
@@ -2172,6 +2200,9 @@ impl<'a> AnalysisBuilder<'a> {
                 if let Some(function) = self.program.functions.get(name) {
                     return Some(function.signature.return_type.clone());
                 }
+                if name == "TaskGroup" {
+                    return Some(Type::named("TaskGroup"));
+                }
                 if self.program.classes.contains_key(name) {
                     return Some(Type::named(name));
                 }
@@ -2182,6 +2213,48 @@ impl<'a> AnalysisBuilder<'a> {
                     BuiltinFunction::Sqrt => args
                         .first()
                         .and_then(|arg| self.infer_expr_type(&arg.value, scope)),
+                    BuiltinFunction::WaitAny => args.first().and_then(|arg| {
+                        let task_list = self.infer_expr_type(&arg.value, scope)?;
+                        match task_list {
+                            Type::Named(vec_name, vec_args)
+                                if vec_name == "Vec" && vec_args.len() == 1 =>
+                            {
+                                match &vec_args[0] {
+                                    Type::Named(task_name, task_args)
+                                        if task_name == "Task" && task_args.len() == 1 =>
+                                    {
+                                        Some(Type::Named(
+                                            "WaitAny".to_string(),
+                                            vec![task_args[0].clone()],
+                                        ))
+                                    }
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        }
+                    }),
+                    BuiltinFunction::WaitAll => args.first().and_then(|arg| {
+                        let task_list = self.infer_expr_type(&arg.value, scope)?;
+                        match task_list {
+                            Type::Named(vec_name, vec_args)
+                                if vec_name == "Vec" && vec_args.len() == 1 =>
+                            {
+                                match &vec_args[0] {
+                                    Type::Named(task_name, task_args)
+                                        if task_name == "Task" && task_args.len() == 1 =>
+                                    {
+                                        Some(Type::Named(
+                                            "WaitAll".to_string(),
+                                            vec![task_args[0].clone()],
+                                        ))
+                                    }
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        }
+                    }),
                     _ => builtin_function_return_type(name),
                 };
             }
@@ -2674,8 +2747,8 @@ fn format_variant_hover(enum_name: &str, variant_name: &str, payload: Option<&Ty
 
 const KEYWORDS: &[&str] = &[
     "class", "enum", "trait", "def", "if", "elif", "else", "while", "for", "in", "match", "case",
-    "with", "select", "return", "try", "spawn", "detached", "public", "mut", "borrow", "indirect",
-    "copy", "break", "continue", "pass",
+    "with", "return", "try", "public", "mut", "borrow", "indirect", "copy", "break", "continue",
+    "pass",
 ];
 
 struct CompletionMeta {
@@ -2695,6 +2768,22 @@ const BUILTIN_ENUM_COMPLETIONS: &[CompletionMeta] = &[
     CompletionMeta {
         name: "SendError",
         detail: "enum SendError[T]",
+    },
+    CompletionMeta {
+        name: "QueueReceive",
+        detail: "enum QueueReceive[T]",
+    },
+    CompletionMeta {
+        name: "TaskResult",
+        detail: "enum TaskResult[T]",
+    },
+    CompletionMeta {
+        name: "WaitAny",
+        detail: "enum WaitAny[T]",
+    },
+    CompletionMeta {
+        name: "WaitAll",
+        detail: "enum WaitAll[T]",
     },
 ];
 
@@ -2734,6 +2823,89 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 name: "Cancelled".to_string(),
                 kind: "variant".to_string(),
                 detail: "Cancelled(T) -> SendError".to_string(),
+            },
+            AnalysisCompletion {
+                name: "TimedOut".to_string(),
+                kind: "variant".to_string(),
+                detail: "TimedOut(T) -> SendError".to_string(),
+            },
+            AnalysisCompletion {
+                name: "Full".to_string(),
+                kind: "variant".to_string(),
+                detail: "Full(T) -> SendError".to_string(),
+            },
+        ],
+        "QueueReceive" => vec![
+            AnalysisCompletion {
+                name: "Item".to_string(),
+                kind: "variant".to_string(),
+                detail: "Item(T) -> QueueReceive".to_string(),
+            },
+            AnalysisCompletion {
+                name: "Closed".to_string(),
+                kind: "variant".to_string(),
+                detail: "Closed -> QueueReceive".to_string(),
+            },
+            AnalysisCompletion {
+                name: "TimedOut".to_string(),
+                kind: "variant".to_string(),
+                detail: "TimedOut -> QueueReceive".to_string(),
+            },
+            AnalysisCompletion {
+                name: "Cancelled".to_string(),
+                kind: "variant".to_string(),
+                detail: "Cancelled -> QueueReceive".to_string(),
+            },
+        ],
+        "TaskResult" => vec![
+            AnalysisCompletion {
+                name: "Ready".to_string(),
+                kind: "variant".to_string(),
+                detail: "Ready(T) -> TaskResult".to_string(),
+            },
+            AnalysisCompletion {
+                name: "TimedOut".to_string(),
+                kind: "variant".to_string(),
+                detail: "TimedOut -> TaskResult".to_string(),
+            },
+            AnalysisCompletion {
+                name: "Cancelled".to_string(),
+                kind: "variant".to_string(),
+                detail: "Cancelled -> TaskResult".to_string(),
+            },
+        ],
+        "WaitAny" => vec![
+            AnalysisCompletion {
+                name: "Ready".to_string(),
+                kind: "variant".to_string(),
+                detail: "Ready(int32, T) -> WaitAny".to_string(),
+            },
+            AnalysisCompletion {
+                name: "TimedOut".to_string(),
+                kind: "variant".to_string(),
+                detail: "TimedOut -> WaitAny".to_string(),
+            },
+            AnalysisCompletion {
+                name: "Cancelled".to_string(),
+                kind: "variant".to_string(),
+                detail: "Cancelled -> WaitAny".to_string(),
+            },
+        ],
+        "WaitAll" => vec![
+            AnalysisCompletion {
+                name: "Ready".to_string(),
+                kind: "variant".to_string(),
+                detail: "Ready(Vec[T]) -> WaitAll".to_string(),
+            },
+            AnalysisCompletion {
+                name: "TimedOut".to_string(),
+                kind: "variant".to_string(),
+                detail: "TimedOut -> WaitAll".to_string(),
+            },
+            AnalysisCompletion {
+                name: "Cancelled".to_string(),
+                kind: "variant".to_string(),
+                detail: "Cancelled -> WaitAll".to_string(),
             },
         ],
         _ => Vec::new(),
@@ -2998,10 +3170,12 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::SetInsert,
         BuiltinMember::SetRemove,
         BuiltinMember::QueuePut,
+        BuiltinMember::QueueTryPut,
         BuiltinMember::QueueGet,
         BuiltinMember::QueueClose,
         BuiltinMember::TaskResult,
         BuiltinMember::TaskGroupStart,
+        BuiltinMember::TaskGroupStartSoon,
         BuiltinMember::TaskGroupCancel,
     ] {
         if BuiltinMember::resolve(base_type_name(receiver_type), builtin.name()) == Some(builtin) {
@@ -3020,15 +3194,14 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
     match BuiltinFunction::from_name(name)? {
         BuiltinFunction::Print => Some(Type::Unit),
         BuiltinFunction::Range => Some(Type::named("Range")),
-        BuiltinFunction::Tasks => Some(Type::named("TaskGroup")),
         BuiltinFunction::Cancelled => Some(Type::named("bool")),
-        BuiltinFunction::After => Some(Type::named("Duration")),
         BuiltinFunction::Sleep => Some(Type::Unit),
+        BuiltinFunction::WaitAny => None,
+        BuiltinFunction::WaitAll => None,
         BuiltinFunction::Abs => None,
         BuiltinFunction::Min => None,
         BuiltinFunction::Max => None,
         BuiltinFunction::Sqrt => None,
-        BuiltinFunction::Queue => None,
         BuiltinFunction::ParseInt32 => Some(Type::Named(
             "Result".to_string(),
             vec![Type::named("int32"), Type::named("String")],
@@ -3080,7 +3253,6 @@ fn stmt_start_line(stmt: &Stmt) -> usize {
         Stmt::Match(match_stmt) => match_stmt.span.line,
         Stmt::For(for_stmt) => for_stmt.span.line,
         Stmt::With(with_stmt) => with_stmt.span.line,
-        Stmt::Select(select_stmt) => select_stmt.span.line,
         Stmt::While(while_stmt) => while_stmt.span.line,
         Stmt::Break(stmt) => stmt.span.line,
         Stmt::Continue(stmt) => stmt.span.line,
@@ -3139,18 +3311,6 @@ fn stmt_end_line(stmt: &Stmt) -> usize {
             .map(stmt_end_line)
             .max()
             .unwrap_or(with_stmt.span.line),
-        Stmt::Select(select_stmt) => select_stmt
-            .arms
-            .iter()
-            .map(|arm| {
-                arm.body
-                    .iter()
-                    .map(stmt_end_line)
-                    .max()
-                    .unwrap_or(arm.span.line)
-            })
-            .max()
-            .unwrap_or(select_stmt.span.line),
         Stmt::While(while_stmt) => while_stmt
             .body
             .iter()

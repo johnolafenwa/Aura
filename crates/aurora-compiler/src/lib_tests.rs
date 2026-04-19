@@ -117,16 +117,16 @@ const EXAMPLE_CASES: &[(&str, &str)] = &[
         include_str!("../../../examples/strings/greeting.au"),
     ),
     (
-        "examples/concurrency/task_group_select.au",
-        include_str!("../../../examples/concurrency/task_group_select.au"),
+        "examples/concurrency/task_group_queue_sum.au",
+        include_str!("../../../examples/concurrency/task_group_queue_sum.au"),
     ),
     (
         "examples/concurrency/task_group_cancel.au",
         include_str!("../../../examples/concurrency/task_group_cancel.au"),
     ),
     (
-        "examples/concurrency/select_timeout.au",
-        include_str!("../../../examples/concurrency/select_timeout.au"),
+        "examples/concurrency/queue_get_timeout.au",
+        include_str!("../../../examples/concurrency/queue_get_timeout.au"),
     ),
     (
         "examples/concurrency/sleep_builtin.au",
@@ -141,12 +141,12 @@ const EXAMPLE_CASES: &[(&str, &str)] = &[
         include_str!("../../../examples/concurrency/bounded_queue.au"),
     ),
     (
-        "examples/concurrency/spawn_detached.au",
-        include_str!("../../../examples/concurrency/spawn_detached.au"),
+        "examples/concurrency/task_group_start_soon.au",
+        include_str!("../../../examples/concurrency/task_group_start_soon.au"),
     ),
     (
-        "examples/concurrency/select_send.au",
-        include_str!("../../../examples/concurrency/select_send.au"),
+        "examples/concurrency/queue_put_timeout.au",
+        include_str!("../../../examples/concurrency/queue_put_timeout.au"),
     ),
     (
         "examples/enums/wildcard_match.au",
@@ -280,8 +280,8 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "1\n2\n",
     ),
     (
-        "examples/concurrency/queues_spawn.au",
-        include_str!("../../../examples/concurrency/queues_spawn.au"),
+        "examples/concurrency/task_group_start.au",
+        include_str!("../../../examples/concurrency/task_group_start.au"),
         "2\n4\n6\n",
     ),
     (
@@ -295,8 +295,8 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "queued 1\nqueued 2\n3\n",
     ),
     (
-        "examples/concurrency/select_timeout_named.au",
-        include_str!("../../../examples/concurrency/select_timeout_named.au"),
+        "examples/concurrency/queue_get_timeout_named.au",
+        include_str!("../../../examples/concurrency/queue_get_timeout_named.au"),
         "timeout\n",
     ),
     (
@@ -994,7 +994,7 @@ fn mir_runtime_runs_with_example_natively() {
 
 #[test]
 fn mir_runtime_runs_queues_example_natively() {
-    let source = include_str!("../../../examples/concurrency/queues_spawn.au");
+    let source = include_str!("../../../examples/concurrency/task_group_start.au");
     let mir = lower_source_to_mir(source).expect("queue example should lower to MIR");
     let output = run_mir(&mir).expect("queue example should run directly through MIR");
     assert_eq!(output.stdout, "2\n4\n6\n");
@@ -1011,37 +1011,41 @@ fn mir_runtime_runs_send_result_example_natively() {
 }
 
 #[test]
-fn mir_runtime_runs_spawn_detached_example_natively() {
-    let source = include_str!("../../../examples/concurrency/spawn_detached.au");
-    let mir = lower_source_to_mir(source).expect("spawn_detached example should lower to MIR");
-    let output = run_mir(&mir).expect("spawn_detached example should run directly through MIR");
+fn mir_runtime_runs_task_group_start_soon_example_natively() {
+    let source = include_str!("../../../examples/concurrency/task_group_start_soon.au");
+    let mir =
+        lower_source_to_mir(source).expect("task_group_start_soon example should lower to MIR");
+    let output =
+        run_mir(&mir).expect("task_group_start_soon example should run directly through MIR");
     assert_eq!(output.stdout, "9\n");
     assert_eq!(output.value, zero_exit_value());
 }
 
 #[test]
-fn mir_runtime_runs_select_timeout_example_natively() {
-    let source = include_str!("../../../examples/concurrency/select_timeout.au");
-    let mir = lower_source_to_mir(source).expect("select_timeout example should lower to MIR");
-    let output = run_mir(&mir).expect("select_timeout example should run directly through MIR");
+fn mir_runtime_runs_queue_get_timeout_example_natively() {
+    let source = include_str!("../../../examples/concurrency/queue_get_timeout.au");
+    let mir = lower_source_to_mir(source).expect("queue_get_timeout example should lower to MIR");
+    let output = run_mir(&mir).expect("queue_get_timeout example should run directly through MIR");
     assert_eq!(output.stdout, "timeout\n");
     assert_eq!(output.value, zero_exit_value());
 }
 
 #[test]
-fn mir_runtime_runs_select_send_example_natively() {
-    let source = include_str!("../../../examples/concurrency/select_send.au");
-    let mir = lower_source_to_mir(source).expect("select_send example should lower to MIR");
-    let output = run_mir(&mir).expect("select_send example should run directly through MIR");
+fn mir_runtime_runs_queue_put_timeout_example_natively() {
+    let source = include_str!("../../../examples/concurrency/queue_put_timeout.au");
+    let mir = lower_source_to_mir(source).expect("queue_put_timeout example should lower to MIR");
+    let output = run_mir(&mir).expect("queue_put_timeout example should run directly through MIR");
     assert_eq!(output.stdout, "sent\n4\n");
     assert_eq!(output.value, zero_exit_value());
 }
 
 #[test]
-fn mir_runtime_runs_task_group_select_example_natively() {
-    let source = include_str!("../../../examples/concurrency/task_group_select.au");
-    let mir = lower_source_to_mir(source).expect("task_group_select example should lower to MIR");
-    let output = run_mir(&mir).expect("task_group_select example should run directly through MIR");
+fn mir_runtime_runs_task_group_queue_sum_example_natively() {
+    let source = include_str!("../../../examples/concurrency/task_group_queue_sum.au");
+    let mir =
+        lower_source_to_mir(source).expect("task_group_queue_sum example should lower to MIR");
+    let output =
+        run_mir(&mir).expect("task_group_queue_sum example should run directly through MIR");
     assert_eq!(output.stdout, "3\n");
     assert_eq!(output.value, zero_exit_value());
 }
@@ -1357,7 +1361,7 @@ fn maintained_example_tree_public_paths_do_not_panic() {
 
 #[test]
 fn public_run_path_runs_queues_example_natively() {
-    let source = include_str!("../../../examples/concurrency/queues_spawn.au");
+    let source = include_str!("../../../examples/concurrency/task_group_start.au");
     let output = run_source(source).expect("queue example should run through the public run path");
     assert_eq!(output.stdout, "2\n4\n6\n");
     assert_eq!(output.value, zero_exit_value());
@@ -1516,7 +1520,7 @@ fn categorized_examples_run_with_expected_output() {
                 "hello, aurora\n",
             ),
             (
-                "examples/concurrency/task_group_select.au",
+                "examples/concurrency/task_group_queue_sum.au",
                 EXAMPLE_CASES[21].1,
                 "3\n",
             ),
@@ -1526,7 +1530,7 @@ fn categorized_examples_run_with_expected_output() {
                 "0\n1\n",
             ),
             (
-                "examples/concurrency/select_timeout.au",
+                "examples/concurrency/queue_get_timeout.au",
                 EXAMPLE_CASES[23].1,
                 "timeout\n",
             ),
@@ -1546,12 +1550,12 @@ fn categorized_examples_run_with_expected_output() {
                 "queued 1\nqueued 2\n3\n",
             ),
             (
-                "examples/concurrency/spawn_detached.au",
+                "examples/concurrency/task_group_start_soon.au",
                 EXAMPLE_CASES[27].1,
                 "9\n",
             ),
             (
-                "examples/concurrency/select_send.au",
+                "examples/concurrency/queue_put_timeout.au",
                 EXAMPLE_CASES[28].1,
                 "sent\n4\n",
             ),
@@ -1748,17 +1752,16 @@ def main() -> int32:
     print(seen.remove("x"))
     print(seen.contains("y"))
 
-    jobs: Queue[int32] = queue()
+    jobs = Queue[int32]()
     jobs_copy = jobs
     print(jobs_copy.put(1))
     print(jobs.get())
     jobs.close()
 
-    task = spawn worker(4)
-    task_copy = task
-    print(task_copy.result())
-
-    with tasks() as group:
+    with TaskGroup() as group:
+        task = group.start(worker, 4)
+        task_copy = task
+        print(task_copy.result())
         group.cancel()
 
     return 0
@@ -1812,13 +1815,9 @@ def main() -> int32:
     print(parse_int32("12"))
     print(cancelled())
 
-    jobs: Queue[int32] = queue()
+    jobs = Queue[int32]()
     print(jobs.put(7))
-    select:
-        case value = jobs.get():
-            print(value)
-        case after(duration=1ms):
-            print(99)
+    print(jobs.get())
     jobs.close()
 
     sleep(0ms)
@@ -1826,10 +1825,9 @@ def main() -> int32:
     with Resource() as resource:
         print(resource.closed)
 
-    task = spawn worker(4)
-    print(task.result())
-
-    with tasks() as group:
+    with TaskGroup() as group:
+        task = group.start(worker, 4)
+        print(task.result())
         group.cancel()
 
     return second.value
@@ -1857,15 +1855,19 @@ def sleeper(started: Queue[String], finished: Queue[String]) -> None:
 def wait_for_one(queue: Queue[String]):
     while true:
         match queue.get():
-            case Option.Some(_):
+            case QueueReceive.Item(_):
                 return
-            case Option.None:
+            case QueueReceive.Closed:
+                return
+            case QueueReceive.TimedOut:
+                pass
+            case QueueReceive.Cancelled:
                 pass
 
 def main() -> int32:
-    started: Queue[String] = queue()
-    finished: Queue[String] = queue()
-    with tasks() as group:
+    started = Queue[String]()
+    finished = Queue[String]()
+    with TaskGroup() as group:
         group.start(sleeper, started, finished)
         wait_for_one(started)
         group.cancel()
@@ -1886,31 +1888,39 @@ def main() -> int32:
 }
 
 #[test]
-fn cancellation_wakes_select_tasks_promptly() {
+fn cancellation_wakes_queue_wait_tasks_promptly() {
     let source = r#"
 def waiter(started: Queue[String], jobs: Queue[int32], finished: Queue[String]) -> None:
-    started.put("select")
+    started.put("wait")
     while not cancelled():
-        select:
-            case _ = jobs.get():
+        match jobs.get(timeout=250ms):
+            case QueueReceive.Item(_):
                 pass
-            case after(250ms):
+            case QueueReceive.TimedOut:
                 pass
-    finished.put("select")
+            case QueueReceive.Closed:
+                pass
+            case QueueReceive.Cancelled:
+                pass
+    finished.put("wait")
 
 def wait_for_one(queue: Queue[String]):
     while true:
         match queue.get():
-            case Option.Some(_):
+            case QueueReceive.Item(_):
                 return
-            case Option.None:
+            case QueueReceive.Closed:
+                return
+            case QueueReceive.TimedOut:
+                pass
+            case QueueReceive.Cancelled:
                 pass
 
 def main() -> int32:
-    started: Queue[String] = queue()
-    finished: Queue[String] = queue()
-    jobs: Queue[int32] = queue()
-    with tasks() as group:
+    started = Queue[String]()
+    finished = Queue[String]()
+    jobs = Queue[int32]()
+    with TaskGroup() as group:
         group.start(waiter, started, jobs, finished)
         wait_for_one(started)
         group.cancel()
@@ -1919,13 +1929,13 @@ def main() -> int32:
 "#;
 
     let start = Instant::now();
-    let output = run_source(source).expect("select cancellation source should run");
+    let output = run_source(source).expect("queue-wait cancellation source should run");
     let elapsed = start.elapsed();
 
     assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
     assert!(
         elapsed < StdDuration::from_millis(120),
-        "select cancellation should return promptly; elapsed {:?}",
+        "queue wait cancellation should return promptly; elapsed {:?}",
         elapsed
     );
 }
@@ -1944,9 +1954,13 @@ import fs
 def consumer(jobs: Queue[int32], after_get_path: String) -> None:
     sleep(120ms)
     match jobs.get():
-        case Option.Some(_):
+        case QueueReceive.Item(_):
             pass
-        case Option.None:
+        case QueueReceive.Closed:
+            pass
+        case QueueReceive.TimedOut:
+            pass
+        case QueueReceive.Cancelled:
             pass
     match fs.write_string(after_get_path, "drained"):
         case Result.Ok(_):
@@ -1955,8 +1969,8 @@ def consumer(jobs: Queue[int32], after_get_path: String) -> None:
             pass
 
 def main() -> int32:
-    jobs: Queue[int32] = queue(capacity=1)
-    with tasks() as group:
+    jobs = Queue[int32](capacity=1)
+    with TaskGroup() as group:
         group.start(consumer, jobs, "{before_path}")
         match jobs.put(1):
             case Result.Ok(_):
@@ -2041,9 +2055,9 @@ def mark_ready(path: String):
             pass
 
 def main() -> int32:
-    with tasks() as group:
-        group.start(wait_for_text, "{fifo_path}")
-        group.start(mark_ready, "{ready_path}")
+    with TaskGroup() as group:
+        group.start_soon(wait_for_text, "{fifo_path}")
+        group.start_soon(mark_ready, "{ready_path}")
     return 0
 "#,
         fifo_path = fifo_literal,
@@ -2104,14 +2118,18 @@ def wait_for_count(queue: Queue[int32], expected: int32):
     mut seen = 0
     while seen < expected:
         match queue.get():
-            case Option.Some(_):
+            case QueueReceive.Item(_):
                 seen = seen + 1
-            case Option.None:
+            case QueueReceive.Closed:
+                pass
+            case QueueReceive.TimedOut:
+                pass
+            case QueueReceive.Cancelled:
                 pass
 
 def main() -> int32:
-    started: Queue[int32] = queue()
-    with tasks() as group:
+    started = Queue[int32]()
+    with TaskGroup() as group:
         for i in range(3000):
             group.start(sleeper, started)
         wait_for_count(started, 3000)

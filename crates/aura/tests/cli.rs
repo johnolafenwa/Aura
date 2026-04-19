@@ -1394,7 +1394,7 @@ fn build_with_direct_backend_supports_generic_data_example() {
 #[test]
 fn build_with_direct_backend_supports_concurrency_example() {
     assert_direct_backend_example_runs(
-        "examples/concurrency/queues_spawn.au",
+        "examples/concurrency/task_group_start.au",
         "queues-direct",
         "2\n4\n6\n",
     );
@@ -1632,15 +1632,15 @@ fn build_with_direct_backend_supports_string_map_and_numeric_builtins() {
 }
 
 #[test]
-fn build_with_direct_backend_ignores_closed_recv_when_timeout_arm_exists() {
+fn build_with_direct_backend_supports_queue_timeout_matches() {
     let (_, run) = build_and_run_direct_source(
-        "aurora-build-direct-select-closed-timeout",
-        "def main() -> int32:\n    ch: Queue[int32] = queue()\n    ch.close()\n    select:\n        case value = ch.get():\n            match value:\n                case Option.Some(v):\n                    print(v)\n                case Option.None:\n                    print(1)\n        case after(1ms):\n            print(2)\n    return 0\n",
+        "aurora-build-direct-queue-timeout",
+        "def main() -> int32:\n    ch = Queue[int32]()\n    match ch.get(timeout=1ms):\n        case QueueReceive.Item(v):\n            print(v)\n        case QueueReceive.Closed:\n            print(1)\n        case QueueReceive.TimedOut:\n            print(2)\n        case QueueReceive.Cancelled:\n            print(3)\n    return 0\n",
     );
 
     assert!(
         run.status.success(),
-        "direct-backend select binary should exit successfully, stderr was:\n{}",
+        "direct-backend queue timeout binary should exit successfully, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
@@ -1946,15 +1946,15 @@ fn default_build_supports_bare_none_unit_values() {
 }
 
 #[test]
-fn default_build_ignores_closed_recv_when_timeout_arm_exists() {
+fn default_build_supports_queue_timeout_matches() {
     let (_, run) = build_and_run_default_source(
-        "aurora-build-auto-select-closed-timeout",
-        "def main() -> int32:\n    ch: Queue[int32] = queue()\n    ch.close()\n    select:\n        case value = ch.get():\n            match value:\n                case Option.Some(v):\n                    print(v)\n                case Option.None:\n                    print(1)\n        case after(1ms):\n            print(2)\n    return 0\n",
+        "aurora-build-auto-queue-timeout",
+        "def main() -> int32:\n    ch = Queue[int32]()\n    match ch.get(timeout=1ms):\n        case QueueReceive.Item(v):\n            print(v)\n        case QueueReceive.Closed:\n            print(1)\n        case QueueReceive.TimedOut:\n            print(2)\n        case QueueReceive.Cancelled:\n            print(3)\n    return 0\n",
     );
 
     assert!(
         run.status.success(),
-        "default-backend select binary should exit successfully, stderr was:\n{}",
+        "default-backend queue timeout binary should exit successfully, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "2\n");
@@ -2134,7 +2134,7 @@ fn build_runs_indirect_recursive_example() {
 fn build_with_direct_backend_supports_task_result_returning_plain_classes() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-task-result-class",
-        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    task = spawn make_box()\n    box = task.result()\n    print(box.value)\n    return 0\n",
+        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        task = group.start(make_box)\n        match task.result():\n            case TaskResult.Ready(box):\n                print(box.value)\n            case TaskResult.TimedOut:\n                print(0)\n            case TaskResult.Cancelled:\n                print(0)\n    return 0\n",
     );
 
     assert!(
@@ -2149,7 +2149,7 @@ fn build_with_direct_backend_supports_task_result_returning_plain_classes() {
 fn build_supports_task_result_returning_plain_classes() {
     let (temp, source_path) = write_temp_source(
         "aurora-build-default-task-result-class",
-        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    task = spawn make_box()\n    box = task.result()\n    print(box.value)\n    return 0\n",
+        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        task = group.start(make_box)\n        match task.result():\n            case TaskResult.Ready(box):\n                print(box.value)\n            case TaskResult.TimedOut:\n                print(0)\n            case TaskResult.Cancelled:\n                print(0)\n    return 0\n",
     );
     let output_path = temp.path().join("out");
 
@@ -2181,9 +2181,9 @@ fn build_supports_task_result_returning_plain_classes() {
 
 #[test]
 fn build_produces_runnable_concurrency_binary() {
-    let fixture = repo_root().join("examples/concurrency/queues_spawn.au");
+    let fixture = repo_root().join("examples/concurrency/task_group_start.au");
     let output_dir = TempDir::new("aurora-build-concurrency");
-    let output_path = output_dir.path().join("queues-spawn");
+    let output_path = output_dir.path().join("task-group-start");
 
     let build = Command::new(aura_bin())
         .arg("build")
@@ -2934,7 +2934,7 @@ fn run_executes_programs_with_local_modules() {
 
 #[test]
 fn module_qualified_spawn_target_runs_across_commands() {
-    let temp = TempDir::new("aurora-cli-qualified-spawn");
+    let temp = TempDir::new("aurora-cli-qualified-task-start");
     fs::create_dir_all(temp.path().join("pkg")).expect("failed to create module dir");
     fs::write(
         temp.path().join("pkg/helpers.au"),
@@ -2944,7 +2944,7 @@ fn module_qualified_spawn_target_runs_across_commands() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "import pkg.helpers\n\ndef main() -> int32:\n    task = spawn pkg.helpers.work()\n    print(task.result())\n    return 0\n",
+        "import pkg.helpers\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        task = group.start(pkg.helpers.work)\n        match task.result():\n            case TaskResult.Ready(value):\n                print(value)\n            case TaskResult.TimedOut:\n                print(0)\n            case TaskResult.Cancelled:\n                print(0)\n    return 0\n",
     )
     .expect("failed to write main module");
 
@@ -2955,7 +2955,7 @@ fn module_qualified_spawn_target_runs_across_commands() {
         .expect("failed to run aura check");
     assert!(
         check.status.success(),
-        "check should accept module-qualified spawn targets, stderr was:\n{}",
+        "check should accept module-qualified task start targets, stderr was:\n{}",
         String::from_utf8_lossy(&check.stderr)
     );
 
@@ -2968,7 +2968,7 @@ fn module_qualified_spawn_target_runs_across_commands() {
 
         assert!(
             output.status.success(),
-            "{} should execute module-qualified spawn targets, stderr was:\n{}",
+            "{} should execute module-qualified task start targets, stderr was:\n{}",
             command,
             String::from_utf8_lossy(&output.stderr)
         );
@@ -2994,13 +2994,13 @@ fn module_qualified_spawn_target_runs_across_commands() {
 
         assert!(
             build.status.success(),
-            "build --backend {backend} should accept module-qualified spawn targets, stderr was:\n{}",
+            "build --backend {backend} should accept module-qualified task start targets, stderr was:\n{}",
             String::from_utf8_lossy(&build.stderr)
         );
 
         let run = Command::new(&output_path)
             .output()
-            .expect("failed to run built spawn binary");
+            .expect("failed to run built task binary");
         assert!(
             run.status.success(),
             "built binary for backend {backend} should succeed, stderr was:\n{}",
@@ -3239,7 +3239,7 @@ def run() -> Result[None, io.Error]:
     print(read_back[0])
     print(read_back[2])
 
-    with tasks() as group:
+    with TaskGroup() as group:
         udp_listener = try net.udp_bind("127.0.0.1:0")
         udp_addr = try udp_listener.local_addr()
         udp_task = group.start(serve_udp, udp_listener)
@@ -3251,7 +3251,17 @@ def run() -> Result[None, io.Error]:
                     print(try packet.text())
                 case Option.None:
                     return Result.Ok(None)
-        print(try udp_task.result())
+        match udp_task.result():
+            case TaskResult.Ready(result):
+                match result:
+                    case Result.Ok(text):
+                        print(text)
+                    case Result.Err(error):
+                        return Result.Err(error)
+            case TaskResult.Cancelled:
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                return Result.Ok(None)
 
         http_listener = try net.http_listen("127.0.0.1:0")
         http_addr = try http_listener.local_addr()
@@ -3261,7 +3271,13 @@ def run() -> Result[None, io.Error]:
         with http_response = response:
             print(http_response.status())
             print(try http_response.text())
-        try http_task.result()
+        match http_task.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Cancelled:
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                return Result.Ok(None)
 
         ws_listener = try net.websocket_listen("127.0.0.1:0")
         ws_addr = try ws_listener.local_addr()
@@ -3274,7 +3290,13 @@ def run() -> Result[None, io.Error]:
                     print(text)
                 case Option.None:
                     return Result.Ok(None)
-        try ws_task.result()
+        match ws_task.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Cancelled:
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                return Result.Ok(None)
 
     return Result.Ok(None)
 
@@ -3347,7 +3369,7 @@ def serve_tls(listener: net.TlsListener) -> Result[None, io.Error]:
             return Result.Ok(None)
 
 def run() -> Result[None, io.Error]:
-    with tasks() as group:
+    with TaskGroup() as group:
         unix_listener = try net.unix_listen("{unix_path}")
         unix_task = group.start(serve_unix, unix_listener)
         client = try net.unix_connect_timeout("{unix_path}", 1s)
@@ -3358,7 +3380,13 @@ def run() -> Result[None, io.Error]:
                     print(text)
                 case Option.None:
                     return Result.Ok(None)
-        try unix_task.result()
+        match unix_task.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Cancelled:
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                return Result.Ok(None)
 
         tls_listener = try net.tls_listen("127.0.0.1:0", "{cert_path}", "{key_path}")
         tls_addr = try tls_listener.local_addr()
@@ -3368,7 +3396,13 @@ def run() -> Result[None, io.Error]:
             try tls_client.write_all("ping!", timeout=2s)
             reply = try tls_client.read_exact(9, timeout=2s)
             print(reply.len())
-        try tls_task.result()
+        match tls_task.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Cancelled:
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                return Result.Ok(None)
 
     return Result.Ok(None)
 

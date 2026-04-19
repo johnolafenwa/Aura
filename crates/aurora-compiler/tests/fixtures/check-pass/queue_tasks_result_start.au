@@ -8,20 +8,36 @@ def double(value: int32) -> int32:
     return value * 2
 
 def main() -> int32:
-    jobs: Queue[int32] = queue()
-    task = spawn produce_numbers(jobs)
+    jobs = Queue[int32]()
+    with TaskGroup() as group:
+        task = group.start(produce_numbers, jobs)
 
-    while true:
-        match jobs.get():
-            case Option.Some(value):
-                print(value)
-            case Option.None:
-                break
+        while true:
+            match jobs.get():
+                case QueueReceive.Item(value):
+                    print(value)
+                case QueueReceive.Closed:
+                    break
+                case QueueReceive.TimedOut:
+                    pass
+                case QueueReceive.Cancelled:
+                    break
 
-    print(task.result())
+        match task.result():
+            case TaskResult.Ready(total):
+                print(total)
+            case TaskResult.Cancelled:
+                return 1
+            case TaskResult.TimedOut:
+                return 1
 
-    with tasks() as group:
         other = group.start(double, 5)
-        print(other.result())
+        match other.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case TaskResult.Cancelled:
+                return 1
+            case TaskResult.TimedOut:
+                return 1
 
     return 0

@@ -1,5 +1,5 @@
 def main() -> int32:
-    jobs: Queue[int32] = queue()
+    jobs = Queue[int32]()
     jobs.close()
 
     send_result = jobs.put(7)
@@ -11,6 +11,10 @@ def main() -> int32:
                 case SendError.Closed(value):
                     print(value)
                 case SendError.Cancelled(value):
+                    print(value)
+                case SendError.TimedOut(value):
+                    print(value)
+                case SendError.Full(value):
                     print(value)
 
     return 0

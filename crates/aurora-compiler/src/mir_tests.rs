@@ -522,6 +522,28 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(vec![Type::named("int32")])
     );
     assert_eq!(
+        lowerer.variant_payload_types(
+            Some(&Type::Named(
+                "TaskResult".to_string(),
+                vec![Type::named("bool")]
+            )),
+            "TaskResult",
+            "Ready"
+        ),
+        Some(vec![Type::named("bool")])
+    );
+    assert_eq!(
+        lowerer.variant_payload_types(
+            Some(&Type::Named(
+                "WaitAny".to_string(),
+                vec![Type::named("String")]
+            )),
+            "WaitAny",
+            "Ready"
+        ),
+        Some(vec![Type::named("int32"), Type::named("String")])
+    );
+    assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::named("String"), "split"),
         Some(Type::Named("Vec".to_string(), vec![Type::named("String")]))
     );
@@ -546,7 +568,20 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
             &Type::Named("Task".to_string(), vec![Type::named("bool")]),
             "result"
         ),
-        Some(Type::named("bool"))
+        Some(Type::Named(
+            "TaskResult".to_string(),
+            vec![Type::named("bool")]
+        ))
+    );
+    assert_eq!(
+        lowerer.builtin_runtime_member_return_type(
+            &Type::Named("Queue".to_string(), vec![Type::named("bool")]),
+            "get"
+        ),
+        Some(Type::Named(
+            "QueueReceive".to_string(),
+            vec![Type::named("bool")]
+        ))
     );
 }
 
@@ -584,7 +619,7 @@ def main() -> int32:
     mut counts = {"a": 1}
     counts["b"] = 2
     seen = Set{"a", "b"}
-    jobs: Queue[int32] = queue()
+    jobs = Queue[int32]()
     jobs.put(1)
     if true and not false:
         counter.value += values[0]
@@ -597,17 +632,22 @@ def main() -> int32:
         counter.value += i
     while counter.value < 10:
         break
-    select:
-        case value = jobs.get():
+    match jobs.get(timeout=0ms):
+        case QueueReceive.Item(value):
             print(value)
-        case after(duration=0ms):
+        case QueueReceive.TimedOut:
             counter.value += 10
+        case QueueReceive.Closed:
+            pass
+        case QueueReceive.Cancelled:
+            pass
     jobs.close()
     with Resource() as resource:
         print(resource.closed)
     print(consume(value=User(label="aurora")))
-    task = spawn worker(counter.value)
-    print(task.result())
+    with TaskGroup() as group:
+        task = group.start(worker, counter.value)
+        print(task.result())
     print(seen.contains("a"))
     print(counts.get("a"))
     return counter.value
@@ -619,21 +659,16 @@ def main() -> int32:
         .trait_impls
         .iter()
         .any(|impl_info| impl_info.trait_name == "Named"));
-    let mut saw_spawn = false;
+    let mut saw_task_start = false;
     let mut saw_vec_literal = false;
     let mut saw_set_literal = false;
     let mut saw_map_literal = false;
-    let mut saw_select = false;
     for function in module.functions.iter().chain(module.top_level.iter()) {
         for block in &function.blocks {
-            match &block.terminator {
-                Terminator::Select { .. } => saw_select = true,
-                _ => {}
-            }
             for instruction in &block.instructions {
                 if let Instruction::Assign { value, .. } = instruction {
                     match value {
-                        Rvalue::Spawn { .. } => saw_spawn = true,
+                        Rvalue::StartTask { .. } => saw_task_start = true,
                         Rvalue::VecLiteral { .. } => saw_vec_literal = true,
                         Rvalue::SetLiteral { .. } => saw_set_literal = true,
                         Rvalue::MapLiteral { .. } => saw_map_literal = true,
@@ -643,11 +678,10 @@ def main() -> int32:
             }
         }
     }
-    assert!(saw_spawn);
+    assert!(saw_task_start);
     assert!(saw_vec_literal);
     assert!(saw_set_literal);
     assert!(saw_map_literal);
-    assert!(saw_select);
 }
 
 #[test]

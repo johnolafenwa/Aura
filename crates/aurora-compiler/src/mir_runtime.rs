@@ -11,18 +11,21 @@ use crate::diag::{Diagnostic, Result};
 use crate::integer::IntegerValue;
 use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod, MirModule,
-    MirParam, MirReceiverKind, MirSelectKind, MirTraitImpl, Operand, Rvalue, Terminator,
+    MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::runtime_value::{
-    cast_numeric_value, io_error, io_read_line, option_none, option_some, result_err, result_ok,
+    cast_numeric_value, io_error, io_read_line, option_none, option_some, queue_receive_cancelled,
+    queue_receive_closed, queue_receive_item, queue_receive_timed_out, result_err, result_ok,
     run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
-    sleep_with_runtime_scheduler, spawn_lightweight_task, wait_for_select_progress,
-    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, RangeValue, RunOutput,
-    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue, TaskValue,
-    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TryRecvResult,
-    UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
-    WebSocketListenerValue, WebSocketValue,
+    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
+    task_result_cancelled, task_result_ready, task_result_timed_out, wait_all_cancelled,
+    wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_ready, wait_any_timed_out,
+    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, RangeValue,
+    RecvValueResult, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
+    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
+    TlsStreamValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
+    VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -121,7 +124,6 @@ fn validate_runtime_module_complexity(module: &MirModule) -> Result<()> {
             }
             total_arms = total_arms.saturating_add(match &block.terminator {
                 Terminator::Match { arms, .. } => arms.len(),
-                Terminator::Select { arms, .. } => arms.len(),
                 _ => 0,
             });
             if total_arms > MAX_RUNTIME_TERMINATOR_ARMS {
@@ -133,22 +135,6 @@ fn validate_runtime_module_complexity(module: &MirModule) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn deadline_after_millis_with(
-    millis: u64,
-    checked_add: impl FnOnce(StdDuration) -> Option<Instant>,
-) -> Result<Instant> {
-    checked_add(StdDuration::from_millis(millis)).ok_or_else(|| {
-        Diagnostic::new(format!(
-            "duration `{}ms` overflows the MIR runtime deadline range",
-            millis
-        ))
-    })
-}
-
-fn deadline_after_millis(millis: u64) -> Result<Instant> {
-    deadline_after_millis_with(millis, |duration| Instant::now().checked_add(duration))
 }
 
 fn run_serialized_mir_entrypoint(mir_json: &[u8], source_path: &str, source: &str) -> i32 {
@@ -1010,7 +996,6 @@ impl MirRuntime {
                 }
                 Ok(BlockOutcome::Goto(otherwise.clone()))
             }
-            Terminator::Select { arms, otherwise } => self.execute_select(arms, otherwise, env),
             Terminator::Unreachable => Err(Diagnostic::new("reached unreachable MIR block")),
         }
     }
@@ -1227,14 +1212,14 @@ impl MirRuntime {
                     )),
                 }
             }
-            Rvalue::Spawn {
-                detached,
+            Rvalue::StartTask {
+                returns_handle,
                 task_group,
                 function,
                 args,
-            } => Ok(RvalueOutcome::Value(self.spawn_function(
-                *detached,
-                task_group.as_ref(),
+            } => Ok(RvalueOutcome::Value(self.start_task(
+                *returns_handle,
+                task_group,
                 function,
                 args,
                 env,
@@ -1384,7 +1369,7 @@ impl MirRuntime {
                     return build_range(values);
                 }
 
-                if name == "queue" {
+                if name == "Queue" {
                     let values = evaluate_named_args(args, env)?;
                     if values.len() > 1 {
                         return Err(Diagnostic::new(format!(
@@ -1399,14 +1384,14 @@ impl MirRuntime {
                                 && argument.name.is_some()
                             {
                                 return Err(Diagnostic::new(
-                                    "`queue()` expects an optional `capacity=` argument",
+                                    "`Queue()` expects an optional `capacity=` argument",
                                 ));
                             }
                             let capacity =
-                                expect_i32_value(&argument.value, "queue(capacity=...)")?;
+                                expect_i32_value(&argument.value, "Queue(capacity=...)")?;
                             if capacity <= 0 {
                                 return Err(Diagnostic::new(
-                                    "`queue(capacity=...)` expects a positive `int32`",
+                                    "`Queue(capacity=...)` expects a positive `int32`",
                                 ));
                             }
                             Some(capacity as usize)
@@ -1447,7 +1432,7 @@ impl MirRuntime {
                     }));
                 }
 
-                if name == "tasks" {
+                if name == "TaskGroup" {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
                     return Ok(Value::TaskGroup(TaskGroupValue::new(&self.cancellation)));
@@ -1457,23 +1442,6 @@ impl MirRuntime {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
                     return Ok(Value::Bool(self.cancellation.is_cancelled()));
-                }
-
-                if name == "after" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["duration"], values)?;
-                    let duration = match bound[0].value.clone() {
-                        Value::Int(duration) => duration.as_i128().ok_or_else(|| {
-                            Diagnostic::new("`after(...)` duration must fit in signed timer range")
-                        })?,
-                        Value::Duration(duration) => duration,
-                        _ => {
-                            return Err(Diagnostic::new(
-                                "`after(...)` expects a duration value in MIR runtime",
-                            ))
-                        }
-                    };
-                    return Ok(Value::Duration(duration));
                 }
 
                 if name == "sleep" {
@@ -1501,6 +1469,21 @@ impl MirRuntime {
                         Some(&self.cancellation),
                     );
                     return Ok(Value::Unit);
+                }
+
+                if matches!(name.as_str(), "wait_any" | "wait_all") {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["tasks", "timeout"], values)?;
+                    let tasks = self.expect_task_list(&bound[0].value, name)?;
+                    let timeout = expect_optional_timeout(
+                        Some(&bound[1].value),
+                        &format!("{name}(timeout=...)"),
+                    )?;
+                    return if name == "wait_any" {
+                        self.wait_any(tasks, timeout)
+                    } else {
+                        self.wait_all(tasks, timeout)
+                    };
                 }
 
                 if name == "abs" {
@@ -1778,7 +1761,7 @@ impl MirRuntime {
                         return self.evaluate_channel_method(channel.clone(), field, args, env);
                     }
                     Value::Task(task) => {
-                        return self.evaluate_task_method(task.clone(), field, args);
+                        return self.evaluate_task_method(task.clone(), field, args, env);
                     }
                     Value::TaskGroup(group) => {
                         return self.evaluate_task_group_method(group.clone(), field, args, env);
@@ -1995,10 +1978,10 @@ impl MirRuntime {
         }
     }
 
-    fn spawn_function(
+    fn start_task(
         &mut self,
-        detached: bool,
-        task_group: Option<&Operand>,
+        returns_handle: bool,
+        task_group: &Operand,
         function: &str,
         args: &[MirArg],
         env: &Env,
@@ -2008,28 +1991,17 @@ impl MirRuntime {
             .get(function)
             .cloned()
             .ok_or_else(|| Diagnostic::new(format!("unknown MIR function `{}`", function)))?;
-        self.require_spawnable_function(&function)?;
+        self.require_task_startable_function(&function)?;
         let bound_args = evaluate_named_args(args, env)?;
 
-        let group_value = if let Some(group) = task_group {
-            let value = self.evaluate_operand(group, env)?;
-            let Value::TaskGroup(group) = value else {
-                return Err(Diagnostic::new(
-                    "MIR task-group spawn requires a task-group value",
-                ));
-            };
-            Some(group)
-        } else {
-            None
+        let value = self.evaluate_operand(task_group, env)?;
+        let Value::TaskGroup(group_value) = value else {
+            return Err(Diagnostic::new(
+                "MIR task start requires a task-group value",
+            ));
         };
 
-        let cancellation = if let Some(group) = &group_value {
-            group.child_cancellation()
-        } else if detached {
-            CancellationContext::default()
-        } else {
-            self.cancellation.clone()
-        };
+        let cancellation = group_value.child_cancellation();
 
         let module = (*self.module).clone();
         let stdout = self.stdout.clone();
@@ -2040,14 +2012,12 @@ impl MirRuntime {
                 .call_function(&function_for_task, None, bound_args)
                 .map(|outcome| outcome.value)
         })?;
-        if let Some(group) = group_value {
-            group.register_task(task.clone());
-        }
+        group_value.register_task(task.clone());
 
-        if detached {
-            Ok(Value::Unit)
-        } else {
+        if returns_handle {
             Ok(Value::Task(task))
+        } else {
+            Ok(Value::Unit)
         }
     }
 
@@ -2079,14 +2049,14 @@ impl MirRuntime {
         Ok(())
     }
 
-    fn require_spawnable_function(&self, function: &MirFunction) -> Result<()> {
+    fn require_task_startable_function(&self, function: &MirFunction) -> Result<()> {
         if let Some(param) = function
             .params
             .iter()
             .find(|param| param.passing != MirReceiverKind::Value)
         {
             return Err(Diagnostic::new(format!(
-                "`spawn` does not yet support borrowed parameter `{}` on function `{}` in MIR runtime",
+                "task starting does not yet support borrowed parameter `{}` on function `{}` in the MIR runtime",
                 param.name, function.name
             )));
         }
@@ -2103,73 +2073,59 @@ impl MirRuntime {
         match field {
             "put" => {
                 let values = evaluate_named_args(args, env)?;
-                let bound = bind_builtin_args(&["value"], values)?;
-                let Some(value) = bound.into_iter().next().map(|arg| arg.value) else {
+                let bound = bind_builtin_args(&["value", "timeout"], values)?;
+                let Some(value) = bound.first().map(|arg| arg.value.clone()) else {
                     return Err(Diagnostic::new(format!(
                         "internal error: `{}` should bind one argument",
                         field
                     )));
                 };
-                match channel.send_with_cancellation(value, Some(&self.cancellation)) {
+                let timeout = expect_optional_timeout(Some(&bound[1].value), "put(timeout=...)")?;
+                match channel.send_with_timeout(value, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(SendValueError::Closed(value)) => Ok(result_err(send_error_closed(value))),
                     Err(SendValueError::Cancelled(value)) => {
                         Ok(result_err(send_error_cancelled(value)))
                     }
+                    Err(SendValueError::TimedOut(value)) => {
+                        Ok(result_err(send_error_timed_out(value)))
+                    }
+                    Err(SendValueError::Full(value)) => Ok(result_err(send_error_full(value))),
+                }
+            }
+            "try_put" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["value"], values)?;
+                let Some(value) = bound.first().map(|arg| arg.value.clone()) else {
+                    return Err(Diagnostic::new(format!(
+                        "internal error: `{}` should bind one argument",
+                        field
+                    )));
+                };
+                match channel.try_send_result(value) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(SendValueError::Closed(value)) => Ok(result_err(send_error_closed(value))),
+                    Err(SendValueError::Full(value)) => Ok(result_err(send_error_full(value))),
+                    Err(SendValueError::Cancelled(value)) => {
+                        Ok(result_err(send_error_cancelled(value)))
+                    }
+                    Err(SendValueError::TimedOut(value)) => {
+                        Ok(result_err(send_error_timed_out(value)))
+                    }
                 }
             }
             "get" => {
                 let values = evaluate_named_args(args, env)?;
-                if values.len() > 1 {
-                    return Err(Diagnostic::new(
-                        "`get()` expects at most one optional `timeout` argument",
-                    ));
-                }
-                let timeout = if let Some(argument) = values.into_iter().next() {
-                    if argument
-                        .name
-                        .as_deref()
-                        .is_some_and(|name| name != "timeout")
-                    {
-                        return Err(Diagnostic::new(
-                            "`get()` only accepts the named argument `timeout`",
-                        ));
-                    }
-                    match argument.value {
-                        Value::Duration(duration) => Some(duration),
-                        Value::Int(duration) => Some(duration.as_i128().ok_or_else(|| {
-                            Diagnostic::new(
-                                "`get(timeout=...)` duration must fit in signed timer range",
-                            )
-                        })?),
-                        other => {
-                            return Err(Diagnostic::new(format!(
-                                "`get(timeout=...)` expects a `Duration`, found `{}`",
-                                other.render()
-                            )))
-                        }
-                    }
-                } else {
-                    None
-                };
-                let received = if let Some(timeout) = timeout {
-                    let timeout = u64::try_from(timeout).map_err(|_| {
-                        Diagnostic::new(format!(
-                            "duration `{}ms` does not fit in the MIR runtime timer range",
-                            timeout
-                        ))
-                    })?;
-                    channel.recv_with_cancellation(
-                        Some(StdDuration::from_millis(timeout)),
-                        Some(&self.cancellation),
-                    )
-                } else {
-                    channel.recv_with_cancellation(None, Some(&self.cancellation))
-                };
-                Ok(match received {
-                    Some(value) => option_some(value),
-                    None => option_none(),
-                })
+                let bound = bind_builtin_args(&["timeout"], values)?;
+                let timeout = expect_optional_timeout(Some(&bound[0].value), "get(timeout=...)")?;
+                Ok(
+                    match channel.recv_result_with_cancellation(timeout, Some(&self.cancellation)) {
+                        RecvValueResult::Value(value) => queue_receive_item(value),
+                        RecvValueResult::Closed => queue_receive_closed(),
+                        RecvValueResult::TimedOut => queue_receive_timed_out(),
+                        RecvValueResult::Cancelled => queue_receive_cancelled(),
+                    },
+                )
             }
             "close" => {
                 if !args.is_empty() {
@@ -2917,16 +2873,15 @@ impl MirRuntime {
         task: TaskValue,
         field: &str,
         args: &[MirArg],
+        env: &Env,
     ) -> Result<Value> {
         match field {
             "result" => {
-                if !args.is_empty() {
-                    return Err(Diagnostic::new(format!(
-                        "`{}` does not take arguments",
-                        field
-                    )));
-                }
-                self.join_task(task)
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["timeout"], values)?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[0].value), "result(timeout=...)")?;
+                self.join_task(task, timeout)
             }
             _ => Err(Diagnostic::new(format!(
                 "unsupported task method `{}`",
@@ -4088,8 +4043,79 @@ impl MirRuntime {
         }
     }
 
-    fn join_task(&mut self, task: TaskValue) -> Result<Value> {
-        task.join_result()
+    fn expect_task_list(&self, value: &Value, label: &str) -> Result<Vec<TaskValue>> {
+        let Value::Vec(tasks) = value else {
+            return Err(Diagnostic::new(format!(
+                "`{label}` expects `Vec[Task[T]]`, found `{}`",
+                value.render()
+            )));
+        };
+        let mut resolved = Vec::with_capacity(tasks.elements.len());
+        for task in &tasks.elements {
+            let Value::Task(task) = task else {
+                return Err(Diagnostic::new(format!(
+                    "`{label}` expects `Vec[Task[T]]`, found `{}`",
+                    value.render()
+                )));
+            };
+            resolved.push(task.clone());
+        }
+        Ok(resolved)
+    }
+
+    fn join_task(&mut self, task: TaskValue, timeout: Option<StdDuration>) -> Result<Value> {
+        Ok(
+            match task.wait_result_with_cancellation(timeout, Some(&self.cancellation)) {
+                TaskWaitStatus::Ready(result) => task_result_ready(result?),
+                TaskWaitStatus::TimedOut => task_result_timed_out(),
+                TaskWaitStatus::Cancelled => task_result_cancelled(),
+            },
+        )
+    }
+
+    fn wait_any(&mut self, tasks: Vec<TaskValue>, timeout: Option<StdDuration>) -> Result<Value> {
+        let deadline = runtime_deadline_after_timeout(timeout)?;
+        loop {
+            for (index, task) in tasks.iter().enumerate() {
+                if let Some(result) = task.completed_result() {
+                    let index = i32::try_from(index).map_err(|_| {
+                        Diagnostic::new("wait_any result index exceeds int32 range")
+                    })?;
+                    return Ok(wait_any_ready(index, result?));
+                }
+            }
+
+            match wait_for_runtime_scheduler(
+                Vec::new(),
+                false,
+                Vec::new(),
+                tasks.clone(),
+                deadline,
+                Some(&self.cancellation),
+            ) {
+                RuntimeSchedulerWakeReason::Ready => {}
+                RuntimeSchedulerWakeReason::TimedOut => return Ok(wait_any_timed_out()),
+                RuntimeSchedulerWakeReason::Cancelled => return Ok(wait_any_cancelled()),
+            }
+        }
+    }
+
+    fn wait_all(&mut self, tasks: Vec<TaskValue>, timeout: Option<StdDuration>) -> Result<Value> {
+        let deadline = runtime_deadline_after_timeout(timeout)?;
+        let mut results = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            let remaining = deadline.and_then(|deadline| {
+                deadline
+                    .checked_duration_since(Instant::now())
+                    .or(Some(StdDuration::from_millis(0)))
+            });
+            match task.wait_result_with_cancellation(remaining, Some(&self.cancellation)) {
+                TaskWaitStatus::Ready(result) => results.push(result?),
+                TaskWaitStatus::TimedOut => return Ok(wait_all_timed_out()),
+                TaskWaitStatus::Cancelled => return Ok(wait_all_cancelled()),
+            }
+        }
+        Ok(wait_all_ready(results))
     }
 
     fn close_task_group(
@@ -4103,10 +4129,21 @@ impl MirRuntime {
 
         let mut first_error = None;
         for task in group.drain_tasks() {
-            if let Err(error) = self.join_task(task) {
-                group.cancel();
-                if first_error.is_none() {
-                    first_error = Some(error);
+            match task.wait_result_with_cancellation(None, Some(&self.cancellation)) {
+                TaskWaitStatus::Ready(result) => {
+                    if let Err(error) = result {
+                        group.cancel();
+                        if first_error.is_none() {
+                            first_error = Some(error);
+                        }
+                    }
+                }
+                TaskWaitStatus::TimedOut => {}
+                TaskWaitStatus::Cancelled => {
+                    group.cancel();
+                    if first_error.is_none() {
+                        first_error = Some(Diagnostic::new("task group cleanup was cancelled"));
+                    }
                 }
             }
         }
@@ -4116,152 +4153,6 @@ impl MirRuntime {
         }
 
         Ok(())
-    }
-
-    fn execute_select(
-        &mut self,
-        arms: &[crate::mir::MirSelectArm],
-        otherwise: &str,
-        env: &mut Env,
-    ) -> Result<BlockOutcome> {
-        let deadlines = arms
-            .iter()
-            .map(|arm| match &arm.kind {
-                MirSelectKind::After { duration } => {
-                    let value = self.evaluate_operand(duration, env)?;
-                    let millis = match value {
-                        Value::Int(value) => value.as_i128().ok_or_else(|| {
-                            Diagnostic::new(
-                                "MIR `after(...)` duration must fit in signed timer range",
-                            )
-                        })?,
-                        Value::Duration(value) => value,
-                        other => {
-                            return Err(Diagnostic::new(format!(
-                                "MIR `after(...)` expects a duration-like value, found `{}`",
-                                other.render()
-                            )))
-                        }
-                    };
-                    let millis = u64::try_from(millis).map_err(|_| {
-                        Diagnostic::new(format!(
-                            "duration `{}ms` does not fit in the MIR runtime timer range",
-                            millis
-                        ))
-                    })?;
-                    let deadline = deadline_after_millis(millis)?;
-                    Ok(Some(deadline))
-                }
-                _ => Ok(None),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let ignore_closed_recv = deadlines.iter().any(Option::is_some);
-
-        loop {
-            for (index, arm) in arms.iter().enumerate() {
-                if let Some(value) =
-                    self.try_select_arm(arm, env, deadlines[index], ignore_closed_recv)?
-                {
-                    if let Some(binding) = &arm.binding {
-                        env.write_place(binding, value)?;
-                    }
-                    return Ok(BlockOutcome::Goto(arm.label.clone()));
-                }
-            }
-            let recv_channels = arms
-                .iter()
-                .filter_map(|arm| match &arm.kind {
-                    MirSelectKind::Recv { channel } => match self.evaluate_operand(channel, env) {
-                        Ok(Value::Channel(channel)) => Some(Ok(channel)),
-                        Ok(other) => Some(Err(Diagnostic::new(format!(
-                            "MIR `select` expected `Queue`, found `{}`",
-                            other.render()
-                        )))),
-                        Err(error) => Some(Err(error)),
-                    },
-                    _ => None,
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let send_channels = arms
-                .iter()
-                .filter_map(|arm| match &arm.kind {
-                    MirSelectKind::Send { channel, .. } => {
-                        match self.evaluate_operand(channel, env) {
-                            Ok(Value::Channel(channel)) => Some(Ok(channel)),
-                            Ok(other) => Some(Err(Diagnostic::new(format!(
-                                "MIR `select` expected `Queue`, found `{}`",
-                                other.render()
-                            )))),
-                            Err(error) => Some(Err(error)),
-                        }
-                    }
-                    _ => None,
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let active_deadlines = deadlines
-                .iter()
-                .filter_map(|deadline| deadline.as_ref().copied())
-                .collect::<Vec<_>>();
-            let wake_reason = wait_for_select_progress(
-                &recv_channels,
-                ignore_closed_recv,
-                &send_channels,
-                &active_deadlines,
-                Some(&self.cancellation),
-            );
-            if matches!(wake_reason, RuntimeSchedulerWakeReason::Cancelled) {
-                return Ok(BlockOutcome::Goto(otherwise.to_string()));
-            }
-        }
-    }
-
-    fn try_select_arm(
-        &mut self,
-        arm: &crate::mir::MirSelectArm,
-        env: &mut Env,
-        deadline: Option<Instant>,
-        ignore_closed_recv: bool,
-    ) -> Result<Option<Value>> {
-        match &arm.kind {
-            MirSelectKind::After { .. } => {
-                if let Some(deadline) = deadline {
-                    if Instant::now() >= deadline {
-                        return Ok(Some(Value::Unit));
-                    }
-                }
-                Ok(None)
-            }
-            MirSelectKind::Recv { channel } => {
-                let channel = self.evaluate_operand(channel, env)?;
-                let Value::Channel(channel) = channel else {
-                    return Err(Diagnostic::new(
-                        "MIR `select` recv arm requires a channel value",
-                    ));
-                };
-                match channel.try_recv() {
-                    TryRecvResult::Value(value) => Ok(Some(option_some(value))),
-                    TryRecvResult::Closed if ignore_closed_recv => Ok(None),
-                    TryRecvResult::Closed => Ok(Some(option_none())),
-                    TryRecvResult::Empty => Ok(None),
-                }
-            }
-            MirSelectKind::Send { channel, value } => {
-                let channel = self.evaluate_operand(channel, env)?;
-                let Value::Channel(channel) = channel else {
-                    return Err(Diagnostic::new(
-                        "MIR `select` send arm requires a channel value",
-                    ));
-                };
-                if !channel.is_ready_for_scheduler_send() {
-                    return Ok(None);
-                }
-                let value = self.evaluate_operand(value, env)?;
-                Ok(Some(match channel.send(value) {
-                    Ok(()) => result_ok(Value::Unit),
-                    Err(value) => result_err(send_error_closed(value)),
-                }))
-            }
-        }
     }
 
     fn evaluate_operand(&self, operand: &Operand, env: &Env) -> Result<Value> {
@@ -4387,6 +4278,16 @@ impl MirRuntime {
             BinaryOp::Greater => eval_ordering(BinaryOp::Greater, left, right),
             BinaryOp::GreaterEq => eval_ordering(BinaryOp::GreaterEq, left, right),
         }
+    }
+}
+
+fn runtime_deadline_after_timeout(timeout: Option<StdDuration>) -> Result<Option<Instant>> {
+    match timeout {
+        Some(timeout) => Instant::now()
+            .checked_add(timeout)
+            .map(Some)
+            .ok_or_else(|| Diagnostic::new("timeout overflows the MIR runtime deadline range")),
+        None => Ok(None),
     }
 }
 

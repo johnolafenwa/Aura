@@ -520,27 +520,31 @@ match borrow mut result:
 Queues transfer ownership of sent values. When you put a value into a queue, it moves:
 
 ```python
-jobs: Queue[String] = queue()
+jobs = Queue[String]()
 jobs.put("hello")      # "hello" moves into the queue
 # the sent string is now owned by whichever task receives it
 ```
 
-Queue and task handles are cheap copy-like references. Passing a queue to `spawn` or `tasks().start(...)` shares the same underlying queue; you do not need `.clone()` for the common case:
+Queue and task handles are cheap copy-like references. Passing a queue to `TaskGroup.start(...)` shares the same underlying queue; you do not need `.clone()` for the common case:
 
 ```python
 def send_message(jobs: Queue[String]):
     jobs.put("from task")
     jobs.close()
 
-jobs: Queue[String] = queue()
-task = spawn send_message(jobs)
-msg = jobs.get()       # returns Option[String]
-match msg:
-    case Some(value):
-        print(value)   # "from task"
-    case None:
-        pass
-task.result()
+jobs = Queue[String]()
+with TaskGroup() as group:
+    task = group.start(send_message, jobs)
+    match jobs.get():
+        case QueueReceive.Item(value):
+            print(value)   # "from task"
+        case QueueReceive.Closed:
+            pass
+        case QueueReceive.TimedOut:
+            pass
+        case QueueReceive.Cancelled:
+            pass
+    task.result()
 ```
 
 Queue and task handles are cheap copy-like values, so the maintained surface does not require `.clone()` when passing them around.

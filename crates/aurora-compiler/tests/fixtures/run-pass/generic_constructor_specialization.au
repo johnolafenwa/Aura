@@ -14,9 +14,13 @@ def main() -> int32:
             print("send failed")
 
     match jobs.get():
-        case Some(value):
+        case QueueReceive.Item(value):
             print(value)
-        case None:
+        case QueueReceive.Closed:
+            print(0)
+        case QueueReceive.TimedOut:
+            print(0)
+        case QueueReceive.Cancelled:
             print(0)
 
     return 0

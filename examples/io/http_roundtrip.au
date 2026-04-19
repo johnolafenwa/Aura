@@ -11,7 +11,7 @@ def serve_http(listener: net.HttpListener) -> Result[None, io.Error]:
             return Result.Ok(None)
 
 def run() -> Result[None, io.Error]:
-    with tasks() as group:
+    with TaskGroup() as group:
         listener = try net.http_listen("127.0.0.1:0")
         address = try listener.local_addr()
         server = group.start(serve_http, listener)
@@ -22,7 +22,13 @@ def run() -> Result[None, io.Error]:
             print(http_response.status())
             print(try http_response.text())
 
-        try server.result()
+        match server.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Cancelled:
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                return Result.Ok(None)
         return Result.Ok(None)
 
 def main() -> int32:

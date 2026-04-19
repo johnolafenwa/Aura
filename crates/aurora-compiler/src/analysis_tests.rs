@@ -158,14 +158,14 @@ fn machine_readable_analysis_reports_diagnostics() {
 }
 
 #[test]
-fn select_timer_analysis_does_not_treat_after_or_ms_as_unknown() {
-    let source = include_str!("../../../examples/concurrency/select_send.au");
+fn queue_timeout_analysis_does_not_treat_queue_receive_or_ms_as_unknown() {
+    let source = "def main() -> int32:\n    jobs = Queue[int32]()\n    match jobs.get(timeout=5ms):\n        case QueueReceive.Item(value):\n            print(value)\n        case QueueReceive.TimedOut:\n            print(\"timeout\")\n        case _:\n            pass\n    return 0\n";
     let analysis = analyze_source(source);
 
     assert!(analysis.diagnostics.is_empty());
     assert!(analysis.occurrences.iter().any(|occurrence| occurrence
         .hover
-        .contains("after(duration: Duration) -> Duration")));
+        .contains("get(timeout: Duration = ...) -> QueueReceive[T]")));
 }
 
 #[test]
@@ -695,6 +695,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         .map(|completion| completion.name)
         .collect::<Vec<_>>();
     assert!(task_group_member_names.contains(&"start".to_string()));
+    assert!(task_group_member_names.contains(&"start_soon".to_string()));
 
     let scope = BTreeMap::from([
         (
@@ -726,6 +727,37 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
                     end_character: 7,
                 },
                 hover: "binding mapping: Map[String, int32]".to_string(),
+            },
+        ),
+        (
+            "task".to_string(),
+            super::BindingInfo {
+                ty: Type::Named("Task".to_string(), vec![Type::named("int32")]),
+                trait_bounds: Vec::new(),
+                definition: super::AnalysisRange {
+                    file_path: None,
+                    line: 0,
+                    start_character: 0,
+                    end_character: 4,
+                },
+                hover: "binding task: Task[int32]".to_string(),
+            },
+        ),
+        (
+            "tasks".to_string(),
+            super::BindingInfo {
+                ty: Type::Named(
+                    "Vec".to_string(),
+                    vec![Type::Named("Task".to_string(), vec![Type::named("int32")])],
+                ),
+                trait_bounds: Vec::new(),
+                definition: super::AnalysisRange {
+                    file_path: None,
+                    line: 0,
+                    start_character: 0,
+                    end_character: 5,
+                },
+                hover: "binding tasks: Vec[Task[int32]]".to_string(),
             },
         ),
     ]);
@@ -765,29 +797,32 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     );
     assert_eq!(
         builder.infer_expr_type(
-            &expr(ExprKind::Spawn {
-                detached: false,
-                value: Box::new(expr(ExprKind::Call {
-                    callee: Box::new(expr(ExprKind::Name("helper".to_string()))),
-                    args: Vec::new(),
-                })),
+            &expr(ExprKind::Call {
+                callee: Box::new(expr(ExprKind::Name("wait_any".to_string()))),
+                args: vec![arg(expr(ExprKind::Name("tasks".to_string())))],
             }),
             &scope,
         ),
-        Some(Type::Named("Task".to_string(), vec![Type::named("int32")]))
+        Some(Type::Named(
+            "WaitAny".to_string(),
+            vec![Type::named("int32")],
+        ))
     );
     assert_eq!(
         builder.infer_expr_type(
-            &expr(ExprKind::Spawn {
-                detached: true,
-                value: Box::new(expr(ExprKind::Call {
-                    callee: Box::new(expr(ExprKind::Name("helper".to_string()))),
-                    args: Vec::new(),
+            &expr(ExprKind::Call {
+                callee: Box::new(expr(ExprKind::Member {
+                    object: Box::new(expr(ExprKind::Name("task".to_string()))),
+                    field: "result".to_string(),
                 })),
+                args: Vec::new(),
             }),
             &scope,
         ),
-        Some(Type::Unit)
+        Some(Type::Named(
+            "TaskResult".to_string(),
+            vec![Type::named("int32")],
+        ))
     );
     assert_eq!(
         builder.infer_expr_type(
@@ -1153,7 +1188,7 @@ fn completion_scope_tracks_nested_statement_bindings() {
         "        return self.value",
         "",
         "def scoped(value: int32) -> int32:",
-        "    jobs: Queue[int32] = queue()",
+        "    jobs = Queue[int32]()",
         "    if value > 0:",
         "        positive = value",
         "        print(positive)",
@@ -1169,12 +1204,12 @@ fn completion_scope_tracks_nested_statement_bindings() {
         "            print(wildcard)",
         "    for item in [1, 2, 3]:",
         "        print(item)",
-        "    with tasks() as group:",
+        "    with TaskGroup() as group:",
         "        print(group.cancel())",
-        "    select:",
-        "        case received = jobs.get():",
+        "    match jobs.get(timeout=1ms):",
+        "        case QueueReceive.Item(received):",
         "            print(received)",
-        "        case after(1ms):",
+        "        case _:",
         "            pass",
         "    while value > 0:",
         "        loop_value = value",
@@ -1224,14 +1259,14 @@ fn compiler_analysis_accepts_builtin_named_arguments() {
 }
 
 #[test]
-fn compiler_analysis_handles_named_after_duration() {
-    let source = include_str!("../../../examples/concurrency/select_timeout_named.au");
+fn compiler_analysis_handles_named_wait_any_timeout() {
+    let source = "def worker(value: int32) -> int32:\n    return value\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        mut tasks = Vec[Task[int32]]()\n        tasks.push(group.start(worker, 1))\n        print(wait_any(tasks, timeout=5ms))\n    return 0\n";
     let analysis = analyze_source(source);
 
     assert!(analysis.diagnostics.is_empty());
     assert!(analysis.occurrences.iter().any(|occurrence| occurrence
         .hover
-        .contains("after(duration: Duration) -> Duration")));
+        .contains("wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]")));
 }
 
 #[test]
@@ -1668,10 +1703,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
     );
     assert_eq!(builtin_function_return_type("min"), None);
     assert_eq!(builtin_function_return_type("queue"), None);
-    assert_eq!(
-        builtin_function_return_type("tasks"),
-        Some(Type::named("TaskGroup"))
-    );
+    assert_eq!(builtin_function_return_type("TaskGroup"), None);
     assert_eq!(
         format_function_detail(&function_decl("render", "bool")),
         "render(int32) -> bool"
@@ -1845,18 +1877,14 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         builtin_function_return_type("range"),
         Some(Type::named("Range"))
     );
-    assert_eq!(
-        builtin_function_return_type("tasks"),
-        Some(Type::named("TaskGroup"))
-    );
+    assert_eq!(builtin_function_return_type("TaskGroup"), None);
     assert_eq!(
         builtin_function_return_type("cancelled"),
         Some(Type::named("bool"))
     );
-    assert_eq!(
-        builtin_function_return_type("after"),
-        Some(Type::named("Duration"))
-    );
+    assert_eq!(builtin_function_return_type("after"), None);
+    assert_eq!(builtin_function_return_type("wait_any"), None);
+    assert_eq!(builtin_function_return_type("wait_all"), None);
     assert_eq!(builtin_function_return_type("sleep"), Some(Type::Unit));
     assert_eq!(
         builtin_function_return_type("parse_int32"),
@@ -1928,18 +1956,15 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         })],
         span: Span::new(11, 5),
     });
-    let select_stmt = crate::ast::Stmt::Select(crate::ast::SelectStmt {
-        arms: vec![crate::ast::SelectArm {
-            binding: Some("value".to_string()),
-            expr: Expr {
-                kind: ExprKind::Name("ready".to_string()),
-                span: Span::new(13, 12),
-            },
-            body: vec![crate::ast::Stmt::Pass(PassStmt {
-                span: Span::new(14, 9),
-            })],
-            span: Span::new(13, 5),
-        }],
+    let helper_with_stmt = crate::ast::Stmt::With(crate::ast::WithStmt {
+        binding: "group".to_string(),
+        value: Expr {
+            kind: ExprKind::Name("group".to_string()),
+            span: Span::new(13, 10),
+        },
+        body: vec![crate::ast::Stmt::Pass(PassStmt {
+            span: Span::new(14, 9),
+        })],
         span: Span::new(13, 5),
     });
     let while_stmt = crate::ast::Stmt::While(crate::ast::WhileStmt {
@@ -1957,7 +1982,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         match_stmt,
         for_stmt,
         with_stmt,
-        select_stmt,
+        helper_with_stmt,
         while_stmt,
     ];
     assert_eq!(stmt_end_line(&stmts[0]), 5);

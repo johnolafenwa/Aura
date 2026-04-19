@@ -155,7 +155,6 @@ pub enum Stmt {
     Match(MatchStmt),
     For(ForStmt),
     With(WithStmt),
-    Select(SelectStmt),
     While(WhileStmt),
     Break(BreakStmt),
     Continue(ContinueStmt),
@@ -280,20 +279,6 @@ pub struct WithStmt {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct SelectStmt {
-    pub arms: Vec<SelectArm>,
-    pub span: Span,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct SelectArm {
-    pub binding: Option<String>,
-    pub expr: Expr,
-    pub body: Vec<Stmt>,
-    pub span: Span,
-}
-
-#[derive(Clone, Debug, Serialize)]
 pub struct WhileStmt {
     pub condition: Expr,
     pub body: Vec<Stmt>,
@@ -362,10 +347,6 @@ pub enum ExprKind {
     Index {
         object: Box<Expr>,
         index: Box<Expr>,
-    },
-    Spawn {
-        detached: bool,
-        value: Box<Expr>,
     },
     Try(Box<Expr>),
     Group(Box<Expr>),

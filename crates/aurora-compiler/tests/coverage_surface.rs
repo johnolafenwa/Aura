@@ -189,13 +189,14 @@ def main() -> int32:
     print(summarize(counter))
     print(summarize(Badge(text="badge")))
 
-    jobs: Queue[int32] = queue()
+    jobs = Queue[int32]()
     print(jobs.put(7))
     print(jobs.get())
     jobs.close()
 
-    task = spawn worker(4)
-    print(task.result())
+    with TaskGroup() as group:
+        task = group.start(worker, 4)
+        print(task.result())
 
     with Resource() as resource:
         print(resource.closed)
@@ -349,9 +350,9 @@ fn maintained_example_subset_runs_via_public_entrypoints_and_direct_codegen() {
         "examples/numbers/numeric_builtins.au",
         "examples/strings/string_methods.au",
         "examples/strings/string_parsing_and_formatting.au",
-        "examples/concurrency/queues_spawn.au",
+        "examples/concurrency/task_group_start.au",
         "examples/concurrency/queue_timeout.au",
-        "examples/concurrency/select_timeout_named.au",
+        "examples/concurrency/queue_get_timeout_named.au",
         "examples/modules/trait_impl_imports.au",
         "examples/traits/operator_traits.au",
     ];
