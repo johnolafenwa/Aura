@@ -11,6 +11,7 @@ use crate::diag::Span;
 use crate::integer::IntegerValue;
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::path::PathBuf;
@@ -134,6 +135,10 @@ const EXAMPLE_CASES: &[(&str, &str)] = &[
     (
         "examples/concurrency/send_result.au",
         include_str!("../../../examples/concurrency/send_result.au"),
+    ),
+    (
+        "examples/concurrency/bounded_queue.au",
+        include_str!("../../../examples/concurrency/bounded_queue.au"),
     ),
     (
         "examples/concurrency/spawn_detached.au",
@@ -283,6 +288,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "examples/concurrency/queue_timeout.au",
         include_str!("../../../examples/concurrency/queue_timeout.au"),
         "timeout\n",
+    ),
+    (
+        "examples/concurrency/bounded_queue.au",
+        include_str!("../../../examples/concurrency/bounded_queue.au"),
+        "queued 1\nqueued 2\n3\n",
     ),
     (
         "examples/concurrency/select_timeout_named.au",
@@ -1531,93 +1541,98 @@ fn categorized_examples_run_with_expected_output() {
                 "7\n",
             ),
             (
-                "examples/concurrency/spawn_detached.au",
+                "examples/concurrency/bounded_queue.au",
                 EXAMPLE_CASES[26].1,
+                "queued 1\nqueued 2\n3\n",
+            ),
+            (
+                "examples/concurrency/spawn_detached.au",
+                EXAMPLE_CASES[27].1,
                 "9\n",
             ),
             (
                 "examples/concurrency/select_send.au",
-                EXAMPLE_CASES[27].1,
+                EXAMPLE_CASES[28].1,
                 "sent\n4\n",
             ),
             (
                 "examples/enums/wildcard_match.au",
-                EXAMPLE_CASES[28].1,
+                EXAMPLE_CASES[29].1,
                 "2\n",
             ),
             (
                 "examples/generics/generic_method_calls.au",
-                EXAMPLE_CASES[29].1,
+                EXAMPLE_CASES[30].1,
                 "7\n",
             ),
             (
                 "examples/generics/bounded_types.au",
-                EXAMPLE_CASES[30].1,
+                EXAMPLE_CASES[31].1,
                 "aurora\nempty\n",
             ),
             (
                 "examples/traits/marker_trait.au",
-                EXAMPLE_CASES[31].1,
+                EXAMPLE_CASES[32].1,
                 "1\n",
             ),
             (
                 "examples/traits/specialized_generic_impl.au",
-                EXAMPLE_CASES[32].1,
+                EXAMPLE_CASES[33].1,
                 "hello\n",
             ),
             (
                 "examples/concurrency/minute_duration.au",
-                EXAMPLE_CASES[33].1,
+                EXAMPLE_CASES[34].1,
                 "120000ms\n",
             ),
             (
                 "examples/traits/generic_dispatch_multiple_types.au",
-                EXAMPLE_CASES[34].1,
+                EXAMPLE_CASES[35].1,
                 "dog\ncat\n",
             ),
             (
                 "examples/strings/string_methods.au",
-                EXAMPLE_CASES[35].1,
+                EXAMPLE_CASES[36].1,
                 "15\ntrue\ntrue\ntrue\naurora repo\n2\naurora\nrepo\naurora lang\naurora repo\nAURORA REPO\nrepo\nnone\naurora\nnone\n11\n",
             ),
             (
                 "examples/numbers/numeric_builtins.au",
-                EXAMPLE_CASES[36].1,
+                EXAMPLE_CASES[37].1,
                 "7\n3.5\n2\n12\n9.0\n9.0\n",
             ),
             (
                 "examples/collections/map_basics.au",
-                EXAMPLE_CASES[37].1,
+                EXAMPLE_CASES[38].1,
                 "3\ntrue\n1\n1\n5\naurora\n3\n3\n3\n3\ntrue\n",
             ),
             (
                 "examples/collections/set_basics.au",
-                EXAMPLE_CASES[38].1,
+                EXAMPLE_CASES[39].1,
                 "3\ntrue\nfalse\ntrue\ntrue\n9\ntrue\ntrue\n1\n",
             ),
             (
                 "examples/strings/string_parsing_and_formatting.au",
-                EXAMPLE_CASES[39].1,
+                EXAMPLE_CASES[40].1,
                 "42\n-9000000000\n3.5\ntrue\naurora-lang-tests\ntrue\n12\n4\n9\n3.0\n",
             ),
             (
                 "examples/traits/generic_trait_bounds.au",
-                EXAMPLE_CASES[40].1,
+                EXAMPLE_CASES[41].1,
                 "20\n",
             ),
             (
                 "examples/traits/operator_traits.au",
-                EXAMPLE_CASES[41].1,
+                EXAMPLE_CASES[42].1,
                 "6\n8\n-6\n-8\n",
             ),
             (
                 "examples/traits/ordering_traits.au",
-                EXAMPLE_CASES[42].1,
+                EXAMPLE_CASES[43].1,
                 "true\ntrue\ntrue\ntrue\n2\n",
             ),
             (
                 "examples/basics/borrowed_lifetime_labels.au",
-                EXAMPLE_CASES[43].1,
+                EXAMPLE_CASES[44].1,
                 "aurora\n",
             ),
         ];
@@ -1913,6 +1928,162 @@ def main() -> int32:
         "select cancellation should return promptly; elapsed {:?}",
         elapsed
     );
+}
+
+#[test]
+fn bounded_queue_blocks_second_put_until_capacity_frees() {
+    let temp = TempDir::new("aurora-bounded-queue");
+    let before_path = temp.path().join("before.txt");
+    let after_path = temp.path().join("after.txt");
+    let before_literal = escape_aurora_string(&before_path.display().to_string());
+    let after_literal = escape_aurora_string(&after_path.display().to_string());
+    let source = format!(
+        r#"
+import fs
+
+def consumer(jobs: Queue[int32], after_get_path: String) -> None:
+    sleep(120ms)
+    match jobs.get():
+        case Option.Some(_):
+            pass
+        case Option.None:
+            pass
+    match fs.write_string(after_get_path, "drained"):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+
+def main() -> int32:
+    jobs: Queue[int32] = queue(capacity=1)
+    with tasks() as group:
+        group.start(consumer, jobs, "{before_path}")
+        match jobs.put(1):
+            case Result.Ok(_):
+                pass
+            case Result.Err(_):
+                return 1
+        match fs.write_string("{after_path}", "before-second"):
+            case Result.Ok(_):
+                pass
+            case Result.Err(_):
+                return 2
+        match jobs.put(2):
+            case Result.Ok(_):
+                pass
+            case Result.Err(_):
+                return 3
+        print("second-put-finished")
+    return 0
+"#,
+        before_path = before_literal,
+        after_path = after_literal
+    );
+
+    let handle = thread::spawn(move || run_source(&source));
+    let deadline = Instant::now() + StdDuration::from_secs(3);
+    while Instant::now() < deadline && !after_path.exists() {
+        thread::sleep(StdDuration::from_millis(5));
+    }
+
+    thread::sleep(StdDuration::from_millis(40));
+    let second_put_finished_early = before_path.exists();
+    let output = handle
+        .join()
+        .expect("bounded queue runtime thread should join")
+        .expect("bounded queue source should run");
+
+    assert!(
+        after_path.exists(),
+        "bounded queue source never signalled the first put path"
+    );
+    assert!(
+        !second_put_finished_early,
+        "second put should not finish before the consumer frees capacity"
+    );
+    assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
+    assert_eq!(output.stdout.trim(), "second-put-finished");
+}
+
+#[cfg(unix)]
+#[test]
+fn async_file_io_keeps_the_scheduler_running_while_a_fifo_read_waits() {
+    let _guard = lock_io_example();
+    let temp = TempDir::new("aurora-async-file-io");
+    let fifo_path = temp.path().join("events.fifo");
+    let ready_path = temp.path().join("ready.txt");
+    let fifo_literal = escape_aurora_string(&fifo_path.display().to_string());
+    let ready_literal = escape_aurora_string(&ready_path.display().to_string());
+
+    let status = Command::new("mkfifo")
+        .arg(&fifo_path)
+        .status()
+        .expect("mkfifo should be available");
+    assert!(status.success(), "mkfifo should succeed");
+
+    let source = format!(
+        r#"
+import fs
+
+def wait_for_text(path: String):
+    match fs.read_to_string(path):
+        case Result.Ok(text):
+            print(text)
+        case Result.Err(err):
+            print(err)
+
+def mark_ready(path: String):
+    sleep(20ms)
+    match fs.write_string(path, "ready"):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+
+def main() -> int32:
+    with tasks() as group:
+        group.start(wait_for_text, "{fifo_path}")
+        group.start(mark_ready, "{ready_path}")
+    return 0
+"#,
+        fifo_path = fifo_literal,
+        ready_path = ready_literal
+    );
+
+    let writer_path = fifo_path.clone();
+    let writer = thread::spawn(move || {
+        thread::sleep(StdDuration::from_millis(180));
+        let mut fifo = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(writer_path)
+            .expect("fifo writer should open the fifo");
+        fifo.write_all(b"ping").expect("fifo writer should succeed");
+    });
+
+    let handle = thread::spawn(move || run_source(&source));
+    let ready_deadline = Instant::now() + StdDuration::from_millis(120);
+    let mut ready_seen = false;
+    while Instant::now() < ready_deadline {
+        if ready_path.exists() {
+            ready_seen = true;
+            break;
+        }
+        thread::sleep(StdDuration::from_millis(5));
+    }
+
+    writer.join().expect("fifo writer thread should join");
+    let output = handle
+        .join()
+        .expect("async file I/O runtime thread should join")
+        .expect("async file I/O source should run");
+
+    assert!(
+        ready_seen,
+        "scheduler should keep running other tasks while a FIFO read waits"
+    );
+    assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
+    assert_eq!(output.stdout.trim(), "ping");
 }
 
 #[test]

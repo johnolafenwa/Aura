@@ -1,6 +1,6 @@
 use super::{
     cast_numeric_value, io_decode_utf8, lock_mutex, option_none, option_some, render_float,
-    result_err, result_ok, send_error_closed, sleep_with_runtime_scheduler,
+    result_err, result_ok, send_error_cancelled, send_error_closed, sleep_with_runtime_scheduler,
     wait_for_select_progress, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
     HttpListenerValue, HttpResponseValue, MapValue, RangeValue, SetValue, TaskGroupValue,
     TaskValue, TcpListenerValue, TcpStreamValue, TryRecvResult, UdpSocketValue, Value, VecValue,
@@ -84,6 +84,10 @@ fn option_and_result_helpers_render_expected_variants() {
         send_error_closed(Value::Int(IntegerValue::from_signed(3))).render(),
         "SendError.Closed(3)"
     );
+    assert_eq!(
+        send_error_cancelled(Value::Int(IntegerValue::from_signed(4))).render(),
+        "SendError.Cancelled(4)"
+    );
 }
 
 #[test]
@@ -165,6 +169,43 @@ fn channel_runtime_helpers_cover_send_receive_and_close_paths() {
         Value::Bool(true)
     );
     assert!(channel.recv_with_cancellation(None, None).is_none());
+}
+
+#[test]
+fn bounded_channel_waits_for_capacity_before_accepting_another_value() {
+    let channel = ChannelValue::with_capacity(1);
+    channel
+        .send(Value::Int(IntegerValue::from_signed(1)))
+        .expect("first bounded send should succeed");
+
+    let delayed_recv = channel.clone();
+    let worker = thread::spawn(move || {
+        thread::sleep(StdDuration::from_millis(80));
+        delayed_recv.try_recv()
+    });
+
+    let start = Instant::now();
+    channel
+        .send(Value::Int(IntegerValue::from_signed(2)))
+        .expect("second send should succeed after capacity frees");
+    let elapsed = start.elapsed();
+    let received = worker
+        .join()
+        .expect("bounded channel worker should join successfully");
+
+    assert_eq!(
+        received,
+        TryRecvResult::Value(Value::Int(IntegerValue::from_signed(1)))
+    );
+    assert!(
+        elapsed >= StdDuration::from_millis(60),
+        "bounded send should wait for free capacity; elapsed {:?}",
+        elapsed
+    );
+    assert_eq!(
+        channel.try_recv(),
+        TryRecvResult::Value(Value::Int(IntegerValue::from_signed(2)))
+    );
 }
 
 #[test]
@@ -281,6 +322,7 @@ fn runtime_scheduler_wakes_select_wait_on_cancellation() {
         wait_for_select_progress(
             &[channel],
             true,
+            &[],
             &[Instant::now() + StdDuration::from_millis(250)],
             Some(&cancellation),
         );

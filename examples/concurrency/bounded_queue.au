@@ -1,0 +1,41 @@
+def consumer(inbox: Queue[int32]) -> int32:
+    sleep(5ms)
+
+    mut total: int32 = 0
+    match inbox.get():
+        case Option.Some(value):
+            total += value
+        case Option.None:
+            return total
+
+    sleep(5ms)
+
+    match inbox.get():
+        case Option.Some(value):
+            total += value
+        case Option.None:
+            pass
+
+    return total
+
+def main() -> int32:
+    jobs: Queue[int32] = queue(capacity=1)
+    worker = spawn consumer(jobs)
+
+    match jobs.put(1):
+        case Result.Ok(_):
+            print("queued 1")
+        case Result.Err(_):
+            print("send failed")
+            return 1
+
+    match jobs.put(2):
+        case Result.Ok(_):
+            print("queued 2")
+        case Result.Err(_):
+            print("send failed")
+            return 1
+
+    jobs.close()
+    print(worker.result())
+    return 0

@@ -304,6 +304,6 @@ This surface is deliberately explicit but no longer relies on the old blocking/p
 - queue waits, `sleep(...)`, `select`, socket waits, and the maintained HTTP helpers all run through the shared runtime scheduler
 - socket-backed networking and HTTP convenience helpers use nonblocking descriptors with timeout and cancellation support
 - Aurora tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
-- ordinary file operations still execute synchronously for now
+- ordinary file operations now offload through the shared scheduler-backed runtime instead of pinning a lightweight task on a blocking host thread
 
-That keeps the execution model straightforward while removing the old timeout-spin loops and blocking HTTP special case.
+That keeps the execution model straightforward while removing the old timeout-spin loops, the blocking HTTP special case, and the old synchronous file-I/O mismatch.

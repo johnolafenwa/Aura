@@ -408,8 +408,14 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
 - `queue_timeout.au`
   - `Queue.get(timeout=...)` for the ordinary timeout case without `select`
   - prints `timeout`
+- `bounded_queue.au`
+  - `queue(capacity=...)` and `Queue.put(...)` waiting for bounded-capacity space on the shared scheduler
+  - prints:
+    - `queued 1`
+    - `queued 2`
+    - `3`
 - `send_result.au`
-  - `Queue.put()` returning `Result[None, SendError[T]]`
+  - `Queue.put()` returning `Result[None, SendError[T]]`, including both `Closed(...)` and `Cancelled(...)`
   - prints `7`
 - `spawn_detached.au`
   - explicit detached background work with `spawn detached`
@@ -587,6 +593,7 @@ cargo run -p aura -- run examples/io/http_roundtrip.au
 cargo run -p aura -- run examples/io/websocket_roundtrip.au
 cargo run -p aura -- run examples/io/unix_tls_roundtrip.au
 cargo run -p aura -- run examples/concurrency/queues_spawn.au
+cargo run -p aura -- run examples/concurrency/bounded_queue.au
 cargo run -p aura -- run examples/concurrency/send_result.au
 cargo run -p aura -- run examples/concurrency/spawn_detached.au
 cargo run -p aura -- run examples/concurrency/select_send.au

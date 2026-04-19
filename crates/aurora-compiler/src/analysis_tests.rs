@@ -1726,6 +1726,15 @@ fn builtin_variant_inference_helpers_cover_builtin_constructors_and_unknowns() {
         ))
     );
     assert_eq!(
+        infer_builtin_variant_call("SendError", "Cancelled", &int_arg, |_| Some(Type::named(
+            "int32"
+        ))),
+        Some(Type::Named(
+            "SendError".to_string(),
+            vec![Type::named("int32")],
+        ))
+    );
+    assert_eq!(
         infer_builtin_variant_call("Option", "Missing", &[], |_| None),
         None
     );

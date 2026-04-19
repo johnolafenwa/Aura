@@ -131,6 +131,7 @@ struct ChannelState {
 struct ChannelInner {
     queue: VecDeque<Value>,
     closed: bool,
+    capacity: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -319,8 +320,9 @@ enum TaskYield {
 
 #[derive(Clone)]
 struct TaskWaitRegistration {
-    channels: Vec<ChannelValue>,
-    ignore_closed_channels: bool,
+    recv_channels: Vec<ChannelValue>,
+    ignore_closed_recv_channels: bool,
+    send_channels: Vec<ChannelValue>,
     deadline: Option<Instant>,
     cancellation: Option<CancellationContext>,
     fd_wait: Option<FdWaitRegistration>,
@@ -356,8 +358,9 @@ const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 struct RuntimeSchedulerRegistration {
-    channels: Vec<ChannelValue>,
-    ignore_closed_channels: bool,
+    recv_channels: Vec<ChannelValue>,
+    ignore_closed_recv_channels: bool,
+    send_channels: Vec<ChannelValue>,
     deadline: Option<Instant>,
     cancellation: Option<CancellationContext>,
     waiter: Arc<RuntimeSchedulerWaiter>,
@@ -383,6 +386,13 @@ struct RuntimeScheduler {
     state: Mutex<RuntimeSchedulerState>,
     ready: Condvar,
     next_id: AtomicU64,
+}
+
+type BlockingIoJob = Box<dyn FnOnce() + Send + 'static>;
+
+struct BlockingIoPool {
+    queue: Mutex<VecDeque<BlockingIoJob>>,
+    ready: Condvar,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -807,8 +817,9 @@ impl RuntimeScheduler {
 
     fn register(
         &self,
-        channels: Vec<ChannelValue>,
-        ignore_closed_channels: bool,
+        recv_channels: Vec<ChannelValue>,
+        ignore_closed_recv_channels: bool,
+        send_channels: Vec<ChannelValue>,
         deadline: Option<Instant>,
         cancellation: Option<CancellationContext>,
     ) -> RuntimeSchedulerHandle {
@@ -818,8 +829,9 @@ impl RuntimeScheduler {
             ready: Condvar::new(),
         });
         let registration = RuntimeSchedulerRegistration {
-            channels,
-            ignore_closed_channels,
+            recv_channels,
+            ignore_closed_recv_channels,
+            send_channels,
             deadline,
             cancellation,
             waiter: waiter.clone(),
@@ -869,9 +881,13 @@ impl RuntimeScheduler {
                     continue;
                 }
 
-                if registration.channels.iter().any(|channel| {
-                    channel.is_ready_for_scheduler_recv(registration.ignore_closed_channels)
-                }) {
+                if registration.recv_channels.iter().any(|channel| {
+                    channel.is_ready_for_scheduler_recv(registration.ignore_closed_recv_channels)
+                }) || registration
+                    .send_channels
+                    .iter()
+                    .any(ChannelValue::is_ready_for_scheduler_send)
+                {
                     registration
                         .waiter
                         .finish(RuntimeSchedulerWakeReason::Ready);
@@ -919,18 +935,67 @@ fn runtime_scheduler() -> &'static Arc<RuntimeScheduler> {
     SCHEDULER.get_or_init(RuntimeScheduler::start)
 }
 
+impl BlockingIoPool {
+    fn start() -> Arc<Self> {
+        let pool = Arc::new(Self {
+            queue: Mutex::new(VecDeque::new()),
+            ready: Condvar::new(),
+        });
+        let worker_count = thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(4)
+            .clamp(2, 8);
+        for _ in 0..worker_count {
+            let worker = pool.clone();
+            thread::spawn(move || worker.run());
+        }
+        pool
+    }
+
+    fn run(self: Arc<Self>) {
+        loop {
+            let job = {
+                let mut queue = lock_mutex(&self.queue);
+                loop {
+                    if let Some(job) = queue.pop_front() {
+                        break job;
+                    }
+                    queue = wait_condvar(&self.ready, queue);
+                }
+            };
+            job();
+        }
+    }
+
+    fn submit(&self, job: BlockingIoJob) {
+        let mut queue = lock_mutex(&self.queue);
+        queue.push_back(job);
+        drop(queue);
+        self.ready.notify_one();
+    }
+}
+
+fn blocking_io_pool() -> &'static Arc<BlockingIoPool> {
+    static POOL: OnceLock<Arc<BlockingIoPool>> = OnceLock::new();
+    POOL.get_or_init(BlockingIoPool::start)
+}
+
 fn wait_for_runtime_scheduler(
-    channels: Vec<ChannelValue>,
-    ignore_closed_channels: bool,
+    recv_channels: Vec<ChannelValue>,
+    ignore_closed_recv_channels: bool,
+    send_channels: Vec<ChannelValue>,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> RuntimeSchedulerWakeReason {
     if cancellation.is_some_and(CancellationContext::is_cancelled) {
         return RuntimeSchedulerWakeReason::Cancelled;
     }
-    if channels
+    if recv_channels
         .iter()
-        .any(|channel| channel.is_ready_for_scheduler_recv(ignore_closed_channels))
+        .any(|channel| channel.is_ready_for_scheduler_recv(ignore_closed_recv_channels))
+        || send_channels
+            .iter()
+            .any(ChannelValue::is_ready_for_scheduler_send)
     {
         return RuntimeSchedulerWakeReason::Ready;
     }
@@ -939,8 +1004,9 @@ fn wait_for_runtime_scheduler(
     }
 
     if let Some(reason) = yield_current_lightweight_wait(TaskWaitRegistration {
-        channels: channels.clone(),
-        ignore_closed_channels,
+        recv_channels: recv_channels.clone(),
+        ignore_closed_recv_channels,
+        send_channels: send_channels.clone(),
         deadline,
         cancellation: cancellation.cloned(),
         fd_wait: None,
@@ -950,8 +1016,9 @@ fn wait_for_runtime_scheduler(
 
     runtime_scheduler()
         .register(
-            channels,
-            ignore_closed_channels,
+            recv_channels,
+            ignore_closed_recv_channels,
+            send_channels,
             deadline,
             cancellation.cloned(),
         )
@@ -959,15 +1026,17 @@ fn wait_for_runtime_scheduler(
 }
 
 pub(crate) fn wait_for_select_progress(
-    channels: &[ChannelValue],
-    ignore_closed_channels: bool,
+    recv_channels: &[ChannelValue],
+    ignore_closed_recv_channels: bool,
+    send_channels: &[ChannelValue],
     deadlines: &[Instant],
     cancellation: Option<&CancellationContext>,
 ) -> RuntimeSchedulerWakeReason {
     let deadline = deadlines.iter().copied().min();
     wait_for_runtime_scheduler(
-        channels.to_vec(),
-        ignore_closed_channels,
+        recv_channels.to_vec(),
+        ignore_closed_recv_channels,
+        send_channels.to_vec(),
         deadline,
         cancellation,
     )
@@ -978,7 +1047,7 @@ pub(crate) fn sleep_with_runtime_scheduler(
     cancellation: Option<&CancellationContext>,
 ) {
     let deadline = Instant::now().checked_add(duration);
-    let _ = wait_for_runtime_scheduler(Vec::new(), false, deadline, cancellation);
+    let _ = wait_for_runtime_scheduler(Vec::new(), false, Vec::new(), deadline, cancellation);
 }
 
 thread_local! {
@@ -1034,6 +1103,49 @@ pub(crate) fn current_lightweight_task_cancellation() -> Option<CancellationCont
     CURRENT_LIGHTWEIGHT_TASK_CANCELLATION.with(|slot| slot.borrow().clone())
 }
 
+pub(crate) fn run_blocking_io<T, F>(
+    operation: F,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> io::Result<T> + Send + 'static,
+{
+    if current_lightweight_task_context().is_none() {
+        return operation();
+    }
+    if cancellation.is_some_and(CancellationContext::is_cancelled) {
+        return Err(cancelled_resource_error());
+    }
+
+    let completion = ChannelValue::new();
+    let result = Arc::new(Mutex::new(None::<io::Result<T>>));
+    let result_slot = result.clone();
+    let completion_signal = completion.clone();
+    blocking_io_pool().submit(Box::new(move || {
+        let outcome = operation();
+        *lock_mutex(&result_slot) = Some(outcome);
+        let _ = completion_signal.send(Value::Unit);
+        completion_signal.close();
+    }));
+
+    match completion.recv_with_cancellation(None, cancellation) {
+        Some(_) => lock_mutex(&result).take().unwrap_or_else(|| {
+            Err(io::Error::other(
+                "blocking I/O task completed without returning a result",
+            ))
+        }),
+        None if cancellation.is_some_and(CancellationContext::is_cancelled) => {
+            Err(cancelled_resource_error())
+        }
+        None => lock_mutex(&result).take().unwrap_or_else(|| {
+            Err(io::Error::other(
+                "blocking I/O wait ended before the task completed",
+            ))
+        }),
+    }
+}
+
 fn yield_current_lightweight_task(wait: TaskYield) -> Option<RuntimeSchedulerWakeReason> {
     let context = current_lightweight_task_context()?;
     let yielder_ptr = context.yielder.get();
@@ -1064,9 +1176,13 @@ impl TaskWaitRegistration {
             return Some(RuntimeSchedulerWakeReason::Cancelled);
         }
         if self
-            .channels
+            .recv_channels
             .iter()
-            .any(|channel| channel.is_ready_for_scheduler_recv(self.ignore_closed_channels))
+            .any(|channel| channel.is_ready_for_scheduler_recv(self.ignore_closed_recv_channels))
+            || self
+                .send_channels
+                .iter()
+                .any(ChannelValue::is_ready_for_scheduler_send)
         {
             return Some(RuntimeSchedulerWakeReason::Ready);
         }
@@ -1524,11 +1640,20 @@ pub(crate) fn render_float(value: f64) -> String {
 
 impl ChannelValue {
     pub(crate) fn new() -> Self {
+        Self::with_optional_capacity(None)
+    }
+
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self::with_optional_capacity(Some(capacity))
+    }
+
+    fn with_optional_capacity(capacity: Option<usize>) -> Self {
         Self {
             inner: Arc::new(ChannelState {
                 state: Mutex::new(ChannelInner {
                     queue: VecDeque::new(),
                     closed: false,
+                    capacity,
                 }),
             }),
         }
@@ -1542,15 +1667,38 @@ pub(crate) enum TryRecvResult {
     Empty,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum TrySendResult {
+    Sent,
+    Closed(Value),
+    Full(Value),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SendValueError {
+    Closed(Value),
+    Cancelled(Value),
+}
+
 impl ChannelValue {
     fn is_ready_for_scheduler_recv(&self, ignore_closed: bool) -> bool {
         let state = lock_mutex(&self.inner.state);
         !state.queue.is_empty() || (!ignore_closed && state.closed)
     }
 
+    pub(crate) fn is_ready_for_scheduler_send(&self) -> bool {
+        let state = lock_mutex(&self.inner.state);
+        state.closed
+            || state
+                .capacity
+                .is_none_or(|capacity| state.queue.len() < capacity)
+    }
+
     pub(crate) fn try_recv(&self) -> TryRecvResult {
         let mut state = lock_mutex(&self.inner.state);
         if let Some(value) = state.queue.pop_front() {
+            drop(state);
+            runtime_scheduler().notify();
             return TryRecvResult::Value(value);
         }
         if state.closed {
@@ -1559,15 +1707,58 @@ impl ChannelValue {
         TryRecvResult::Empty
     }
 
-    pub(crate) fn send(&self, value: Value) -> std::result::Result<(), Value> {
+    pub(crate) fn try_send(&self, value: Value) -> TrySendResult {
         let mut state = lock_mutex(&self.inner.state);
         if state.closed {
-            return Err(value);
+            return TrySendResult::Closed(value);
+        }
+        if state
+            .capacity
+            .is_some_and(|capacity| state.queue.len() >= capacity)
+        {
+            return TrySendResult::Full(value);
         }
         state.queue.push_back(value);
         drop(state);
         runtime_scheduler().notify();
-        Ok(())
+        TrySendResult::Sent
+    }
+
+    pub(crate) fn send(&self, value: Value) -> std::result::Result<(), Value> {
+        match self.send_with_cancellation(value, None) {
+            Ok(()) => Ok(()),
+            Err(SendValueError::Closed(value)) | Err(SendValueError::Cancelled(value)) => {
+                Err(value)
+            }
+        }
+    }
+
+    pub(crate) fn send_with_cancellation(
+        &self,
+        mut value: Value,
+        cancellation: Option<&CancellationContext>,
+    ) -> std::result::Result<(), SendValueError> {
+        loop {
+            value = match self.try_send(value) {
+                TrySendResult::Sent => return Ok(()),
+                TrySendResult::Closed(value) => return Err(SendValueError::Closed(value)),
+                TrySendResult::Full(value) => value,
+            };
+
+            match wait_for_runtime_scheduler(
+                Vec::new(),
+                false,
+                vec![self.clone()],
+                None,
+                cancellation,
+            ) {
+                RuntimeSchedulerWakeReason::Ready => {}
+                RuntimeSchedulerWakeReason::TimedOut => {}
+                RuntimeSchedulerWakeReason::Cancelled => {
+                    return Err(SendValueError::Cancelled(value));
+                }
+            }
+        }
     }
 
     pub(crate) fn recv_with_cancellation(
@@ -1583,7 +1774,13 @@ impl ChannelValue {
                 TryRecvResult::Empty => {}
             }
 
-            match wait_for_runtime_scheduler(vec![self.clone()], false, deadline, cancellation) {
+            match wait_for_runtime_scheduler(
+                vec![self.clone()],
+                false,
+                Vec::new(),
+                deadline,
+                cancellation,
+            ) {
                 RuntimeSchedulerWakeReason::Ready => {}
                 RuntimeSchedulerWakeReason::TimedOut | RuntimeSchedulerWakeReason::Cancelled => {
                     return None;
@@ -1702,8 +1899,9 @@ fn wait_for_fd_event(
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<()> {
     if let Some(reason) = yield_current_lightweight_wait(TaskWaitRegistration {
-        channels: Vec::new(),
-        ignore_closed_channels: false,
+        recv_channels: Vec::new(),
+        ignore_closed_recv_channels: false,
+        send_channels: Vec::new(),
         deadline,
         cancellation: cancellation.cloned(),
         fd_wait: Some(FdWaitRegistration { fd, events }),
@@ -2613,37 +2811,65 @@ impl FileValue {
     }
 
     pub(crate) fn open(path: &str) -> io::Result<Self> {
-        Ok(Self::from_std(StdFile::open(path)?))
+        let path = path.to_string();
+        run_blocking_io(
+            move || StdFile::open(path).map(Self::from_std),
+            current_lightweight_task_cancellation().as_ref(),
+        )
     }
 
     pub(crate) fn create(path: &str) -> io::Result<Self> {
-        Ok(Self::from_std(StdFile::create(path)?))
+        let path = path.to_string();
+        run_blocking_io(
+            move || StdFile::create(path).map(Self::from_std),
+            current_lightweight_task_cancellation().as_ref(),
+        )
     }
 
     pub(crate) fn append(path: &str) -> io::Result<Self> {
-        Ok(Self::from_std(
-            OpenOptions::new().create(true).append(true).open(path)?,
-        ))
+        let path = path.to_string();
+        run_blocking_io(
+            move || {
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .map(Self::from_std)
+            },
+            current_lightweight_task_cancellation().as_ref(),
+        )
     }
 
     pub(crate) fn read_all(&self) -> io::Result<String> {
-        let mut file = lock_mutex(&self.inner.file);
-        let Some(file) = file.as_mut() else {
-            return Err(closed_resource_error());
-        };
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
-        Ok(contents)
+        let state = self.inner.clone();
+        run_blocking_io(
+            move || {
+                let mut file = lock_mutex(&state.file);
+                let Some(file) = file.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                let mut contents = String::new();
+                file.read_to_string(&mut contents)?;
+                Ok(contents)
+            },
+            current_lightweight_task_cancellation().as_ref(),
+        )
     }
 
     pub(crate) fn read_bytes(&self) -> io::Result<Vec<u8>> {
-        let mut file = lock_mutex(&self.inner.file);
-        let Some(file) = file.as_mut() else {
-            return Err(closed_resource_error());
-        };
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)?;
-        Ok(contents)
+        let state = self.inner.clone();
+        run_blocking_io(
+            move || {
+                let mut file = lock_mutex(&state.file);
+                let Some(file) = file.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                let mut contents = Vec::new();
+                file.read_to_end(&mut contents)?;
+                Ok(contents)
+            },
+            current_lightweight_task_cancellation().as_ref(),
+        )
     }
 
     pub(crate) fn write_all(&self, text: &str) -> io::Result<()> {
@@ -2651,19 +2877,32 @@ impl FileValue {
     }
 
     pub(crate) fn write_bytes(&self, bytes: &[u8]) -> io::Result<()> {
-        let mut file = lock_mutex(&self.inner.file);
-        let Some(file) = file.as_mut() else {
-            return Err(closed_resource_error());
-        };
-        file.write_all(bytes)
+        let state = self.inner.clone();
+        let bytes = bytes.to_vec();
+        run_blocking_io(
+            move || {
+                let mut file = lock_mutex(&state.file);
+                let Some(file) = file.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                file.write_all(&bytes)
+            },
+            current_lightweight_task_cancellation().as_ref(),
+        )
     }
 
     pub(crate) fn flush(&self) -> io::Result<()> {
-        let mut file = lock_mutex(&self.inner.file);
-        let Some(file) = file.as_mut() else {
-            return Err(closed_resource_error());
-        };
-        file.flush()
+        let state = self.inner.clone();
+        run_blocking_io(
+            move || {
+                let mut file = lock_mutex(&state.file);
+                let Some(file) = file.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                file.flush()
+            },
+            current_lightweight_task_cancellation().as_ref(),
+        )
     }
 
     pub(crate) fn close(&self) {
@@ -4149,6 +4388,14 @@ pub(crate) fn send_error_closed(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "SendError".to_string(),
         variant_name: "Closed".to_string(),
+        payloads: vec![value],
+    })
+}
+
+pub(crate) fn send_error_cancelled(value: Value) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "SendError".to_string(),
+        variant_name: "Cancelled".to_string(),
         payloads: vec![value],
     })
 }

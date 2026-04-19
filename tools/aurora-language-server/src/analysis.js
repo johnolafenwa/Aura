@@ -1149,7 +1149,8 @@ const BUILTIN_MEMBERS = {
       name: "put",
       kind: "method",
       detail: "put(value) -> Result[None, SendError[T]]",
-      documentation: "Puts a value into the queue or returns `SendError.Closed(value)` if the queue is closed."
+      documentation:
+        "Puts a value into the queue, waiting for free capacity when needed, or returns `SendError.Closed(value)` / `SendError.Cancelled(value)` if the send cannot complete."
     },
     {
       name: "get",
@@ -1205,7 +1206,7 @@ const BUILTIN_FUNCTIONS = [
   {
     name: "queue",
     kind: "function",
-    detail: "queue() -> Queue[T]",
+    detail: "queue(capacity: int32 = ...) -> Queue[T]",
     documentation: "Creates a typed queue when the surrounding annotation or expectation provides `T`."
   },
   {
@@ -1343,6 +1344,13 @@ const BUILTIN_ENUMS = new Map([
           returnType: "SendError",
           payloadType: "T",
           detail: "Closed(T) -> SendError"
+        },
+        {
+          kind: "variant",
+          name: "Cancelled",
+          returnType: "SendError",
+          payloadType: "T",
+          detail: "Cancelled(T) -> SendError"
         }
       ]
     }

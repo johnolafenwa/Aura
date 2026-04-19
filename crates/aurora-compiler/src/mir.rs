@@ -2588,7 +2588,12 @@ impl<'a> Lowerer<'a> {
                     },
                 });
             }
-            ExprKind::Name(name) if matches!(name.as_str(), "Some" | "Ok" | "Err" | "Closed") => {
+            ExprKind::Name(name)
+                if matches!(
+                    name.as_str(),
+                    "Some" | "Ok" | "Err" | "Closed" | "Cancelled"
+                ) =>
+            {
                 let payloads = args
                     .iter()
                     .map(|argument| self.lower_expr(&argument.value))
@@ -2596,7 +2601,7 @@ impl<'a> Lowerer<'a> {
                 let enum_name = match name.as_str() {
                     "Some" => "Option",
                     "Ok" | "Err" => "Result",
-                    "Closed" => "SendError",
+                    "Closed" | "Cancelled" => "SendError",
                     _ => unreachable!(),
                 };
                 self.emit(Instruction::Assign {
@@ -3039,7 +3044,7 @@ impl<'a> Lowerer<'a> {
                 matches!(field, "Ok" | "Err").then(|| receiver_type.clone())
             }
             Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
-                (field == "Closed").then(|| receiver_type.clone())
+                matches!(field, "Closed" | "Cancelled").then(|| receiver_type.clone())
             }
             _ => None,
         }
@@ -3735,7 +3740,7 @@ impl<'a> Lowerer<'a> {
                 }
                 Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
                     return Some(match variant_name {
-                        "Closed" => vec![args[0].clone()],
+                        "Closed" | "Cancelled" => vec![args[0].clone()],
                         _ => return None,
                     });
                 }

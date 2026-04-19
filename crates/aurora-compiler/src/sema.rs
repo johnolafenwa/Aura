@@ -4939,11 +4939,16 @@ impl<'a> FunctionChecker<'a> {
         }
 
         match &base_callee.kind {
-            ExprKind::Name(name) if matches!(name.as_str(), "Some" | "Ok" | "Err" | "Closed") => {
+            ExprKind::Name(name)
+                if matches!(
+                    name.as_str(),
+                    "Some" | "Ok" | "Err" | "Closed" | "Cancelled"
+                ) =>
+            {
                 let enum_name = match name.as_str() {
                     "Some" => "Option",
                     "Ok" | "Err" => "Result",
-                    "Closed" => "SendError",
+                    "Closed" | "Cancelled" => "SendError",
                     _ => unreachable!(),
                 };
                 let Some(expected_ty) = expected else {
@@ -4999,6 +5004,24 @@ impl<'a> FunctionChecker<'a> {
                         Ok(Type::named("Range"))
                     }
                     BuiltinFunction::Queue => {
+                        if let Some(capacity_arg) =
+                            ordered_args.first().and_then(|arg| arg.as_ref())
+                        {
+                            let actual = self.type_of_expr_hint(
+                                &capacity_arg.value,
+                                locals,
+                                Some(&Type::named("int32")),
+                            )?;
+                            if actual != Type::named("int32") {
+                                return Err(Diagnostic::at(
+                                    capacity_arg.span,
+                                    format!(
+                                        "`queue(capacity=...)` expects `int32`, found `{}`",
+                                        actual
+                                    ),
+                                ));
+                            }
+                        }
                         if let Some(type_args) = explicit_type_args {
                             let explicit_args = self.lower_explicit_type_args(type_args)?;
                             if explicit_args.len() != 1 {
@@ -10118,9 +10141,10 @@ impl<'a> FunctionChecker<'a> {
                 ("Ok".to_string(), vec![args[0].clone()]),
                 ("Err".to_string(), vec![args[1].clone()]),
             ]),
-            Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
-                Some(vec![("Closed".to_string(), vec![args[0].clone()])])
-            }
+            Type::Named(name, args) if name == "SendError" && args.len() == 1 => Some(vec![
+                ("Closed".to_string(), vec![args[0].clone()]),
+                ("Cancelled".to_string(), vec![args[0].clone()]),
+            ]),
             Type::Named(name, args) => self.resolve_enum_info(name).map(|enum_info| {
                 let substitutions =
                     substitutions_from_decl_type_args(&enum_info.decl.type_params, args);
@@ -10166,7 +10190,7 @@ impl<'a> FunctionChecker<'a> {
             ("Option", "None", [_]) => Some(None),
             ("Result", "Ok", [ok, _err]) => Some(Some(ok.clone())),
             ("Result", "Err", [_ok, err]) => Some(Some(err.clone())),
-            ("SendError", "Closed", [value]) => Some(Some(value.clone())),
+            ("SendError", "Closed" | "Cancelled", [value]) => Some(Some(value.clone())),
             _ => None,
         }
     }

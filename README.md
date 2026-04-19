@@ -115,6 +115,8 @@ Current bootstrap compiler workflow:
   - execute deterministic scoped cleanup with `with`
 - `cargo run -p aura -- run examples/concurrency/queues_spawn.au`
   - execute the maintained queue/task concurrency surface
+- `cargo run -p aura -- run examples/concurrency/bounded_queue.au`
+  - execute bounded queues with `queue(capacity=...)` on the shared scheduler
 - `cargo run -p aura -- run examples/concurrency/sleep_builtin.au`
   - execute `sleep(duration)` delays in the MIR-backed runtime path
 - `cargo run -p aura -- build -o ./target/aurora-point examples/point.au`
@@ -173,12 +175,12 @@ Current `build` status:
 - manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aurora.toml`
 - git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
 - the current package-system milestone writes a local `Aurora.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
-- both maintained execution paths now cover the builtin `io`, `fs`, and `net` module surface for blocking text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, and higher-level HTTP helpers
+- both maintained execution paths now cover the builtin `io`, `fs`, and `net` module surface for scheduler-aware text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, and higher-level HTTP helpers
 
 Current `run` status:
 
 - `aura run` now executes programs through the MIR runtime for the current implemented Aurora surface
-- `spawn`, `select`, queues, task groups, `try`, `with`, blocking file I/O, and the maintained poll-driven socket networking surface now run through the same MIR-backed public execution path
+- `spawn`, `select`, queues, task groups, `try`, `with`, scheduler-aware file I/O, and the maintained poll-driven socket networking surface now run through the same MIR-backed public execution path
 - the maintained execution architecture is now the MIR runtime for `run` plus native direct codegen for `build`
 
 ## VS Code install

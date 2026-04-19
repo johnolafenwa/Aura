@@ -14,13 +14,14 @@ use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_value::{
     cast_numeric_value, current_lightweight_task_cancellation, io_error, io_read_line, option_none,
-    option_some, render_float, result_err, result_ok, run_lightweight_root_task, send_error_closed,
-    sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
-    wait_for_select_progress, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, RangeValue,
-    RuntimeSchedulerWakeReason, SetValue, TaskGroupValue, TcpListenerValue, TcpStreamValue,
-    TlsListenerValue, TlsStreamValue, TryRecvResult, UdpSocketValue, UnixListenerValue,
-    UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    option_some, render_float, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
+    send_error_cancelled, send_error_closed, sleep_with_runtime_scheduler,
+    spawn_lightweight_task_with_cancellation, wait_for_select_progress, CancellationContext,
+    ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue,
+    MapValue, RangeValue, RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue,
+    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TryRecvResult,
+    UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue,
+    WebSocketValue,
 };
 use crate::sema::Type;
 
@@ -2299,28 +2300,62 @@ pub extern "C" fn aurora_direct_i64_buffer_store(buffer: *mut i64, index: i64, v
 
 #[no_mangle]
 pub extern "C" fn aurora_direct_select_wait(
-    channels_ptr: *mut i64,
-    channel_count: i64,
+    recv_channels_ptr: *mut i64,
+    recv_channel_count: i64,
+    send_channels_ptr: *mut i64,
+    send_channel_count: i64,
     ignore_closed_recv: i64,
     deadlines_ptr: *mut i64,
     deadline_count: i64,
 ) -> i64 {
-    let channel_count = match usize::try_from(channel_count) {
+    let recv_channel_count = match usize::try_from(recv_channel_count) {
         Ok(count) => count,
-        Err(_) => runtime_error("invalid select channel count"),
+        Err(_) => runtime_error("invalid select recv channel count"),
+    };
+    let send_channel_count = match usize::try_from(send_channel_count) {
+        Ok(count) => count,
+        Err(_) => runtime_error("invalid select send channel count"),
     };
     let deadline_count = match usize::try_from(deadline_count) {
         Ok(count) => count,
         Err(_) => runtime_error("invalid select deadline count"),
     };
 
-    let channels = if channel_count == 0 || channels_ptr.is_null() {
+    let recv_channels = if recv_channel_count == 0 || recv_channels_ptr.is_null() {
         Vec::new()
     } else {
         let boxed = unsafe {
             Box::from_raw(std::ptr::slice_from_raw_parts_mut(
-                channels_ptr,
-                channel_count,
+                recv_channels_ptr,
+                recv_channel_count,
+            ))
+        };
+        let values = boxed.into_vec();
+        values
+            .into_iter()
+            .filter_map(|value| {
+                if value == 0 {
+                    None
+                } else {
+                    match unsafe { value_ref(value as *mut OpaqueValue) } {
+                        Value::Channel(channel) => Some(channel.clone()),
+                        other => runtime_error(format!(
+                            "expected `Queue`, found `{}`",
+                            value_type_name(other)
+                        )),
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let send_channels = if send_channel_count == 0 || send_channels_ptr.is_null() {
+        Vec::new()
+    } else {
+        let boxed = unsafe {
+            Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                send_channels_ptr,
+                send_channel_count,
             ))
         };
         let values = boxed.into_vec();
@@ -2370,8 +2405,9 @@ pub extern "C" fn aurora_direct_select_wait(
     };
 
     match wait_for_select_progress(
-        &channels,
+        &recv_channels,
         ignore_closed_recv != 0,
+        &send_channels,
         &deadlines,
         Some(&current_cancellation()),
     ) {
@@ -2381,8 +2417,20 @@ pub extern "C" fn aurora_direct_select_wait(
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_channel_new() -> *mut OpaqueValue {
-    boxed_value(Value::Channel(ChannelValue::new()))
+pub extern "C" fn aurora_direct_channel_new(capacity: *mut OpaqueValue) -> *mut OpaqueValue {
+    if capacity.is_null() {
+        return boxed_value(Value::Channel(ChannelValue::new()));
+    }
+    let capacity = expect_i32_value(
+        unsafe { value_ref(capacity) }.borrow(),
+        "queue(capacity=...)",
+    );
+    if capacity <= 0 {
+        runtime_error("`queue(capacity=...)` expects a positive `int32`");
+    }
+    boxed_value(Value::Channel(ChannelValue::with_capacity(
+        capacity as usize,
+    )))
 }
 
 #[no_mangle]
@@ -2407,10 +2455,30 @@ pub extern "C" fn aurora_direct_channel_send(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     match unsafe { value_ref(channel) } {
-        Value::Channel(channel) => match channel.send(unsafe { take_value(value) }) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(value) => boxed_value(result_err(send_error_closed(value))),
-        },
+        Value::Channel(channel) => {
+            match channel
+                .send_with_cancellation(unsafe { take_value(value) }, Some(&current_cancellation()))
+            {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(SendValueError::Closed(value)) => {
+                    boxed_value(result_err(send_error_closed(value)))
+                }
+                Err(SendValueError::Cancelled(value)) => {
+                    boxed_value(result_err(send_error_cancelled(value)))
+                }
+            }
+        }
+        other => runtime_error(format!(
+            "expected `Queue`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_channel_can_send(channel: *mut OpaqueValue) -> i64 {
+    match unsafe { value_ref(channel) } {
+        Value::Channel(channel) => i64::from(channel.is_ready_for_scheduler_send()),
         other => runtime_error(format!(
             "expected `Queue`, found `{}`",
             value_type_name(other)
@@ -2594,7 +2662,10 @@ pub extern "C" fn aurora_direct_fs_exists(path: *mut OpaqueValue) -> *mut Opaque
 #[no_mangle]
 pub extern "C" fn aurora_direct_fs_read_to_string(path: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(path) } {
-        Value::String(path) => match std::fs::read_to_string(path) {
+        Value::String(path) => match run_blocking_io(
+            move || std::fs::read_to_string(path),
+            Some(&current_cancellation()),
+        ) {
             Ok(text) => boxed_value(result_ok(Value::String(text))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
@@ -2608,10 +2679,12 @@ pub extern "C" fn aurora_direct_fs_read_to_string(path: *mut OpaqueValue) -> *mu
 #[no_mangle]
 pub extern "C" fn aurora_direct_fs_read_bytes(path: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(path) } {
-        Value::String(path) => match std::fs::read(path) {
-            Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
+        Value::String(path) => {
+            match run_blocking_io(move || std::fs::read(path), Some(&current_cancellation())) {
+                Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
         other => runtime_error(format!(
             "expected `String`, found `{}`",
             value_type_name(other)
@@ -2638,7 +2711,10 @@ pub extern "C" fn aurora_direct_fs_write_string(
             value_type_name(other)
         )),
     };
-    match std::fs::write(path, text) {
+    match run_blocking_io(
+        move || std::fs::write(path, text),
+        Some(&current_cancellation()),
+    ) {
         Ok(()) => boxed_value(result_ok(Value::Unit)),
         Err(error) => boxed_value(result_err(io_error(error))),
     }
@@ -2651,7 +2727,10 @@ pub extern "C" fn aurora_direct_fs_write_bytes(
 ) -> *mut OpaqueValue {
     let path = expect_string_value(&unsafe { value_ref(path) }, "fs.write_bytes(...)");
     let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "fs.write_bytes(...)");
-    match std::fs::write(path, bytes) {
+    match run_blocking_io(
+        move || std::fs::write(path, bytes),
+        Some(&current_cancellation()),
+    ) {
         Ok(()) => boxed_value(result_ok(Value::Unit)),
         Err(error) => boxed_value(result_err(io_error(error))),
     }
@@ -2676,12 +2755,16 @@ pub extern "C" fn aurora_direct_fs_append_string(
             value_type_name(other)
         )),
     };
-    match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut file| file.write_all(text.as_bytes()))
-    {
+    match run_blocking_io(
+        move || {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .and_then(|mut file| file.write_all(text.as_bytes()))
+        },
+        Some(&current_cancellation()),
+    ) {
         Ok(()) => boxed_value(result_ok(Value::Unit)),
         Err(error) => boxed_value(result_err(io_error(error))),
     }
@@ -2694,12 +2777,16 @@ pub extern "C" fn aurora_direct_fs_append_bytes(
 ) -> *mut OpaqueValue {
     let path = expect_string_value(&unsafe { value_ref(path) }, "fs.append_bytes(...)");
     let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "fs.append_bytes(...)");
-    match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut file| file.write_all(&bytes))
-    {
+    match run_blocking_io(
+        move || {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .and_then(|mut file| file.write_all(&bytes))
+        },
+        Some(&current_cancellation()),
+    ) {
         Ok(()) => boxed_value(result_ok(Value::Unit)),
         Err(error) => boxed_value(result_err(io_error(error))),
     }
@@ -2708,7 +2795,10 @@ pub extern "C" fn aurora_direct_fs_append_bytes(
 #[no_mangle]
 pub extern "C" fn aurora_direct_fs_create_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(path) } {
-        Value::String(path) => match std::fs::create_dir_all(path) {
+        Value::String(path) => match run_blocking_io(
+            move || std::fs::create_dir_all(path),
+            Some(&current_cancellation()),
+        ) {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
@@ -2722,18 +2812,21 @@ pub extern "C" fn aurora_direct_fs_create_dir(path: *mut OpaqueValue) -> *mut Op
 #[no_mangle]
 pub extern "C" fn aurora_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(path) } {
-        Value::String(path) => match std::fs::read_dir(path) {
-            Ok(entries) => {
-                let mut names = entries
+        Value::String(path) => match run_blocking_io(
+            move || {
+                let mut names = std::fs::read_dir(path)?
                     .filter_map(|entry| entry.ok())
-                    .map(|entry| Value::String(entry.file_name().to_string_lossy().to_string()))
+                    .map(|entry| entry.file_name().to_string_lossy().to_string())
                     .collect::<Vec<_>>();
-                names.sort_by_key(|value| value.render());
-                boxed_value(result_ok(Value::Vec(VecValue {
-                    element_type: Type::named("String"),
-                    elements: names,
-                })))
-            }
+                names.sort();
+                Ok(names)
+            },
+            Some(&current_cancellation()),
+        ) {
+            Ok(names) => boxed_value(result_ok(Value::Vec(VecValue {
+                element_type: Type::named("String"),
+                elements: names.into_iter().map(Value::String).collect(),
+            }))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
@@ -2746,7 +2839,10 @@ pub extern "C" fn aurora_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut Opaq
 #[no_mangle]
 pub extern "C" fn aurora_direct_fs_remove_file(path: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(path) } {
-        Value::String(path) => match std::fs::remove_file(path) {
+        Value::String(path) => match run_blocking_io(
+            move || std::fs::remove_file(path),
+            Some(&current_cancellation()),
+        ) {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(io_error(error))),
         },

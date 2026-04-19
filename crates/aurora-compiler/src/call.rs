@@ -323,7 +323,7 @@ impl BuiltinFunction {
         match self {
             Self::Print => "print(value) -> None",
             Self::Range => "range(stop: int32) -> Range; range(start: int32, stop: int32) -> Range",
-            Self::Queue => "queue() -> Queue[T]",
+            Self::Queue => "queue(capacity: int32 = ...) -> Queue[T]",
             Self::Tasks => "tasks() -> TaskGroup",
             Self::Cancelled => "cancelled() -> bool",
             Self::After => "after(duration: Duration) -> Duration",
@@ -407,10 +407,10 @@ impl BuiltinFunction {
             }
             Self::Queue => bind_call_arguments(
                 &format!("`{}`", self.name()),
-                &[],
+                &[CallableParam::optional("capacity")],
                 args,
                 span,
-                CallConvention::PositionalOnly,
+                CallConvention::PositionalOrNamed,
             ),
             Self::Tasks => {
                 bind_call_arguments("`tasks`", &[], args, span, CallConvention::PositionalOnly)
@@ -1075,7 +1075,7 @@ impl BuiltinMember {
             Self::SetRemove => "Removes `value`, returning false when it is absent.",
             Self::StringClone => "Creates a new owned `String` with the same contents.",
             Self::QueuePut => {
-                "Puts a value into the queue or returns `SendError.Closed(value)` if the queue is closed."
+                "Puts a value into the queue, waiting for capacity when needed, or returns `SendError.Closed(value)` / `SendError.Cancelled(value)` if the send cannot complete."
             }
             Self::QueueGet => {
                 "Receives the next value from the queue, or `Option.None` when the queue is closed or the optional timeout expires."

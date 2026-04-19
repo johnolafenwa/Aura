@@ -15,13 +15,14 @@ use crate::mir::{
 };
 use crate::runtime_value::{
     cast_numeric_value, io_error, io_read_line, option_none, option_some, result_err, result_ok,
-    run_lightweight_root_task, send_error_closed, sleep_with_runtime_scheduler,
-    spawn_lightweight_task, wait_for_select_progress, CancellationContext, ChannelValue,
-    EnumVariantValue, FileValue, HttpExchangeValue, HttpListenerValue, HttpResponseValue,
-    InstanceValue, MapValue, RangeValue, RunOutput, RuntimeSchedulerWakeReason, SetValue,
-    TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
-    TryRecvResult, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
-    VecValue, WebSocketListenerValue, WebSocketValue,
+    run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
+    sleep_with_runtime_scheduler, spawn_lightweight_task, wait_for_select_progress,
+    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, RangeValue, RunOutput,
+    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue, TaskValue,
+    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TryRecvResult,
+    UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
+    WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -586,8 +587,10 @@ impl MirRuntime {
                     .map(|ok| Type::Named("Result".to_string(), vec![ok, Type::Unit])),
                 ("Result", "Err", Some(payload)) => Self::infer_value_type(payload)
                     .map(|err| Type::Named("Result".to_string(), vec![Type::Unit, err])),
-                ("SendError", "Closed", Some(payload)) => Self::infer_value_type(payload)
-                    .map(|inner| Type::Named("SendError".to_string(), vec![inner])),
+                ("SendError", "Closed" | "Cancelled", Some(payload)) => {
+                    Self::infer_value_type(payload)
+                        .map(|inner| Type::Named("SendError".to_string(), vec![inner]))
+                }
                 _ => Some(Type::named(&variant.enum_name)),
             },
             Value::Channel(_) | Value::Task(_) | Value::TaskGroup(_) => None,
@@ -1389,7 +1392,31 @@ impl MirRuntime {
                             name
                         )));
                     }
-                    return Ok(Value::Channel(ChannelValue::new()));
+                    let capacity = match values.as_slice() {
+                        [] => None,
+                        [argument] => {
+                            if argument.name.as_deref() != Some("capacity")
+                                && argument.name.is_some()
+                            {
+                                return Err(Diagnostic::new(
+                                    "`queue()` expects an optional `capacity=` argument",
+                                ));
+                            }
+                            let capacity =
+                                expect_i32_value(&argument.value, "queue(capacity=...)")?;
+                            if capacity <= 0 {
+                                return Err(Diagnostic::new(
+                                    "`queue(capacity=...)` expects a positive `int32`",
+                                ));
+                            }
+                            Some(capacity as usize)
+                        }
+                        _ => unreachable!(),
+                    };
+                    return Ok(Value::Channel(match capacity {
+                        Some(capacity) => ChannelValue::with_capacity(capacity),
+                        None => ChannelValue::new(),
+                    }));
                 }
 
                 if name == "Vec" {
@@ -2083,9 +2110,12 @@ impl MirRuntime {
                         field
                     )));
                 };
-                match channel.send(value) {
+                match channel.send_with_cancellation(value, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
-                    Err(value) => Ok(result_err(send_error_closed(value))),
+                    Err(SendValueError::Closed(value)) => Ok(result_err(send_error_closed(value))),
+                    Err(SendValueError::Cancelled(value)) => {
+                        Ok(result_err(send_error_cancelled(value)))
+                    }
                 }
             }
             "get" => {
@@ -2949,21 +2979,19 @@ impl MirRuntime {
         match name {
             "fs::read_to_string" => {
                 let bound = bind_builtin_args(&["path"], values)?;
-                match &bound[0].value {
-                    Value::String(path) => match std::fs::read_to_string(path) {
-                        Ok(text) => Ok(result_ok(Value::String(text))),
-                        Err(error) => Ok(result_err(io_error(error))),
-                    },
-                    other => Err(Diagnostic::new(format!(
-                        "`fs.read_to_string(...)` expects `String`, found `{}`",
-                        other.render()
-                    ))),
+                let path = expect_string_value(&bound[0].value, "fs.read_to_string(...)")?;
+                match run_blocking_io(
+                    move || std::fs::read_to_string(path),
+                    Some(&self.cancellation),
+                ) {
+                    Ok(text) => Ok(result_ok(Value::String(text))),
+                    Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "fs::read_bytes" => {
                 let bound = bind_builtin_args(&["path"], values)?;
                 let path = expect_string_value(&bound[0].value, "fs.read_bytes(...)")?;
-                match std::fs::read(path) {
+                match run_blocking_io(move || std::fs::read(path), Some(&self.cancellation)) {
                     Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
@@ -2986,16 +3014,24 @@ impl MirRuntime {
                         )))
                     }
                 };
-                let outcome = if name == "fs::write_string" {
-                    std::fs::write(path, text)
-                } else {
-                    use std::io::Write;
-                    std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(path)
-                        .and_then(|mut file| file.write_all(text.as_bytes()))
-                };
+                let path = path.clone();
+                let text = text.clone();
+                let write_name = name.to_string();
+                let outcome = run_blocking_io(
+                    move || {
+                        if write_name == "fs::write_string" {
+                            std::fs::write(path, text)
+                        } else {
+                            use std::io::Write;
+                            std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(path)
+                                .and_then(|mut file| file.write_all(text.as_bytes()))
+                        }
+                    },
+                    Some(&self.cancellation),
+                );
                 match outcome {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -3005,16 +3041,22 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["path", "bytes"], values)?;
                 let path = expect_string_value(&bound[0].value, name)?;
                 let bytes = expect_bytes_value(&bound[1].value, name)?;
-                let outcome = if name == "fs::write_bytes" {
-                    std::fs::write(path, bytes)
-                } else {
-                    use std::io::Write;
-                    std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(path)
-                        .and_then(|mut file| file.write_all(&bytes))
-                };
+                let write_name = name.to_string();
+                let outcome = run_blocking_io(
+                    move || {
+                        if write_name == "fs::write_bytes" {
+                            std::fs::write(path, bytes)
+                        } else {
+                            use std::io::Write;
+                            std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(path)
+                                .and_then(|mut file| file.write_all(&bytes))
+                        }
+                    },
+                    Some(&self.cancellation),
+                );
                 match outcome {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -3022,53 +3064,43 @@ impl MirRuntime {
             }
             "fs::create_dir" => {
                 let bound = bind_builtin_args(&["path"], values)?;
-                match &bound[0].value {
-                    Value::String(path) => match std::fs::create_dir_all(path) {
-                        Ok(()) => Ok(result_ok(Value::Unit)),
-                        Err(error) => Ok(result_err(io_error(error))),
-                    },
-                    other => Err(Diagnostic::new(format!(
-                        "`fs.create_dir(...)` expects `String`, found `{}`",
-                        other.render()
-                    ))),
+                let path = expect_string_value(&bound[0].value, "fs.create_dir(...)")?;
+                match run_blocking_io(
+                    move || std::fs::create_dir_all(path),
+                    Some(&self.cancellation),
+                ) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "fs::read_dir" => {
                 let bound = bind_builtin_args(&["path"], values)?;
-                match &bound[0].value {
-                    Value::String(path) => match std::fs::read_dir(path) {
-                        Ok(entries) => {
-                            let mut names = entries
-                                .filter_map(|entry| entry.ok())
-                                .map(|entry| {
-                                    Value::String(entry.file_name().to_string_lossy().to_string())
-                                })
-                                .collect::<Vec<_>>();
-                            names.sort_by_key(|value| value.render());
-                            Ok(result_ok(Value::Vec(VecValue {
-                                element_type: Type::named("String"),
-                                elements: names,
-                            })))
-                        }
-                        Err(error) => Ok(result_err(io_error(error))),
+                let path = expect_string_value(&bound[0].value, "fs.read_dir(...)")?;
+                match run_blocking_io(
+                    move || {
+                        let mut names = std::fs::read_dir(path)?
+                            .filter_map(|entry| entry.ok())
+                            .map(|entry| entry.file_name().to_string_lossy().to_string())
+                            .collect::<Vec<_>>();
+                        names.sort();
+                        Ok(names)
                     },
-                    other => Err(Diagnostic::new(format!(
-                        "`fs.read_dir(...)` expects `String`, found `{}`",
-                        other.render()
-                    ))),
+                    Some(&self.cancellation),
+                ) {
+                    Ok(names) => Ok(result_ok(Value::Vec(VecValue {
+                        element_type: Type::named("String"),
+                        elements: names.into_iter().map(Value::String).collect(),
+                    }))),
+                    Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "fs::remove_file" => {
                 let bound = bind_builtin_args(&["path"], values)?;
-                match &bound[0].value {
-                    Value::String(path) => match std::fs::remove_file(path) {
-                        Ok(()) => Ok(result_ok(Value::Unit)),
-                        Err(error) => Ok(result_err(io_error(error))),
-                    },
-                    other => Err(Diagnostic::new(format!(
-                        "`fs.remove_file(...)` expects `String`, found `{}`",
-                        other.render()
-                    ))),
+                let path = expect_string_value(&bound[0].value, "fs.remove_file(...)")?;
+                match run_blocking_io(move || std::fs::remove_file(path), Some(&self.cancellation))
+                {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "fs::open" | "fs::create" | "fs::append" => {
@@ -4150,6 +4182,22 @@ impl MirRuntime {
                     _ => None,
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let send_channels = arms
+                .iter()
+                .filter_map(|arm| match &arm.kind {
+                    MirSelectKind::Send { channel, .. } => {
+                        match self.evaluate_operand(channel, env) {
+                            Ok(Value::Channel(channel)) => Some(Ok(channel)),
+                            Ok(other) => Some(Err(Diagnostic::new(format!(
+                                "MIR `select` expected `Queue`, found `{}`",
+                                other.render()
+                            )))),
+                            Err(error) => Some(Err(error)),
+                        }
+                    }
+                    _ => None,
+                })
+                .collect::<Result<Vec<_>>>()?;
             let active_deadlines = deadlines
                 .iter()
                 .filter_map(|deadline| deadline.as_ref().copied())
@@ -4157,6 +4205,7 @@ impl MirRuntime {
             let wake_reason = wait_for_select_progress(
                 &recv_channels,
                 ignore_closed_recv,
+                &send_channels,
                 &active_deadlines,
                 Some(&self.cancellation),
             );
@@ -4203,6 +4252,9 @@ impl MirRuntime {
                         "MIR `select` send arm requires a channel value",
                     ));
                 };
+                if !channel.is_ready_for_scheduler_send() {
+                    return Ok(None);
+                }
                 let value = self.evaluate_operand(value, env)?;
                 Ok(Some(match channel.send(value) {
                     Ok(()) => result_ok(Value::Unit),

@@ -10,5 +10,7 @@ def main() -> int32:
             match err:
                 case SendError.Closed(value):
                     print(value)
+                case SendError.Cancelled(value):
+                    print(value)
 
     return 0

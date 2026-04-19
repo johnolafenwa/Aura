@@ -466,6 +466,8 @@ Current collection notes:
 - `Set[T]` supports literal construction with `Set{...}` and the maintained method surface `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`
 - `for value in set:` and `for value in borrow set:` are supported for `Set[T]`
 - `for value in borrow mut set:` is not currently supported
+- `Queue[T]` supports `queue(capacity=...)` for bounded-capacity queues on the shared runtime scheduler
+- `Queue.put(...)` returns `Result[None, SendError[T]]`, where `SendError[T]` currently includes `Closed(value)` and `Cancelled(value)`
 
 Timed `select` loops now treat closed receive arms as inactive when an `after(...)` arm is present, so timeout arms can still fire as an escape path. `Queue.get(timeout=...)` is also available for the ordinary single-queue timeout case.
 
@@ -523,6 +525,6 @@ Current expression/ergonomics limitations:
 - `spawn` and `TaskGroup.start(...)` support named functions plus associated methods without `self`
 - concurrency uses only the maintained `Queue[T]`, `queue()`, `Task.result()`, `tasks()`, and `TaskGroup.start(...)` surface
 - queue waits, `sleep(...)`, `select`, socket waits, and the maintained HTTP helpers all use the shared evented runtime scheduler
-- Aurora tasks are scheduler-backed lightweight tasks, and ordinary file I/O still executes synchronously
+- Aurora tasks are scheduler-backed lightweight tasks, and ordinary file I/O now also offloads through the shared scheduler instead of pinning a task on a blocking host thread
 - Unix domain sockets require a Unix host at runtime
 - borrowed return labels such as `borrow[shared]` are supported on borrowed parameters and returns for advanced zero-copy APIs

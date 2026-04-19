@@ -1291,6 +1291,11 @@ test("fallback analysis helper specializes builtin member return types and unres
     "None"
   );
 
+  const sendError = _testing.builtinEnums().find((enumInfo) => enumInfo.name === "SendError");
+  assert.ok(sendError);
+  assert.ok(sendError.variants.some((variant) => variant.name === "Closed"));
+  assert.ok(sendError.variants.some((variant) => variant.name === "Cancelled"));
+
   const taskMembers = byName("Task");
   assert.equal(
     _testing.specializeMemberReturnType("Task[int32]", taskMembers.get("result")),

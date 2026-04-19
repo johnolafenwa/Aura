@@ -202,10 +202,16 @@ fn builtin_function_metadata_and_binding_surface_are_stable() {
         .unwrap_err();
     assert!(range_error.message.contains("expects 1 or 2 arguments"));
 
+    let queue_one_arg_input = [dummy_arg(None)];
+    let queue_one_arg = BuiltinFunction::Queue
+        .bind_args(&queue_one_arg_input, Span::new(1, 1))
+        .unwrap();
+    assert_eq!(queue_one_arg.len(), 1);
+
     let queue_error = BuiltinFunction::Queue
-        .bind_args(&[dummy_arg(None)], Span::new(1, 1))
+        .bind_args(&[dummy_arg(None), dummy_arg(None)], Span::new(1, 1))
         .unwrap_err();
-    assert!(queue_error.message.contains("expects 0 arguments, found 1"));
+    assert!(queue_error.message.contains("expects 1 argument, found 2"));
 }
 
 #[test]

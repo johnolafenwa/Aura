@@ -981,11 +981,11 @@ impl<'a> AnalysisBuilder<'a> {
                         definition: None,
                     })
                 }
-                ("SendError", "Closed") => {
+                ("SendError", "Closed" | "Cancelled") => {
                     return Some(ResolvedSymbol {
                         hover: format_variant_hover(
                             "SendError",
-                            "Closed",
+                            variant.variant_name.as_str(),
                             ty.type_arguments().first(),
                         ),
                         definition: None,
@@ -2006,8 +2006,8 @@ impl<'a> AnalysisBuilder<'a> {
                 definition: None,
                 ty: Some(Type::named("Result")),
             }),
-            "SendError" if field == "Closed" => Some(ResolvedMember {
-                hover: format_variant_hover("SendError", "Closed", Some(&Type::named("T"))),
+            "SendError" if matches!(field, "Closed" | "Cancelled") => Some(ResolvedMember {
+                hover: format_variant_hover("SendError", field, Some(&Type::named("T"))),
                 definition: None,
                 ty: Some(Type::named("SendError")),
             }),
@@ -2245,7 +2245,9 @@ impl<'a> AnalysisBuilder<'a> {
                 ("Option", "Some") => return ty.type_arguments().first().cloned(),
                 ("Result", "Ok") => return ty.type_arguments().first().cloned(),
                 ("Result", "Err") => return ty.type_arguments().get(1).cloned(),
-                ("SendError", "Closed") => return ty.type_arguments().first().cloned(),
+                ("SendError", "Closed" | "Cancelled") => {
+                    return ty.type_arguments().first().cloned()
+                }
                 _ => {}
             }
         }
@@ -2379,7 +2381,7 @@ where
                     .unwrap_or(Type::Unit),
             ],
         )),
-        ("SendError", "Closed") => Some(Type::Named(
+        ("SendError", "Closed" | "Cancelled") => Some(Type::Named(
             "SendError".to_string(),
             vec![args
                 .first()
@@ -2722,11 +2724,18 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 detail: "Err(E) -> Result".to_string(),
             },
         ],
-        "SendError" => vec![AnalysisCompletion {
-            name: "Closed".to_string(),
-            kind: "variant".to_string(),
-            detail: "Closed(T) -> SendError".to_string(),
-        }],
+        "SendError" => vec![
+            AnalysisCompletion {
+                name: "Closed".to_string(),
+                kind: "variant".to_string(),
+                detail: "Closed(T) -> SendError".to_string(),
+            },
+            AnalysisCompletion {
+                name: "Cancelled".to_string(),
+                kind: "variant".to_string(),
+                detail: "Cancelled(T) -> SendError".to_string(),
+            },
+        ],
         _ => Vec::new(),
     }
 }

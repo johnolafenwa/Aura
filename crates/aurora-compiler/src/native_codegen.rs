@@ -263,6 +263,7 @@ struct NativeCodegen<'a> {
     i64_buffer_new: FuncId,
     i64_buffer_store: FuncId,
     channel_new: FuncId,
+    channel_can_send: FuncId,
     channel_send: FuncId,
     channel_recv: FuncId,
     channel_recv_timeout_value: FuncId,
@@ -621,7 +622,8 @@ impl<'a> NativeCodegen<'a> {
             arg_buffer_store => ("aurora_direct_arg_buffer_store", [types::I64, types::I64, types::I64], None),
             i64_buffer_new => ("aurora_direct_i64_buffer_new", [types::I64], Some(types::I64)),
             i64_buffer_store => ("aurora_direct_i64_buffer_store", [types::I64, types::I64, types::I64], None),
-            channel_new => ("aurora_direct_channel_new", [], Some(types::I64)),
+            channel_new => ("aurora_direct_channel_new", [types::I64], Some(types::I64)),
+            channel_can_send => ("aurora_direct_channel_can_send", [types::I64], Some(types::I64)),
             channel_send => ("aurora_direct_channel_send", [types::I64, types::I64], Some(types::I64)),
             channel_recv => ("aurora_direct_channel_recv", [types::I64], Some(types::I64)),
             channel_recv_timeout_value => ("aurora_direct_channel_recv_timeout_value", [types::I64, types::I64], Some(types::I64)),
@@ -736,7 +738,7 @@ impl<'a> NativeCodegen<'a> {
             deadline_new => ("aurora_direct_deadline_new", [types::I64], Some(types::I64)),
             deadline_ready => ("aurora_direct_deadline_ready", [types::I64], Some(types::I64)),
             deadline_drop => ("aurora_direct_deadline_drop", [types::I64], None),
-            select_wait => ("aurora_direct_select_wait", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            select_wait => ("aurora_direct_select_wait", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             sleep_value => ("aurora_direct_sleep_value", [types::I64], Some(types::I64)),
             spawn_call => ("aurora_direct_spawn_call", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
         );
@@ -913,6 +915,7 @@ impl<'a> NativeCodegen<'a> {
             i64_buffer_new,
             i64_buffer_store,
             channel_new,
+            channel_can_send,
             channel_send,
             channel_recv,
             channel_recv_timeout_value,
@@ -1557,6 +1560,9 @@ impl<'a> NativeCodegen<'a> {
         let channel_new = self
             .object
             .declare_func_in_func(self.channel_new, builder.func);
+        let channel_can_send = self
+            .object
+            .declare_func_in_func(self.channel_can_send, builder.func);
         let channel_send = self
             .object
             .declare_func_in_func(self.channel_send, builder.func);
@@ -2025,6 +2031,7 @@ impl<'a> NativeCodegen<'a> {
             i64_buffer_new,
             i64_buffer_store,
             channel_new,
+            channel_can_send,
             channel_send,
             channel_recv,
             channel_recv_timeout_value,
@@ -2450,6 +2457,7 @@ struct FunctionCompiler<'a> {
     i64_buffer_new: cranelift_codegen::ir::FuncRef,
     i64_buffer_store: cranelift_codegen::ir::FuncRef,
     channel_new: cranelift_codegen::ir::FuncRef,
+    channel_can_send: cranelift_codegen::ir::FuncRef,
     channel_send: cranelift_codegen::ir::FuncRef,
     channel_recv: cranelift_codegen::ir::FuncRef,
     channel_recv_timeout_value: cranelift_codegen::ir::FuncRef,
@@ -3371,7 +3379,22 @@ impl<'a> FunctionCompiler<'a> {
                     name
                 ));
             }
-            let inst = self.builder.ins().call(self.channel_new, &[]);
+            let capacity = match args {
+                [] => self.builder.ins().iconst(types::I64, 0),
+                [argument] => {
+                    if argument.name.as_deref() != Some("capacity") && argument.name.is_some() {
+                        return Err(
+                            "direct backend expected `queue()` to receive only `capacity=`"
+                                .to_string(),
+                        );
+                    }
+                    let value = self.load_operand(&argument.value)?;
+                    let value = self.ensure_opaque(value)?;
+                    value.values[0]
+                }
+                _ => unreachable!(),
+            };
+            let inst = self.builder.ins().call(self.channel_new, &[capacity]);
             return Ok(self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::Named("Queue".to_string(), vec![Type::named("Unknown")]),
@@ -7761,6 +7784,19 @@ impl<'a> FunctionCompiler<'a> {
                 MirSelectKind::Send { channel, value } => {
                     let channel = self.load_operand(channel)?;
                     let channel = self.ensure_opaque(channel)?;
+                    let ready = self
+                        .builder
+                        .ins()
+                        .call(self.channel_can_send, &[channel.values[0]]);
+                    let ready = self.builder.inst_results(ready)[0];
+                    let zero = self.builder.ins().iconst(types::I64, 0);
+                    let ready = self.builder.ins().icmp(IntCC::NotEqual, ready, zero);
+                    let send_block = self.builder.create_block();
+                    let next_block = self.builder.create_block();
+                    self.builder
+                        .ins()
+                        .brif(ready, send_block, &[], next_block, &[]);
+                    self.builder.switch_to_block(send_block);
                     let value = self.load_operand(value)?;
                     let value = self.ensure_opaque(value)?;
                     let inst = self
@@ -7780,7 +7816,8 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     self.drop_deadlines(&deadline_params);
                     self.builder.ins().jump(self.blocks[&arm.label], &[]);
-                    return Ok(());
+                    self.builder.seal_block(send_block);
+                    self.builder.switch_to_block(next_block);
                 }
                 MirSelectKind::After { .. } => {
                     let deadline = deadline_params[deadline_index];
@@ -7807,6 +7844,10 @@ impl<'a> FunctionCompiler<'a> {
             .iter()
             .filter(|arm| matches!(arm.kind, MirSelectKind::Recv { .. }))
             .count();
+        let send_arm_count = arms
+            .iter()
+            .filter(|arm| matches!(arm.kind, MirSelectKind::Send { .. }))
+            .count();
         let recv_buffer = if recv_arm_count == 0 {
             self.builder.ins().iconst(types::I64, 0)
         } else {
@@ -7831,6 +7872,35 @@ impl<'a> FunctionCompiler<'a> {
                         .ins()
                         .call(self.i64_buffer_store, &[buffer, index, channel.values[0]]);
                     recv_index += 1;
+                }
+            }
+            buffer
+        };
+
+        let send_buffer = if send_arm_count == 0 {
+            self.builder.ins().iconst(types::I64, 0)
+        } else {
+            let count_value = self.builder.ins().iconst(
+                types::I64,
+                i64::try_from(send_arm_count)
+                    .map_err(|_| "direct backend select send arm count overflowed i64")?,
+            );
+            let call = self.builder.ins().call(self.i64_buffer_new, &[count_value]);
+            let buffer = self.builder.inst_results(call)[0];
+            let mut send_index = 0usize;
+            for arm in arms {
+                if let MirSelectKind::Send { channel, .. } = &arm.kind {
+                    let channel = self.load_operand(channel)?;
+                    let channel = self.ensure_opaque(channel)?;
+                    let index = self.builder.ins().iconst(
+                        types::I64,
+                        i64::try_from(send_index)
+                            .map_err(|_| "direct backend select send index overflowed i64")?,
+                    );
+                    self.builder
+                        .ins()
+                        .call(self.i64_buffer_store, &[buffer, index, channel.values[0]]);
+                    send_index += 1;
                 }
             }
             buffer
@@ -7864,6 +7934,11 @@ impl<'a> FunctionCompiler<'a> {
             i64::try_from(recv_arm_count)
                 .map_err(|_| "direct backend select recv arm count overflowed i64")?,
         );
+        let send_count_value = self.builder.ins().iconst(
+            types::I64,
+            i64::try_from(send_arm_count)
+                .map_err(|_| "direct backend select send arm count overflowed i64")?,
+        );
         let deadline_count_value = self.builder.ins().iconst(
             types::I64,
             i64::try_from(deadline_params.len())
@@ -7878,6 +7953,8 @@ impl<'a> FunctionCompiler<'a> {
             &[
                 recv_buffer,
                 recv_count_value,
+                send_buffer,
+                send_count_value,
                 ignore_closed,
                 deadline_buffer,
                 deadline_count_value,

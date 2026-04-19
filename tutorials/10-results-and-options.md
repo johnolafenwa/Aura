@@ -64,7 +64,7 @@ In practice, the distinction is clear from context. When you see `Option.None` i
 
 ## `SendError[T]`
 
-`SendError[T]` is the error type returned when a queue send fails because the queue is already closed. It wraps the value that could not be sent, so you can recover it:
+`SendError[T]` is the error type returned when a queue send fails because the queue is closed or a waiting send is cancelled. It wraps the value that could not be sent, so you can recover it:
 
 ```python
 ch: Queue[int32] = queue()
@@ -75,6 +75,8 @@ match ch.put(4):
         print("sent")
     case Err(SendError.Closed(value)):
         print(f"queue closed, could not send {value}")
+    case Err(SendError.Cancelled(value)):
+        print(f"send cancelled, could not send {value}")
 ```
 
 See [examples/concurrency/send_result.au](../examples/concurrency/send_result.au) for a full example.
@@ -101,7 +103,7 @@ For simpler cases, Aurora provides `try expr` to reduce the nesting. See [12-err
 The bootstrap compiler supports:
 
 - `Result[T, E]`, `Option[T]`, and `SendError[T]` in type positions
-- constructing values with `Result.Ok(...)`, `Result.Err(...)`, `Option.Some(...)`, `Option.None`, and `SendError.Closed(...)`
+- constructing values with `Result.Ok(...)`, `Result.Err(...)`, `Option.Some(...)`, `Option.None`, `SendError.Closed(...)`, and `SendError.Cancelled(...)`
 - exhaustive `match` over all of these
 - unqualified variants (`Ok`, `Err`, `Some`, `None`) when the scrutinee type is known
 

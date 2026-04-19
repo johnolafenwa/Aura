@@ -1088,7 +1088,7 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
     .expect("spawn call should run inside lightweight scheduler");
     assert_eq!(expect_int(boxed_value(spawned_sum)), 42);
 
-    let channel = super::aurora_direct_channel_new();
+    let channel = super::aurora_direct_channel_new(std::ptr::null_mut());
     let send_ok = unsafe { take_value(super::aurora_direct_channel_send(channel, int_value(9))) };
     match send_ok {
         Value::EnumVariant(variant)

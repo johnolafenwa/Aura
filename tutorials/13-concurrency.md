@@ -20,6 +20,14 @@ jobs: Queue[int32] = queue()
 
 The bootstrap compiler still requires the expected type when you call bare `queue()`. If you want the type inline, use `queue[int32]()` or `Queue[int32]()`.
 
+Queues may also be bounded:
+
+```python
+jobs: Queue[int32] = queue(capacity=16)
+```
+
+With a bounded queue, `put(...)` waits until capacity is available instead of letting the queue grow without bound.
+
 Send and receive:
 
 ```python
@@ -37,10 +45,13 @@ msg = jobs.get()    # returns Option[int32]
 
 - `Result.Ok(None)` on success
 - `Result.Err(SendError.Closed(value))` when the queue is already closed, returning the unsent value
+- `Result.Err(SendError.Cancelled(value))` when a waiting send is interrupted by task-group cancellation, returning the unsent value
 
 Close a queue with `jobs.close()`. After closing, no more values can be sent, but existing values can still be received.
 
 Queue handles are cheap copy-like references. Passing the same queue into multiple tasks shares the underlying queue without requiring `.clone()` in the common case.
+
+See [examples/concurrency/bounded_queue.au](../examples/concurrency/bounded_queue.au).
 
 ### Iterating Over A Queue
 
@@ -88,8 +99,6 @@ task = spawn producer(jobs)
 ```
 
 `spawn` returns a `Task[T]`. Call `.result()` to wait for the task to complete and read its return value.
-
-`Task[T]` also supports `.clone()` as a compatibility helper, but plain assignment and parameter passing are already cheap for task handles.
 
 Associated methods without `self` work too:
 
@@ -210,6 +219,7 @@ def main() -> int32:
 See:
 
 - [examples/concurrency/queues_spawn.au](../examples/concurrency/queues_spawn.au)
+- [examples/concurrency/bounded_queue.au](../examples/concurrency/bounded_queue.au)
 - [examples/concurrency/queue_timeout.au](../examples/concurrency/queue_timeout.au)
 - [examples/concurrency/send_result.au](../examples/concurrency/send_result.au)
 - [examples/concurrency/spawn_detached.au](../examples/concurrency/spawn_detached.au)
