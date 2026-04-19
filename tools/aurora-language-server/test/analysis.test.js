@@ -303,6 +303,24 @@ test("fallback analysis understands builtin io/fs/net module imports", () => {
   assert.ok(!diagnostics.some((diagnostic) => /type `net` has no member `listen`/.test(diagnostic.message)));
 });
 
+test("fallback analysis understands builtin process module imports", () => {
+  const source = [
+    "import process",
+    "",
+    "def main() -> int32:",
+    "    child = process.start([\"/bin/echo\", \"aurora\"], stdout=process.pipe())",
+    "    completed = process.run([\"/bin/echo\", \"aurora\"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s)",
+    "    inherited = process.inherit()",
+    "    return 0"
+  ].join("\n");
+
+  const diagnostics = diagnosticsForDocument(source);
+  assert.ok(!diagnostics.some((diagnostic) => /unknown name `process`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /type `process` has no member `start`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /type `process` has no member `run`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /type `process` has no member `inherit`/.test(diagnostic.message)));
+});
+
 test("fallback member completion exposes builtin module namespaces", () => {
   const source = ["import fs", "", "def main() -> int32:", "    fs.", "    return 0"].join("\n");
   const lineIndex = source.split("\n").findIndex((line) => line.includes("fs."));
@@ -355,6 +373,67 @@ test("fallback member completion exposes builtin file and socket resource method
   assert.ok(names.has("shutdown_write"));
   assert.ok(names.has("shutdown_both"));
   assert.ok(names.has("close"));
+});
+
+test("fallback member completion exposes builtin process module and resource methods", () => {
+  const source = [
+    "import process",
+    "",
+    "def inspect(child: process.Child, pipe: process.Pipe, completed: process.Completed) -> int32:",
+    "    process.",
+    "    child.",
+    "    pipe.",
+    "    completed.",
+    "    return 0"
+  ].join("\n");
+
+  const lines = source.split("\n");
+  const completeNames = (lineMarker) => {
+    const lineIndex = lines.findIndex((line) => line === lineMarker);
+    const lineText = lines[lineIndex];
+    const character = lineText.indexOf(".") + 1;
+    return new Set(
+      completionsForDocument(source, lineIndex, character, ".").map((item) => item.name)
+    );
+  };
+
+  const processNames = completeNames("    process.");
+  assert.ok(processNames.has("start"));
+  assert.ok(processNames.has("run"));
+  assert.ok(processNames.has("inherit"));
+  assert.ok(processNames.has("null"));
+  assert.ok(processNames.has("pipe"));
+  assert.ok(processNames.has("Child"));
+  assert.ok(processNames.has("Pipe"));
+  assert.ok(processNames.has("Completed"));
+  assert.ok(processNames.has("ExitStatus"));
+  assert.ok(processNames.has("Wait"));
+  assert.ok(processNames.has("Stdio"));
+  assert.ok(processNames.has("Error"));
+
+  const childNames = completeNames("    child.");
+  assert.ok(childNames.has("stdin"));
+  assert.ok(childNames.has("stdout"));
+  assert.ok(childNames.has("stderr"));
+  assert.ok(childNames.has("wait"));
+  assert.ok(childNames.has("kill"));
+  assert.ok(childNames.has("terminate"));
+  assert.ok(childNames.has("close"));
+
+  const pipeNames = completeNames("    pipe.");
+  assert.ok(pipeNames.has("read_all"));
+  assert.ok(pipeNames.has("read_line"));
+  assert.ok(pipeNames.has("read_bytes"));
+  assert.ok(pipeNames.has("write_all"));
+  assert.ok(pipeNames.has("write_bytes"));
+  assert.ok(pipeNames.has("flush"));
+  assert.ok(pipeNames.has("close"));
+
+  const completedNames = completeNames("    completed.");
+  assert.ok(completedNames.has("status"));
+  assert.ok(completedNames.has("success"));
+  assert.ok(completedNames.has("stdout"));
+  assert.ok(completedNames.has("stderr"));
 });
 
 test("fallback completion exposes advanced fs/net modules and resource methods", () => {

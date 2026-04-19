@@ -51,6 +51,13 @@ const PRIMITIVE_TYPES = new Set([
   "Duration",
   "io.Error",
   "fs.File",
+  "process.Child",
+  "process.Pipe",
+  "process.Completed",
+  "process.ExitStatus",
+  "process.Wait",
+  "process.Stdio",
+  "process.Error",
   "net.TcpListener",
   "net.TcpStream",
   "net.UdpSocket",
@@ -533,6 +540,201 @@ const BUILTIN_MEMBERS = {
       kind: "method",
       detail: "close() -> Result[None, io.Error]",
       documentation: "Closes the file handle."
+    }
+  ],
+  process: [
+    {
+      name: "start",
+      kind: "method",
+      detail: "start(command: Vec[String], cwd: Option[String] = Option.None, env: Map[String, String] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.inherit(), stderr: process.Stdio = process.inherit()) -> Result[process.Child, process.Error]",
+      documentation: "Starts a child process without waiting for it to complete."
+    },
+    {
+      name: "run",
+      kind: "method",
+      detail: "run(command: Vec[String], cwd: Option[String] = Option.None, env: Map[String, String] = {}, stdin: process.Stdio = process.null(), stdout: process.Stdio = process.pipe(), stderr: process.Stdio = process.pipe(), timeout: Duration = ...) -> Result[process.Completed, process.Error]",
+      documentation: "Runs a child process to completion, optionally capturing stdout and stderr."
+    },
+    {
+      name: "inherit",
+      kind: "method",
+      detail: "inherit() -> process.Stdio",
+      documentation: "Uses the parent process stdio stream directly."
+    },
+    {
+      name: "null",
+      kind: "method",
+      detail: "null() -> process.Stdio",
+      documentation: "Connects the child stdio stream to the null device."
+    },
+    {
+      name: "pipe",
+      kind: "method",
+      detail: "pipe() -> process.Stdio",
+      documentation: "Creates a pipe-backed child stdio stream."
+    },
+    {
+      name: "Child",
+      kind: "field",
+      detail: "Child: process.Child",
+      type: "process.Child",
+      documentation: "The builtin running child-process resource type."
+    },
+    {
+      name: "Pipe",
+      kind: "field",
+      detail: "Pipe: process.Pipe",
+      type: "process.Pipe",
+      documentation: "The builtin child-process pipe resource type."
+    },
+    {
+      name: "Completed",
+      kind: "field",
+      detail: "Completed: process.Completed",
+      type: "process.Completed",
+      documentation: "The builtin completed-process capture value type."
+    },
+    {
+      name: "ExitStatus",
+      kind: "field",
+      detail: "ExitStatus: process.ExitStatus",
+      type: "process.ExitStatus",
+      documentation: "The builtin process exit-status enum."
+    },
+    {
+      name: "Wait",
+      kind: "field",
+      detail: "Wait: process.Wait",
+      type: "process.Wait",
+      documentation: "The builtin child wait-result enum."
+    },
+    {
+      name: "Stdio",
+      kind: "field",
+      detail: "Stdio: process.Stdio",
+      type: "process.Stdio",
+      documentation: "The builtin child stdio configuration enum."
+    },
+    {
+      name: "Error",
+      kind: "field",
+      detail: "Error: process.Error",
+      type: "process.Error",
+      documentation: "The builtin process error enum."
+    }
+  ],
+  "process.Child": [
+    {
+      name: "stdin",
+      kind: "method",
+      detail: "stdin() -> Option[process.Pipe]",
+      documentation: "Returns the child stdin pipe when one was requested."
+    },
+    {
+      name: "stdout",
+      kind: "method",
+      detail: "stdout() -> Option[process.Pipe]",
+      documentation: "Returns the child stdout pipe when one was requested."
+    },
+    {
+      name: "stderr",
+      kind: "method",
+      detail: "stderr() -> Option[process.Pipe]",
+      documentation: "Returns the child stderr pipe when one was requested."
+    },
+    {
+      name: "wait",
+      kind: "method",
+      detail: "wait(timeout: Duration = ...) -> process.Wait",
+      documentation: "Waits for the child process to finish, optionally timing out."
+    },
+    {
+      name: "kill",
+      kind: "method",
+      detail: "kill() -> Result[None, process.Error]",
+      documentation: "Forcefully terminates the child process."
+    },
+    {
+      name: "terminate",
+      kind: "method",
+      detail: "terminate() -> Result[None, process.Error]",
+      documentation: "Requests graceful child termination."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the child handle and remaining attached pipes."
+    }
+  ],
+  "process.Pipe": [
+    {
+      name: "read_all",
+      kind: "method",
+      detail: "read_all() -> Result[String, process.Error]",
+      documentation: "Reads the remaining pipe contents as UTF-8 text."
+    },
+    {
+      name: "read_line",
+      kind: "method",
+      detail: "read_line(timeout: Duration = ...) -> Result[Option[String], process.Error]",
+      documentation: "Reads the next UTF-8 line from the pipe."
+    },
+    {
+      name: "read_bytes",
+      kind: "method",
+      detail: "read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], process.Error]",
+      documentation: "Reads up to `max_bytes` raw bytes from the pipe."
+    },
+    {
+      name: "write_all",
+      kind: "method",
+      detail: "write_all(text: String, timeout: Duration = ...) -> Result[None, process.Error]",
+      documentation: "Writes all of `text` to the pipe."
+    },
+    {
+      name: "write_bytes",
+      kind: "method",
+      detail: "write_bytes(bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, process.Error]",
+      documentation: "Writes all of `bytes` to the pipe."
+    },
+    {
+      name: "flush",
+      kind: "method",
+      detail: "flush() -> Result[None, process.Error]",
+      documentation: "Flushes buffered pipe output."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the pipe handle."
+    }
+  ],
+  "process.Completed": [
+    {
+      name: "status",
+      kind: "method",
+      detail: "status() -> process.ExitStatus",
+      documentation: "Returns the completed child exit status."
+    },
+    {
+      name: "success",
+      kind: "method",
+      detail: "success() -> bool",
+      documentation: "Returns true when the child exited with code 0."
+    },
+    {
+      name: "stdout",
+      kind: "method",
+      detail: "stdout() -> String",
+      documentation: "Returns the captured stdout text."
+    },
+    {
+      name: "stderr",
+      kind: "method",
+      detail: "stderr() -> String",
+      documentation: "Returns the captured stderr text."
     }
   ],
   net: [
@@ -1300,7 +1502,7 @@ const BUILTIN_FUNCTIONS = [
 ];
 
 const BUILTIN_FUNCTION_MAP = new Map(BUILTIN_FUNCTIONS.map((item) => [item.name, item]));
-const BUILTIN_MODULE_NAMES = new Set(["io", "fs", "net"]);
+const BUILTIN_MODULE_NAMES = new Set(["io", "fs", "process", "net"]);
 const BUILTIN_ENUMS = new Map([
   [
     "QueueReceive",
@@ -1338,6 +1540,65 @@ const BUILTIN_ENUMS = new Map([
           payloadType: null,
           detail: "Cancelled -> QueueReceive"
         }
+      ]
+    }
+  ],
+  [
+    "Stdio",
+    {
+      kind: "enum",
+      name: "Stdio",
+      detail: "enum Stdio",
+      documentation: "Process stdio configuration values.",
+      variants: [
+        { kind: "variant", name: "Inherit", returnType: "Stdio", payloadType: null, detail: "Inherit -> Stdio" },
+        { kind: "variant", name: "Null", returnType: "Stdio", payloadType: null, detail: "Null -> Stdio" },
+        { kind: "variant", name: "Pipe", returnType: "Stdio", payloadType: null, detail: "Pipe -> Stdio" }
+      ]
+    }
+  ],
+  [
+    "ExitStatus",
+    {
+      kind: "enum",
+      name: "ExitStatus",
+      detail: "enum ExitStatus",
+      documentation: "Process exit results for normal exits and signal termination.",
+      variants: [
+        { kind: "variant", name: "Exited", returnType: "ExitStatus", payloadType: "int32", detail: "Exited(int32) -> ExitStatus" },
+        { kind: "variant", name: "Signaled", returnType: "ExitStatus", payloadType: "int32", detail: "Signaled(int32) -> ExitStatus" }
+      ]
+    }
+  ],
+  [
+    "Wait",
+    {
+      kind: "enum",
+      name: "Wait",
+      detail: "enum Wait",
+      documentation: "Child-process wait outcomes.",
+      variants: [
+        { kind: "variant", name: "Exited", returnType: "Wait", payloadType: "process.ExitStatus", detail: "Exited(process.ExitStatus) -> Wait" },
+        { kind: "variant", name: "TimedOut", returnType: "Wait", payloadType: null, detail: "TimedOut -> Wait" },
+        { kind: "variant", name: "Cancelled", returnType: "Wait", payloadType: null, detail: "Cancelled -> Wait" },
+        { kind: "variant", name: "Failed", returnType: "Wait", payloadType: "process.Error", detail: "Failed(process.Error) -> Wait" }
+      ]
+    }
+  ],
+  [
+    "Error",
+    {
+      kind: "enum",
+      name: "Error",
+      detail: "enum Error",
+      documentation: "Process API errors.",
+      variants: [
+        { kind: "variant", name: "NoCommand", returnType: "Error", payloadType: null, detail: "NoCommand -> Error" },
+        { kind: "variant", name: "TimedOut", returnType: "Error", payloadType: null, detail: "TimedOut -> Error" },
+        { kind: "variant", name: "Cancelled", returnType: "Error", payloadType: null, detail: "Cancelled -> Error" },
+        { kind: "variant", name: "Io", returnType: "Error", payloadType: "io.Error", detail: "Io(io.Error) -> Error" },
+        { kind: "variant", name: "Spawn", returnType: "Error", payloadType: "String", detail: "Spawn(String) -> Error" },
+        { kind: "variant", name: "Other", returnType: "Error", payloadType: "String", detail: "Other(String) -> Error" }
       ]
     }
   ],

@@ -2,10 +2,6 @@
 
 Last updated: 2026-04-19
 
-## Active Session
-
-- None.
-
 ## In Progress
 
 - Expand the frontend from the current bootstrap toward the broader frozen v1 surface without breaking the working path.
@@ -23,6 +19,7 @@ Last updated: 2026-04-19
 
 ## Done
 
+- Finished the April 19 process-module pass: added the first maintained shell-free `process` builtin module with `process.start(...)`, `process.run(...)`, `process.inherit()`, `process.null()`, `process.pipe()`, `process.Child`, `process.Pipe`, `process.ExitStatus`, `process.Completed`, and `process.Error`; implemented timeout-aware child waiting plus explicit `terminate()` / `kill()` / `close()` behavior across the checker, MIR runtime, direct runtime, native backend, compiler-owned analysis/completions, and LSP fallback analysis; added maintained compiler, CLI, example-smoke, and LSP regression coverage for subprocess execution, stdio piping, and builtin member completions; added the runnable `examples/io/process_run.au` and `examples/io/process_pipes.au` examples; aligned the root README, CLI README, examples index, and tutorials with the new process surface and its current limits; and reverified the final tree with `cargo fmt --all`, `cargo test -p aurora-compiler`, `cargo test -p aura`, `npm run test:lsp`, `npm run check:extension`, and `cargo clippy -p aurora-compiler -p aura -- -D clippy::correctness`.
 - Finished the April 19 concurrency Pythonic surface reset: removed the legacy `spawn`, `spawn detached`, `select`, `after(...)`, `queue()`, `queue[T]()`, and `tasks()` surface; kept only the structured concurrency model centered on `Queue[T]()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `Task.result(timeout=...)`, `wait_any(...)`, and `wait_all(...)`; renamed and rewired maintained fixtures/examples around the new queue/task semantics; updated the fallback LSP analysis metadata and payload inference to the maintained `QueueReceive`, `TaskResult`, `WaitAny`, and `WaitAll` enums; aligned tutorials, READMEs, and VS Code syntax/snippets with the new surface; and reverified the final tree with `cargo fmt --all`, `cargo test -p aurora-compiler`, `cargo test -p aura`, `npm run test:lsp`, `npm run check:extension`, and `cargo clippy -p aurora-compiler -p aura -- -D clippy::correctness`.
 - Refined the April 19 ML systems roadmap so the near-term plan now centers Aurora on subprocess supervision, structured serialization, observability, and a host-side array or tensor-lite layer for NumPy-style local data processing, while scoping full tensor/device placement and distributed runtime support as explicit later phases in the same roadmap.
 - Finished the April 19 ML systems roadmap pass: added `docs/ml_systems_support_plan.md` as a forward-looking plan for making Aurora a strong ML systems language without replacing Python training workflows, covering process supervision, tensor/device handle interop, zero-copy/shared-memory transport, structured serialization, observability, cross-cutting compiler/runtime implications, and staged delivery milestones; linked the roadmap from the root README; verified the new markdown links; and recorded the pass in the dated work log.

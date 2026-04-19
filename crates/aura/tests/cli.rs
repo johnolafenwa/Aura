@@ -3323,6 +3323,77 @@ def main() -> int32:
     );
 }
 
+#[test]
+fn direct_backend_build_supports_process_module_surface() {
+    let temp = TempDir::new("aurora-cli-direct-process");
+    let cwd = fs::canonicalize(temp.path())
+        .expect("temp path should canonicalize")
+        .display()
+        .to_string();
+    let source = format!(
+        r#"import process
+
+def run(cwd: String) -> Result[None, process.Error]:
+    env: Map[String, String] = {{"AURORA_PROCESS_VAR": "present"}}
+    completed = try process.run(["/usr/bin/printenv", "AURORA_PROCESS_VAR"], env=env, timeout=2s)
+    print(completed.stdout().trim())
+    print(completed.stderr().len())
+    pwd = try process.run(["/bin/pwd"], cwd=Option.Some(cwd), timeout=2s)
+    print(pwd.stdout().trim())
+    print(pwd.stderr().len())
+    print(completed.status())
+    print(pwd.status())
+
+    with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null()):
+        match child.stdin():
+            case Option.Some(found_pipe):
+                stdin_pipe: process.Pipe = found_pipe
+                try stdin_pipe.write_all("echo from cat\n", timeout=500ms)
+                try stdin_pipe.flush()
+                stdin_pipe.close()
+            case Option.None:
+                return Result.Ok(None)
+
+        match child.stdout():
+            case Option.Some(found_pipe):
+                stdout_pipe: process.Pipe = found_pipe
+                match try stdout_pipe.read_line(timeout=500ms):
+                    case Option.Some(text):
+                        print(text)
+                    case Option.None:
+                        return Result.Ok(None)
+            case Option.None:
+                return Result.Ok(None)
+
+        print(child.wait(timeout=2s))
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run("{cwd}"):
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#,
+        cwd = cwd,
+    );
+
+    let (_build, run) = build_and_run_direct_source("aurora-cli-direct-process", &source);
+    assert!(
+        run.status.success(),
+        "direct backend process binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        format!(
+            "present\n0\n{cwd}\n0\nExitStatus.Exited(0)\nExitStatus.Exited(0)\necho from cat\nWait.Exited(ExitStatus.Exited(0))\n",
+            cwd = cwd,
+        )
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn direct_backend_build_supports_unix_and_tls_network_surface() {

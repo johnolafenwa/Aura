@@ -54,7 +54,7 @@ The current tutorial set covers:
 - built-in `Result[T, E]`, `Option[T]`, `SendError[T]`, and bare `None`
 - `try expr`
 - `with` using `close(borrow mut self)` and `with TaskGroup() as group:`
-- builtin `io`, `fs`, and `net` modules with scheduler-aware file I/O and maintained networking resource types
+- builtin `io`, `fs`, `net`, and `process` modules with scheduler-aware file I/O, maintained networking resource types, and shell-free subprocess helpers
 - `Queue[T]()`, `Task[T].result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `wait_any(...)`, `wait_all(...)`, send-result errors, and cooperative cancellation
 - arithmetic, strings, string parsing/formatting, booleans, comparisons, and duration literals
 - `if`, `elif`, `else`, `for`, `while`, `match`, `break`, and `continue`

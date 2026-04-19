@@ -365,6 +365,18 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `67`
     - `5`
     - `68`
+- `process_run.au`
+  - shell-free `process.run(...)`, captured stdout/stderr, and `process.Completed`
+  - prints:
+    - `true`
+    - `aurora process`
+    - `0`
+    - `ExitStatus.Exited(0)`
+- `process_pipes.au`
+  - interactive `process.start(...)`, `process.Pipe`, and timeout-aware child waiting
+  - prints:
+    - `ping`
+    - `ExitStatus.Exited(0)`
 - `tcp_echo.au`
   - builtin `net.listen(...)`, `net.connect(...)`, `TcpListener.accept()`, `TcpStream.read_line()`, `TcpStream.write_all(...)`, and `with` cleanup on network resources
   - prints `echo:ping`
@@ -606,6 +618,8 @@ cargo run -p aura -- run examples/error_handling/try_result.au
 cargo run -p aura -- run examples/resources/with_resource.au
 cargo run -p aura -- run examples/io/read_text_file.au
 cargo run -p aura -- run examples/io/bytes_file_io.au
+cargo run -p aura -- run examples/io/process_run.au
+cargo run -p aura -- run examples/io/process_pipes.au
 cargo run -p aura -- run examples/io/tcp_echo.au
 cargo run -p aura -- run examples/io/tcp_bytes.au
 cargo run -p aura -- run examples/io/udp_echo.au

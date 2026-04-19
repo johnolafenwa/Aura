@@ -1674,6 +1674,66 @@ impl<'a> AnalysisBuilder<'a> {
                     Some(Type::Named("Task".to_string(), vec![Type::Unit]))
                 }
                 BuiltinMember::TaskGroupStartSoon => Some(Type::Unit),
+                BuiltinMember::ProcessChildStdin
+                | BuiltinMember::ProcessChildStdout
+                | BuiltinMember::ProcessChildStderr => Some(Type::Named(
+                    "Option".to_string(),
+                    vec![Type::Named("process.Pipe".to_string(), Vec::new())],
+                )),
+                BuiltinMember::ProcessChildWait => {
+                    Some(Type::Named("process.Wait".to_string(), Vec::new()))
+                }
+                BuiltinMember::ProcessChildKill | BuiltinMember::ProcessChildTerminate => {
+                    Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Unit,
+                            Type::Named("process.Error".to_string(), Vec::new()),
+                        ],
+                    ))
+                }
+                BuiltinMember::ProcessChildClose => Some(Type::Unit),
+                BuiltinMember::ProcessPipeReadAll => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::named("String"),
+                        Type::Named("process.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::ProcessPipeReadLine => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Option".to_string(), vec![Type::named("String")]),
+                        Type::Named("process.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::ProcessPipeReadBytes => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named(
+                            "Option".to_string(),
+                            vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
+                        ),
+                        Type::Named("process.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::ProcessPipeWriteAll
+                | BuiltinMember::ProcessPipeWriteBytes
+                | BuiltinMember::ProcessPipeFlush => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Unit,
+                        Type::Named("process.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::ProcessPipeClose => Some(Type::Unit),
+                BuiltinMember::ProcessCompletedStatus => {
+                    Some(Type::Named("process.ExitStatus".to_string(), Vec::new()))
+                }
+                BuiltinMember::ProcessCompletedSuccess => Some(Type::named("bool")),
+                BuiltinMember::ProcessCompletedStdout | BuiltinMember::ProcessCompletedStderr => {
+                    Some(Type::named("String"))
+                }
                 BuiltinMember::FileReadAll => Some(Type::Named(
                     "Result".to_string(),
                     vec![
@@ -3132,6 +3192,24 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::TlsStreamReadExact,
         BuiltinMember::TlsStreamWriteAll,
         BuiltinMember::TlsStreamClose,
+        BuiltinMember::ProcessChildStdin,
+        BuiltinMember::ProcessChildStdout,
+        BuiltinMember::ProcessChildStderr,
+        BuiltinMember::ProcessChildWait,
+        BuiltinMember::ProcessChildKill,
+        BuiltinMember::ProcessChildTerminate,
+        BuiltinMember::ProcessChildClose,
+        BuiltinMember::ProcessPipeReadAll,
+        BuiltinMember::ProcessPipeReadLine,
+        BuiltinMember::ProcessPipeReadBytes,
+        BuiltinMember::ProcessPipeWriteAll,
+        BuiltinMember::ProcessPipeWriteBytes,
+        BuiltinMember::ProcessPipeFlush,
+        BuiltinMember::ProcessPipeClose,
+        BuiltinMember::ProcessCompletedStatus,
+        BuiltinMember::ProcessCompletedSuccess,
+        BuiltinMember::ProcessCompletedStdout,
+        BuiltinMember::ProcessCompletedStderr,
         BuiltinMember::FloatSqrt,
         BuiltinMember::StringLen,
         BuiltinMember::StringContains,

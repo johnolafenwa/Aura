@@ -588,6 +588,24 @@ pub enum BuiltinMember {
     TlsStreamReadExact,
     TlsStreamWriteAll,
     TlsStreamClose,
+    ProcessChildStdin,
+    ProcessChildStdout,
+    ProcessChildStderr,
+    ProcessChildWait,
+    ProcessChildKill,
+    ProcessChildTerminate,
+    ProcessChildClose,
+    ProcessPipeReadAll,
+    ProcessPipeReadLine,
+    ProcessPipeReadBytes,
+    ProcessPipeWriteAll,
+    ProcessPipeWriteBytes,
+    ProcessPipeFlush,
+    ProcessPipeClose,
+    ProcessCompletedStatus,
+    ProcessCompletedSuccess,
+    ProcessCompletedStdout,
+    ProcessCompletedStderr,
 }
 
 impl BuiltinMember {
@@ -730,6 +748,24 @@ impl BuiltinMember {
             ("net.TlsStream", "read_exact") => Some(Self::TlsStreamReadExact),
             ("net.TlsStream", "write_all") => Some(Self::TlsStreamWriteAll),
             ("net.TlsStream", "close") => Some(Self::TlsStreamClose),
+            ("process.Child", "stdin") => Some(Self::ProcessChildStdin),
+            ("process.Child", "stdout") => Some(Self::ProcessChildStdout),
+            ("process.Child", "stderr") => Some(Self::ProcessChildStderr),
+            ("process.Child", "wait") => Some(Self::ProcessChildWait),
+            ("process.Child", "kill") => Some(Self::ProcessChildKill),
+            ("process.Child", "terminate") => Some(Self::ProcessChildTerminate),
+            ("process.Child", "close") => Some(Self::ProcessChildClose),
+            ("process.Pipe", "read_all") => Some(Self::ProcessPipeReadAll),
+            ("process.Pipe", "read_line") => Some(Self::ProcessPipeReadLine),
+            ("process.Pipe", "read_bytes") => Some(Self::ProcessPipeReadBytes),
+            ("process.Pipe", "write_all") => Some(Self::ProcessPipeWriteAll),
+            ("process.Pipe", "write_bytes") => Some(Self::ProcessPipeWriteBytes),
+            ("process.Pipe", "flush") => Some(Self::ProcessPipeFlush),
+            ("process.Pipe", "close") => Some(Self::ProcessPipeClose),
+            ("process.Completed", "status") => Some(Self::ProcessCompletedStatus),
+            ("process.Completed", "success") => Some(Self::ProcessCompletedSuccess),
+            ("process.Completed", "stdout") => Some(Self::ProcessCompletedStdout),
+            ("process.Completed", "stderr") => Some(Self::ProcessCompletedStderr),
             _ => None,
         }
     }
@@ -857,6 +893,24 @@ impl BuiltinMember {
             Self::TlsStreamReadExact => "read_exact",
             Self::TlsStreamWriteAll => "write_all",
             Self::TlsStreamClose => "close",
+            Self::ProcessChildStdin => "stdin",
+            Self::ProcessChildStdout => "stdout",
+            Self::ProcessChildStderr => "stderr",
+            Self::ProcessChildWait => "wait",
+            Self::ProcessChildKill => "kill",
+            Self::ProcessChildTerminate => "terminate",
+            Self::ProcessChildClose => "close",
+            Self::ProcessPipeReadAll => "read_all",
+            Self::ProcessPipeReadLine => "read_line",
+            Self::ProcessPipeReadBytes => "read_bytes",
+            Self::ProcessPipeWriteAll => "write_all",
+            Self::ProcessPipeWriteBytes => "write_bytes",
+            Self::ProcessPipeFlush => "flush",
+            Self::ProcessPipeClose => "close",
+            Self::ProcessCompletedStatus => "status",
+            Self::ProcessCompletedSuccess => "success",
+            Self::ProcessCompletedStdout => "stdout",
+            Self::ProcessCompletedStderr => "stderr",
         }
     }
 
@@ -985,6 +1039,32 @@ impl BuiltinMember {
             Self::TlsStreamReadExact => "read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]",
             Self::TlsStreamWriteAll => "write_all(text: String, timeout: Duration = ...) -> Result[None, io.Error]",
             Self::TlsStreamClose => "close() -> None",
+            Self::ProcessChildStdin => "stdin() -> Option[process.Pipe]",
+            Self::ProcessChildStdout => "stdout() -> Option[process.Pipe]",
+            Self::ProcessChildStderr => "stderr() -> Option[process.Pipe]",
+            Self::ProcessChildWait => "wait(timeout: Duration = ...) -> process.Wait",
+            Self::ProcessChildKill => "kill() -> Result[None, process.Error]",
+            Self::ProcessChildTerminate => "terminate() -> Result[None, process.Error]",
+            Self::ProcessChildClose => "close() -> None",
+            Self::ProcessPipeReadAll => "read_all() -> Result[String, process.Error]",
+            Self::ProcessPipeReadLine => {
+                "read_line(timeout: Duration = ...) -> Result[Option[String], process.Error]"
+            }
+            Self::ProcessPipeReadBytes => {
+                "read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], process.Error]"
+            }
+            Self::ProcessPipeWriteAll => {
+                "write_all(text: String, timeout: Duration = ...) -> Result[None, process.Error]"
+            }
+            Self::ProcessPipeWriteBytes => {
+                "write_bytes(bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, process.Error]"
+            }
+            Self::ProcessPipeFlush => "flush() -> Result[None, process.Error]",
+            Self::ProcessPipeClose => "close() -> None",
+            Self::ProcessCompletedStatus => "status() -> process.ExitStatus",
+            Self::ProcessCompletedSuccess => "success() -> bool",
+            Self::ProcessCompletedStdout => "stdout() -> String",
+            Self::ProcessCompletedStderr => "stderr() -> String",
         }
     }
 
@@ -1157,6 +1237,24 @@ impl BuiltinMember {
             Self::TlsStreamReadExact => "Reads exactly `count` bytes from the TLS stream.",
             Self::TlsStreamWriteAll => "Writes all of `text` to the TLS stream.",
             Self::TlsStreamClose => "Closes the TLS stream handle.",
+            Self::ProcessChildStdin => "Returns the child's piped stdin handle when stdin was configured with `process.pipe()`.",
+            Self::ProcessChildStdout => "Returns the child's piped stdout handle when stdout was configured with `process.pipe()`.",
+            Self::ProcessChildStderr => "Returns the child's piped stderr handle when stderr was configured with `process.pipe()`.",
+            Self::ProcessChildWait => "Waits for the child process to exit and reports exit, timeout, cancellation, or wait failure.",
+            Self::ProcessChildKill => "Immediately kills the child process.",
+            Self::ProcessChildTerminate => "Requests graceful child-process termination.",
+            Self::ProcessChildClose => "Closes the child resource, terminating it if it is still running.",
+            Self::ProcessPipeReadAll => "Reads the remaining piped output into a String until EOF.",
+            Self::ProcessPipeReadLine => "Reads a UTF-8 line from the process pipe, returning `Option.None` on EOF.",
+            Self::ProcessPipeReadBytes => "Reads up to `max_bytes` raw bytes from the process pipe.",
+            Self::ProcessPipeWriteAll => "Writes all of `text` to the process pipe.",
+            Self::ProcessPipeWriteBytes => "Writes all of `bytes` to the process pipe.",
+            Self::ProcessPipeFlush => "Flushes pending process-pipe writes.",
+            Self::ProcessPipeClose => "Closes the process pipe handle.",
+            Self::ProcessCompletedStatus => "Returns the process exit status captured by `process.run(...)`.",
+            Self::ProcessCompletedSuccess => "Returns true when the completed process exited with code 0.",
+            Self::ProcessCompletedStdout => "Returns the stdout captured by `process.run(...)`.",
+            Self::ProcessCompletedStderr => "Returns the stderr captured by `process.run(...)`.",
         }
     }
 
@@ -1204,7 +1302,11 @@ impl BuiltinMember {
             | Self::TcpStreamShutdownRead
             | Self::TcpStreamShutdownWrite
             | Self::TcpStreamShutdownBoth
-            | Self::TcpStreamClose => bind_call_arguments(
+            | Self::TcpStreamClose
+            | Self::ProcessChildStdin
+            | Self::ProcessChildStdout
+            | Self::ProcessChildStderr
+            | Self::ProcessPipeReadAll => bind_call_arguments(
                 &format!("`{}`", self.name()),
                 &[],
                 args,
@@ -1221,7 +1323,9 @@ impl BuiltinMember {
             | Self::UnixListenerAccept
             | Self::UnixStreamReadLine
             | Self::TlsListenerAccept
-            | Self::TlsStreamReadLine => bind_call_arguments(
+            | Self::TlsStreamReadLine
+            | Self::ProcessChildWait
+            | Self::ProcessPipeReadLine => bind_call_arguments(
                 &format!("`{}`", self.name()),
                 &TIMEOUT_ONLY_PARAMS,
                 args,
@@ -1379,22 +1483,25 @@ impl BuiltinMember {
                 span,
                 CallConvention::PositionalOrNamed,
             ),
-            Self::TcpStreamWriteAll | Self::UnixStreamWriteAll | Self::TlsStreamWriteAll => {
+            Self::TcpStreamWriteAll
+            | Self::UnixStreamWriteAll
+            | Self::TlsStreamWriteAll
+            | Self::ProcessPipeWriteAll => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &TEXT_TIMEOUT_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::TcpStreamWriteBytes | Self::WebSocketSendBytes | Self::ProcessPipeWriteBytes => {
                 bind_call_arguments(
                     &format!("`{}`", self.name()),
-                    &TEXT_TIMEOUT_PARAMS,
+                    &BYTES_TIMEOUT_PARAMS,
                     args,
                     span,
                     CallConvention::PositionalOrNamed,
                 )
             }
-            Self::TcpStreamWriteBytes | Self::WebSocketSendBytes => bind_call_arguments(
-                &format!("`{}`", self.name()),
-                &BYTES_TIMEOUT_PARAMS,
-                args,
-                span,
-                CallConvention::PositionalOrNamed,
-            ),
             Self::TcpStreamReadBytes | Self::UdpSocketRecv | Self::UdpSocketRecvFrom => {
                 bind_call_arguments(
                     &format!("`{}`", self.name()),
@@ -1413,6 +1520,13 @@ impl BuiltinMember {
                     CallConvention::PositionalOrNamed,
                 )
             }
+            Self::ProcessPipeReadBytes => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &MAX_BYTES_TIMEOUT_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
             Self::UdpSocketSendText => bind_call_arguments(
                 &format!("`{}`", self.name()),
                 &ADDRESS_TEXT_TIMEOUT_PARAMS,
@@ -1472,7 +1586,16 @@ impl BuiltinMember {
             | Self::UnixStreamClose
             | Self::TlsListenerLocalAddr
             | Self::TlsListenerClose
-            | Self::TlsStreamClose => bind_call_arguments(
+            | Self::TlsStreamClose
+            | Self::ProcessChildKill
+            | Self::ProcessChildTerminate
+            | Self::ProcessChildClose
+            | Self::ProcessPipeFlush
+            | Self::ProcessPipeClose
+            | Self::ProcessCompletedStatus
+            | Self::ProcessCompletedSuccess
+            | Self::ProcessCompletedStdout
+            | Self::ProcessCompletedStderr => bind_call_arguments(
                 &format!("`{}`", self.name()),
                 &[],
                 args,

@@ -14,18 +14,22 @@ use crate::mir::{
     MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::runtime_value::{
-    cast_numeric_value, io_error, io_read_line, option_none, option_some, queue_receive_cancelled,
-    queue_receive_closed, queue_receive_item, queue_receive_timed_out, result_err, result_ok,
-    run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
-    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
-    task_result_cancelled, task_result_ready, task_result_timed_out, wait_all_cancelled,
-    wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_ready, wait_any_timed_out,
-    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, RangeValue,
-    RecvValueResult, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
-    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
-    TlsStreamValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
-    VecValue, WebSocketListenerValue, WebSocketValue,
+    cast_numeric_value, decode_process_stdio, io_error, io_read_line, option_none, option_some,
+    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
+    process_error_timed_out, process_stdio_inherit, process_stdio_null, process_stdio_pipe,
+    process_wait_cancelled, process_wait_exited, process_wait_failed, process_wait_timed_out,
+    queue_receive_cancelled, queue_receive_closed, queue_receive_item, queue_receive_timed_out,
+    result_err, result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled,
+    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
+    spawn_lightweight_task, task_result_cancelled, task_result_ready, task_result_timed_out,
+    wait_all_cancelled, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_ready,
+    wait_any_timed_out, wait_for_runtime_scheduler, CancellationContext, ChannelValue,
+    EnumVariantValue, FileValue, HttpExchangeValue, HttpListenerValue, HttpResponseValue,
+    InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
+    ProcessPipeValue, RangeValue, RecvValueResult, RunOutput, RuntimeSchedulerWakeReason,
+    SendValueError, SetValue, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, UdpDatagramValue, UdpSocketValue,
+    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -577,6 +581,12 @@ impl MirRuntime {
                     Self::infer_value_type(payload)
                         .map(|inner| Type::Named("SendError".to_string(), vec![inner]))
                 }
+                ("Stdio", _, _) => Some(Type::Named("process.Stdio".to_string(), Vec::new())),
+                ("ExitStatus", _, _) => {
+                    Some(Type::Named("process.ExitStatus".to_string(), Vec::new()))
+                }
+                ("Wait", _, _) => Some(Type::Named("process.Wait".to_string(), Vec::new())),
+                ("Error", _, _) => Some(Type::Named("process.Error".to_string(), Vec::new())),
                 _ => Some(Type::named(&variant.enum_name)),
             },
             Value::Channel(_) | Value::Task(_) | Value::TaskGroup(_) => None,
@@ -596,6 +606,11 @@ impl MirRuntime {
             Value::UnixStream(_) => Some(Type::Named("net.UnixStream".to_string(), Vec::new())),
             Value::TlsListener(_) => Some(Type::Named("net.TlsListener".to_string(), Vec::new())),
             Value::TlsStream(_) => Some(Type::Named("net.TlsStream".to_string(), Vec::new())),
+            Value::ProcessChild(_) => Some(Type::Named("process.Child".to_string(), Vec::new())),
+            Value::ProcessPipe(_) => Some(Type::Named("process.Pipe".to_string(), Vec::new())),
+            Value::ProcessCompleted(_) => {
+                Some(Type::Named("process.Completed".to_string(), Vec::new()))
+            }
         }
     }
 
@@ -1086,6 +1101,15 @@ impl MirRuntime {
                 stream.close();
                 Ok(())
             }
+            Value::ProcessChild(child) => {
+                child.close();
+                Ok(())
+            }
+            Value::ProcessPipe(pipe) => {
+                pipe.close();
+                Ok(())
+            }
+            Value::ProcessCompleted(_) => Ok(()),
             Value::Instance(instance) => {
                 let class = self
                     .classes
@@ -1672,6 +1696,11 @@ impl MirRuntime {
                         | "net::websocket_listen"
                         | "net::websocket_connect"
                         | "net::websocket_connect_timeout"
+                        | "process::inherit"
+                        | "process::null"
+                        | "process::pipe"
+                        | "process::start"
+                        | "process::run"
                 ) {
                     let values = evaluate_named_args(args, env)?;
                     return self.evaluate_builtin_io_call(name, values);
@@ -1847,6 +1876,20 @@ impl MirRuntime {
                     }
                     Value::TlsStream(stream) => {
                         return self.evaluate_tls_stream_method(stream.clone(), field, args, env);
+                    }
+                    Value::ProcessChild(child) => {
+                        return self.evaluate_process_child_method(child.clone(), field, args, env);
+                    }
+                    Value::ProcessPipe(pipe) => {
+                        return self.evaluate_process_pipe_method(pipe.clone(), field, args, env);
+                    }
+                    Value::ProcessCompleted(completed) => {
+                        return self.evaluate_process_completed_method(
+                            completed.clone(),
+                            field,
+                            args,
+                            env,
+                        );
                     }
                     Value::Instance(instance) => {
                         let resolved_receiver_ty = receiver_place
@@ -2932,6 +2975,110 @@ impl MirRuntime {
         values: Vec<EvaluatedMirArg>,
     ) -> Result<Value> {
         match name {
+            "process::inherit" => {
+                bind_builtin_args(&[], values)?;
+                Ok(process_stdio_inherit())
+            }
+            "process::null" => {
+                bind_builtin_args(&[], values)?;
+                Ok(process_stdio_null())
+            }
+            "process::pipe" => {
+                bind_builtin_args(&[], values)?;
+                Ok(process_stdio_pipe())
+            }
+            "process::start" => {
+                let bound = bind_builtin_args(
+                    &["command", "cwd", "env", "stdin", "stdout", "stderr"],
+                    values,
+                )?;
+                let command = expect_command_vec(&bound[0].value, "process.start(...)")?;
+                if command.is_empty() {
+                    return Ok(result_err(process_error_no_command()));
+                }
+                let cwd = expect_optional_string_value(&bound[1].value, "process.start(...)")?;
+                let env = expect_headers_map(&bound[2].value, "process.start(...)")?;
+                let stdin = decode_process_stdio(&bound[3].value, "process.start(...)")?;
+                let stdout = decode_process_stdio(&bound[4].value, "process.start(...)")?;
+                let stderr = decode_process_stdio(&bound[5].value, "process.start(...)")?;
+                match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr) {
+                    Ok(child) => Ok(result_ok(Value::ProcessChild(child))),
+                    Err(error) => Ok(result_err(process_error_spawn(error.to_string()))),
+                }
+            }
+            "process::run" => {
+                let bound = bind_builtin_args(
+                    &[
+                        "command", "cwd", "env", "stdin", "stdout", "stderr", "timeout",
+                    ],
+                    values,
+                )?;
+                let command = expect_command_vec(&bound[0].value, "process.run(...)")?;
+                if command.is_empty() {
+                    return Ok(result_err(process_error_no_command()));
+                }
+                let cwd = expect_optional_string_value(&bound[1].value, "process.run(...)")?;
+                let env = expect_headers_map(&bound[2].value, "process.run(...)")?;
+                let stdin = decode_process_stdio(&bound[3].value, "process.run(...)")?;
+                let stdout = decode_process_stdio(&bound[4].value, "process.run(...)")?;
+                let stderr = decode_process_stdio(&bound[5].value, "process.run(...)")?;
+                let timeout = expect_process_optional_timeout(&bound[6].value, "process.run(...)")?;
+                let child = match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr)
+                {
+                    Ok(child) => child,
+                    Err(error) => return Ok(result_err(process_error_spawn(error.to_string()))),
+                };
+                let stdout_task = child
+                    .stdout()
+                    .map(|pipe| {
+                        let cancellation = self.cancellation.clone();
+                        spawn_lightweight_task(move || match pipe.read_all(Some(&cancellation)) {
+                            Ok(text) => Ok(Value::String(text)),
+                            Err(error) => Err(Diagnostic::new(format!(
+                                "process stdout capture failed: {}",
+                                error
+                            ))),
+                        })
+                    })
+                    .transpose()?;
+                let stderr_task = child
+                    .stderr()
+                    .map(|pipe| {
+                        let cancellation = self.cancellation.clone();
+                        spawn_lightweight_task(move || match pipe.read_all(Some(&cancellation)) {
+                            Ok(text) => Ok(Value::String(text)),
+                            Err(error) => Err(Diagnostic::new(format!(
+                                "process stderr capture failed: {}",
+                                error
+                            ))),
+                        })
+                    })
+                    .transpose()?;
+                let status = match child.wait(timeout, Some(&self.cancellation)) {
+                    ProcessChildWaitStatus::Exited(status) => status,
+                    ProcessChildWaitStatus::TimedOut => {
+                        child.close();
+                        return Ok(result_err(process_error_timed_out()));
+                    }
+                    ProcessChildWaitStatus::Cancelled => {
+                        child.close();
+                        return Ok(result_err(process_error_cancelled()));
+                    }
+                    ProcessChildWaitStatus::Failed(error) => {
+                        child.close();
+                        return Ok(result_err(process_error_io(error)));
+                    }
+                };
+                let stdout = self.await_process_capture_task(stdout_task, "stdout")?;
+                let stderr = self.await_process_capture_task(stderr_task, "stderr")?;
+                Ok(result_ok(Value::ProcessCompleted(
+                    ProcessCompletedValue::new(
+                        crate::runtime_value::process_exit_status(status),
+                        stdout,
+                        stderr,
+                    ),
+                )))
+            }
             "fs::read_to_string" => {
                 let bound = bind_builtin_args(&["path"], values)?;
                 let path = expect_string_value(&bound[0].value, "fs.read_to_string(...)")?;
@@ -3303,6 +3450,29 @@ impl MirRuntime {
         }
     }
 
+    fn await_process_capture_task(&self, task: Option<TaskValue>, label: &str) -> Result<String> {
+        let Some(task) = task else {
+            return Ok(String::new());
+        };
+        match task.wait_result_with_cancellation(None, Some(&self.cancellation)) {
+            TaskWaitStatus::Ready(Ok(Value::String(text))) => Ok(text),
+            TaskWaitStatus::Ready(Ok(other)) => Err(Diagnostic::new(format!(
+                "process {} capture returned `{}` instead of `String`",
+                label,
+                other.render()
+            ))),
+            TaskWaitStatus::Ready(Err(error)) => Err(error),
+            TaskWaitStatus::TimedOut => Err(Diagnostic::new(format!(
+                "process {} capture timed out unexpectedly",
+                label
+            ))),
+            TaskWaitStatus::Cancelled => Err(Diagnostic::new(format!(
+                "process {} capture was cancelled unexpectedly",
+                label
+            ))),
+        }
+    }
+
     fn evaluate_file_method(
         &mut self,
         file: FileValue,
@@ -3360,6 +3530,189 @@ impl MirRuntime {
             }
             _ => Err(Diagnostic::new(format!(
                 "unsupported MIR file method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_process_child_method(
+        &mut self,
+        child: ProcessChildValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "stdin" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(child
+                    .stdin()
+                    .map(Value::ProcessPipe)
+                    .map(option_some)
+                    .unwrap_or_else(option_none))
+            }
+            "stdout" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(child
+                    .stdout()
+                    .map(Value::ProcessPipe)
+                    .map(option_some)
+                    .unwrap_or_else(option_none))
+            }
+            "stderr" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(child
+                    .stderr()
+                    .map(Value::ProcessPipe)
+                    .map(option_some)
+                    .unwrap_or_else(option_none))
+            }
+            "wait" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_process_optional_timeout(&bound[0].value, "wait(timeout=...)")?;
+                Ok(match child.wait(timeout, Some(&self.cancellation)) {
+                    ProcessChildWaitStatus::Exited(status) => process_wait_exited(status),
+                    ProcessChildWaitStatus::TimedOut => process_wait_timed_out(),
+                    ProcessChildWaitStatus::Cancelled => process_wait_cancelled(),
+                    ProcessChildWaitStatus::Failed(error) => {
+                        process_wait_failed(process_error_from_io(error))
+                    }
+                })
+            }
+            "kill" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match child.kill() {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(process_error_from_io(error))),
+                }
+            }
+            "terminate" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match child.terminate() {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(process_error_from_io(error))),
+                }
+            }
+            "close" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                child.close();
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR process child method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_process_pipe_method(
+        &mut self,
+        pipe: ProcessPipeValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "read_all" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match pipe.read_all(Some(&self.cancellation)) {
+                    Ok(text) => Ok(result_ok(Value::String(text))),
+                    Err(error) => Ok(result_err(process_error_from_io(error))),
+                }
+            }
+            "read_line" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_process_optional_timeout(&bound[0].value, "read_line(timeout=...)")?;
+                match pipe.read_line(timeout, Some(&self.cancellation)) {
+                    Ok(Some(line)) => Ok(result_ok(option_some(Value::String(line)))),
+                    Ok(None) => Ok(result_ok(option_none())),
+                    Err(error) => Ok(result_err(process_error_from_io(error))),
+                }
+            }
+            "read_bytes" => {
+                let bound =
+                    bind_builtin_args(&["max_bytes", "timeout"], evaluate_named_args(args, env)?)?;
+                let max_bytes = expect_i32_value(&bound[0].value, "read_bytes(...)")?;
+                let max_bytes = usize::try_from(max_bytes).map_err(|_| {
+                    Diagnostic::new("`read_bytes(...)` expects a non-negative `max_bytes`")
+                })?;
+                let timeout =
+                    expect_process_optional_timeout(&bound[1].value, "read_bytes(timeout=...)")?;
+                match pipe.read_bytes(max_bytes, timeout, Some(&self.cancellation)) {
+                    Ok(Some(bytes)) => Ok(result_ok(option_some(bytes_vec_value(bytes)))),
+                    Ok(None) => Ok(result_ok(option_none())),
+                    Err(error) => Ok(result_err(process_error_from_io(error))),
+                }
+            }
+            "write_all" => {
+                let bound =
+                    bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
+                let text = expect_string_value(&bound[0].value, "write_all(...)")?;
+                let timeout =
+                    expect_process_optional_timeout(&bound[1].value, "write_all(timeout=...)")?;
+                match pipe.write_all(&text, timeout, Some(&self.cancellation)) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(process_error_from_io(error))),
+                }
+            }
+            "write_bytes" => {
+                let bound =
+                    bind_builtin_args(&["bytes", "timeout"], evaluate_named_args(args, env)?)?;
+                let bytes = expect_bytes_value(&bound[0].value, "write_bytes(...)")?;
+                let timeout =
+                    expect_process_optional_timeout(&bound[1].value, "write_bytes(timeout=...)")?;
+                match pipe.write_bytes(&bytes, timeout, Some(&self.cancellation)) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(process_error_from_io(error))),
+                }
+            }
+            "flush" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match pipe.flush() {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(process_error_from_io(error))),
+                }
+            }
+            "close" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                pipe.close();
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR process pipe method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_process_completed_method(
+        &mut self,
+        completed: ProcessCompletedValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "status" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(completed.status())
+            }
+            "success" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(Value::Bool(completed.success()))
+            }
+            "stdout" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(Value::String(completed.stdout()))
+            }
+            "stderr" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(Value::String(completed.stderr()))
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR process completed method `{}`",
                 field
             ))),
         }
@@ -4395,6 +4748,21 @@ fn expect_string_value(value: &Value, label: &str) -> Result<String> {
     }
 }
 
+fn expect_command_vec(value: &Value, label: &str) -> Result<Vec<String>> {
+    match value {
+        Value::Vec(vector) if vector.element_type == Type::named("String") => vector
+            .elements
+            .iter()
+            .map(|element| expect_string_value(element, label))
+            .collect(),
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `Vec[String]`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
 fn expect_bytes_value(value: &Value, label: &str) -> Result<Vec<u8>> {
     match value {
         Value::Vec(vector)
@@ -4426,6 +4794,33 @@ fn expect_bytes_value(value: &Value, label: &str) -> Result<Vec<u8>> {
     }
 }
 
+fn expect_optional_string_value(value: &Value, label: &str) -> Result<Option<String>> {
+    match value {
+        Value::Unit => Ok(None),
+        Value::EnumVariant(variant)
+            if variant.enum_name == "Option" && variant.variant_name == "None" =>
+        {
+            Ok(None)
+        }
+        Value::EnumVariant(variant)
+            if variant.enum_name == "Option" && variant.variant_name == "Some" =>
+        {
+            match variant.payloads.as_slice() {
+                [text] => Ok(Some(expect_string_value(text, label)?)),
+                _ => Err(Diagnostic::new(format!(
+                    "`{}` expects `Option[String]`, found malformed option payload",
+                    label
+                ))),
+            }
+        }
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `Option[String]`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
 fn expect_i32_value(value: &Value, label: &str) -> Result<i32> {
     match value {
         Value::Int(number) => {
@@ -4437,6 +4832,24 @@ fn expect_i32_value(value: &Value, label: &str) -> Result<i32> {
         }
         other => Err(Diagnostic::new(format!(
             "`{}` expects `int32`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
+fn expect_process_optional_timeout(value: &Value, label: &str) -> Result<Option<StdDuration>> {
+    match value {
+        Value::Unit => Ok(None),
+        Value::Duration(duration) if *duration < 0 => Ok(None),
+        Value::Duration(duration) => {
+            let millis = u64::try_from(*duration).map_err(|_| {
+                Diagnostic::new(format!("`{}` duration must be non-negative", label))
+            })?;
+            Ok(Some(StdDuration::from_millis(millis)))
+        }
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `Duration`, found `{}`",
             label,
             other.render()
         ))),
@@ -4463,10 +4876,20 @@ fn expect_optional_timeout(value: Option<&Value>, label: &str) -> Result<Option<
     }
 }
 
+fn process_error_from_io(error: std::io::Error) -> Value {
+    match error.kind() {
+        std::io::ErrorKind::TimedOut => process_error_timed_out(),
+        std::io::ErrorKind::Interrupted => process_error_cancelled(),
+        _ => process_error_io(error),
+    }
+}
+
 fn expect_headers_map(value: &Value, label: &str) -> Result<Vec<(String, String)>> {
     match value {
         Value::Map(map)
-            if map.key_type == Type::named("String") && map.value_type == Type::named("String") =>
+            if (map.key_type == Type::named("String")
+                && map.value_type == Type::named("String"))
+                || map.entries.is_empty() =>
         {
             let mut headers = Vec::with_capacity(map.entries.len());
             for (key, value) in &map.entries {

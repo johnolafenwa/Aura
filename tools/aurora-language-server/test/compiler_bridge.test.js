@@ -1168,6 +1168,75 @@ test("compiler bridge includes builtin io/fs/net module and resource members", a
   }
 });
 
+test("compiler bridge includes builtin process module and resource members", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-process-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const prelude = [
+      "import process",
+      "",
+      "def inspect(child: process.Child, pipe: process.Pipe, completed: process.Completed, status: process.ExitStatus, wait: process.Wait, stdio: process.Stdio, error: process.Error) -> int32:"
+    ];
+    const sourceForLine = (line) => [...prelude, line, "    return 0"].join("\n");
+    const completionsForLine = async (line) => {
+      const source = sourceForLine(line);
+      const lines = source.split("\n");
+      const lineIndex = lines.findIndex((candidate) => candidate === line);
+      const character = lines[lineIndex].indexOf(".") + 1;
+      const items = await completeWithCompiler(mainUri, source, lineIndex, character, ".");
+      assert.ok(items);
+      return new Set(items.map((item) => item.name));
+    };
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, sourceForLine("    return 0"));
+    assert.ok(analysis);
+    assert.ok(Array.isArray(analysis.diagnostics));
+    assert.equal(analysis.diagnostics.length, 0);
+
+    const processNames = await completionsForLine("    process.");
+    assert.ok(processNames.has("start"));
+    assert.ok(processNames.has("run"));
+    assert.ok(processNames.has("inherit"));
+    assert.ok(processNames.has("null"));
+    assert.ok(processNames.has("pipe"));
+    assert.ok(processNames.has("Child"));
+    assert.ok(processNames.has("Pipe"));
+    assert.ok(processNames.has("Completed"));
+    assert.ok(processNames.has("ExitStatus"));
+    assert.ok(processNames.has("Wait"));
+    assert.ok(processNames.has("Stdio"));
+    assert.ok(processNames.has("Error"));
+
+    const childNames = await completionsForLine("    child.");
+    assert.ok(childNames.has("stdin"));
+    assert.ok(childNames.has("stdout"));
+    assert.ok(childNames.has("stderr"));
+    assert.ok(childNames.has("wait"));
+    assert.ok(childNames.has("kill"));
+    assert.ok(childNames.has("terminate"));
+    assert.ok(childNames.has("close"));
+
+    const pipeNames = await completionsForLine("    pipe.");
+    assert.ok(pipeNames.has("read_all"));
+    assert.ok(pipeNames.has("read_line"));
+    assert.ok(pipeNames.has("read_bytes"));
+    assert.ok(pipeNames.has("write_all"));
+    assert.ok(pipeNames.has("write_bytes"));
+    assert.ok(pipeNames.has("flush"));
+    assert.ok(pipeNames.has("close"));
+
+    const completedNames = await completionsForLine("    completed.");
+    assert.ok(completedNames.has("status"));
+    assert.ok(completedNames.has("success"));
+    assert.ok(completedNames.has("stdout"));
+    assert.ok(completedNames.has("stderr"));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge analyzes indexed member chains and f-string indexed lookups", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-index-chain-"));
   try {

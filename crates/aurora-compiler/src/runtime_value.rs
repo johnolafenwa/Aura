@@ -7,6 +7,11 @@ use std::net::{
     Shutdown, TcpListener as StdTcpListener, TcpStream as StdTcpStream, ToSocketAddrs,
     UdpSocket as StdUdpSocket,
 };
+use std::process::{
+    Child as StdChild, ChildStderr as StdChildStderr, ChildStdin as StdChildStdin,
+    ChildStdout as StdChildStdout, Command as StdCommand, ExitStatus as StdExitStatus,
+    Stdio as StdProcessStdio,
+};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock};
 use std::thread;
@@ -61,6 +66,9 @@ pub enum Value {
     HttpResponse(HttpResponseValue),
     WebSocketListener(WebSocketListenerValue),
     WebSocket(WebSocketValue),
+    ProcessChild(ProcessChildValue),
+    ProcessPipe(ProcessPipeValue),
+    ProcessCompleted(ProcessCompletedValue),
     UnixListener(UnixListenerValue),
     UnixStream(UnixStreamValue),
     TlsListener(TlsListenerValue),
@@ -199,6 +207,21 @@ pub struct WebSocketValue {
 }
 
 #[derive(Clone)]
+pub struct ProcessChildValue {
+    inner: Arc<ProcessChildState>,
+}
+
+#[derive(Clone)]
+pub struct ProcessPipeValue {
+    inner: Arc<ProcessPipeState>,
+}
+
+#[derive(Clone)]
+pub struct ProcessCompletedValue {
+    inner: Arc<ProcessCompletedState>,
+}
+
+#[derive(Clone)]
 pub struct UnixListenerValue {
     inner: Arc<UnixListenerState>,
 }
@@ -269,6 +292,54 @@ enum WebSocketStateKind {
 
 struct WebSocketState {
     socket: Mutex<Option<WebSocketStateKind>>,
+}
+
+struct ProcessChildState {
+    child: Mutex<Option<StdChild>>,
+    waited: Mutex<Option<StdExitStatus>>,
+    stdin: Option<ProcessPipeValue>,
+    stdout: Option<ProcessPipeValue>,
+    stderr: Option<ProcessPipeValue>,
+}
+
+enum ProcessPipeKind {
+    Stdin(StdChildStdin),
+    Stdout(StdChildStdout),
+    Stderr(StdChildStderr),
+}
+
+struct ProcessPipeState {
+    pipe: Mutex<Option<ProcessPipeKind>>,
+}
+
+struct ProcessCompletedState {
+    status: Value,
+    stdout: String,
+    stderr: String,
+}
+
+pub(crate) enum ProcessChildWaitStatus {
+    Exited(StdExitStatus),
+    TimedOut,
+    Cancelled,
+    Failed(io::Error),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ProcessStdioConfig {
+    Inherit,
+    Null,
+    Pipe,
+}
+
+impl ProcessStdioConfig {
+    fn as_stdio(self) -> StdProcessStdio {
+        match self {
+            Self::Inherit => StdProcessStdio::inherit(),
+            Self::Null => StdProcessStdio::null(),
+            Self::Pipe => StdProcessStdio::piped(),
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -440,6 +511,9 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
             Value::HttpResponse(_) => "net.HttpResponse".to_string(),
             Value::WebSocketListener(_) => "net.WebSocketListener".to_string(),
             Value::WebSocket(_) => "net.WebSocket".to_string(),
+            Value::ProcessChild(_) => "process.Child".to_string(),
+            Value::ProcessPipe(_) => "process.Pipe".to_string(),
+            Value::ProcessCompleted(_) => "process.Completed".to_string(),
             Value::UnixListener(_) => "net.UnixListener".to_string(),
             Value::UnixStream(_) => "net.UnixStream".to_string(),
             Value::TlsListener(_) => "net.TlsListener".to_string(),
@@ -628,6 +702,24 @@ impl fmt::Debug for WebSocketValue {
     }
 }
 
+impl fmt::Debug for ProcessChildValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ProcessChildValue(..)")
+    }
+}
+
+impl fmt::Debug for ProcessPipeValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ProcessPipeValue(..)")
+    }
+}
+
+impl fmt::Debug for ProcessCompletedValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ProcessCompletedValue(..)")
+    }
+}
+
 impl fmt::Debug for UnixListenerValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("UnixListenerValue(..)")
@@ -713,6 +805,24 @@ impl PartialEq for WebSocketListenerValue {
 }
 
 impl PartialEq for WebSocketValue {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl PartialEq for ProcessChildValue {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl PartialEq for ProcessPipeValue {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl PartialEq for ProcessCompletedValue {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -1525,6 +1635,9 @@ impl PartialEq for Value {
             (Value::HttpResponse(left), Value::HttpResponse(right)) => left == right,
             (Value::WebSocketListener(left), Value::WebSocketListener(right)) => left == right,
             (Value::WebSocket(left), Value::WebSocket(right)) => left == right,
+            (Value::ProcessChild(left), Value::ProcessChild(right)) => left == right,
+            (Value::ProcessPipe(left), Value::ProcessPipe(right)) => left == right,
+            (Value::ProcessCompleted(left), Value::ProcessCompleted(right)) => left == right,
             (Value::UnixListener(left), Value::UnixListener(right)) => left == right,
             (Value::UnixStream(left), Value::UnixStream(right)) => left == right,
             (Value::TlsListener(left), Value::TlsListener(right)) => left == right,
@@ -1601,6 +1714,11 @@ impl Value {
             ),
             Value::WebSocketListener(_) => "<websocket-listener>".to_string(),
             Value::WebSocket(_) => "<websocket>".to_string(),
+            Value::ProcessChild(_) => "<process-child>".to_string(),
+            Value::ProcessPipe(_) => "<process-pipe>".to_string(),
+            Value::ProcessCompleted(completed) => {
+                format!("<process-completed {}>", completed.status().render())
+            }
             Value::UnixListener(_) => "<unix-listener>".to_string(),
             Value::UnixStream(_) => "<unix-stream>".to_string(),
             Value::TlsListener(_) => "<tls-listener>".to_string(),
@@ -1934,6 +2052,33 @@ fn is_retryable_network_error(error: &io::Error) -> bool {
         error.kind(),
         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
     )
+}
+
+#[cfg(unix)]
+fn set_fd_nonblocking(fd: libc::c_int, enabled: bool) -> io::Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut updated = flags;
+    if enabled {
+        updated |= libc::O_NONBLOCK;
+    } else {
+        updated &= !libc::O_NONBLOCK;
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, updated) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_process_pipe_nonblocking<P: AsRawFd>(pipe: &P, enabled: bool) -> io::Result<()> {
+    set_fd_nonblocking(pipe.as_raw_fd(), enabled)
+}
+
+fn timeout_deadline(timeout: Option<StdDuration>) -> Option<Instant> {
+    timeout.and_then(|timeout| Instant::now().checked_add(timeout))
 }
 
 fn ensure_rustls_crypto_provider() {
@@ -2987,6 +3132,438 @@ impl FileValue {
     pub(crate) fn close(&self) {
         let mut file = lock_mutex(&self.inner.file);
         *file = None;
+    }
+}
+
+impl ProcessPipeValue {
+    #[cfg(unix)]
+    fn from_stdin(stdin: StdChildStdin) -> io::Result<Self> {
+        set_process_pipe_nonblocking(&stdin, true)?;
+        Ok(Self {
+            inner: Arc::new(ProcessPipeState {
+                pipe: Mutex::new(Some(ProcessPipeKind::Stdin(stdin))),
+            }),
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn from_stdin(stdin: StdChildStdin) -> io::Result<Self> {
+        Ok(Self {
+            inner: Arc::new(ProcessPipeState {
+                pipe: Mutex::new(Some(ProcessPipeKind::Stdin(stdin))),
+            }),
+        })
+    }
+
+    #[cfg(unix)]
+    fn from_stdout(stdout: StdChildStdout) -> io::Result<Self> {
+        set_process_pipe_nonblocking(&stdout, true)?;
+        Ok(Self {
+            inner: Arc::new(ProcessPipeState {
+                pipe: Mutex::new(Some(ProcessPipeKind::Stdout(stdout))),
+            }),
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn from_stdout(stdout: StdChildStdout) -> io::Result<Self> {
+        Ok(Self {
+            inner: Arc::new(ProcessPipeState {
+                pipe: Mutex::new(Some(ProcessPipeKind::Stdout(stdout))),
+            }),
+        })
+    }
+
+    #[cfg(unix)]
+    fn from_stderr(stderr: StdChildStderr) -> io::Result<Self> {
+        set_process_pipe_nonblocking(&stderr, true)?;
+        Ok(Self {
+            inner: Arc::new(ProcessPipeState {
+                pipe: Mutex::new(Some(ProcessPipeKind::Stderr(stderr))),
+            }),
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn from_stderr(stderr: StdChildStderr) -> io::Result<Self> {
+        Ok(Self {
+            inner: Arc::new(ProcessPipeState {
+                pipe: Mutex::new(Some(ProcessPipeKind::Stderr(stderr))),
+            }),
+        })
+    }
+
+    pub(crate) fn read_all(
+        &self,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<String> {
+        let mut pipe = lock_mutex(&self.inner.pipe);
+        let Some(pipe) = pipe.as_mut() else {
+            return Err(closed_resource_error());
+        };
+        #[cfg(unix)]
+        let bytes = match pipe {
+            ProcessPipeKind::Stdout(stdout) => read_all_with_deadline(stdout, None, cancellation)?,
+            ProcessPipeKind::Stderr(stderr) => read_all_with_deadline(stderr, None, cancellation)?,
+            ProcessPipeKind::Stdin(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "cannot read from a process stdin pipe",
+                ))
+            }
+        };
+        #[cfg(not(unix))]
+        let bytes = match pipe {
+            ProcessPipeKind::Stdout(stdout) => {
+                let mut bytes = Vec::new();
+                stdout.read_to_end(&mut bytes)?;
+                bytes
+            }
+            ProcessPipeKind::Stderr(stderr) => {
+                let mut bytes = Vec::new();
+                stderr.read_to_end(&mut bytes)?;
+                bytes
+            }
+            ProcessPipeKind::Stdin(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "cannot read from a process stdin pipe",
+                ))
+            }
+        };
+        io_decode_utf8(&bytes)
+    }
+
+    pub(crate) fn read_line(
+        &self,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<Option<String>> {
+        let deadline = timeout_deadline(timeout);
+        let mut pipe = lock_mutex(&self.inner.pipe);
+        let Some(pipe) = pipe.as_mut() else {
+            return Err(closed_resource_error());
+        };
+        #[cfg(unix)]
+        {
+            match pipe {
+                ProcessPipeKind::Stdout(stdout) => {
+                    read_line_with_deadline(stdout, deadline, cancellation)
+                }
+                ProcessPipeKind::Stderr(stderr) => {
+                    read_line_with_deadline(stderr, deadline, cancellation)
+                }
+                ProcessPipeKind::Stdin(_) => Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "cannot read from a process stdin pipe",
+                )),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = deadline;
+            let _ = cancellation;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "process pipe line reads are only supported on unix in the bootstrap runtime",
+            ))
+        }
+    }
+
+    pub(crate) fn read_bytes(
+        &self,
+        max_bytes: usize,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<Option<Vec<u8>>> {
+        let deadline = timeout_deadline(timeout);
+        let mut pipe = lock_mutex(&self.inner.pipe);
+        let Some(pipe) = pipe.as_mut() else {
+            return Err(closed_resource_error());
+        };
+        #[cfg(unix)]
+        {
+            match pipe {
+                ProcessPipeKind::Stdout(stdout) => {
+                    read_some_with_deadline(stdout, max_bytes, deadline, cancellation)
+                }
+                ProcessPipeKind::Stderr(stderr) => {
+                    read_some_with_deadline(stderr, max_bytes, deadline, cancellation)
+                }
+                ProcessPipeKind::Stdin(_) => Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "cannot read from a process stdin pipe",
+                )),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = max_bytes;
+            let _ = deadline;
+            let _ = cancellation;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "process pipe byte reads are only supported on unix in the bootstrap runtime",
+            ))
+        }
+    }
+
+    pub(crate) fn write_all(
+        &self,
+        text: &str,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<()> {
+        self.write_bytes(text.as_bytes(), timeout, cancellation)
+    }
+
+    pub(crate) fn write_bytes(
+        &self,
+        bytes: &[u8],
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<()> {
+        let deadline = timeout_deadline(timeout);
+        let mut pipe = lock_mutex(&self.inner.pipe);
+        let Some(pipe) = pipe.as_mut() else {
+            return Err(closed_resource_error());
+        };
+        #[cfg(unix)]
+        {
+            match pipe {
+                ProcessPipeKind::Stdin(stdin) => {
+                    write_all_with_deadline(stdin, bytes, deadline, cancellation)
+                }
+                ProcessPipeKind::Stdout(_) | ProcessPipeKind::Stderr(_) => Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "cannot write to a process output pipe",
+                )),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = bytes;
+            let _ = deadline;
+            let _ = cancellation;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "process pipe writes are only supported on unix in the bootstrap runtime",
+            ))
+        }
+    }
+
+    pub(crate) fn flush(&self) -> io::Result<()> {
+        let mut pipe = lock_mutex(&self.inner.pipe);
+        let Some(pipe) = pipe.as_mut() else {
+            return Err(closed_resource_error());
+        };
+        match pipe {
+            ProcessPipeKind::Stdin(stdin) => stdin.flush(),
+            ProcessPipeKind::Stdout(_) | ProcessPipeKind::Stderr(_) => Ok(()),
+        }
+    }
+
+    pub(crate) fn close(&self) {
+        let mut pipe = lock_mutex(&self.inner.pipe);
+        *pipe = None;
+    }
+}
+
+impl ProcessCompletedValue {
+    pub(crate) fn new(status: Value, stdout: String, stderr: String) -> Self {
+        Self {
+            inner: Arc::new(ProcessCompletedState {
+                status,
+                stdout,
+                stderr,
+            }),
+        }
+    }
+
+    pub(crate) fn status(&self) -> Value {
+        self.inner.status.clone()
+    }
+
+    pub(crate) fn stdout(&self) -> String {
+        self.inner.stdout.clone()
+    }
+
+    pub(crate) fn stderr(&self) -> String {
+        self.inner.stderr.clone()
+    }
+
+    pub(crate) fn success(&self) -> bool {
+        matches!(
+            &self.inner.status,
+            Value::EnumVariant(EnumVariantValue {
+                enum_name,
+                variant_name,
+                payloads,
+            }) if matches!(enum_name.as_str(), "ExitStatus" | "process.ExitStatus")
+                && variant_name == "Exited"
+                && matches!(payloads.as_slice(), [Value::Int(code)] if code.as_i128() == Some(0))
+        )
+    }
+}
+
+impl ProcessChildValue {
+    pub(crate) fn spawn(
+        command: Vec<String>,
+        cwd: Option<String>,
+        env: Vec<(String, String)>,
+        stdin: ProcessStdioConfig,
+        stdout: ProcessStdioConfig,
+        stderr: ProcessStdioConfig,
+    ) -> io::Result<Self> {
+        let Some(program) = command.first().cloned() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "process.start(...) requires at least one command element",
+            ));
+        };
+        let mut builder = StdCommand::new(program);
+        builder.args(command.iter().skip(1));
+        if let Some(cwd) = cwd {
+            builder.current_dir(cwd);
+        }
+        for (key, value) in env {
+            builder.env(key, value);
+        }
+        builder.stdin(stdin.as_stdio());
+        builder.stdout(stdout.as_stdio());
+        builder.stderr(stderr.as_stdio());
+        let mut child = builder.spawn()?;
+        let stdin = child
+            .stdin
+            .take()
+            .map(ProcessPipeValue::from_stdin)
+            .transpose()?;
+        let stdout = child
+            .stdout
+            .take()
+            .map(ProcessPipeValue::from_stdout)
+            .transpose()?;
+        let stderr = child
+            .stderr
+            .take()
+            .map(ProcessPipeValue::from_stderr)
+            .transpose()?;
+        Ok(Self {
+            inner: Arc::new(ProcessChildState {
+                child: Mutex::new(Some(child)),
+                waited: Mutex::new(None),
+                stdin,
+                stdout,
+                stderr,
+            }),
+        })
+    }
+
+    pub(crate) fn stdin(&self) -> Option<ProcessPipeValue> {
+        self.inner.stdin.clone()
+    }
+
+    pub(crate) fn stdout(&self) -> Option<ProcessPipeValue> {
+        self.inner.stdout.clone()
+    }
+
+    pub(crate) fn stderr(&self) -> Option<ProcessPipeValue> {
+        self.inner.stderr.clone()
+    }
+
+    pub(crate) fn wait(
+        &self,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> ProcessChildWaitStatus {
+        if let Some(status) = lock_mutex(&self.inner.waited).clone() {
+            return ProcessChildWaitStatus::Exited(status);
+        }
+        let deadline = timeout_deadline(timeout);
+        loop {
+            match self.try_wait_once() {
+                Ok(Some(status)) => return ProcessChildWaitStatus::Exited(status),
+                Ok(None) => {}
+                Err(error) => return ProcessChildWaitStatus::Failed(error),
+            }
+            if cancellation.is_some_and(CancellationContext::is_cancelled) {
+                return ProcessChildWaitStatus::Cancelled;
+            }
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return ProcessChildWaitStatus::TimedOut;
+            }
+            sleep_with_runtime_scheduler(StdDuration::from_millis(5), cancellation);
+        }
+    }
+
+    fn try_wait_once(&self) -> io::Result<Option<StdExitStatus>> {
+        if let Some(status) = lock_mutex(&self.inner.waited).clone() {
+            return Ok(Some(status));
+        }
+        let mut child_slot = lock_mutex(&self.inner.child);
+        let Some(child) = child_slot.as_mut() else {
+            return Ok(lock_mutex(&self.inner.waited).clone());
+        };
+        match child.try_wait()? {
+            Some(status) => {
+                *lock_mutex(&self.inner.waited) = Some(status.clone());
+                *child_slot = None;
+                Ok(Some(status))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) fn kill(&self) -> io::Result<()> {
+        let mut child = lock_mutex(&self.inner.child);
+        let Some(child) = child.as_mut() else {
+            return Ok(());
+        };
+        child.kill()
+    }
+
+    pub(crate) fn terminate(&self) -> io::Result<()> {
+        let mut child = lock_mutex(&self.inner.child);
+        let Some(child) = child.as_mut() else {
+            return Ok(());
+        };
+        #[cfg(unix)]
+        {
+            if unsafe { libc::kill(child.id() as i32, libc::SIGTERM) } < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            child.kill()
+        }
+    }
+
+    pub(crate) fn close(&self) {
+        let _ = self.terminate();
+        if matches!(
+            self.wait(
+                Some(StdDuration::from_millis(100)),
+                current_lightweight_task_cancellation().as_ref(),
+            ),
+            ProcessChildWaitStatus::TimedOut
+        ) {
+            let _ = self.kill();
+            let _ = self.wait(
+                Some(StdDuration::from_millis(100)),
+                current_lightweight_task_cancellation().as_ref(),
+            );
+        }
+        if let Some(stdin) = &self.inner.stdin {
+            stdin.close();
+        }
+        if let Some(stdout) = &self.inner.stdout {
+            stdout.close();
+        }
+        if let Some(stderr) = &self.inner.stderr {
+            stderr.close();
+        }
     }
 }
 
@@ -4627,6 +5204,145 @@ pub(crate) fn wait_all_cancelled() -> Value {
         variant_name: "Cancelled".to_string(),
         payloads: Vec::new(),
     })
+}
+
+pub(crate) fn process_stdio_inherit() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Stdio".to_string(),
+        variant_name: "Inherit".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn process_stdio_null() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Stdio".to_string(),
+        variant_name: "Null".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn process_stdio_pipe() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Stdio".to_string(),
+        variant_name: "Pipe".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn process_exit_status(status: StdExitStatus) -> Value {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return Value::EnumVariant(EnumVariantValue {
+                enum_name: "ExitStatus".to_string(),
+                variant_name: "Signaled".to_string(),
+                payloads: vec![Value::Int(IntegerValue::from_signed(signal as i128))],
+            });
+        }
+    }
+    let code = status.code().unwrap_or_default();
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "ExitStatus".to_string(),
+        variant_name: "Exited".to_string(),
+        payloads: vec![Value::Int(IntegerValue::from_signed(code as i128))],
+    })
+}
+
+pub(crate) fn process_wait_exited(status: StdExitStatus) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Wait".to_string(),
+        variant_name: "Exited".to_string(),
+        payloads: vec![process_exit_status(status)],
+    })
+}
+
+pub(crate) fn process_wait_timed_out() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Wait".to_string(),
+        variant_name: "TimedOut".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn process_wait_cancelled() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Wait".to_string(),
+        variant_name: "Cancelled".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn process_wait_failed(error: Value) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Wait".to_string(),
+        variant_name: "Failed".to_string(),
+        payloads: vec![error],
+    })
+}
+
+pub(crate) fn process_error_no_command() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Error".to_string(),
+        variant_name: "NoCommand".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn process_error_timed_out() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Error".to_string(),
+        variant_name: "TimedOut".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn process_error_cancelled() -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Error".to_string(),
+        variant_name: "Cancelled".to_string(),
+        payloads: Vec::new(),
+    })
+}
+
+pub(crate) fn process_error_io(error: io::Error) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Error".to_string(),
+        variant_name: "Io".to_string(),
+        payloads: vec![io_error(error)],
+    })
+}
+
+pub(crate) fn process_error_spawn(message: String) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Error".to_string(),
+        variant_name: "Spawn".to_string(),
+        payloads: vec![Value::String(message)],
+    })
+}
+
+pub(crate) fn decode_process_stdio(value: &Value, label: &str) -> Result<ProcessStdioConfig> {
+    match value {
+        Value::EnumVariant(variant)
+            if matches!(variant.enum_name.as_str(), "Stdio" | "process.Stdio") =>
+        {
+            match variant.variant_name.as_str() {
+                "Inherit" => Ok(ProcessStdioConfig::Inherit),
+                "Null" => Ok(ProcessStdioConfig::Null),
+                "Pipe" => Ok(ProcessStdioConfig::Pipe),
+                _ => Err(Diagnostic::new(format!(
+                    "`{}` received an unknown `process.Stdio` variant `{}`",
+                    label, variant.variant_name
+                ))),
+            }
+        }
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `process.Stdio`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
 }
 
 pub(crate) fn io_error(error: io::Error) -> Value {

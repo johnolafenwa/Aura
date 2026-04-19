@@ -13,19 +13,23 @@ use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_value::{
-    cast_numeric_value, current_lightweight_task_cancellation, io_error, io_read_line, option_none,
-    option_some, queue_receive_cancelled, queue_receive_closed, queue_receive_item,
-    queue_receive_timed_out, render_float, result_err, result_ok, run_blocking_io,
-    run_lightweight_root_task, send_error_cancelled, send_error_closed, send_error_full,
-    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
-    task_result_cancelled, task_result_ready, task_result_timed_out, wait_all_cancelled,
-    wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_ready, wait_any_timed_out,
-    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, RangeValue, RecvValueResult,
-    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue, TaskValue,
-    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
-    UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue,
-    WebSocketValue,
+    cast_numeric_value, current_lightweight_task_cancellation, decode_process_stdio, io_error,
+    io_read_line, option_none, option_some, process_error_cancelled, process_error_io,
+    process_error_no_command, process_error_spawn, process_error_timed_out, process_stdio_inherit,
+    process_stdio_null, process_stdio_pipe, process_wait_cancelled, process_wait_exited,
+    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
+    queue_receive_item, queue_receive_timed_out, render_float, result_err, result_ok,
+    run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
+    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
+    spawn_lightweight_task_with_cancellation, task_result_cancelled, task_result_ready,
+    task_result_timed_out, wait_all_cancelled, wait_all_ready, wait_all_timed_out,
+    wait_any_cancelled, wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
+    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpListenerValue,
+    HttpResponseValue, InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus,
+    ProcessCompletedValue, RangeValue, RecvValueResult, RuntimeSchedulerWakeReason, SendValueError,
+    SetValue, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue,
+    TlsListenerValue, TlsStreamValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
+    VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::Type;
 
@@ -385,6 +389,105 @@ fn optional_timeout_from_ptr(value: *mut OpaqueValue, label: &str) -> Option<Std
     }
 }
 
+fn process_optional_timeout_from_ptr(value: *mut OpaqueValue, label: &str) -> Option<StdDuration> {
+    if value.is_null() {
+        return None;
+    }
+    match unsafe { value_ref(value) } {
+        Value::Unit => None,
+        Value::Duration(duration) if duration < 0 => None,
+        Value::Duration(duration) => Some(
+            u64::try_from(duration)
+                .map(StdDuration::from_millis)
+                .unwrap_or_else(|_| {
+                    runtime_error(format!("`{}` duration must be non-negative", label))
+                }),
+        ),
+        other => runtime_error(format!(
+            "`{}` expects `Duration`, found `{}`",
+            label,
+            value_type_name(other)
+        )),
+    }
+}
+
+fn expect_command_vec(value: &Value, label: &str) -> Vec<String> {
+    match value {
+        Value::Vec(vector)
+            if vector.element_type == Type::named("String")
+                || vector.element_type == Type::named("Unknown") =>
+        {
+            vector
+                .elements
+                .iter()
+                .map(|element| expect_string_value(element, label))
+                .collect()
+        }
+        other => runtime_error(format!(
+            "`{}` expects `Vec[String]`, found `{}`",
+            label,
+            value_type_name(other)
+        )),
+    }
+}
+
+fn expect_optional_string_value(value: &Value, label: &str) -> Option<String> {
+    match value {
+        Value::Unit => None,
+        Value::EnumVariant(variant)
+            if variant.enum_name == "Option" && variant.variant_name == "None" =>
+        {
+            None
+        }
+        Value::EnumVariant(variant)
+            if variant.enum_name == "Option" && variant.variant_name == "Some" =>
+        {
+            match variant.payloads.as_slice() {
+                [text] => Some(expect_string_value(text, label)),
+                _ => runtime_error(format!(
+                    "`{}` expects `Option[String]`, found malformed option payload",
+                    label
+                )),
+            }
+        }
+        other => runtime_error(format!(
+            "`{}` expects `Option[String]`, found `{}`",
+            label,
+            value_type_name(other)
+        )),
+    }
+}
+
+fn process_error_from_io(error: io::Error) -> Value {
+    match error.kind() {
+        io::ErrorKind::TimedOut => process_error_timed_out(),
+        io::ErrorKind::Interrupted => process_error_cancelled(),
+        _ => process_error_io(error),
+    }
+}
+
+fn await_process_capture_task(task: Option<TaskValue>, label: &str) -> String {
+    let Some(task) = task else {
+        return String::new();
+    };
+    match task.wait_result_with_cancellation(None, Some(&current_cancellation())) {
+        TaskWaitStatus::Ready(Ok(Value::String(text))) => text,
+        TaskWaitStatus::Ready(Ok(other)) => runtime_error(format!(
+            "process {} capture returned `{}` instead of `String`",
+            label,
+            other.render()
+        )),
+        TaskWaitStatus::Ready(Err(error)) => runtime_diagnostic_error(error),
+        TaskWaitStatus::TimedOut => {
+            runtime_error(format!("process {} capture timed out unexpectedly", label))
+        }
+        TaskWaitStatus::Cancelled => runtime_error(format!(
+            "process {} capture was cancelled unexpectedly",
+            label
+        )),
+    }
+}
+
 fn render_runtime_diagnostic(diagnostic: Diagnostic) -> String {
     if let Some(context) = DIRECT_PROGRAM_SOURCE.get() {
         diagnostic.render_with_source(&context.path, &context.source)
@@ -449,6 +552,9 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::UnixStream(_) => "net.UnixStream".to_string(),
         Value::TlsListener(_) => "net.TlsListener".to_string(),
         Value::TlsStream(_) => "net.TlsStream".to_string(),
+        Value::ProcessChild(_) => "process.Child".to_string(),
+        Value::ProcessPipe(_) => "process.Pipe".to_string(),
+        Value::ProcessCompleted(_) => "process.Completed".to_string(),
     }
 }
 
@@ -484,6 +590,9 @@ fn inferred_collection_type(value: &Value) -> Type {
         Value::UnixStream(_) => Type::named("net.UnixStream"),
         Value::TlsListener(_) => Type::named("net.TlsListener"),
         Value::TlsStream(_) => Type::named("net.TlsStream"),
+        Value::ProcessChild(_) => Type::named("process.Child"),
+        Value::ProcessPipe(_) => Type::named("process.Pipe"),
+        Value::ProcessCompleted(_) => Type::named("process.Completed"),
         Value::Int(_) | Value::ModuleNamespace(_) | Value::Unit => Type::named("Unknown"),
     }
 }
@@ -2095,6 +2204,9 @@ pub extern "C" fn aurora_direct_value_type_matches(
         Value::UnixStream(_) => expected == "net.UnixStream",
         Value::TlsListener(_) => expected == "net.TlsListener",
         Value::TlsStream(_) => expected == "net.TlsStream",
+        Value::ProcessChild(_) => expected == "process.Child",
+        Value::ProcessPipe(_) => expected == "process.Pipe",
+        Value::ProcessCompleted(_) => expected == "process.Completed",
         Value::Duration(_) => expected == "Duration",
         Value::Range(_) => expected == "Range",
         Value::Bool(_) => expected == "bool",
@@ -3057,6 +3169,436 @@ pub extern "C" fn aurora_direct_file_close(file: *mut OpaqueValue) -> *mut Opaqu
         }
         other => runtime_error(format!(
             "expected `fs.File`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_inherit() -> *mut OpaqueValue {
+    boxed_value(process_stdio_inherit())
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_null() -> *mut OpaqueValue {
+    boxed_value(process_stdio_null())
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_pipe() -> *mut OpaqueValue {
+    boxed_value(process_stdio_pipe())
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_start(
+    command: *mut OpaqueValue,
+    cwd: *mut OpaqueValue,
+    env: *mut OpaqueValue,
+    stdin: *mut OpaqueValue,
+    stdout: *mut OpaqueValue,
+    stderr: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let command = expect_command_vec(&unsafe { value_ref(command) }, "process.start(...)");
+    if command.is_empty() {
+        return boxed_value(result_err(process_error_no_command()));
+    }
+    let cwd = expect_optional_string_value(&unsafe { value_ref(cwd) }, "process.start(...)");
+    let env = expect_headers_map(&unsafe { value_ref(env) }, "process.start(...)");
+    let stdin = decode_process_stdio(&unsafe { value_ref(stdin) }, "process.start(...)")
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+    let stdout = decode_process_stdio(&unsafe { value_ref(stdout) }, "process.start(...)")
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+    let stderr = decode_process_stdio(&unsafe { value_ref(stderr) }, "process.start(...)")
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+    match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr) {
+        Ok(child) => boxed_value(result_ok(Value::ProcessChild(child))),
+        Err(error) => boxed_value(result_err(process_error_spawn(error.to_string()))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_run(
+    command: *mut OpaqueValue,
+    cwd: *mut OpaqueValue,
+    env: *mut OpaqueValue,
+    stdin: *mut OpaqueValue,
+    stdout: *mut OpaqueValue,
+    stderr: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let command = expect_command_vec(&unsafe { value_ref(command) }, "process.run(...)");
+    if command.is_empty() {
+        return boxed_value(result_err(process_error_no_command()));
+    }
+    let cwd = expect_optional_string_value(&unsafe { value_ref(cwd) }, "process.run(...)");
+    let env = expect_headers_map(&unsafe { value_ref(env) }, "process.run(...)");
+    let stdin = decode_process_stdio(&unsafe { value_ref(stdin) }, "process.run(...)")
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+    let stdout = decode_process_stdio(&unsafe { value_ref(stdout) }, "process.run(...)")
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+    let stderr = decode_process_stdio(&unsafe { value_ref(stderr) }, "process.run(...)")
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+    let timeout = process_optional_timeout_from_ptr(timeout, "process.run(...)");
+
+    let child = match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr) {
+        Ok(child) => child,
+        Err(error) => return boxed_value(result_err(process_error_spawn(error.to_string()))),
+    };
+
+    let cancellation = current_cancellation();
+    let stdout_task = child
+        .stdout()
+        .map(|pipe| {
+            let capture_cancellation = cancellation.clone();
+            spawn_lightweight_task_with_cancellation(capture_cancellation.clone(), move || {
+                match pipe.read_all(Some(&capture_cancellation)) {
+                    Ok(text) => Ok(Value::String(text)),
+                    Err(error) => Err(Diagnostic::new(format!(
+                        "process stdout capture failed: {}",
+                        error
+                    ))),
+                }
+            })
+        })
+        .transpose()
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+    let stderr_task = child
+        .stderr()
+        .map(|pipe| {
+            let capture_cancellation = cancellation.clone();
+            spawn_lightweight_task_with_cancellation(capture_cancellation.clone(), move || {
+                match pipe.read_all(Some(&capture_cancellation)) {
+                    Ok(text) => Ok(Value::String(text)),
+                    Err(error) => Err(Diagnostic::new(format!(
+                        "process stderr capture failed: {}",
+                        error
+                    ))),
+                }
+            })
+        })
+        .transpose()
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+
+    let status = match child.wait(timeout, Some(&cancellation)) {
+        ProcessChildWaitStatus::Exited(status) => status,
+        ProcessChildWaitStatus::TimedOut => {
+            child.close();
+            return boxed_value(result_err(process_error_timed_out()));
+        }
+        ProcessChildWaitStatus::Cancelled => {
+            child.close();
+            return boxed_value(result_err(process_error_cancelled()));
+        }
+        ProcessChildWaitStatus::Failed(error) => {
+            child.close();
+            return boxed_value(result_err(process_error_from_io(error)));
+        }
+    };
+    let stdout = await_process_capture_task(stdout_task, "stdout");
+    let stderr = await_process_capture_task(stderr_task, "stderr");
+    boxed_value(result_ok(Value::ProcessCompleted(
+        ProcessCompletedValue::new(
+            crate::runtime_value::process_exit_status(status),
+            stdout,
+            stderr,
+        ),
+    )))
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_child_stdin(child: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(child) } {
+        Value::ProcessChild(child) => boxed_value(
+            child
+                .stdin()
+                .map(Value::ProcessPipe)
+                .map(option_some)
+                .unwrap_or_else(option_none),
+        ),
+        other => runtime_error(format!(
+            "expected `process.Child`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_child_stdout(child: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(child) } {
+        Value::ProcessChild(child) => boxed_value(
+            child
+                .stdout()
+                .map(Value::ProcessPipe)
+                .map(option_some)
+                .unwrap_or_else(option_none),
+        ),
+        other => runtime_error(format!(
+            "expected `process.Child`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_child_stderr(child: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(child) } {
+        Value::ProcessChild(child) => boxed_value(
+            child
+                .stderr()
+                .map(Value::ProcessPipe)
+                .map(option_some)
+                .unwrap_or_else(option_none),
+        ),
+        other => runtime_error(format!(
+            "expected `process.Child`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_child_wait(
+    child: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = process_optional_timeout_from_ptr(timeout, "wait(timeout=...)");
+    match unsafe { value_ref(child) } {
+        Value::ProcessChild(child) => {
+            boxed_value(match child.wait(timeout, Some(&current_cancellation())) {
+                ProcessChildWaitStatus::Exited(status) => process_wait_exited(status),
+                ProcessChildWaitStatus::TimedOut => process_wait_timed_out(),
+                ProcessChildWaitStatus::Cancelled => process_wait_cancelled(),
+                ProcessChildWaitStatus::Failed(error) => {
+                    process_wait_failed(process_error_from_io(error))
+                }
+            })
+        }
+        other => runtime_error(format!(
+            "expected `process.Child`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_child_kill(child: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(child) } {
+        Value::ProcessChild(child) => match child.kill() {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(process_error_from_io(error))),
+        },
+        other => runtime_error(format!(
+            "expected `process.Child`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_child_terminate(
+    child: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(child) } {
+        Value::ProcessChild(child) => match child.terminate() {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(process_error_from_io(error))),
+        },
+        other => runtime_error(format!(
+            "expected `process.Child`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_child_close(child: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(child) } {
+        Value::ProcessChild(child) => {
+            child.close();
+            boxed_value(Value::Unit)
+        }
+        other => runtime_error(format!(
+            "expected `process.Child`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_pipe_read_all(pipe: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(pipe) } {
+        Value::ProcessPipe(pipe) => match pipe.read_all(Some(&current_cancellation())) {
+            Ok(text) => boxed_value(result_ok(Value::String(text))),
+            Err(error) => boxed_value(result_err(process_error_from_io(error))),
+        },
+        other => runtime_error(format!(
+            "expected `process.Pipe`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_pipe_read_line(
+    pipe: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = process_optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
+    match unsafe { value_ref(pipe) } {
+        Value::ProcessPipe(pipe) => match pipe.read_line(timeout, Some(&current_cancellation())) {
+            Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
+            Ok(None) => boxed_value(result_ok(option_none())),
+            Err(error) => boxed_value(result_err(process_error_from_io(error))),
+        },
+        other => runtime_error(format!(
+            "expected `process.Pipe`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_pipe_read_bytes(
+    pipe: *mut OpaqueValue,
+    max_bytes: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let count = expect_i32_value(&unsafe { value_ref(max_bytes) }, "read_bytes(...)");
+    let count = usize::try_from(count)
+        .unwrap_or_else(|_| runtime_error("`read_bytes(...)` expects a non-negative `max_bytes`"));
+    let timeout = process_optional_timeout_from_ptr(timeout, "read_bytes(timeout=...)");
+    match unsafe { value_ref(pipe) } {
+        Value::ProcessPipe(pipe) => {
+            match pipe.read_bytes(count, timeout, Some(&current_cancellation())) {
+                Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
+                Ok(None) => boxed_value(result_ok(option_none())),
+                Err(error) => boxed_value(result_err(process_error_from_io(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `process.Pipe`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_pipe_write_all(
+    pipe: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let text = expect_string_value(&unsafe { value_ref(text) }, "write_all(...)");
+    let timeout = process_optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
+    match unsafe { value_ref(pipe) } {
+        Value::ProcessPipe(pipe) => {
+            match pipe.write_all(&text, timeout, Some(&current_cancellation())) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(process_error_from_io(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `process.Pipe`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_pipe_write_bytes(
+    pipe: *mut OpaqueValue,
+    bytes: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "write_bytes(...)");
+    let timeout = process_optional_timeout_from_ptr(timeout, "write_bytes(timeout=...)");
+    match unsafe { value_ref(pipe) } {
+        Value::ProcessPipe(pipe) => {
+            match pipe.write_bytes(&bytes, timeout, Some(&current_cancellation())) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(process_error_from_io(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `process.Pipe`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_pipe_flush(pipe: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(pipe) } {
+        Value::ProcessPipe(pipe) => match pipe.flush() {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(process_error_from_io(error))),
+        },
+        other => runtime_error(format!(
+            "expected `process.Pipe`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_pipe_close(pipe: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(pipe) } {
+        Value::ProcessPipe(pipe) => {
+            pipe.close();
+            boxed_value(Value::Unit)
+        }
+        other => runtime_error(format!(
+            "expected `process.Pipe`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_completed_status(
+    completed: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(completed) } {
+        Value::ProcessCompleted(completed) => boxed_value(completed.status()),
+        other => runtime_error(format!(
+            "expected `process.Completed`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_completed_success(completed: *mut OpaqueValue) -> i64 {
+    match unsafe { value_ref(completed) } {
+        Value::ProcessCompleted(completed) => i64::from(completed.success()),
+        other => runtime_error(format!(
+            "expected `process.Completed`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_completed_stdout(
+    completed: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(completed) } {
+        Value::ProcessCompleted(completed) => boxed_value(Value::String(completed.stdout())),
+        other => runtime_error(format!(
+            "expected `process.Completed`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_completed_stderr(
+    completed: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(completed) } {
+        Value::ProcessCompleted(completed) => boxed_value(Value::String(completed.stderr())),
+        other => runtime_error(format!(
+            "expected `process.Completed`, found `{}`",
             value_type_name(other)
         )),
     }

@@ -63,6 +63,13 @@ Builtin scalar and utility type names currently accepted by the compiler:
 - `net.UnixStream`
 - `net.TlsListener`
 - `net.TlsStream`
+- `process.Child`
+- `process.Pipe`
+- `process.Completed`
+- `process.ExitStatus`
+- `process.Wait`
+- `process.Stdio`
+- `process.Error`
 
 Builtin generic or runtime-facing types currently accepted:
 
@@ -248,6 +255,7 @@ Current builtin module namespaces:
 - `io`
 - `fs`
 - `net`
+- `process`
 
 Current builtin `range(...)` notes:
 
@@ -255,7 +263,7 @@ Current builtin `range(...)` notes:
 - supports the matching named-argument forms
 - currently requires bounds that fit the bootstrap compiler's signed index space
 
-Current builtin I/O and networking surface:
+Current builtin I/O, networking, and process surface:
 
 - `io.write(...)`
 - `io.flush()`
@@ -297,6 +305,11 @@ Current builtin I/O and networking surface:
 - `net.tls_listen(...)`
 - `net.tls_connect(...)`
 - `net.tls_connect_timeout(...)`
+- `process.start(...)`
+- `process.run(...)`
+- `process.inherit()`
+- `process.null()`
+- `process.pipe()`
 - `net.TcpListener.accept(timeout=...)`
 - `net.TcpListener.local_addr()`
 - `net.TcpListener.close()`
@@ -359,6 +372,24 @@ Current builtin I/O and networking surface:
 - `net.TlsStream.read_exact(...)`
 - `net.TlsStream.write_all(...)`
 - `net.TlsStream.close()`
+- `process.Child.stdin()`
+- `process.Child.stdout()`
+- `process.Child.stderr()`
+- `process.Child.wait(timeout=...)`
+- `process.Child.kill()`
+- `process.Child.terminate()`
+- `process.Child.close()`
+- `process.Pipe.read_all()`
+- `process.Pipe.read_line(timeout=...)`
+- `process.Pipe.read_bytes(...)`
+- `process.Pipe.write_all(...)`
+- `process.Pipe.write_bytes(...)`
+- `process.Pipe.flush()`
+- `process.Pipe.close()`
+- `process.Completed.status()`
+- `process.Completed.success()`
+- `process.Completed.stdout()`
+- `process.Completed.stderr()`
 
 Current builtin member methods include:
 
@@ -526,4 +557,5 @@ Current expression/ergonomics limitations:
 - queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all use the shared evented runtime scheduler
 - Aurora tasks are scheduler-backed lightweight tasks, and ordinary file I/O now also offloads through the shared scheduler instead of pinning a task on a blocking host thread
 - Unix domain sockets require a Unix host at runtime
+- subprocess APIs are shell-free and use explicit argv vectors; there is not yet a PTY, process-group, or restart-supervisor surface
 - borrowed return labels such as `borrow[shared]` are supported on borrowed parameters and returns for advanced zero-copy APIs

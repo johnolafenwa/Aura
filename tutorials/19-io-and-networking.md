@@ -1,10 +1,11 @@
 # I/O And Networking
 
-Aurora now has a maintained I/O surface through three builtin modules:
+Aurora now has a maintained I/O surface through four builtin modules:
 
 - `io`
 - `fs`
 - `net`
+- `process`
 
 These modules are imported like ordinary namespaces:
 
@@ -12,6 +13,7 @@ These modules are imported like ordinary namespaces:
 import io
 import fs
 import net
+import process
 ```
 
 The current runtime model uses scheduler-backed lightweight tasks, and queue waits, timer waits, and the maintained socket/HTTP surface now share the same evented runtime scheduler underneath instead of spinning or blocking on per-operation sleeps.
@@ -111,6 +113,93 @@ See:
 
 - [examples/io/read_text_file.au](../examples/io/read_text_file.au)
 - [examples/io/bytes_file_io.au](../examples/io/bytes_file_io.au)
+
+## Processes
+
+The `process` module provides shell-free subprocess helpers that fit the current Aurora runtime model.
+
+Process constructors:
+
+- `process.start(command, cwd=..., env=..., stdin=..., stdout=..., stderr=...)`
+- `process.run(command, cwd=..., env=..., stdin=..., stdout=..., stderr=..., timeout=...)`
+- `process.inherit()`
+- `process.null()`
+- `process.pipe()`
+
+`command` is always an explicit `Vec[String]` argv list. Aurora does not provide a shell-string subprocess API.
+
+`process.start(...)` returns `Result[process.Child, process.Error]`. `process.Child` works with `with` and exposes:
+
+- `stdin()`
+- `stdout()`
+- `stderr()`
+- `wait(timeout=...)`
+- `kill()`
+- `terminate()`
+- `close()`
+
+`process.pipe()` is used to request captured child stdio streams. `process.Pipe` works with `with` and exposes:
+
+- `read_all()`
+- `read_line(timeout=...)`
+- `read_bytes(max_bytes, timeout=...)`
+- `write_all(text, timeout=...)`
+- `write_bytes(bytes, timeout=...)`
+- `flush()`
+- `close()`
+
+`process.run(...)` returns `Result[process.Completed, process.Error]`. `process.Completed` exposes:
+
+- `status()`
+- `success()`
+- `stdout()`
+- `stderr()`
+
+`process.Child.close()` is cleanup-oriented: it sends a graceful terminate signal first, waits briefly, and escalates to kill if the child does not exit promptly.
+
+One-shot example:
+
+```python
+import process
+
+def run_echo() -> Result[None, process.Error]:
+    completed = try process.run(["/bin/echo", "aurora process"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s)
+    print(completed.success())
+    print(completed.stdout().trim())
+    return Result.Ok(None)
+```
+
+Interactive pipe example:
+
+```python
+import process
+
+def roundtrip() -> Result[None, process.Error]:
+    with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null()):
+        match child.stdin():
+            case Option.Some(stdin_pipe):
+                try stdin_pipe.write_all("ping\n", timeout=500ms)
+                try stdin_pipe.flush()
+                stdin_pipe.close()
+            case Option.None:
+                pass
+
+        match child.stdout():
+            case Option.Some(stdout_pipe):
+                match try stdout_pipe.read_line(timeout=500ms):
+                    case Option.Some(text):
+                        print(text.trim())
+                    case Option.None:
+                        pass
+            case Option.None:
+                pass
+        return Result.Ok(None)
+```
+
+See:
+
+- [examples/io/process_run.au](../examples/io/process_run.au)
+- [examples/io/process_pipes.au](../examples/io/process_pipes.au)
 
 ## TCP
 
@@ -303,7 +392,14 @@ This surface is deliberately explicit but no longer relies on the old blocking/p
 
 - queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all run through the shared runtime scheduler
 - socket-backed networking and HTTP convenience helpers use nonblocking descriptors with timeout and cancellation support
+- process waits and captured child stdio pipes use the same scheduler-backed wait path
 - Aurora tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
 - ordinary file operations now offload through the shared scheduler-backed runtime instead of pinning a lightweight task on a blocking host thread
+
+Current process notes:
+
+- subprocess APIs are shell-free and take explicit argv vectors only
+- there is not yet a PTY surface
+- there are not yet process groups, restart supervisors, or pipeline helpers
 
 That keeps the execution model straightforward while removing the old timeout-spin loops, the blocking HTTP special case, and the old synchronous file-I/O mismatch.

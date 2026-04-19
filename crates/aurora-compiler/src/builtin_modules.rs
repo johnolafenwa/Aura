@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use crate::ast::{
-    ClassDecl, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, FunctionDecl, Param, ReceiverKind,
-    TypeRef,
+    Argument, ClassDecl, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind,
+    FunctionDecl, Param, ReceiverKind, TypeRef,
 };
 use crate::diag::{Diagnostic, Result, Span};
 use crate::sema::{
@@ -45,6 +45,54 @@ fn value_param(name: &str, ty: TypeRef) -> Param {
         borrow_label: None,
         ty,
         default: None,
+        span: builtin_span(),
+    }
+}
+
+fn value_param_with_default(name: &str, ty: TypeRef, default: Expr) -> Param {
+    Param {
+        name: name.to_string(),
+        passing: ReceiverKind::Value,
+        borrow_label: None,
+        ty,
+        default: Some(default),
+        span: builtin_span(),
+    }
+}
+
+fn name_expr(name: &str) -> Expr {
+    Expr {
+        kind: ExprKind::Name(name.to_string()),
+        span: builtin_span(),
+    }
+}
+
+fn duration_expr(millis: i128) -> Expr {
+    Expr {
+        kind: ExprKind::DurationMillis(millis),
+        span: builtin_span(),
+    }
+}
+
+fn empty_map_expr() -> Expr {
+    Expr {
+        kind: ExprKind::Map(Vec::new()),
+        span: builtin_span(),
+    }
+}
+
+fn qualified_zero_arg_call_expr(module_name: &str, name: &str) -> Expr {
+    Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Member {
+                    object: Box::new(name_expr(module_name)),
+                    field: name.to_string(),
+                },
+                span: builtin_span(),
+            }),
+            args: Vec::<Argument>::new(),
+        },
         span: builtin_span(),
     }
 }
@@ -176,6 +224,10 @@ fn io_error_type_ref() -> TypeRef {
     type_ref("io.Error", Vec::new())
 }
 
+fn process_error_type_ref() -> TypeRef {
+    type_ref("process.Error", Vec::new())
+}
+
 fn bytes_type_ref() -> TypeRef {
     type_ref("Vec", vec![type_ref("uint8", Vec::new())])
 }
@@ -194,8 +246,250 @@ fn result_type_ref(ok: TypeRef) -> TypeRef {
     type_ref("Result", vec![ok, io_error_type_ref()])
 }
 
+fn process_result_type_ref(ok: TypeRef) -> TypeRef {
+    type_ref("Result", vec![ok, process_error_type_ref()])
+}
+
 fn builtin_io_error_type() -> Type {
     Type::Named("io.Error".to_string(), Vec::new())
+}
+
+fn process_error_enum_info() -> EnumInfo {
+    let variants = vec![
+        ("NoCommand", Vec::new()),
+        ("TimedOut", Vec::new()),
+        ("Cancelled", Vec::new()),
+        (
+            "Io",
+            vec![EnumPayloadFieldDecl {
+                name: Some("error".to_string()),
+                ty: io_error_type_ref(),
+                span: builtin_span(),
+            }],
+        ),
+        (
+            "Spawn",
+            vec![EnumPayloadFieldDecl {
+                name: Some("message".to_string()),
+                ty: type_ref("String", Vec::new()),
+                span: builtin_span(),
+            }],
+        ),
+        (
+            "Other",
+            vec![EnumPayloadFieldDecl {
+                name: Some("message".to_string()),
+                ty: type_ref("String", Vec::new()),
+                span: builtin_span(),
+            }],
+        ),
+    ];
+
+    EnumInfo {
+        module_name: "process".to_string(),
+        decl: EnumDecl {
+            public: true,
+            name: "Error".to_string(),
+            type_params: Vec::new(),
+            type_param_bounds: BTreeMap::new(),
+            variants: variants
+                .iter()
+                .map(|(name, payloads)| EnumVariantDecl {
+                    name: (*name).to_string(),
+                    payloads: payloads.clone(),
+                    named_payloads: !payloads.is_empty(),
+                    span: builtin_span(),
+                })
+                .collect(),
+            span: builtin_span(),
+        },
+        type_param_bounds: BTreeMap::new(),
+        variants: variants
+            .into_iter()
+            .map(|(name, payloads)| {
+                (
+                    name.to_string(),
+                    EnumVariantInfo {
+                        payloads: payloads
+                            .iter()
+                            .map(|payload| EnumPayloadFieldInfo {
+                                name: payload.name.clone(),
+                                ty: lower_type_ref(&payload.ty),
+                                span: payload.span,
+                            })
+                            .collect(),
+                        named_payloads: !payloads.is_empty(),
+                        span: builtin_span(),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+fn process_stdio_enum_info() -> EnumInfo {
+    let variants = vec![
+        ("Inherit", Vec::new()),
+        ("Null", Vec::new()),
+        ("Pipe", Vec::new()),
+    ];
+    EnumInfo {
+        module_name: "process".to_string(),
+        decl: EnumDecl {
+            public: true,
+            name: "Stdio".to_string(),
+            type_params: Vec::new(),
+            type_param_bounds: BTreeMap::new(),
+            variants: variants
+                .iter()
+                .map(|(name, payloads)| EnumVariantDecl {
+                    name: (*name).to_string(),
+                    payloads: payloads.clone(),
+                    named_payloads: false,
+                    span: builtin_span(),
+                })
+                .collect(),
+            span: builtin_span(),
+        },
+        type_param_bounds: BTreeMap::new(),
+        variants: variants
+            .into_iter()
+            .map(|(name, _)| {
+                (
+                    name.to_string(),
+                    EnumVariantInfo {
+                        payloads: Vec::new(),
+                        named_payloads: false,
+                        span: builtin_span(),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+fn process_exit_status_enum_info() -> EnumInfo {
+    let variants = vec![
+        (
+            "Exited",
+            vec![EnumPayloadFieldDecl {
+                name: Some("code".to_string()),
+                ty: type_ref("int32", Vec::new()),
+                span: builtin_span(),
+            }],
+        ),
+        (
+            "Signaled",
+            vec![EnumPayloadFieldDecl {
+                name: Some("signal".to_string()),
+                ty: type_ref("int32", Vec::new()),
+                span: builtin_span(),
+            }],
+        ),
+    ];
+    EnumInfo {
+        module_name: "process".to_string(),
+        decl: EnumDecl {
+            public: true,
+            name: "ExitStatus".to_string(),
+            type_params: Vec::new(),
+            type_param_bounds: BTreeMap::new(),
+            variants: variants
+                .iter()
+                .map(|(name, payloads)| EnumVariantDecl {
+                    name: (*name).to_string(),
+                    payloads: payloads.clone(),
+                    named_payloads: true,
+                    span: builtin_span(),
+                })
+                .collect(),
+            span: builtin_span(),
+        },
+        type_param_bounds: BTreeMap::new(),
+        variants: variants
+            .into_iter()
+            .map(|(name, payloads)| {
+                (
+                    name.to_string(),
+                    EnumVariantInfo {
+                        payloads: payloads
+                            .iter()
+                            .map(|payload| EnumPayloadFieldInfo {
+                                name: payload.name.clone(),
+                                ty: lower_type_ref(&payload.ty),
+                                span: payload.span,
+                            })
+                            .collect(),
+                        named_payloads: true,
+                        span: builtin_span(),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+fn process_wait_enum_info() -> EnumInfo {
+    let variants = vec![
+        (
+            "Exited",
+            vec![EnumPayloadFieldDecl {
+                name: Some("status".to_string()),
+                ty: type_ref("process.ExitStatus", Vec::new()),
+                span: builtin_span(),
+            }],
+        ),
+        ("TimedOut", Vec::new()),
+        ("Cancelled", Vec::new()),
+        (
+            "Failed",
+            vec![EnumPayloadFieldDecl {
+                name: Some("error".to_string()),
+                ty: process_error_type_ref(),
+                span: builtin_span(),
+            }],
+        ),
+    ];
+    EnumInfo {
+        module_name: "process".to_string(),
+        decl: EnumDecl {
+            public: true,
+            name: "Wait".to_string(),
+            type_params: Vec::new(),
+            type_param_bounds: BTreeMap::new(),
+            variants: variants
+                .iter()
+                .map(|(name, payloads)| EnumVariantDecl {
+                    name: (*name).to_string(),
+                    payloads: payloads.clone(),
+                    named_payloads: !payloads.is_empty(),
+                    span: builtin_span(),
+                })
+                .collect(),
+            span: builtin_span(),
+        },
+        type_param_bounds: BTreeMap::new(),
+        variants: variants
+            .into_iter()
+            .map(|(name, payloads)| {
+                (
+                    name.to_string(),
+                    EnumVariantInfo {
+                        payloads: payloads
+                            .iter()
+                            .map(|payload| EnumPayloadFieldInfo {
+                                name: payload.name.clone(),
+                                ty: lower_type_ref(&payload.ty),
+                                span: payload.span,
+                            })
+                            .collect(),
+                        named_payloads: !payloads.is_empty(),
+                        span: builtin_span(),
+                    },
+                )
+            })
+            .collect(),
+    }
 }
 
 fn io_namespace() -> ModuleNamespace {
@@ -614,11 +908,142 @@ fn net_namespace() -> ModuleNamespace {
     }
 }
 
+fn process_namespace() -> ModuleNamespace {
+    let child = class_info("process", "Child");
+    let pipe = class_info("process", "Pipe");
+    let completed = class_info("process", "Completed");
+    let mut classes = BTreeMap::new();
+    classes.insert(child.decl.name.clone(), child.clone());
+    classes.insert(pipe.decl.name.clone(), pipe.clone());
+    classes.insert(completed.decl.name.clone(), completed.clone());
+
+    let stdio = process_stdio_enum_info();
+    let exit_status = process_exit_status_enum_info();
+    let wait = process_wait_enum_info();
+    let error = process_error_enum_info();
+    let mut enums = BTreeMap::new();
+    enums.insert(stdio.decl.name.clone(), stdio.clone());
+    enums.insert(exit_status.decl.name.clone(), exit_status.clone());
+    enums.insert(wait.decl.name.clone(), wait.clone());
+    enums.insert(error.decl.name.clone(), error.clone());
+
+    let mut functions = BTreeMap::new();
+    for function in [
+        function_info(
+            "process",
+            "inherit",
+            Vec::new(),
+            type_ref("process.Stdio", Vec::new()),
+        ),
+        function_info(
+            "process",
+            "null",
+            Vec::new(),
+            type_ref("process.Stdio", Vec::new()),
+        ),
+        function_info(
+            "process",
+            "pipe",
+            Vec::new(),
+            type_ref("process.Stdio", Vec::new()),
+        ),
+        function_info(
+            "process",
+            "start",
+            vec![
+                value_param(
+                    "command",
+                    type_ref("Vec", vec![type_ref("String", Vec::new())]),
+                ),
+                value_param_with_default(
+                    "cwd",
+                    type_ref("Option", vec![type_ref("String", Vec::new())]),
+                    name_expr("None"),
+                ),
+                value_param_with_default("env", string_map_type_ref(), empty_map_expr()),
+                value_param_with_default(
+                    "stdin",
+                    type_ref("process.Stdio", Vec::new()),
+                    qualified_zero_arg_call_expr("process", "null"),
+                ),
+                value_param_with_default(
+                    "stdout",
+                    type_ref("process.Stdio", Vec::new()),
+                    qualified_zero_arg_call_expr("process", "inherit"),
+                ),
+                value_param_with_default(
+                    "stderr",
+                    type_ref("process.Stdio", Vec::new()),
+                    qualified_zero_arg_call_expr("process", "inherit"),
+                ),
+            ],
+            process_result_type_ref(type_ref("process.Child", Vec::new())),
+        ),
+        function_info(
+            "process",
+            "run",
+            vec![
+                value_param(
+                    "command",
+                    type_ref("Vec", vec![type_ref("String", Vec::new())]),
+                ),
+                value_param_with_default(
+                    "cwd",
+                    type_ref("Option", vec![type_ref("String", Vec::new())]),
+                    name_expr("None"),
+                ),
+                value_param_with_default("env", string_map_type_ref(), empty_map_expr()),
+                value_param_with_default(
+                    "stdin",
+                    type_ref("process.Stdio", Vec::new()),
+                    qualified_zero_arg_call_expr("process", "null"),
+                ),
+                value_param_with_default(
+                    "stdout",
+                    type_ref("process.Stdio", Vec::new()),
+                    qualified_zero_arg_call_expr("process", "pipe"),
+                ),
+                value_param_with_default(
+                    "stderr",
+                    type_ref("process.Stdio", Vec::new()),
+                    qualified_zero_arg_call_expr("process", "pipe"),
+                ),
+                value_param_with_default(
+                    "timeout",
+                    type_ref("Duration", Vec::new()),
+                    duration_expr(-1),
+                ),
+            ],
+            process_result_type_ref(type_ref("process.Completed", Vec::new())),
+        ),
+    ] {
+        functions.insert(function.decl.name.clone(), function);
+    }
+
+    ModuleNamespace {
+        name: "process".to_string(),
+        path: "process".to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: functions.clone(),
+        classes: classes.clone(),
+        enums: enums.clone(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: functions,
+        all_classes: classes,
+        all_enums: enums,
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+    }
+}
+
 fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
     match name {
         "io" => Some(io_namespace()),
         "fs" => Some(fs_namespace()),
         "net" => Some(net_namespace()),
+        "process" => Some(process_namespace()),
         _ => None,
     }
 }
@@ -674,4 +1099,8 @@ pub(crate) fn builtin_imported_binding(
 
 pub(crate) fn io_error_type() -> Type {
     builtin_io_error_type()
+}
+
+pub(crate) fn process_error_type() -> Type {
+    Type::Named("process.Error".to_string(), Vec::new())
 }

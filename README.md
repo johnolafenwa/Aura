@@ -100,6 +100,10 @@ Current bootstrap compiler workflow:
   - execute the maintained builtin file I/O surface through `fs.exists(...)`, `fs.read_to_string(...)`, and `io.write(...)`
 - `cargo run -p aura -- run examples/io/bytes_file_io.au`
   - execute binary file helpers plus `fs.File.read_bytes()` / `write_bytes(...)`
+- `cargo run -p aura -- run examples/io/process_run.au`
+  - execute shell-free subprocess helpers through `process.run(...)`, captured stdio, and `process.Completed`
+- `cargo run -p aura -- run examples/io/process_pipes.au`
+  - execute `process.start(...)`, interactive `process.Pipe` I/O, and timeout-aware child waiting
 - `cargo run -p aura -- run examples/io/tcp_echo.au`
   - execute the maintained builtin TCP networking surface through `net.listen(...)`, `net.connect(...)`, and `TcpStream` / `TcpListener`
 - `cargo run -p aura -- run examples/io/tcp_bytes.au`
@@ -176,12 +180,12 @@ Current `build` status:
 - manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aurora.toml`
 - git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
 - the current package-system milestone writes a local `Aurora.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
-- both maintained execution paths now cover the builtin `io`, `fs`, and `net` module surface for scheduler-aware text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, and higher-level HTTP helpers
+- both maintained execution paths now cover the builtin `io`, `fs`, `net`, and `process` module surface for scheduler-aware text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, and shell-free subprocess execution with captured pipes
 
 Current `run` status:
 
 - `aura run` now executes programs through the MIR runtime for the current implemented Aurora surface
-- queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, and the maintained poll-driven socket networking surface now run through the same MIR-backed public execution path
+- queues, task groups, wait helpers, `try`, `with`, scheduler-aware file I/O, the maintained poll-driven socket networking surface, and the shell-free `process` module now run through the same MIR-backed public execution path
 - the maintained execution architecture is now the MIR runtime for `run` plus native direct codegen for `build`
 
 ## VS Code install

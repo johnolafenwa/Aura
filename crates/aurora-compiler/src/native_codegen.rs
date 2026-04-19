@@ -297,6 +297,29 @@ struct NativeCodegen<'a> {
     file_write_bytes: FuncId,
     file_flush: FuncId,
     file_close: FuncId,
+    process_inherit: FuncId,
+    process_null: FuncId,
+    process_pipe: FuncId,
+    process_start: FuncId,
+    process_run: FuncId,
+    process_child_stdin: FuncId,
+    process_child_stdout: FuncId,
+    process_child_stderr: FuncId,
+    process_child_wait: FuncId,
+    process_child_kill: FuncId,
+    process_child_terminate: FuncId,
+    process_child_close: FuncId,
+    process_pipe_read_all: FuncId,
+    process_pipe_read_line: FuncId,
+    process_pipe_read_bytes: FuncId,
+    process_pipe_write_all: FuncId,
+    process_pipe_write_bytes: FuncId,
+    process_pipe_flush: FuncId,
+    process_pipe_close: FuncId,
+    process_completed_status: FuncId,
+    process_completed_success: FuncId,
+    process_completed_stdout: FuncId,
+    process_completed_stderr: FuncId,
     net_connect: FuncId,
     net_connect_timeout: FuncId,
     net_listen: FuncId,
@@ -656,6 +679,29 @@ impl<'a> NativeCodegen<'a> {
             file_write_bytes => ("aurora_direct_file_write_bytes", [types::I64, types::I64], Some(types::I64)),
             file_flush => ("aurora_direct_file_flush", [types::I64], Some(types::I64)),
             file_close => ("aurora_direct_file_close", [types::I64], Some(types::I64)),
+            process_inherit => ("aurora_direct_process_inherit", [], Some(types::I64)),
+            process_null => ("aurora_direct_process_null", [], Some(types::I64)),
+            process_pipe => ("aurora_direct_process_pipe", [], Some(types::I64)),
+            process_start => ("aurora_direct_process_start", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            process_run => ("aurora_direct_process_run", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            process_child_stdin => ("aurora_direct_process_child_stdin", [types::I64], Some(types::I64)),
+            process_child_stdout => ("aurora_direct_process_child_stdout", [types::I64], Some(types::I64)),
+            process_child_stderr => ("aurora_direct_process_child_stderr", [types::I64], Some(types::I64)),
+            process_child_wait => ("aurora_direct_process_child_wait", [types::I64, types::I64], Some(types::I64)),
+            process_child_kill => ("aurora_direct_process_child_kill", [types::I64], Some(types::I64)),
+            process_child_terminate => ("aurora_direct_process_child_terminate", [types::I64], Some(types::I64)),
+            process_child_close => ("aurora_direct_process_child_close", [types::I64], Some(types::I64)),
+            process_pipe_read_all => ("aurora_direct_process_pipe_read_all", [types::I64], Some(types::I64)),
+            process_pipe_read_line => ("aurora_direct_process_pipe_read_line", [types::I64, types::I64], Some(types::I64)),
+            process_pipe_read_bytes => ("aurora_direct_process_pipe_read_bytes", [types::I64, types::I64, types::I64], Some(types::I64)),
+            process_pipe_write_all => ("aurora_direct_process_pipe_write_all", [types::I64, types::I64, types::I64], Some(types::I64)),
+            process_pipe_write_bytes => ("aurora_direct_process_pipe_write_bytes", [types::I64, types::I64, types::I64], Some(types::I64)),
+            process_pipe_flush => ("aurora_direct_process_pipe_flush", [types::I64], Some(types::I64)),
+            process_pipe_close => ("aurora_direct_process_pipe_close", [types::I64], Some(types::I64)),
+            process_completed_status => ("aurora_direct_process_completed_status", [types::I64], Some(types::I64)),
+            process_completed_success => ("aurora_direct_process_completed_success", [types::I64], Some(types::I64)),
+            process_completed_stdout => ("aurora_direct_process_completed_stdout", [types::I64], Some(types::I64)),
+            process_completed_stderr => ("aurora_direct_process_completed_stderr", [types::I64], Some(types::I64)),
             net_connect => ("aurora_direct_net_connect", [types::I64], Some(types::I64)),
             net_connect_timeout => ("aurora_direct_net_connect_timeout", [types::I64, types::I64], Some(types::I64)),
             net_listen => ("aurora_direct_net_listen", [types::I64], Some(types::I64)),
@@ -947,6 +993,29 @@ impl<'a> NativeCodegen<'a> {
             file_write_bytes,
             file_flush,
             file_close,
+            process_inherit,
+            process_null,
+            process_pipe,
+            process_start,
+            process_run,
+            process_child_stdin,
+            process_child_stdout,
+            process_child_stderr,
+            process_child_wait,
+            process_child_kill,
+            process_child_terminate,
+            process_child_close,
+            process_pipe_read_all,
+            process_pipe_read_line,
+            process_pipe_read_bytes,
+            process_pipe_write_all,
+            process_pipe_write_bytes,
+            process_pipe_flush,
+            process_pipe_close,
+            process_completed_status,
+            process_completed_success,
+            process_completed_stdout,
+            process_completed_stderr,
             net_connect,
             net_connect_timeout,
             net_listen,
@@ -1632,6 +1701,75 @@ impl<'a> NativeCodegen<'a> {
         let file_close = self
             .object
             .declare_func_in_func(self.file_close, builder.func);
+        let process_inherit = self
+            .object
+            .declare_func_in_func(self.process_inherit, builder.func);
+        let process_null = self
+            .object
+            .declare_func_in_func(self.process_null, builder.func);
+        let process_pipe = self
+            .object
+            .declare_func_in_func(self.process_pipe, builder.func);
+        let process_start = self
+            .object
+            .declare_func_in_func(self.process_start, builder.func);
+        let process_run = self
+            .object
+            .declare_func_in_func(self.process_run, builder.func);
+        let process_child_stdin = self
+            .object
+            .declare_func_in_func(self.process_child_stdin, builder.func);
+        let process_child_stdout = self
+            .object
+            .declare_func_in_func(self.process_child_stdout, builder.func);
+        let process_child_stderr = self
+            .object
+            .declare_func_in_func(self.process_child_stderr, builder.func);
+        let process_child_wait = self
+            .object
+            .declare_func_in_func(self.process_child_wait, builder.func);
+        let process_child_kill = self
+            .object
+            .declare_func_in_func(self.process_child_kill, builder.func);
+        let process_child_terminate = self
+            .object
+            .declare_func_in_func(self.process_child_terminate, builder.func);
+        let process_child_close = self
+            .object
+            .declare_func_in_func(self.process_child_close, builder.func);
+        let process_pipe_read_all = self
+            .object
+            .declare_func_in_func(self.process_pipe_read_all, builder.func);
+        let process_pipe_read_line = self
+            .object
+            .declare_func_in_func(self.process_pipe_read_line, builder.func);
+        let process_pipe_read_bytes = self
+            .object
+            .declare_func_in_func(self.process_pipe_read_bytes, builder.func);
+        let process_pipe_write_all = self
+            .object
+            .declare_func_in_func(self.process_pipe_write_all, builder.func);
+        let process_pipe_write_bytes = self
+            .object
+            .declare_func_in_func(self.process_pipe_write_bytes, builder.func);
+        let process_pipe_flush = self
+            .object
+            .declare_func_in_func(self.process_pipe_flush, builder.func);
+        let process_pipe_close = self
+            .object
+            .declare_func_in_func(self.process_pipe_close, builder.func);
+        let process_completed_status = self
+            .object
+            .declare_func_in_func(self.process_completed_status, builder.func);
+        let process_completed_success = self
+            .object
+            .declare_func_in_func(self.process_completed_success, builder.func);
+        let process_completed_stdout = self
+            .object
+            .declare_func_in_func(self.process_completed_stdout, builder.func);
+        let process_completed_stderr = self
+            .object
+            .declare_func_in_func(self.process_completed_stderr, builder.func);
         let net_connect = self
             .object
             .declare_func_in_func(self.net_connect, builder.func);
@@ -2032,6 +2170,29 @@ impl<'a> NativeCodegen<'a> {
             file_write_bytes,
             file_flush,
             file_close,
+            process_inherit,
+            process_null,
+            process_pipe,
+            process_start,
+            process_run,
+            process_child_stdin,
+            process_child_stdout,
+            process_child_stderr,
+            process_child_wait,
+            process_child_kill,
+            process_child_terminate,
+            process_child_close,
+            process_pipe_read_all,
+            process_pipe_read_line,
+            process_pipe_read_bytes,
+            process_pipe_write_all,
+            process_pipe_write_bytes,
+            process_pipe_flush,
+            process_pipe_close,
+            process_completed_status,
+            process_completed_success,
+            process_completed_stdout,
+            process_completed_stderr,
             net_connect,
             net_connect_timeout,
             net_listen,
@@ -2457,6 +2618,29 @@ struct FunctionCompiler<'a> {
     file_write_bytes: cranelift_codegen::ir::FuncRef,
     file_flush: cranelift_codegen::ir::FuncRef,
     file_close: cranelift_codegen::ir::FuncRef,
+    process_inherit: cranelift_codegen::ir::FuncRef,
+    process_null: cranelift_codegen::ir::FuncRef,
+    process_pipe: cranelift_codegen::ir::FuncRef,
+    process_start: cranelift_codegen::ir::FuncRef,
+    process_run: cranelift_codegen::ir::FuncRef,
+    process_child_stdin: cranelift_codegen::ir::FuncRef,
+    process_child_stdout: cranelift_codegen::ir::FuncRef,
+    process_child_stderr: cranelift_codegen::ir::FuncRef,
+    process_child_wait: cranelift_codegen::ir::FuncRef,
+    process_child_kill: cranelift_codegen::ir::FuncRef,
+    process_child_terminate: cranelift_codegen::ir::FuncRef,
+    process_child_close: cranelift_codegen::ir::FuncRef,
+    process_pipe_read_all: cranelift_codegen::ir::FuncRef,
+    process_pipe_read_line: cranelift_codegen::ir::FuncRef,
+    process_pipe_read_bytes: cranelift_codegen::ir::FuncRef,
+    process_pipe_write_all: cranelift_codegen::ir::FuncRef,
+    process_pipe_write_bytes: cranelift_codegen::ir::FuncRef,
+    process_pipe_flush: cranelift_codegen::ir::FuncRef,
+    process_pipe_close: cranelift_codegen::ir::FuncRef,
+    process_completed_status: cranelift_codegen::ir::FuncRef,
+    process_completed_success: cranelift_codegen::ir::FuncRef,
+    process_completed_stdout: cranelift_codegen::ir::FuncRef,
+    process_completed_stderr: cranelift_codegen::ir::FuncRef,
     net_connect: cranelift_codegen::ir::FuncRef,
     net_connect_timeout: cranelift_codegen::ir::FuncRef,
     net_listen: cranelift_codegen::ir::FuncRef,
@@ -3491,6 +3675,11 @@ impl<'a> FunctionCompiler<'a> {
                 | "fs::open"
                 | "fs::create"
                 | "fs::append"
+                | "process::inherit"
+                | "process::null"
+                | "process::pipe"
+                | "process::start"
+                | "process::run"
                 | "net::connect"
                 | "net::connect_timeout"
                 | "net::listen"
@@ -3753,6 +3942,11 @@ impl<'a> FunctionCompiler<'a> {
             "fs::exists" | "fs::read_to_string" | "fs::read_bytes" | "fs::create_dir"
             | "fs::read_dir" | "fs::remove_file" | "fs::open" | "fs::create" | "fs::append"
             | "net::unix_listen" | "net::unix_connect" => &["path"],
+            "process::inherit" | "process::null" | "process::pipe" => &[],
+            "process::start" => &["command", "cwd", "env", "stdin", "stdout", "stderr"],
+            "process::run" => &[
+                "command", "cwd", "env", "stdin", "stdout", "stderr", "timeout",
+            ],
             "net::connect"
             | "net::listen"
             | "net::udp_bind"
@@ -3795,6 +3989,11 @@ impl<'a> FunctionCompiler<'a> {
             "fs::open" => self.fs_open,
             "fs::create" => self.fs_create,
             "fs::append" => self.fs_append,
+            "process::inherit" => self.process_inherit,
+            "process::null" => self.process_null,
+            "process::pipe" => self.process_pipe,
+            "process::start" => self.process_start,
+            "process::run" => self.process_run,
             "net::connect" => self.net_connect,
             "net::connect_timeout" => self.net_connect_timeout,
             "net::listen" => self.net_listen,
@@ -3822,6 +4021,7 @@ impl<'a> FunctionCompiler<'a> {
                 name,
                 "net::connect_timeout"
                     | "net::unix_connect_timeout"
+                    | "process::run"
                     | "net::tls_connect_timeout"
                     | "net::http_request_text_timeout"
                     | "net::http_request_bytes_timeout"
@@ -3902,6 +4102,30 @@ impl<'a> FunctionCompiler<'a> {
                     vec![
                         Type::Named("fs.File".to_string(), Vec::new()),
                         io_error_ty.clone(),
+                    ],
+                ),
+            )),
+            "process::inherit" | "process::null" | "process::pipe" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named("process.Stdio".to_string(), Vec::new()),
+            )),
+            "process::start" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("process.Child".to_string(), Vec::new()),
+                        Type::Named("process.Error".to_string(), Vec::new()),
+                    ],
+                ),
+            )),
+            "process::run" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("process.Completed".to_string(), Vec::new()),
+                        Type::Named("process.Error".to_string(), Vec::new()),
                     ],
                 ),
             )),
@@ -6204,6 +6428,361 @@ impl<'a> FunctionCompiler<'a> {
                             values: self.builder.inst_results(inst).to_vec(),
                             ty: DirectType::Scalar(ScalarKind::Unit),
                         })
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "process.Child" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "stdin" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `stdin()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_child_stdin, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("process.Pipe".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "stdout" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `stdout()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_child_stdout, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("process.Pipe".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "stderr" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `stderr()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_child_stderr, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![Type::Named("process.Pipe".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "wait" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_child_wait, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named("process.Wait".to_string(), Vec::new()),
+                        ))
+                    }
+                    "kill" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `kill()` to take no arguments".to_string()
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_child_kill, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Unit,
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "terminate" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `terminate()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_child_terminate, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Unit,
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "close" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `close()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_child_close, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Unit),
+                        })
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "process.Pipe" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "read_all" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `read_all()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_pipe_read_all, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "read_line" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_pipe_read_line, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "read_bytes" => {
+                        let bound = ordered_optional_named_args(&["max_bytes", "timeout"], args)?;
+                        let count = bound[0].ok_or_else(|| {
+                            "direct backend expected `read_bytes()` to receive `max_bytes`"
+                                .to_string()
+                        })?;
+                        let loaded_count = self.load_operand(&count.value)?;
+                        let count = self
+                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let count = self.ensure_opaque(count)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.process_pipe_read_bytes,
+                            &[object.values[0], count.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named(
+                                        "Option".to_string(),
+                                        vec![Type::Named(
+                                            "Vec".to_string(),
+                                            vec![Type::named("uint8")],
+                                        )],
+                                    ),
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "write_all" => {
+                        let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
+                        let argument = bound[0].ok_or_else(|| {
+                            "direct backend expected `write_all()` to receive `text`".to_string()
+                        })?;
+                        let loaded = self.load_operand(&argument.value)?;
+                        let text = self.ensure_opaque(loaded)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.process_pipe_write_all,
+                            &[object.values[0], text.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Unit,
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "write_bytes" => {
+                        let bound = ordered_optional_named_args(&["bytes", "timeout"], args)?;
+                        let argument = bound[0].ok_or_else(|| {
+                            "direct backend expected `write_bytes()` to receive `bytes`".to_string()
+                        })?;
+                        let loaded = self.load_operand(&argument.value)?;
+                        let bytes = self.ensure_opaque(loaded)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.process_pipe_write_bytes,
+                            &[object.values[0], bytes.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Unit,
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "flush" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `flush()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_pipe_flush, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Unit,
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "close" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `close()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_pipe_close, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Unit),
+                        })
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "process.Completed" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "status" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `status()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_completed_status, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named("process.ExitStatus".to_string(), Vec::new()),
+                        ))
+                    }
+                    "success" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `success()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_completed_success, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        })
+                    }
+                    "stdout" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `stdout()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_completed_stdout, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::named("String"),
+                        ))
+                    }
+                    "stderr" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `stderr()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_completed_stderr, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::named("String"),
+                        ))
                     }
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
@@ -8562,6 +9141,35 @@ fn infer_rvalue_type(
                 )))
             }
             CallTarget::Name(name)
+                if matches!(
+                    name.as_str(),
+                    "process::inherit" | "process::null" | "process::pipe"
+                ) =>
+            {
+                Some(DirectType::Opaque(Type::Named(
+                    "process.Stdio".to_string(),
+                    Vec::new(),
+                )))
+            }
+            CallTarget::Name(name) if name == "process::start" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("process.Child".to_string(), Vec::new()),
+                        Type::Named("process.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name) if name == "process::run" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("process.Completed".to_string(), Vec::new()),
+                        Type::Named("process.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name)
                 if matches!(name.as_str(), "net::connect" | "net::connect_timeout") =>
             {
                 Some(DirectType::Opaque(Type::Named(
@@ -9002,6 +9610,84 @@ fn builtin_opaque_member_return_type(
             )
         }
         ("fs.File", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("process.Child", "stdin") | ("process.Child", "stdout") | ("process.Child", "stderr") => {
+            direct_type(
+                &Type::Named(
+                    "Option".to_string(),
+                    vec![Type::Named("process.Pipe".to_string(), Vec::new())],
+                ),
+                classes,
+            )
+        }
+        ("process.Child", "wait") => direct_type(
+            &Type::Named("process.Wait".to_string(), Vec::new()),
+            classes,
+        ),
+        ("process.Child", "kill") | ("process.Child", "terminate") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Unit,
+                    Type::Named("process.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("process.Child", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("process.Pipe", "read_all") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::named("String"),
+                    Type::Named("process.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("process.Pipe", "read_line") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("process.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("process.Pipe", "read_bytes") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named(
+                        "Option".to_string(),
+                        vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
+                    ),
+                    Type::Named("process.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("process.Pipe", "write_all")
+        | ("process.Pipe", "write_bytes")
+        | ("process.Pipe", "flush") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Unit,
+                    Type::Named("process.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("process.Pipe", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("process.Completed", "status") => direct_type(
+            &Type::Named("process.ExitStatus".to_string(), Vec::new()),
+            classes,
+        ),
+        ("process.Completed", "success") => Some(DirectType::Scalar(ScalarKind::Bool)),
+        ("process.Completed", "stdout") | ("process.Completed", "stderr") => {
+            direct_type(&Type::named("String"), classes)
+        }
         ("net.TcpListener", "accept") => direct_type(
             &Type::Named(
                 "Result".to_string(),

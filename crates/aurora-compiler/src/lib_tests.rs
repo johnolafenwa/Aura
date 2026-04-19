@@ -212,6 +212,14 @@ const EXAMPLE_CASES: &[(&str, &str)] = &[
         "examples/basics/borrowed_lifetime_labels.au",
         include_str!("../../../examples/basics/borrowed_lifetime_labels.au"),
     ),
+    (
+        "examples/io/process_run.au",
+        include_str!("../../../examples/io/process_run.au"),
+    ),
+    (
+        "examples/io/process_pipes.au",
+        include_str!("../../../examples/io/process_pipes.au"),
+    ),
 ];
 const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
     (
@@ -1638,6 +1646,16 @@ fn categorized_examples_run_with_expected_output() {
                 "examples/basics/borrowed_lifetime_labels.au",
                 EXAMPLE_CASES[44].1,
                 "aurora\n",
+            ),
+            (
+                "examples/io/process_run.au",
+                EXAMPLE_CASES[45].1,
+                "true\naurora process\n0\nExitStatus.Exited(0)\n",
+            ),
+            (
+                "examples/io/process_pipes.au",
+                EXAMPLE_CASES[46].1,
+                "ping\nExitStatus.Exited(0)\n",
             ),
         ];
 

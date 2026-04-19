@@ -1492,6 +1492,13 @@ fn lower_type_with_self(
     if is_builtin_type(type_name) || type_names.contains_key(type_name) {
         let canonical_name = match type_name {
             "fs.File"
+            | "process.Child"
+            | "process.Pipe"
+            | "process.Completed"
+            | "process.ExitStatus"
+            | "process.Wait"
+            | "process.Stdio"
+            | "process.Error"
             | "net.TcpStream"
             | "net.TcpListener"
             | "net.UdpSocket"
@@ -2118,6 +2125,8 @@ fn is_builtin_io_resource_type(name: &str, args: &[Type]) -> bool {
         && matches!(
             name,
             "TaskGroup"
+                | "process.Child"
+                | "process.Pipe"
                 | "fs.File"
                 | "net.TcpStream"
                 | "net.TcpListener"
@@ -6824,6 +6833,179 @@ impl<'a> FunctionChecker<'a> {
                                 )),
                                 BuiltinMember::FileClose => Ok(Type::Unit),
                                 _ => unreachable!("unexpected file builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "process.Child" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::ProcessChildStdin
+                                | BuiltinMember::ProcessChildStdout
+                                | BuiltinMember::ProcessChildStderr => Ok(Type::Named(
+                                    "Option".to_string(),
+                                    vec![Type::named("process.Pipe")],
+                                )),
+                                BuiltinMember::ProcessChildWait => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "wait(timeout=...)",
+                                    )?;
+                                    Ok(Type::named("process.Wait"))
+                                }
+                                BuiltinMember::ProcessChildKill
+                                | BuiltinMember::ProcessChildTerminate => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![Type::Unit, crate::builtin_modules::process_error_type()],
+                                )),
+                                BuiltinMember::ProcessChildClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected process child builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "process.Pipe" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let bytes_ty =
+                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::ProcessPipeReadAll => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![
+                                        Type::named("String"),
+                                        crate::builtin_modules::process_error_type(),
+                                    ],
+                                )),
+                                BuiltinMember::ProcessPipeReadLine => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "read_line(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Named(
+                                                "Option".to_string(),
+                                                vec![Type::named("String")],
+                                            ),
+                                            crate::builtin_modules::process_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::ProcessPipeReadBytes => {
+                                    let count_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`read_bytes` requires a `max_bytes` argument",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        count_arg,
+                                        &Type::named("int32"),
+                                        locals,
+                                        "read_bytes",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "read_bytes(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Named(
+                                                "Option".to_string(),
+                                                vec![bytes_ty.clone()],
+                                            ),
+                                            crate::builtin_modules::process_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::ProcessPipeWriteAll => {
+                                    let text_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`write_all` requires a `text` argument",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        text_arg,
+                                        &Type::named("String"),
+                                        locals,
+                                        "write_all",
+                                    )?;
+                                    self.consume_value_expr(&text_arg.value, locals)?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "write_all(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Unit,
+                                            crate::builtin_modules::process_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::ProcessPipeWriteBytes => {
+                                    let bytes_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`write_bytes` requires a `bytes` argument",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        bytes_arg,
+                                        &bytes_ty,
+                                        locals,
+                                        "write_bytes",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "write_bytes(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Unit,
+                                            crate::builtin_modules::process_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::ProcessPipeFlush => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![Type::Unit, crate::builtin_modules::process_error_type()],
+                                )),
+                                BuiltinMember::ProcessPipeClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected process pipe builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "process.Completed" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::ProcessCompletedStatus => {
+                                    Ok(Type::named("process.ExitStatus"))
+                                }
+                                BuiltinMember::ProcessCompletedSuccess => Ok(Type::named("bool")),
+                                BuiltinMember::ProcessCompletedStdout
+                                | BuiltinMember::ProcessCompletedStderr => {
+                                    Ok(Type::named("String"))
+                                }
+                                _ => unreachable!("unexpected process completed builtin member"),
                             };
                         }
                     }

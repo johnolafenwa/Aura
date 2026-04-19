@@ -1,0 +1,41 @@
+import process
+
+def roundtrip() -> Result[None, process.Error]:
+    with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null()):
+        match child.stdin():
+            case Option.Some(stdin_pipe):
+                try stdin_pipe.write_all("ping\n", timeout=500ms)
+                try stdin_pipe.flush()
+                stdin_pipe.close()
+            case Option.None:
+                pass
+
+        match child.stdout():
+            case Option.Some(stdout_pipe):
+                match try stdout_pipe.read_line(timeout=500ms):
+                    case Option.Some(text):
+                        print(text.trim())
+                    case Option.None:
+                        pass
+            case Option.None:
+                pass
+
+        match child.wait(timeout=2s):
+            case Wait.Exited(status):
+                print(status)
+            case Wait.TimedOut:
+                print("timed out")
+            case Wait.Cancelled:
+                print("cancelled")
+            case Wait.Failed(error):
+                print(error)
+
+    return Result.Ok(None)
+
+def main() -> int32:
+    match roundtrip():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
