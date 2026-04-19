@@ -1,6 +1,6 @@
 # I/O And Networking
 
-Aurora now has a maintained blocking I/O surface through three builtin modules:
+Aurora now has a maintained I/O surface through three builtin modules:
 
 - `io`
 - `fs`
@@ -14,7 +14,7 @@ import fs
 import net
 ```
 
-The current runtime model is still thread-based and blocking. File and network operations block the current task, but they now cover ordinary text/binary file work plus a broader blocking network surface.
+The current runtime model is still thread-based. File operations and higher-level HTTP helpers are still blocking, while the maintained socket-backed network surface now uses nonblocking descriptors plus poll-driven waits under the hood.
 
 ## Standard Input And Output
 
@@ -114,7 +114,7 @@ See:
 
 ## TCP
 
-The `net` module provides blocking TCP clients and listeners:
+The `net` module provides TCP clients and listeners on the maintained nonblocking socket runtime:
 
 - `net.connect(address)`
 - `net.connect_timeout(address, timeout)`
@@ -169,7 +169,7 @@ See:
 
 ## UDP
 
-Aurora also supports blocking UDP sockets:
+Aurora also supports UDP sockets on the same poll-driven runtime:
 
 - `net.udp_bind(address)`
 
@@ -193,7 +193,7 @@ See [examples/io/udp_echo.au](../examples/io/udp_echo.au).
 
 ## HTTP
 
-The maintained blocking HTTP surface includes:
+The maintained HTTP convenience surface includes:
 
 - `net.http_listen(address)`
 - `net.http_request_text(method, url, body, headers)`
@@ -230,7 +230,7 @@ See [examples/io/http_roundtrip.au](../examples/io/http_roundtrip.au).
 
 ## WebSockets
 
-The maintained blocking WebSocket surface includes:
+The maintained WebSocket surface includes:
 
 - `net.websocket_listen(address)`
 - `net.websocket_connect(url)`
@@ -254,7 +254,7 @@ See [examples/io/websocket_roundtrip.au](../examples/io/websocket_roundtrip.au).
 
 ## Unix Sockets And TLS
 
-Aurora also supports blocking Unix domain stream sockets and TLS streams.
+Aurora also supports Unix domain stream sockets and TLS streams on the maintained nonblocking socket runtime.
 
 Unix-socket constructors:
 
@@ -293,17 +293,17 @@ See [examples/io/unix_tls_roundtrip.au](../examples/io/unix_tls_roundtrip.au), w
 
 ## Timeouts And Cancellation
 
-Most blocking socket operations now accept optional `timeout=...` arguments. Timeouts are expressed with Aurora `Duration` values such as `100ms`, `1s`, or `2m`.
+Most maintained socket operations accept optional `timeout=...` arguments. Timeouts are expressed with Aurora `Duration` values such as `100ms`, `1s`, or `2m`.
 
-The runtime also threads task-group cancellation into blocking socket waits. If a task group is cancelled while a child is blocked in a maintained network operation, that operation returns an `io.Error` instead of waiting forever.
+The socket runtime also threads task-group cancellation into maintained socket waits. If a task group is cancelled while a child is waiting on a maintained network operation, that operation returns an `io.Error` instead of waiting forever.
 
 ## Current Model
 
-This surface is deliberately blocking and thread-based:
+This surface is still deliberately simple:
 
 - file operations block the current task
-- socket operations block the current task
-- there is no evented runtime or general async I/O layer yet
-- higher-level protocols now exist, but they are still built on the same blocking task model
+- HTTP listener/request helpers are still higher-level blocking convenience APIs
+- socket-backed networking now uses nonblocking descriptors with poll-driven waits and timeout/cancellation support
+- there is still no general async/event-loop scheduler
 
-That keeps the runtime model simple while still making ordinary text/binary file work, socket programming, request/response servers, and local TLS testing possible today.
+That keeps the runtime model straightforward while still making ordinary text/binary file work, socket programming, request/response servers, and local TLS testing possible today.

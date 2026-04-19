@@ -384,7 +384,7 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `200`
     - `POST:/hello:body:ok`
 - `websocket_roundtrip.au`
-  - blocking WebSocket listener/connect helpers with text frames
+  - timeout-aware WebSocket listener/connect helpers on the nonblocking socket runtime
   - prints `ws:hi`
 - `unix_tls_roundtrip.au`
   - Unix-only Unix-socket and TLS roundtrip example with an embedded self-signed certificate

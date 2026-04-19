@@ -2,6 +2,10 @@
 
 Last updated: 2026-04-19
 
+### Active Session
+
+None.
+
 ## In Progress
 
 - Expand the frontend from the current bootstrap toward the broader frozen v1 surface without breaking the working path.
@@ -19,6 +23,7 @@ Last updated: 2026-04-19
 
 ## Done
 
+- Finished the April 19 evented networking runtime pass: converted the maintained socket-backed runtime onto nonblocking descriptors plus poll-driven waits, fixed websocket accept/connect handshake resumption on nonblocking sockets, made timeout handling honor the caller’s full budget instead of a single poll slice, tightened TLS socket polling so handshake progress can wait on both read and write readiness, added direct runtime regressions for nonblocking descriptor invariants plus timeout-budget coverage, updated the maintained READMEs/tutorials to describe the new socket model accurately, and reverified the final tree with `cargo fmt --all`, `cargo test -p aurora-compiler`, `cargo test -p aura`, `npm run test:lsp`, and `npm run check:extension`.
 - Finished the April 18-19 networking expansion/stabilization pass: expanded the maintained `io`/`fs`/`net` surface from the initial blocking file/TCP subset to the richer blocking runtime that now covers byte-oriented file and socket I/O, timeout-aware TCP/Unix/TLS/HTTP/WebSocket operations, UDP, Unix sockets, and TLS; filled the compiler-backed builtin-module completion gap for the new resource members; made the maintained Unix/TLS example self-contained with embedded certificate material; stabilized network example timeouts plus the WebSocket accept/handshake path under full-suite load; removed the dead networking helper/runtime warning leftovers; and reverified the final tree with `cargo fmt --all`, `cargo test -p aurora-compiler`, `cargo test -p aura`, `npm run test:lsp`, and `npm run check:extension`.
 - Finished the April 18 I/O and network surface pass: added maintained builtin `io`, `fs`, and `net` modules; introduced `io.Error`, `fs.File`, `net.TcpListener`, and `net.TcpStream`; wired blocking file and TCP I/O through the checker, MIR runtime, native direct backend, public compiler entrypoints, CLI product tests, and language-server analysis/completion surface; added maintained examples plus the `19-io-and-networking` tutorial chapter; aligned root/CLI/tutorial/example documentation with the implemented builtin I/O model; and reverified the final tree with `cargo fmt --all`, `cargo test -p aurora-compiler`, `cargo test -p aura`, `npm run test:lsp`, and `npm run check:extension`.
 - Finished the April 18 concurrency surface removal pass: removed the remaining compatibility-era concurrency spellings from the checker and tooling so `Channel[T]`, `channel()`, `task_group()`, `Task.join()`, `Queue.send()/recv()/clone()`, `Task.clone()`, and `TaskGroup.spawn(...)` are no longer part of the maintained surface at all; converted stale positive fixtures, examples, tutorials, and LSP fallback tests to the queue/task-only model; renamed maintained example and fixture stems from `channel*`/`channels*` to `queue*`/`queues*` everywhere except explicit negative regressions for removed aliases; and reverified the compiler, CLI, LSP, and extension checks on the final queue/task-only tree.

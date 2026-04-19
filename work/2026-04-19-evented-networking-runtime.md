@@ -1,0 +1,25 @@
+# 2026-04-19 Evented Networking Runtime
+
+- Session start: 2026-04-19 08:29:43 BST
+- Goal: replace the maintained blocking networking runtime paths with an internal evented/non-blocking socket runtime across Aurora's MIR and direct backends, keeping the existing language surface aligned while updating tests, examples, tutorials, and work logs.
+- Work completed:
+  - moved the maintained socket-backed runtime onto nonblocking descriptors plus poll-driven readiness waits in `runtime_value.rs`
+  - fixed websocket accept and connect so nonblocking handshakes resume correctly instead of failing on `WouldBlock` / incomplete handshake states
+  - fixed the timeout-budget bug in the new poll helper so socket timeouts honor the caller’s full requested duration rather than a single 50ms slice
+  - tightened TLS socket polling so read/write operations can wait on both read and write readiness during handshake progress
+  - added direct runtime regressions for nonblocking descriptor invariants across TCP, UDP, Unix, TLS, and WebSocket resources
+  - added a timeout-budget regression so the shared socket wait path cannot silently regress back to truncated timeouts
+  - updated the maintained READMEs and tutorial surface so Aurora now documents blocking file I/O plus poll-driven socket networking accurately
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p aurora-compiler nonblocking_descriptors_internally -- --nocapture`
+  - `cargo test -p aurora-compiler socket_timeouts_honor_the_requested_budget -- --nocapture`
+  - `cargo test -p aurora-compiler tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface -- --nocapture`
+  - `cargo test -p aurora-compiler unix_and_tls_helpers_cover_local_socket_and_tls_surface -- --nocapture`
+  - `cargo test -p aurora-compiler`
+  - `cargo test -p aura`
+  - `npm run test:lsp`
+  - `npm run check:extension`
+  - `cargo clippy -p aurora-compiler -p aura -- -D clippy::correctness`
+- Follow-up:
+  - the remaining networking/runtime expansion is broader than sockets: Aurora still does not have a general async/event-loop scheduler, and the higher-level HTTP convenience APIs remain blocking on top of the maintained socket/runtime layer

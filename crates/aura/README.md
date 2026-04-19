@@ -124,7 +124,7 @@ aura deps update util
 - `aura run <file.au>`
   - run a program through the MIR runtime
   - this now includes the maintained `pass` statement and `sleep(duration)` builtin
-  - the maintained user-facing surface now also includes the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, `Set[T]`, builtin blocking text/binary file I/O and blocking networking through `io`, `fs`, and `net`, specialized generic trait bounds, and the current operator-trait subset
+  - the maintained user-facing surface now also includes the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, `Set[T]`, builtin blocking text/binary file I/O plus the maintained socket/networking surface through `io`, `fs`, and `net`, specialized generic trait bounds, and the current operator-trait subset
   - local file imports and `public` module boundaries now work for file-backed programs
   - manifest-rooted packages now also resolve sibling path dependencies, git dependencies, and workspace members when the entry file lives under a package `src/`
 - `aura build -o <output> <file.au>`
@@ -134,7 +134,7 @@ aura deps update util
   - `direct` forces the new low-level native backend for the full currently implemented Aurora language surface
   - it relies on Cargo/Rust and a host C compiler for the current build step
   - file-backed and stdin-backed programs with local module imports and package dependencies now build correctly through this path
-  - the maintained direct build path now also covers builtin blocking text/binary file I/O plus TCP, UDP, HTTP, WebSocket, Unix-socket, and TLS networking through `io`, `fs`, and `net`
+  - the maintained direct build path now also covers builtin blocking text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, and higher-level HTTP helpers through `io`, `fs`, and `net`
 - `aura ast <file.au>`
   - print the parsed syntax tree
 - `aura ast-json <file.au>`

@@ -64,4 +64,4 @@ The current tutorial set covers:
 
 Use `14-current-language-surface.md` as the compact truth source for the currently implemented subset. The earlier chapters should explain that surface progressively, but that reference chapter should stay exhaustive for the bootstrap compiler.
 
-It does not yet attempt to teach features that are still only in the proposal, such as detached-task ownership restrictions or a richer evented runtime beyond the current blocking task-and-queue model.
+It does not yet attempt to teach features that are still only in the proposal, such as detached-task ownership restrictions or a broader async scheduler beyond the current thread-based tasks, blocking queues, and poll-driven socket runtime.

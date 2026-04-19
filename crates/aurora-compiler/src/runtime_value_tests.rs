@@ -1,9 +1,9 @@
 use super::{
-    cast_numeric_value, io_decode_utf8, option_none, option_some, render_float, result_err,
-    result_ok, send_error_closed, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpListenerValue, HttpResponseValue, MapValue, RangeValue, SetValue, TaskGroupValue,
-    TaskValue, TcpListenerValue, TcpStreamValue, TryRecvResult, UdpSocketValue, Value, VecValue,
-    WebSocketListenerValue,
+    cast_numeric_value, io_decode_utf8, lock_mutex, option_none, option_some, render_float,
+    result_err, result_ok, send_error_closed, CancellationContext, ChannelValue, EnumVariantValue,
+    FileValue, HttpListenerValue, HttpResponseValue, MapValue, RangeValue, SetValue,
+    TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue, TryRecvResult, UdpSocketValue,
+    Value, VecValue, WebSocketListenerValue,
 };
 use crate::diag::Span;
 use crate::integer::IntegerValue;
@@ -12,10 +12,12 @@ use rcgen::generate_simple_self_signed;
 use std::fs;
 use std::path::PathBuf;
 use std::thread;
-use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
 use super::{TlsListenerValue, TlsStreamValue, UnixListenerValue, UnixStreamValue};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 
 struct TempDir {
     path: PathBuf,
@@ -46,6 +48,13 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+#[cfg(unix)]
+fn fd_is_nonblocking(fd: i32) -> bool {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    assert!(flags >= 0, "fcntl(F_GETFL) should succeed");
+    flags & libc::O_NONBLOCK != 0
 }
 
 #[test]
@@ -497,6 +506,83 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
 
 #[cfg(unix)]
 #[test]
+fn network_resources_use_nonblocking_descriptors_internally() {
+    let short_timeout = StdDuration::from_secs(5);
+    let cancellation = CancellationContext::default();
+
+    let tcp_listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp bind should succeed");
+    let tcp_listener_fd = lock_mutex(&tcp_listener.inner.listener)
+        .as_ref()
+        .expect("listener should still be open")
+        .as_raw_fd();
+    assert!(
+        fd_is_nonblocking(tcp_listener_fd),
+        "tcp listeners should stay in nonblocking mode internally"
+    );
+    let tcp_address = tcp_listener
+        .local_addr()
+        .expect("listener local addr should succeed");
+    let tcp_server = tcp_listener.clone();
+    let tcp_thread = thread::spawn(move || {
+        let accepted = tcp_server
+            .accept(Some(short_timeout), Some(&CancellationContext::default()))
+            .expect("tcp accept should succeed");
+        let accepted_fd = lock_mutex(&accepted.inner.stream)
+            .as_ref()
+            .expect("accepted tcp stream should still be open")
+            .as_raw_fd();
+        assert!(
+            fd_is_nonblocking(accepted_fd),
+            "accepted tcp streams should stay in nonblocking mode internally"
+        );
+        accepted.close();
+    });
+    let tcp_client =
+        TcpStreamValue::connect(&tcp_address, Some(short_timeout), Some(&cancellation))
+            .expect("tcp connect should succeed");
+    let tcp_client_fd = lock_mutex(&tcp_client.inner.stream)
+        .as_ref()
+        .expect("tcp client stream should still be open")
+        .as_raw_fd();
+    assert!(
+        fd_is_nonblocking(tcp_client_fd),
+        "tcp client streams should stay in nonblocking mode internally"
+    );
+    tcp_client.close();
+    tcp_thread.join().expect("tcp server thread should join");
+
+    let udp_socket = UdpSocketValue::bind("127.0.0.1:0").expect("udp bind should succeed");
+    let udp_fd = lock_mutex(&udp_socket.inner.socket)
+        .as_ref()
+        .expect("udp socket should still be open")
+        .as_raw_fd();
+    assert!(
+        fd_is_nonblocking(udp_fd),
+        "udp sockets should stay in nonblocking mode internally"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn socket_timeouts_honor_the_requested_budget() {
+    let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp bind should succeed");
+    let started = Instant::now();
+    let error = listener
+        .accept(
+            Some(StdDuration::from_millis(200)),
+            Some(&CancellationContext::default()),
+        )
+        .expect_err("accept without a peer should time out");
+    let elapsed = started.elapsed();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(
+        elapsed >= StdDuration::from_millis(120),
+        "timeouts should honor the caller's budget instead of returning after the first poll slice; elapsed: {elapsed:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn unix_and_tls_helpers_cover_local_socket_and_tls_surface() {
     let temp = TempDir::new("aurora-runtime-unix-tls");
     let socket_path = PathBuf::from(format!("/tmp/aurora-{}.sock", std::process::id()));
@@ -624,4 +710,191 @@ fn unix_and_tls_helpers_cover_local_socket_and_tls_surface() {
         .expect("tls read_exact should succeed");
     assert_eq!(tls_reply, b"ok");
     tls_thread.join().expect("tls server thread should join");
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_tls_and_websocket_resources_use_nonblocking_descriptors_internally() {
+    let temp = TempDir::new("aurora-runtime-evented-network");
+
+    let socket_path = PathBuf::from(format!("/tmp/aurora-evented-{}.sock", std::process::id()));
+    let unix_listener = UnixListenerValue::bind(
+        socket_path
+            .to_str()
+            .expect("unix socket path should be valid UTF-8"),
+    )
+    .expect("unix listener bind should succeed");
+    let unix_listener_fd = lock_mutex(&unix_listener.inner.listener)
+        .as_ref()
+        .expect("unix listener should still be open")
+        .as_raw_fd();
+    assert!(
+        fd_is_nonblocking(unix_listener_fd),
+        "unix listeners should stay in nonblocking mode internally"
+    );
+    let unix_server = unix_listener.clone();
+    let unix_thread = thread::spawn(move || {
+        let accepted = unix_server
+            .accept(
+                Some(StdDuration::from_secs(2)),
+                Some(&CancellationContext::default()),
+            )
+            .expect("unix accept should succeed");
+        let accepted_fd = lock_mutex(&accepted.inner.stream)
+            .as_ref()
+            .expect("unix accepted stream should still be open")
+            .as_raw_fd();
+        assert!(
+            fd_is_nonblocking(accepted_fd),
+            "accepted unix streams should stay in nonblocking mode internally"
+        );
+        accepted.close();
+    });
+    let unix_client = UnixStreamValue::connect(
+        socket_path
+            .to_str()
+            .expect("unix socket path should be valid UTF-8"),
+        Some(StdDuration::from_secs(2)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("unix connect should succeed");
+    let unix_client_fd = lock_mutex(&unix_client.inner.stream)
+        .as_ref()
+        .expect("unix client stream should still be open")
+        .as_raw_fd();
+    assert!(
+        fd_is_nonblocking(unix_client_fd),
+        "unix client streams should stay in nonblocking mode internally"
+    );
+    unix_client.close();
+    unix_thread.join().expect("unix server thread should join");
+
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = temp.path().join("cert.pem");
+    let key_path = temp.path().join("key.pem");
+    fs::write(&cert_path, certificate.cert.pem().as_bytes()).expect("write cert pem");
+    fs::write(&key_path, certificate.key_pair.serialize_pem().as_bytes()).expect("write key pem");
+
+    let tls_listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        cert_path.to_str().expect("cert path should be valid UTF-8"),
+        key_path.to_str().expect("key path should be valid UTF-8"),
+    )
+    .expect("tls listener bind should succeed");
+    let tls_listener_fd = lock_mutex(&tls_listener.inner.listener)
+        .as_ref()
+        .expect("tls listener should still be open")
+        .as_raw_fd();
+    assert!(
+        fd_is_nonblocking(tls_listener_fd),
+        "tls listeners should stay in nonblocking mode internally"
+    );
+    let tls_address = tls_listener
+        .local_addr()
+        .expect("tls listener local addr should succeed");
+    let tls_server = tls_listener.clone();
+    let tls_thread = thread::spawn(move || {
+        let accepted = tls_server
+            .accept(
+                Some(StdDuration::from_secs(2)),
+                Some(&CancellationContext::default()),
+            )
+            .expect("tls accept should succeed");
+        let accepted_fd = match lock_mutex(&accepted.inner.stream)
+            .as_ref()
+            .expect("tls accepted stream should still be open")
+        {
+            super::TlsStreamKind::Client(stream) => stream.sock.as_raw_fd(),
+            super::TlsStreamKind::Server(stream) => stream.sock.as_raw_fd(),
+        };
+        assert!(
+            fd_is_nonblocking(accepted_fd),
+            "accepted tls streams should stay in nonblocking mode internally"
+        );
+        accepted.close();
+    });
+    let tls_client = TlsStreamValue::connect(
+        &tls_address,
+        "localhost",
+        Some(cert_path.to_str().expect("cert path should be valid UTF-8")),
+        Some(StdDuration::from_secs(2)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("tls connect should succeed");
+    let tls_client_fd = match lock_mutex(&tls_client.inner.stream)
+        .as_ref()
+        .expect("tls client stream should still be open")
+    {
+        super::TlsStreamKind::Client(stream) => stream.sock.as_raw_fd(),
+        super::TlsStreamKind::Server(stream) => stream.sock.as_raw_fd(),
+    };
+    assert!(
+        fd_is_nonblocking(tls_client_fd),
+        "tls client streams should stay in nonblocking mode internally"
+    );
+    tls_client.close();
+    tls_thread.join().expect("tls server thread should join");
+
+    let ws_listener = WebSocketListenerValue::bind("127.0.0.1:0")
+        .expect("websocket listener bind should succeed");
+    let ws_listener_fd = lock_mutex(&ws_listener.inner.listener)
+        .as_ref()
+        .expect("websocket listener should still be open")
+        .as_raw_fd();
+    assert!(
+        fd_is_nonblocking(ws_listener_fd),
+        "websocket listeners should stay in nonblocking mode internally"
+    );
+    let ws_address = ws_listener
+        .local_addr()
+        .expect("websocket listener local addr should succeed");
+    let ws_server = ws_listener.clone();
+    let ws_thread = thread::spawn(move || {
+        let socket = ws_server
+            .accept(Some(StdDuration::from_secs(2)))
+            .expect("websocket accept should succeed");
+        let accepted_fd = match lock_mutex(&socket.inner.socket)
+            .as_ref()
+            .expect("accepted websocket should still be open")
+        {
+            super::WebSocketStateKind::Plain(socket) => socket.get_ref().as_raw_fd(),
+            super::WebSocketStateKind::MaybeTls(socket) => match socket.get_ref() {
+                tungstenite::stream::MaybeTlsStream::Plain(stream) => stream.as_raw_fd(),
+                tungstenite::stream::MaybeTlsStream::Rustls(stream) => stream.get_ref().as_raw_fd(),
+                _ => unreachable!("unexpected websocket transport"),
+            },
+        };
+        assert!(
+            fd_is_nonblocking(accepted_fd),
+            "accepted websocket streams should stay in nonblocking mode internally"
+        );
+        socket.close().expect("websocket close should succeed");
+    });
+    let ws_client = super::WebSocketValue::connect(
+        &format!("ws://{}", ws_address),
+        Some(StdDuration::from_secs(2)),
+    )
+    .expect("websocket connect should succeed");
+    let ws_client_fd = match lock_mutex(&ws_client.inner.socket)
+        .as_ref()
+        .expect("websocket client should still be open")
+    {
+        super::WebSocketStateKind::Plain(socket) => socket.get_ref().as_raw_fd(),
+        super::WebSocketStateKind::MaybeTls(socket) => match socket.get_ref() {
+            tungstenite::stream::MaybeTlsStream::Plain(stream) => stream.as_raw_fd(),
+            tungstenite::stream::MaybeTlsStream::Rustls(stream) => stream.get_ref().as_raw_fd(),
+            _ => unreachable!("unexpected websocket transport"),
+        },
+    };
+    assert!(
+        fd_is_nonblocking(ws_client_fd),
+        "websocket clients should stay in nonblocking mode internally"
+    );
+    ws_client
+        .close()
+        .expect("websocket client close should succeed");
+    ws_thread
+        .join()
+        .expect("websocket server thread should join");
 }

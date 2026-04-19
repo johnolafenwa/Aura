@@ -18,7 +18,7 @@ use tiny_http::{
     Method as TinyHttpMethod, Request as TinyHttpRequest, Response as TinyHttpResponse,
 };
 use tungstenite::stream::MaybeTlsStream;
-use tungstenite::{accept as websocket_accept, connect as websocket_connect, Message, WebSocket};
+use tungstenite::{accept as websocket_accept, client_tls_with_config, Message, WebSocket};
 use ureq::AgentBuilder;
 
 #[cfg(unix)]
@@ -231,7 +231,6 @@ struct FileState {
 
 struct TcpListenerState {
     listener: Mutex<Option<StdTcpListener>>,
-    nonblocking: AtomicBool,
 }
 
 struct TcpStreamState {
@@ -270,7 +269,6 @@ struct WebSocketState {
 #[cfg(unix)]
 struct UnixListenerState {
     listener: Mutex<Option<StdUnixListener>>,
-    nonblocking: AtomicBool,
 }
 
 #[cfg(not(unix))]
@@ -279,7 +277,6 @@ struct UnixListenerState;
 #[cfg(unix)]
 struct UnixStreamState {
     stream: Mutex<Option<StdUnixStream>>,
-    nonblocking: AtomicBool,
 }
 
 #[cfg(not(unix))]
@@ -1025,29 +1022,26 @@ fn ensure_rustls_crypto_provider() {
     });
 }
 
+#[cfg(not(unix))]
 trait ReadTimeoutStream: Read {
     fn set_read_timeout_value(&mut self, timeout: Option<StdDuration>) -> io::Result<()>;
 }
 
+#[cfg(not(unix))]
 impl ReadTimeoutStream for StdTcpStream {
     fn set_read_timeout_value(&mut self, timeout: Option<StdDuration>) -> io::Result<()> {
         self.set_read_timeout(timeout)
     }
 }
 
-#[cfg(unix)]
-impl ReadTimeoutStream for StdUnixStream {
-    fn set_read_timeout_value(&mut self, timeout: Option<StdDuration>) -> io::Result<()> {
-        self.set_read_timeout(timeout)
-    }
-}
-
+#[cfg(not(unix))]
 impl ReadTimeoutStream for rustls::StreamOwned<ClientConnection, StdTcpStream> {
     fn set_read_timeout_value(&mut self, timeout: Option<StdDuration>) -> io::Result<()> {
         self.sock.set_read_timeout(timeout)
     }
 }
 
+#[cfg(not(unix))]
 impl ReadTimeoutStream for rustls::StreamOwned<ServerConnection, StdTcpStream> {
     fn set_read_timeout_value(&mut self, timeout: Option<StdDuration>) -> io::Result<()> {
         self.sock.set_read_timeout(timeout)
@@ -1055,13 +1049,12 @@ impl ReadTimeoutStream for rustls::StreamOwned<ServerConnection, StdTcpStream> {
 }
 
 #[cfg(unix)]
-fn poll_fd(
+fn wait_for_fd_event(
     fd: i32,
     events: i16,
-    timeout: Option<StdDuration>,
+    deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
-) -> io::Result<bool> {
-    let deadline = deadline_from_timeout(timeout);
+) -> io::Result<()> {
     loop {
         let slice = next_wait_slice(deadline, cancellation)?;
         let timeout_ms = match slice {
@@ -1077,43 +1070,22 @@ fn poll_fd(
         };
         let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
         if result > 0 {
-            return Ok(true);
+            return Ok(());
         }
         if result == 0 {
-            if deadline.is_some() {
-                if let Some(deadline) = deadline {
-                    if Instant::now() >= deadline {
-                        return Ok(false);
-                    }
-                }
-                continue;
+            if deadline.is_some() && deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Err(timeout_resource_error());
             }
-            if cancellation.is_some() {
-                continue;
+            if deadline.is_none() && cancellation.is_none() {
+                return Err(timeout_resource_error());
             }
-            return Ok(false);
+            continue;
         }
         let error = io::Error::last_os_error();
         if error.kind() == io::ErrorKind::Interrupted {
             continue;
         }
         return Err(error);
-    }
-}
-
-#[cfg(not(unix))]
-fn poll_fd(
-    _fd: i32,
-    _events: i16,
-    timeout: Option<StdDuration>,
-    cancellation: Option<&CancellationContext>,
-) -> io::Result<bool> {
-    match next_wait_slice(deadline_from_timeout(timeout), cancellation)? {
-        Some(slice) => {
-            std::thread::sleep(slice);
-            Ok(timeout.is_none())
-        }
-        None => Ok(true),
     }
 }
 
@@ -1132,6 +1104,58 @@ fn trim_line_endings(text: String) -> String {
         .to_string()
 }
 
+#[cfg(unix)]
+fn read_line_with_fd_deadline<R>(
+    reader: &mut R,
+    fd: i32,
+    readiness_events: i16,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<Option<String>>
+where
+    R: Read,
+{
+    let mut buffer = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        match reader.read(&mut byte) {
+            Ok(0) if buffer.is_empty() => return Ok(None),
+            Ok(0) => break,
+            Ok(_) => {
+                buffer.push(byte[0]);
+                if byte[0] == b'\n' {
+                    break;
+                }
+            }
+            Err(error) if is_retryable_network_error(&error) => {
+                wait_for_fd_event(fd, readiness_events, deadline, cancellation)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(Some(trim_line_endings(io_decode_utf8(&buffer)?)))
+}
+
+#[cfg(unix)]
+fn read_line_with_deadline<R>(
+    reader: &mut R,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<Option<String>>
+where
+    R: Read + AsRawFd,
+{
+    read_line_with_fd_deadline(
+        reader,
+        reader.as_raw_fd(),
+        libc::POLLIN,
+        deadline,
+        cancellation,
+    )
+}
+
+#[cfg(not(unix))]
 fn read_line_with_deadline<R>(
     reader: &mut R,
     deadline: Option<Instant>,
@@ -1161,6 +1185,59 @@ where
     Ok(Some(trim_line_endings(io_decode_utf8(&buffer)?)))
 }
 
+#[cfg(unix)]
+fn read_exact_with_fd_deadline<R>(
+    reader: &mut R,
+    fd: i32,
+    count: usize,
+    readiness_events: i16,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<Vec<u8>>
+where
+    R: Read,
+{
+    let mut buffer = vec![0u8; count];
+    let mut offset = 0;
+    while offset < count {
+        match reader.read(&mut buffer[offset..]) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "stream closed before reading the requested number of bytes",
+                ))
+            }
+            Ok(bytes) => offset += bytes,
+            Err(error) if is_retryable_network_error(&error) => {
+                wait_for_fd_event(fd, readiness_events, deadline, cancellation)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(buffer)
+}
+
+#[cfg(unix)]
+fn read_exact_with_deadline<R>(
+    reader: &mut R,
+    count: usize,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<Vec<u8>>
+where
+    R: Read + AsRawFd,
+{
+    read_exact_with_fd_deadline(
+        reader,
+        reader.as_raw_fd(),
+        count,
+        libc::POLLIN,
+        deadline,
+        cancellation,
+    )
+}
+
+#[cfg(not(unix))]
 fn read_exact_with_deadline<R>(
     reader: &mut R,
     count: usize,
@@ -1189,6 +1266,55 @@ where
     Ok(buffer)
 }
 
+#[cfg(unix)]
+fn read_some_with_fd_deadline<R>(
+    reader: &mut R,
+    fd: i32,
+    max_bytes: usize,
+    readiness_events: i16,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<Option<Vec<u8>>>
+where
+    R: Read,
+{
+    let mut buffer = vec![0u8; max_bytes.max(1)];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => return Ok(None),
+            Ok(bytes) => {
+                buffer.truncate(bytes);
+                return Ok(Some(buffer));
+            }
+            Err(error) if is_retryable_network_error(&error) => {
+                wait_for_fd_event(fd, readiness_events, deadline, cancellation)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn read_some_with_deadline<R>(
+    reader: &mut R,
+    max_bytes: usize,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<Option<Vec<u8>>>
+where
+    R: Read + AsRawFd,
+{
+    read_some_with_fd_deadline(
+        reader,
+        reader.as_raw_fd(),
+        max_bytes,
+        libc::POLLIN,
+        deadline,
+        cancellation,
+    )
+}
+
+#[cfg(not(unix))]
 fn read_some_with_deadline<R>(
     reader: &mut R,
     max_bytes: usize,
@@ -1214,85 +1340,64 @@ where
 }
 
 #[cfg(unix)]
-fn read_line_from_unix_stream_with_deadline(
-    stream: &mut StdUnixStream,
+fn read_all_with_fd_deadline<R>(
+    reader: &mut R,
+    fd: i32,
+    readiness_events: i16,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
-) -> io::Result<Option<String>> {
-    let mut buffer = Vec::new();
+) -> io::Result<Vec<u8>>
+where
+    R: Read,
+{
+    let mut contents = Vec::new();
     loop {
-        let mut byte = [0u8; 1];
-        match stream.read(&mut byte) {
-            Ok(0) if buffer.is_empty() => return Ok(None),
+        let mut chunk = [0u8; 4096];
+        match reader.read(&mut chunk) {
             Ok(0) => break,
-            Ok(_) => {
-                buffer.push(byte[0]);
-                if byte[0] == b'\n' {
-                    break;
-                }
-            }
+            Ok(bytes) => contents.extend_from_slice(&chunk[..bytes]),
             Err(error) if is_retryable_network_error(&error) => {
-                if !poll_fd(
-                    stream.as_raw_fd(),
-                    libc::POLLIN,
-                    next_wait_slice(deadline, cancellation)?,
-                    cancellation,
-                )? {
-                    return Err(timeout_resource_error());
-                }
+                wait_for_fd_event(fd, readiness_events, deadline, cancellation)?;
             }
             Err(error) => return Err(error),
         }
     }
-    Ok(Some(trim_line_endings(io_decode_utf8(&buffer)?)))
+    Ok(contents)
 }
 
 #[cfg(unix)]
-fn read_exact_from_unix_stream_with_deadline(
-    stream: &mut StdUnixStream,
-    count: usize,
+fn read_all_with_deadline<R>(
+    reader: &mut R,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
-) -> io::Result<Vec<u8>> {
-    let mut buffer = vec![0u8; count];
-    let mut read = 0usize;
-    while read < count {
-        match stream.read(&mut buffer[read..]) {
-            Ok(0) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "stream ended before enough bytes were read",
-                ));
-            }
-            Ok(bytes) => {
-                read += bytes;
-            }
-            Err(error) if is_retryable_network_error(&error) => {
-                if !poll_fd(
-                    stream.as_raw_fd(),
-                    libc::POLLIN,
-                    next_wait_slice(deadline, cancellation)?,
-                    cancellation,
-                )? {
-                    return Err(timeout_resource_error());
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(buffer)
+) -> io::Result<Vec<u8>>
+where
+    R: Read + AsRawFd,
+{
+    read_all_with_fd_deadline(
+        reader,
+        reader.as_raw_fd(),
+        libc::POLLIN,
+        deadline,
+        cancellation,
+    )
 }
 
 #[cfg(unix)]
-fn write_all_to_unix_stream_with_deadline(
-    stream: &mut StdUnixStream,
+fn write_all_with_fd_deadline<W>(
+    writer: &mut W,
+    fd: i32,
     bytes: &[u8],
+    readiness_events: i16,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
-) -> io::Result<()> {
+) -> io::Result<()>
+where
+    W: Write,
+{
     let mut written = 0usize;
     while written < bytes.len() {
-        match stream.write(&bytes[written..]) {
+        match writer.write(&bytes[written..]) {
             Ok(0) => {
                 return Err(io::Error::new(
                     io::ErrorKind::WriteZero,
@@ -1303,19 +1408,32 @@ fn write_all_to_unix_stream_with_deadline(
                 written += count;
             }
             Err(error) if is_retryable_network_error(&error) => {
-                if !poll_fd(
-                    stream.as_raw_fd(),
-                    libc::POLLOUT,
-                    next_wait_slice(deadline, cancellation)?,
-                    cancellation,
-                )? {
-                    return Err(timeout_resource_error());
-                }
+                wait_for_fd_event(fd, readiness_events, deadline, cancellation)?;
             }
             Err(error) => return Err(error),
         }
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn write_all_with_deadline<W>(
+    writer: &mut W,
+    bytes: &[u8],
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<()>
+where
+    W: Write + AsRawFd,
+{
+    write_all_with_fd_deadline(
+        writer,
+        writer.as_raw_fd(),
+        bytes,
+        libc::POLLOUT,
+        deadline,
+        cancellation,
+    )
 }
 
 fn load_tls_server_config(
@@ -1384,23 +1502,87 @@ fn tiny_http_method_name(method: &TinyHttpMethod) -> String {
     .to_string()
 }
 
-fn set_maybe_tls_stream_timeouts(
-    stream: &mut MaybeTlsStream<StdTcpStream>,
-    read_timeout: Option<StdDuration>,
-    write_timeout: Option<StdDuration>,
-) -> io::Result<()> {
-    match stream {
-        MaybeTlsStream::Plain(inner) => {
-            inner.set_read_timeout(read_timeout)?;
-            inner.set_write_timeout(write_timeout)?;
-        }
-        MaybeTlsStream::Rustls(inner) => {
-            inner.get_mut().set_read_timeout(read_timeout)?;
-            inner.get_mut().set_write_timeout(write_timeout)?;
-        }
-        _ => {}
+#[cfg(unix)]
+fn websocket_raw_fd(socket: &WebSocketStateKind) -> i32 {
+    match socket {
+        WebSocketStateKind::Plain(socket) => socket.get_ref().as_raw_fd(),
+        WebSocketStateKind::MaybeTls(socket) => match socket.get_ref() {
+            MaybeTlsStream::Plain(stream) => stream.as_raw_fd(),
+            MaybeTlsStream::Rustls(stream) => stream.get_ref().as_raw_fd(),
+            _ => unreachable!("unsupported websocket transport"),
+        },
     }
-    Ok(())
+}
+
+#[cfg(unix)]
+fn maybe_tls_stream_raw_fd(stream: &MaybeTlsStream<StdTcpStream>) -> i32 {
+    match stream {
+        MaybeTlsStream::Plain(stream) => stream.as_raw_fd(),
+        MaybeTlsStream::Rustls(stream) => stream.get_ref().as_raw_fd(),
+        _ => unreachable!("unsupported websocket transport"),
+    }
+}
+
+#[cfg(unix)]
+trait WebSocketHandshakeStream {
+    fn raw_fd(&self) -> i32;
+}
+
+#[cfg(unix)]
+impl WebSocketHandshakeStream for StdTcpStream {
+    fn raw_fd(&self) -> i32 {
+        self.as_raw_fd()
+    }
+}
+
+#[cfg(unix)]
+impl WebSocketHandshakeStream for MaybeTlsStream<StdTcpStream> {
+    fn raw_fd(&self) -> i32 {
+        maybe_tls_stream_raw_fd(self)
+    }
+}
+
+#[cfg(unix)]
+fn finish_websocket_handshake<Role>(
+    mut mid: tungstenite::handshake::MidHandshake<Role>,
+    deadline: Option<Instant>,
+) -> io::Result<Role::FinalResult>
+where
+    Role: tungstenite::handshake::HandshakeRole,
+    Role::InternalStream: Read + Write + WebSocketHandshakeStream,
+{
+    loop {
+        match mid.handshake() {
+            Ok(result) => return Ok(result),
+            Err(tungstenite::handshake::HandshakeError::Interrupted(next_mid)) => {
+                wait_for_fd_event(
+                    next_mid.get_ref().get_ref().raw_fd(),
+                    libc::POLLIN | libc::POLLOUT,
+                    deadline,
+                    None,
+                )?;
+                mid = next_mid;
+            }
+            Err(tungstenite::handshake::HandshakeError::Failure(error)) => {
+                return Err(io::Error::other(error));
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn websocket_set_nonblocking(socket: &mut WebSocketStateKind, enabled: bool) -> io::Result<()> {
+    match socket {
+        WebSocketStateKind::Plain(socket) => socket.get_mut().set_nonblocking(enabled),
+        WebSocketStateKind::MaybeTls(socket) => match socket.get_mut() {
+            MaybeTlsStream::Plain(stream) => stream.set_nonblocking(enabled),
+            MaybeTlsStream::Rustls(stream) => stream.get_mut().set_nonblocking(enabled),
+            _ => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "unsupported websocket transport",
+            )),
+        },
+    }
 }
 
 fn websocket_read_message(
@@ -1410,20 +1592,8 @@ fn websocket_read_message(
     let deadline = deadline_from_timeout(timeout);
     loop {
         let result = match socket {
-            WebSocketStateKind::Plain(socket) => {
-                socket
-                    .get_mut()
-                    .set_read_timeout(next_wait_slice(deadline, None)?)?;
-                socket.read()
-            }
-            WebSocketStateKind::MaybeTls(socket) => {
-                set_maybe_tls_stream_timeouts(
-                    socket.get_mut(),
-                    next_wait_slice(deadline, None)?,
-                    None,
-                )?;
-                socket.read()
-            }
+            WebSocketStateKind::Plain(socket) => socket.read(),
+            WebSocketStateKind::MaybeTls(socket) => socket.read(),
         };
 
         match result {
@@ -1432,7 +1602,22 @@ fn websocket_read_message(
             Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
                 return Ok(None)
             }
-            Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => continue,
+            Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
+                #[cfg(unix)]
+                {
+                    wait_for_fd_event(
+                        websocket_raw_fd(socket),
+                        libc::POLLIN | libc::POLLOUT,
+                        deadline,
+                        None,
+                    )?;
+                    continue;
+                }
+                #[cfg(not(unix))]
+                {
+                    continue;
+                }
+            }
             Err(error) => return Err(io::Error::other(error)),
         }
     }
@@ -1509,10 +1694,13 @@ impl FileValue {
 
 impl TcpListenerValue {
     fn from_std(listener: StdTcpListener) -> Self {
+        #[cfg(unix)]
+        listener
+            .set_nonblocking(true)
+            .expect("tcp listeners should switch to nonblocking mode");
         Self {
             inner: Arc::new(TcpListenerState {
                 listener: Mutex::new(Some(listener)),
-                nonblocking: AtomicBool::new(false),
             }),
         }
     }
@@ -1530,43 +1718,19 @@ impl TcpListenerValue {
         let Some(listener) = listener.as_mut() else {
             return Err(closed_resource_error());
         };
-        let restore_nonblocking = !self.inner.nonblocking.load(Ordering::SeqCst);
-        if restore_nonblocking {
-            listener.set_nonblocking(true)?;
-        }
         let deadline = deadline_from_timeout(timeout);
         loop {
             match listener.accept() {
-                Ok((stream, _)) => {
-                    if restore_nonblocking {
-                        let _ = listener.set_nonblocking(false);
-                    }
-                    return Ok(TcpStreamValue::from_std(stream));
-                }
+                Ok((stream, _)) => return Ok(TcpStreamValue::from_std(stream)),
                 Err(error)
                     if matches!(
                         error.kind(),
                         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                     ) =>
                 {
-                    if !poll_fd(
-                        listener.as_raw_fd(),
-                        libc::POLLIN,
-                        next_wait_slice(deadline, cancellation)?,
-                        cancellation,
-                    )? {
-                        if restore_nonblocking {
-                            let _ = listener.set_nonblocking(false);
-                        }
-                        return Err(timeout_resource_error());
-                    }
+                    wait_for_fd_event(listener.as_raw_fd(), libc::POLLIN, deadline, cancellation)?;
                 }
-                Err(error) => {
-                    if restore_nonblocking {
-                        let _ = listener.set_nonblocking(false);
-                    }
-                    return Err(error);
-                }
+                Err(error) => return Err(error),
             }
         }
     }
@@ -1587,6 +1751,10 @@ impl TcpListenerValue {
 
 impl TcpStreamValue {
     fn from_std(stream: StdTcpStream) -> Self {
+        #[cfg(unix)]
+        stream
+            .set_nonblocking(true)
+            .expect("tcp streams should switch to nonblocking mode");
         Self {
             inner: Arc::new(TcpStreamState {
                 stream: Mutex::new(Some(stream)),
@@ -1655,29 +1823,36 @@ impl TcpStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        let mut contents = Vec::new();
-        let deadline = deadline_from_timeout(timeout);
-        loop {
-            stream.set_read_timeout(next_wait_slice(deadline, cancellation)?)?;
-            let mut chunk = [0u8; 4096];
-            match stream.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(bytes) => contents.extend_from_slice(&chunk[..bytes]),
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    if deadline.is_some() && Instant::now() >= deadline.unwrap() {
-                        return Err(timeout_resource_error());
-                    }
-                    continue;
-                }
-                Err(error) => return Err(error),
-            }
+        #[cfg(unix)]
+        {
+            read_all_with_deadline(stream, deadline_from_timeout(timeout), cancellation)
         }
-        Ok(contents)
+        #[cfg(not(unix))]
+        {
+            let mut contents = Vec::new();
+            let deadline = deadline_from_timeout(timeout);
+            loop {
+                stream.set_read_timeout(next_wait_slice(deadline, cancellation)?)?;
+                let mut chunk = [0u8; 4096];
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(bytes) => contents.extend_from_slice(&chunk[..bytes]),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        if deadline.is_some() && Instant::now() >= deadline.unwrap() {
+                            return Err(timeout_resource_error());
+                        }
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(contents)
+        }
     }
 
     pub(crate) fn read_line(
@@ -1742,11 +1917,18 @@ impl TcpStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        stream.set_write_timeout(next_wait_slice(
-            deadline_from_timeout(timeout),
-            cancellation,
-        )?)?;
-        stream.write_all(bytes)
+        #[cfg(unix)]
+        {
+            write_all_with_deadline(stream, bytes, deadline_from_timeout(timeout), cancellation)
+        }
+        #[cfg(not(unix))]
+        {
+            stream.set_write_timeout(next_wait_slice(
+                deadline_from_timeout(timeout),
+                cancellation,
+            )?)?;
+            stream.write_all(bytes)
+        }
     }
 
     pub(crate) fn flush(&self) -> io::Result<()> {
@@ -1821,6 +2003,10 @@ impl UdpDatagramValue {
 
 impl UdpSocketValue {
     fn from_std(socket: StdUdpSocket) -> Self {
+        #[cfg(unix)]
+        socket
+            .set_nonblocking(true)
+            .expect("udp sockets should switch to nonblocking mode");
         Self {
             inner: Arc::new(UdpSocketState {
                 socket: Mutex::new(Some(socket)),
@@ -1853,12 +2039,33 @@ impl UdpSocketValue {
         let Some(socket) = socket.as_mut() else {
             return Err(closed_resource_error());
         };
-        socket.set_write_timeout(next_wait_slice(
-            deadline_from_timeout(timeout),
-            cancellation,
-        )?)?;
-        socket.send_to(bytes, address)?;
-        Ok(())
+        #[cfg(unix)]
+        {
+            let deadline = deadline_from_timeout(timeout);
+            loop {
+                match socket.send_to(bytes, address) {
+                    Ok(_) => return Ok(()),
+                    Err(error) if is_retryable_network_error(&error) => {
+                        wait_for_fd_event(
+                            socket.as_raw_fd(),
+                            libc::POLLOUT,
+                            deadline,
+                            cancellation,
+                        )?;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            socket.set_write_timeout(next_wait_slice(
+                deadline_from_timeout(timeout),
+                cancellation,
+            )?)?;
+            socket.send_to(bytes, address)?;
+            Ok(())
+        }
     }
 
     pub(crate) fn recv(
@@ -1871,26 +2078,52 @@ impl UdpSocketValue {
         let Some(socket) = socket.as_mut() else {
             return Err(closed_resource_error());
         };
-        socket.set_read_timeout(next_wait_slice(
-            deadline_from_timeout(timeout),
-            cancellation,
-        )?)?;
-        let mut buffer = vec![0u8; max_bytes.max(1)];
-        match socket.recv(&mut buffer) {
-            Ok(0) => Ok(None),
-            Ok(bytes) => {
-                buffer.truncate(bytes);
-                Ok(Some(buffer))
+        #[cfg(unix)]
+        {
+            let deadline = deadline_from_timeout(timeout);
+            let mut buffer = vec![0u8; max_bytes.max(1)];
+            loop {
+                match socket.recv(&mut buffer) {
+                    Ok(0) => return Ok(None),
+                    Ok(bytes) => {
+                        buffer.truncate(bytes);
+                        return Ok(Some(buffer));
+                    }
+                    Err(error) if is_retryable_network_error(&error) => {
+                        wait_for_fd_event(
+                            socket.as_raw_fd(),
+                            libc::POLLIN,
+                            deadline,
+                            cancellation,
+                        )?;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) =>
-            {
-                Ok(None)
+        }
+        #[cfg(not(unix))]
+        {
+            socket.set_read_timeout(next_wait_slice(
+                deadline_from_timeout(timeout),
+                cancellation,
+            )?)?;
+            let mut buffer = vec![0u8; max_bytes.max(1)];
+            match socket.recv(&mut buffer) {
+                Ok(0) => Ok(None),
+                Ok(bytes) => {
+                    buffer.truncate(bytes);
+                    Ok(Some(buffer))
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    Ok(None)
+                }
+                Err(error) => Err(error),
             }
-            Err(error) => Err(error),
         }
     }
 
@@ -1904,28 +2137,56 @@ impl UdpSocketValue {
         let Some(socket) = socket.as_mut() else {
             return Err(closed_resource_error());
         };
-        socket.set_read_timeout(next_wait_slice(
-            deadline_from_timeout(timeout),
-            cancellation,
-        )?)?;
-        let mut buffer = vec![0u8; max_bytes.max(1)];
-        match socket.recv_from(&mut buffer) {
-            Ok((bytes, address)) => {
-                buffer.truncate(bytes);
-                Ok(Some(UdpDatagramValue {
-                    address: address.to_string(),
-                    data: buffer,
-                }))
+        #[cfg(unix)]
+        {
+            let deadline = deadline_from_timeout(timeout);
+            let mut buffer = vec![0u8; max_bytes.max(1)];
+            loop {
+                match socket.recv_from(&mut buffer) {
+                    Ok((bytes, address)) => {
+                        buffer.truncate(bytes);
+                        return Ok(Some(UdpDatagramValue {
+                            address: address.to_string(),
+                            data: buffer,
+                        }));
+                    }
+                    Err(error) if is_retryable_network_error(&error) => {
+                        wait_for_fd_event(
+                            socket.as_raw_fd(),
+                            libc::POLLIN,
+                            deadline,
+                            cancellation,
+                        )?;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) =>
-            {
-                Ok(None)
+        }
+        #[cfg(not(unix))]
+        {
+            socket.set_read_timeout(next_wait_slice(
+                deadline_from_timeout(timeout),
+                cancellation,
+            )?)?;
+            let mut buffer = vec![0u8; max_bytes.max(1)];
+            match socket.recv_from(&mut buffer) {
+                Ok((bytes, address)) => {
+                    buffer.truncate(bytes);
+                    Ok(Some(UdpDatagramValue {
+                        address: address.to_string(),
+                        data: buffer,
+                    }))
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    Ok(None)
+                }
+                Err(error) => Err(error),
             }
-            Err(error) => Err(error),
         }
     }
 
@@ -1954,10 +2215,12 @@ impl UdpSocketValue {
 #[cfg(unix)]
 impl UnixListenerValue {
     fn from_std(listener: StdUnixListener) -> Self {
+        listener
+            .set_nonblocking(true)
+            .expect("unix listeners should switch to nonblocking mode");
         Self {
             inner: Arc::new(UnixListenerState {
                 listener: Mutex::new(Some(listener)),
-                nonblocking: AtomicBool::new(false),
             }),
         }
     }
@@ -1976,43 +2239,19 @@ impl UnixListenerValue {
         let Some(listener) = listener.as_mut() else {
             return Err(closed_resource_error());
         };
-        let restore_nonblocking = !self.inner.nonblocking.load(Ordering::SeqCst);
-        if restore_nonblocking {
-            listener.set_nonblocking(true)?;
-        }
         let deadline = deadline_from_timeout(timeout);
         loop {
             match listener.accept() {
-                Ok((stream, _)) => {
-                    if restore_nonblocking {
-                        let _ = listener.set_nonblocking(false);
-                    }
-                    return Ok(UnixStreamValue::from_std(stream));
-                }
+                Ok((stream, _)) => return Ok(UnixStreamValue::from_std(stream)),
                 Err(error)
                     if matches!(
                         error.kind(),
                         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                     ) =>
                 {
-                    if !poll_fd(
-                        listener.as_raw_fd(),
-                        libc::POLLIN,
-                        next_wait_slice(deadline, cancellation)?,
-                        cancellation,
-                    )? {
-                        if restore_nonblocking {
-                            let _ = listener.set_nonblocking(false);
-                        }
-                        return Err(timeout_resource_error());
-                    }
+                    wait_for_fd_event(listener.as_raw_fd(), libc::POLLIN, deadline, cancellation)?;
                 }
-                Err(error) => {
-                    if restore_nonblocking {
-                        let _ = listener.set_nonblocking(false);
-                    }
-                    return Err(error);
-                }
+                Err(error) => return Err(error),
             }
         }
     }
@@ -2036,10 +2275,12 @@ impl UnixListenerValue {
 #[cfg(unix)]
 impl UnixStreamValue {
     fn from_std(stream: StdUnixStream) -> Self {
+        stream
+            .set_nonblocking(true)
+            .expect("unix streams should switch to nonblocking mode");
         Self {
             inner: Arc::new(UnixStreamState {
                 stream: Mutex::new(Some(stream)),
-                nonblocking: AtomicBool::new(false),
             }),
         }
     }
@@ -2064,21 +2305,7 @@ impl UnixStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        let restore_nonblocking = !self.inner.nonblocking.load(Ordering::SeqCst);
-        if restore_nonblocking {
-            stream.set_nonblocking(true)?;
-            self.inner.nonblocking.store(true, Ordering::SeqCst);
-        }
-        let result = read_line_from_unix_stream_with_deadline(
-            stream,
-            deadline_from_timeout(timeout),
-            cancellation,
-        );
-        if restore_nonblocking {
-            let _ = stream.set_nonblocking(false);
-            self.inner.nonblocking.store(false, Ordering::SeqCst);
-        }
-        result
+        read_line_with_deadline(stream, deadline_from_timeout(timeout), cancellation)
     }
 
     pub(crate) fn read_exact(
@@ -2091,22 +2318,7 @@ impl UnixStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        let restore_nonblocking = !self.inner.nonblocking.load(Ordering::SeqCst);
-        if restore_nonblocking {
-            stream.set_nonblocking(true)?;
-            self.inner.nonblocking.store(true, Ordering::SeqCst);
-        }
-        let result = read_exact_from_unix_stream_with_deadline(
-            stream,
-            count,
-            deadline_from_timeout(timeout),
-            cancellation,
-        );
-        if restore_nonblocking {
-            let _ = stream.set_nonblocking(false);
-            self.inner.nonblocking.store(false, Ordering::SeqCst);
-        }
-        result
+        read_exact_with_deadline(stream, count, deadline_from_timeout(timeout), cancellation)
     }
 
     pub(crate) fn write_all(
@@ -2119,22 +2331,12 @@ impl UnixStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        let restore_nonblocking = !self.inner.nonblocking.load(Ordering::SeqCst);
-        if restore_nonblocking {
-            stream.set_nonblocking(true)?;
-            self.inner.nonblocking.store(true, Ordering::SeqCst);
-        }
-        let result = write_all_to_unix_stream_with_deadline(
+        write_all_with_deadline(
             stream,
             text.as_bytes(),
             deadline_from_timeout(timeout),
             cancellation,
-        );
-        if restore_nonblocking {
-            let _ = stream.set_nonblocking(false);
-            self.inner.nonblocking.store(false, Ordering::SeqCst);
-        }
-        result
+        )
     }
 
     pub(crate) fn close(&self) {
@@ -2159,9 +2361,12 @@ impl UnixStreamValue {
 
 impl TlsListenerValue {
     pub(crate) fn bind(address: &str, cert_pem_path: &str, key_pem_path: &str) -> io::Result<Self> {
+        let listener = StdTcpListener::bind(address)?;
+        #[cfg(unix)]
+        listener.set_nonblocking(true)?;
         Ok(Self {
             inner: Arc::new(TlsListenerState {
-                listener: Mutex::new(Some(StdTcpListener::bind(address)?)),
+                listener: Mutex::new(Some(listener)),
                 config: load_tls_server_config(cert_pem_path, key_pem_path)?,
             }),
         })
@@ -2176,12 +2381,12 @@ impl TlsListenerValue {
         let Some(listener) = listener.as_mut() else {
             return Err(closed_resource_error());
         };
-        listener.set_nonblocking(true)?;
         let deadline = deadline_from_timeout(timeout);
         loop {
             match listener.accept() {
                 Ok((stream, _)) => {
-                    let _ = listener.set_nonblocking(false);
+                    #[cfg(unix)]
+                    stream.set_nonblocking(true)?;
                     let connection = ServerConnection::new(self.inner.config.clone())
                         .map_err(io::Error::other)?;
                     return Ok(TlsStreamValue {
@@ -2198,20 +2403,9 @@ impl TlsListenerValue {
                         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                     ) =>
                 {
-                    if !poll_fd(
-                        listener.as_raw_fd(),
-                        libc::POLLIN,
-                        next_wait_slice(deadline, cancellation)?,
-                        cancellation,
-                    )? {
-                        let _ = listener.set_nonblocking(false);
-                        return Err(timeout_resource_error());
-                    }
+                    wait_for_fd_event(listener.as_raw_fd(), libc::POLLIN, deadline, cancellation)?;
                 }
-                Err(error) => {
-                    let _ = listener.set_nonblocking(false);
-                    return Err(error);
-                }
+                Err(error) => return Err(error),
             }
         }
     }
@@ -2270,12 +2464,20 @@ impl TlsStreamValue {
             return Err(closed_resource_error());
         };
         match stream {
-            TlsStreamKind::Client(stream) => {
-                read_line_with_deadline(stream, deadline_from_timeout(timeout), cancellation)
-            }
-            TlsStreamKind::Server(stream) => {
-                read_line_with_deadline(stream, deadline_from_timeout(timeout), cancellation)
-            }
+            TlsStreamKind::Client(stream) => read_line_with_fd_deadline(
+                stream,
+                stream.sock.as_raw_fd(),
+                libc::POLLIN | libc::POLLOUT,
+                deadline_from_timeout(timeout),
+                cancellation,
+            ),
+            TlsStreamKind::Server(stream) => read_line_with_fd_deadline(
+                stream,
+                stream.sock.as_raw_fd(),
+                libc::POLLIN | libc::POLLOUT,
+                deadline_from_timeout(timeout),
+                cancellation,
+            ),
         }
     }
 
@@ -2290,15 +2492,19 @@ impl TlsStreamValue {
             return Err(closed_resource_error());
         };
         match stream {
-            TlsStreamKind::Client(stream) => read_exact_with_deadline(
+            TlsStreamKind::Client(stream) => read_exact_with_fd_deadline(
                 stream,
+                stream.sock.as_raw_fd(),
                 count,
+                libc::POLLIN | libc::POLLOUT,
                 deadline_from_timeout(timeout),
                 cancellation,
             ),
-            TlsStreamKind::Server(stream) => read_exact_with_deadline(
+            TlsStreamKind::Server(stream) => read_exact_with_fd_deadline(
                 stream,
+                stream.sock.as_raw_fd(),
                 count,
+                libc::POLLIN | libc::POLLOUT,
                 deadline_from_timeout(timeout),
                 cancellation,
             ),
@@ -2316,20 +2522,22 @@ impl TlsStreamValue {
             return Err(closed_resource_error());
         };
         match stream {
-            TlsStreamKind::Client(stream) => {
-                stream.sock.set_write_timeout(next_wait_slice(
-                    deadline_from_timeout(timeout),
-                    cancellation,
-                )?)?;
-                stream.write_all(text.as_bytes())
-            }
-            TlsStreamKind::Server(stream) => {
-                stream.sock.set_write_timeout(next_wait_slice(
-                    deadline_from_timeout(timeout),
-                    cancellation,
-                )?)?;
-                stream.write_all(text.as_bytes())
-            }
+            TlsStreamKind::Client(stream) => write_all_with_fd_deadline(
+                stream,
+                stream.sock.as_raw_fd(),
+                text.as_bytes(),
+                libc::POLLIN | libc::POLLOUT,
+                deadline_from_timeout(timeout),
+                cancellation,
+            ),
+            TlsStreamKind::Server(stream) => write_all_with_fd_deadline(
+                stream,
+                stream.sock.as_raw_fd(),
+                text.as_bytes(),
+                libc::POLLIN | libc::POLLOUT,
+                deadline_from_timeout(timeout),
+                cancellation,
+            ),
         }
     }
 
@@ -2531,9 +2739,12 @@ impl HttpResponseValue {
 
 impl WebSocketListenerValue {
     pub(crate) fn bind(address: &str) -> io::Result<Self> {
+        let listener = StdTcpListener::bind(address)?;
+        #[cfg(unix)]
+        listener.set_nonblocking(true)?;
         Ok(Self {
             inner: Arc::new(WebSocketListenerState {
-                listener: Mutex::new(Some(StdTcpListener::bind(address)?)),
+                listener: Mutex::new(Some(listener)),
             }),
         })
     }
@@ -2543,17 +2754,35 @@ impl WebSocketListenerValue {
         let Some(listener) = listener.as_mut() else {
             return Err(closed_resource_error());
         };
-        listener.set_nonblocking(true)?;
         let deadline = deadline_from_timeout(timeout);
         loop {
             match listener.accept() {
                 Ok((stream, _)) => {
-                    let _ = listener.set_nonblocking(false);
-                    stream.set_nonblocking(false)?;
-                    let socket = websocket_accept(stream).map_err(io::Error::other)?;
+                    #[cfg(unix)]
+                    stream.set_nonblocking(true)?;
+                    let socket = match websocket_accept(stream) {
+                        Ok(socket) => socket,
+                        #[cfg(unix)]
+                        Err(tungstenite::handshake::HandshakeError::Interrupted(mid)) => {
+                            finish_websocket_handshake(mid, deadline)?
+                        }
+                        #[cfg(not(unix))]
+                        Err(tungstenite::handshake::HandshakeError::Interrupted(_)) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::WouldBlock,
+                                "websocket handshake unexpectedly blocked",
+                            ));
+                        }
+                        Err(tungstenite::handshake::HandshakeError::Failure(error)) => {
+                            return Err(io::Error::other(error));
+                        }
+                    };
+                    let mut state = WebSocketStateKind::Plain(socket);
+                    #[cfg(unix)]
+                    websocket_set_nonblocking(&mut state, true)?;
                     return Ok(WebSocketValue {
                         inner: Arc::new(WebSocketState {
-                            socket: Mutex::new(Some(WebSocketStateKind::Plain(socket))),
+                            socket: Mutex::new(Some(state)),
                         }),
                     });
                 }
@@ -2563,18 +2792,9 @@ impl WebSocketListenerValue {
                         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                     ) =>
                 {
-                    if let Some(deadline) = deadline {
-                        if Instant::now() >= deadline {
-                            let _ = listener.set_nonblocking(false);
-                            return Err(timeout_resource_error());
-                        }
-                    }
-                    std::thread::sleep(StdDuration::from_millis(10));
+                    wait_for_fd_event(listener.as_raw_fd(), libc::POLLIN, deadline, None)?;
                 }
-                Err(error) => {
-                    let _ = listener.set_nonblocking(false);
-                    return Err(error);
-                }
+                Err(error) => return Err(error),
             }
         }
     }
@@ -2589,57 +2809,139 @@ impl WebSocketListenerValue {
 }
 
 impl WebSocketValue {
-    pub(crate) fn connect(url: &str, _timeout: Option<StdDuration>) -> io::Result<Self> {
-        let (socket, _) = websocket_connect(url).map_err(io::Error::other)?;
-        Ok(Self {
-            inner: Arc::new(WebSocketState {
-                socket: Mutex::new(Some(WebSocketStateKind::MaybeTls(socket))),
-            }),
-        })
+    pub(crate) fn connect(url: &str, timeout: Option<StdDuration>) -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            let parsed = url::Url::parse(url).map_err(io::Error::other)?;
+            let host = parsed.host_str().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "websocket URL is missing a host",
+                )
+            })?;
+            let port = parsed.port_or_known_default().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "websocket URL is missing a known port",
+                )
+            })?;
+            let address = if host.contains(':') && !host.starts_with('[') {
+                format!("[{host}]:{port}")
+            } else {
+                format!("{host}:{port}")
+            };
+            let tcp = TcpStreamValue::connect(&address, timeout, None)?;
+            let mut guard = lock_mutex(&tcp.inner.stream);
+            let Some(stream) = guard.take() else {
+                return Err(closed_resource_error());
+            };
+            stream.set_nonblocking(true)?;
+            stream.set_nodelay(true)?;
+            let (socket, _) = match client_tls_with_config(url, stream, None, None) {
+                Ok(result) => result,
+                Err(tungstenite::handshake::HandshakeError::Interrupted(mid)) => {
+                    finish_websocket_handshake(mid, deadline_from_timeout(timeout))?
+                }
+                Err(tungstenite::handshake::HandshakeError::Failure(error)) => {
+                    return Err(io::Error::other(error));
+                }
+            };
+            let mut state = WebSocketStateKind::MaybeTls(socket);
+            websocket_set_nonblocking(&mut state, true)?;
+            return Ok(Self {
+                inner: Arc::new(WebSocketState {
+                    socket: Mutex::new(Some(state)),
+                }),
+            });
+        }
+
+        #[cfg(not(unix))]
+        {
+            let (socket, _) = tungstenite::connect(url).map_err(io::Error::other)?;
+            let mut state = WebSocketStateKind::MaybeTls(socket);
+            let _ = timeout;
+            Ok(Self {
+                inner: Arc::new(WebSocketState {
+                    socket: Mutex::new(Some(state)),
+                }),
+            })
+        }
     }
 
-    pub(crate) fn send_text(&self, text: &str, _timeout: Option<StdDuration>) -> io::Result<()> {
+    pub(crate) fn send_text(&self, text: &str, timeout: Option<StdDuration>) -> io::Result<()> {
         let mut socket = lock_mutex(&self.inner.socket);
+        let deadline = deadline_from_timeout(timeout);
+        let mut message = Message::Text(text.to_string().into());
         match socket.as_mut() {
-            Some(WebSocketStateKind::Plain(socket)) => {
-                socket.get_mut().set_write_timeout(_timeout)?;
-                socket
-                    .send(Message::Text(text.to_string().into()))
-                    .map_err(io::Error::other)
-            }
-            Some(WebSocketStateKind::MaybeTls(socket)) => {
-                set_maybe_tls_stream_timeouts(socket.get_mut(), None, _timeout)?;
-                socket
-                    .send(Message::Text(text.to_string().into()))
-                    .map_err(io::Error::other)
-            }
+            Some(socket) => loop {
+                let result = match socket {
+                    WebSocketStateKind::Plain(socket) => socket.send(message.clone()),
+                    WebSocketStateKind::MaybeTls(socket) => socket.send(message.clone()),
+                };
+                match result {
+                    Ok(()) => return Ok(()),
+                    Err(tungstenite::Error::WriteBufferFull(returned)) => {
+                        message = returned;
+                        #[cfg(unix)]
+                        wait_for_fd_event(websocket_raw_fd(socket), libc::POLLOUT, deadline, None)?;
+                        #[cfg(not(unix))]
+                        return Err(io::Error::new(
+                            io::ErrorKind::WouldBlock,
+                            "websocket write buffer is full",
+                        ));
+                    }
+                    Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
+                        #[cfg(unix)]
+                        wait_for_fd_event(websocket_raw_fd(socket), libc::POLLOUT, deadline, None)?;
+                        #[cfg(not(unix))]
+                        return Err(error);
+                    }
+                    Err(error) => return Err(io::Error::other(error)),
+                }
+            },
             None => Err(closed_resource_error()),
         }
     }
 
-    pub(crate) fn send_bytes(&self, bytes: &[u8], _timeout: Option<StdDuration>) -> io::Result<()> {
+    pub(crate) fn send_bytes(&self, bytes: &[u8], timeout: Option<StdDuration>) -> io::Result<()> {
         let mut socket = lock_mutex(&self.inner.socket);
+        let deadline = deadline_from_timeout(timeout);
+        let mut message = Message::Binary(bytes.to_vec().into());
         match socket.as_mut() {
-            Some(WebSocketStateKind::Plain(socket)) => {
-                socket.get_mut().set_write_timeout(_timeout)?;
-                socket
-                    .send(Message::Binary(bytes.to_vec().into()))
-                    .map_err(io::Error::other)
-            }
-            Some(WebSocketStateKind::MaybeTls(socket)) => {
-                set_maybe_tls_stream_timeouts(socket.get_mut(), None, _timeout)?;
-                socket
-                    .send(Message::Binary(bytes.to_vec().into()))
-                    .map_err(io::Error::other)
-            }
+            Some(socket) => loop {
+                let result = match socket {
+                    WebSocketStateKind::Plain(socket) => socket.send(message.clone()),
+                    WebSocketStateKind::MaybeTls(socket) => socket.send(message.clone()),
+                };
+                match result {
+                    Ok(()) => return Ok(()),
+                    Err(tungstenite::Error::WriteBufferFull(returned)) => {
+                        message = returned;
+                        #[cfg(unix)]
+                        wait_for_fd_event(websocket_raw_fd(socket), libc::POLLOUT, deadline, None)?;
+                        #[cfg(not(unix))]
+                        return Err(io::Error::new(
+                            io::ErrorKind::WouldBlock,
+                            "websocket write buffer is full",
+                        ));
+                    }
+                    Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
+                        #[cfg(unix)]
+                        wait_for_fd_event(websocket_raw_fd(socket), libc::POLLOUT, deadline, None)?;
+                        #[cfg(not(unix))]
+                        return Err(error);
+                    }
+                    Err(error) => return Err(io::Error::other(error)),
+                }
+            },
             None => Err(closed_resource_error()),
         }
     }
 
-    pub(crate) fn recv_text(&self, _timeout: Option<StdDuration>) -> io::Result<Option<String>> {
+    pub(crate) fn recv_text(&self, timeout: Option<StdDuration>) -> io::Result<Option<String>> {
         let mut socket = lock_mutex(&self.inner.socket);
         let message = match socket.as_mut() {
-            Some(socket) => match websocket_read_message(socket, _timeout)? {
+            Some(socket) => match websocket_read_message(socket, timeout)? {
                 Some(message) => message,
                 None => return Ok(None),
             },
@@ -2653,10 +2955,10 @@ impl WebSocketValue {
         }
     }
 
-    pub(crate) fn recv_bytes(&self, _timeout: Option<StdDuration>) -> io::Result<Option<Vec<u8>>> {
+    pub(crate) fn recv_bytes(&self, timeout: Option<StdDuration>) -> io::Result<Option<Vec<u8>>> {
         let mut socket = lock_mutex(&self.inner.socket);
         let message = match socket.as_mut() {
-            Some(socket) => match websocket_read_message(socket, _timeout)? {
+            Some(socket) => match websocket_read_message(socket, timeout)? {
                 Some(message) => message,
                 None => return Ok(None),
             },

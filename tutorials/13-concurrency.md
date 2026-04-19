@@ -222,7 +222,8 @@ See:
 
 The bootstrap concurrency runtime is still intentionally simple:
 
-- blocking queue and socket waits are not evented
+- queue waits are still blocking and not evented
+- socket waits now use nonblocking polling internally, but there is still no broader async scheduler
 - cancellation is still cooperative rather than preemptive
 - detached-task ownership restrictions from the full proposal are not implemented yet
 - borrowed spawn parameters are still rejected

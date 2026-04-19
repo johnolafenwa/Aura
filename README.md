@@ -105,7 +105,7 @@ Current bootstrap compiler workflow:
 - `cargo run -p aura -- run examples/io/http_roundtrip.au`
   - execute blocking HTTP listener/request helpers plus `HttpExchange` / `HttpResponse`
 - `cargo run -p aura -- run examples/io/websocket_roundtrip.au`
-  - execute blocking WebSocket listener/connect helpers with text frames
+  - execute timeout-aware WebSocket listener/connect helpers on the nonblocking socket runtime
 - `cargo run -p aura -- run examples/io/unix_tls_roundtrip.au`
   - execute the Unix-socket and TLS surface on Unix hosts using bundled PEM assets
 - `cargo run -p aura -- run examples/resources/with_resource.au`
@@ -170,12 +170,12 @@ Current `build` status:
 - manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aurora.toml`
 - git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
 - the current package-system milestone writes a local `Aurora.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
-- both maintained execution paths now cover the builtin `io`, `fs`, and `net` module surface for blocking text/binary file I/O plus blocking TCP, UDP, HTTP, WebSocket, Unix-socket, and TLS networking
+- both maintained execution paths now cover the builtin `io`, `fs`, and `net` module surface for blocking text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, and higher-level HTTP helpers
 
 Current `run` status:
 
 - `aura run` now executes programs through the MIR runtime for the current implemented Aurora surface
-- `spawn`, `select`, queues, task groups, `try`, `with`, blocking file I/O, and the maintained blocking networking surface now run through the same MIR-backed public execution path
+- `spawn`, `select`, queues, task groups, `try`, `with`, blocking file I/O, and the maintained poll-driven socket networking surface now run through the same MIR-backed public execution path
 - the maintained execution architecture is now the MIR runtime for `run` plus native direct codegen for `build`
 
 ## VS Code install
