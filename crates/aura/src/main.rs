@@ -10,6 +10,7 @@ use aurora_compiler::{
     parse_source, run_path, run_path_with_source, update_git_dependencies_in_working_dir,
     Diagnostic, MirModule, Value,
 };
+use serde_json::Value as JsonValue;
 
 struct Input {
     path: String,
@@ -697,7 +698,18 @@ fn ensure_native_runtime_artifacts() -> std::result::Result<NativeRuntimeArtifac
         ));
     }
 
-    let staticlib = resolve_static_library_path(repo_root(), current_profile())?;
+    let staticlib = parse_static_library_artifact_path(&output.stdout)
+        .or_else(|| resolve_static_library_path(repo_root(), current_profile()).ok())
+        .ok_or_else(|| {
+            format!(
+                "failed to locate compiled Aurora runtime library from Cargo artifact output or `{}`",
+                repo_root()
+                    .join("target")
+                    .join(current_profile())
+                    .join(static_library_file_name())
+                    .display()
+            )
+        })?;
     if !staticlib.exists() {
         return Err(format!(
             "failed to locate compiled Aurora runtime library `{}` after build",
@@ -711,6 +723,41 @@ fn ensure_native_runtime_artifacts() -> std::result::Result<NativeRuntimeArtifac
         staticlib,
         native_link_args,
     })
+}
+
+fn parse_static_library_artifact_path(stdout: &[u8]) -> Option<PathBuf> {
+    let stdout = std::str::from_utf8(stdout).ok()?;
+    let mut candidate = None;
+    for line in stdout.lines() {
+        let Ok(message) = serde_json::from_str::<JsonValue>(line) else {
+            continue;
+        };
+        if message.get("reason").and_then(|value| value.as_str()) != Some("compiler-artifact") {
+            continue;
+        }
+        let Some(target) = message.get("target") else {
+            continue;
+        };
+        if target.get("name").and_then(|value| value.as_str()) != Some("aurora_compiler") {
+            continue;
+        }
+        let Some(filenames) = message.get("filenames").and_then(|value| value.as_array()) else {
+            continue;
+        };
+        for filename in filenames {
+            let Some(path) = filename.as_str() else {
+                continue;
+            };
+            let path = PathBuf::from(path);
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if name.starts_with("libaurora_compiler") && name.ends_with(".a") {
+                candidate = Some(path);
+            }
+        }
+    }
+    candidate
 }
 
 fn current_profile() -> &'static str {
@@ -842,7 +889,8 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::{
-        resolve_static_library_path, write_unique_temp_file, write_unique_temp_file_with_writer,
+        parse_static_library_artifact_path, resolve_static_library_path, write_unique_temp_file,
+        write_unique_temp_file_with_writer,
     };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
@@ -916,6 +964,15 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parse_static_library_artifact_path_prefers_cargo_reported_archive() {
+        let stdout = br#"{"reason":"compiler-artifact","target":{"name":"aurora_compiler"},"filenames":["/tmp/libaurora_compiler-abc123.rlib","/tmp/libaurora_compiler-abc123.a"]}
+{"reason":"compiler-artifact","target":{"name":"other"},"filenames":["/tmp/libother.a"]}"#;
+        let resolved = parse_static_library_artifact_path(stdout)
+            .expect("cargo artifact output should expose a static archive");
+        assert_eq!(resolved, PathBuf::from("/tmp/libaurora_compiler-abc123.a"));
     }
 
     #[test]

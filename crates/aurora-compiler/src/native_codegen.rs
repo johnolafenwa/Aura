@@ -163,6 +163,7 @@ struct NativeCodegen<'a> {
     function_writeback_types: HashMap<String, Vec<DirectType>>,
     call_conv: CallConv,
     runtime_init: FuncId,
+    run_root: FuncId,
     print_i64: FuncId,
     print_f64: FuncId,
     print_bool: FuncId,
@@ -521,6 +522,7 @@ impl<'a> NativeCodegen<'a> {
         declare_runtime_functions!(
             &mut object,
             runtime_init => ("aurora_direct_runtime_init", [types::I64, types::I64, types::I64, types::I64], None),
+            run_root => ("aurora_direct_run_root", [types::I64], Some(types::I32)),
             print_i64 => ("aurora_direct_print_i64", [types::I64], None),
             print_f64 => ("aurora_direct_print_f64", [types::F64], None),
             print_bool => ("aurora_direct_print_bool", [types::I64], None),
@@ -811,6 +813,7 @@ impl<'a> NativeCodegen<'a> {
             function_writeback_types,
             call_conv,
             runtime_init,
+            run_root,
             print_i64,
             print_f64,
             print_bool,
@@ -1032,6 +1035,13 @@ impl<'a> NativeCodegen<'a> {
     }
 
     fn emit(mut self) -> std::result::Result<Vec<u8>, String> {
+        let entry_name = if self.functions.contains_key("main") {
+            Some("main")
+        } else if self.functions.contains_key("__script") {
+            Some("__script")
+        } else {
+            None
+        };
         let spawn_targets = collect_spawn_targets(self.module);
         for function in self
             .module
@@ -1040,7 +1050,8 @@ impl<'a> NativeCodegen<'a> {
             .chain(self.module.top_level.iter())
         {
             self.define_function(function)?;
-            if spawn_targets.contains(&function.name) {
+            if spawn_targets.contains(&function.name) || entry_name == Some(function.name.as_str())
+            {
                 self.define_function_thunk(function)?;
             }
         }
@@ -2266,7 +2277,7 @@ impl<'a> NativeCodegen<'a> {
                 "direct backend requires a `main` function or top-level script".to_string(),
             );
         };
-        let entry_id = self.functions[&entry_name];
+        let entry_thunk_id = self.function_thunks[&entry_name];
 
         let mut ctx = self.object.make_context();
         ctx.func.signature = main_signature(self.call_conv);
@@ -2283,10 +2294,15 @@ impl<'a> NativeCodegen<'a> {
         builder.switch_to_block(entry_block);
         builder.seal_block(entry_block);
 
-        let entry_ref = self.object.declare_func_in_func(entry_id, builder.func);
         let runtime_init = self
             .object
             .declare_func_in_func(self.runtime_init, builder.func);
+        let run_root = self
+            .object
+            .declare_func_in_func(self.run_root, builder.func);
+        let entry_thunk_ref = self
+            .object
+            .declare_func_in_func(entry_thunk_id, builder.func);
         let (path_ptr, path_len) = declare_string_constant(
             &mut self.object,
             &mut self.string_data,
@@ -2302,12 +2318,9 @@ impl<'a> NativeCodegen<'a> {
         builder
             .ins()
             .call(runtime_init, &[path_ptr, path_len, source_ptr, source_len]);
-        let result = builder.ins().call(entry_ref, &[]);
-        let return_value = match builder.inst_results(result).first().copied() {
-            Some(value) => value,
-            None => builder.ins().iconst(types::I64, 0),
-        };
-        let return_code = builder.ins().ireduce(types::I32, return_value);
+        let thunk_ptr = builder.ins().func_addr(types::I64, entry_thunk_ref);
+        let result = builder.ins().call(run_root, &[thunk_ptr]);
+        let return_code = builder.inst_results(result)[0];
         builder.ins().return_(&[return_code]);
         builder.finalize();
 

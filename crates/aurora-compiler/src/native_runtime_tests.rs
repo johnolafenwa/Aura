@@ -8,8 +8,9 @@ use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_value::{
-    CancellationContext, ChannelValue, EnumVariantValue, InstanceValue, MapValue,
-    ModuleNamespaceValue, RangeValue, SetValue, TaskGroupValue, TaskValue, Value, VecValue,
+    run_lightweight_root_task, CancellationContext, ChannelValue, EnumVariantValue, InstanceValue,
+    MapValue, ModuleNamespaceValue, RangeValue, SetValue, TaskGroupValue, TaskValue, Value,
+    VecValue,
 };
 use std::collections::BTreeMap;
 use std::io;
@@ -1065,14 +1066,27 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
     let buffer = super::aurora_direct_arg_buffer_new(2);
     super::aurora_direct_arg_buffer_store(buffer, 0, int_value(20) as i64);
     super::aurora_direct_arg_buffer_store(buffer, 1, int_value(22) as i64);
-    let task = super::aurora_direct_spawn_call(
-        test_native_thunk as usize as i64,
-        buffer,
-        2,
-        0,
-        std::ptr::null_mut(),
-    );
-    assert_eq!(expect_int(super::aurora_direct_task_join(task)), 42);
+    let spawned_sum = run_lightweight_root_task(move || {
+        let task = unsafe {
+            take_value(super::aurora_direct_spawn_call(
+                test_native_thunk as usize as i64,
+                buffer,
+                2,
+                0,
+                std::ptr::null_mut(),
+            ))
+        };
+        let Value::Task(task) = task else {
+            panic!("spawn call should return a task value");
+        };
+        Ok(unsafe {
+            take_value(super::aurora_direct_task_join(boxed_value(Value::Task(
+                task,
+            ))))
+        })
+    })
+    .expect("spawn call should run inside lightweight scheduler");
+    assert_eq!(expect_int(boxed_value(spawned_sum)), 42);
 
     let channel = super::aurora_direct_channel_new();
     let send_ok = unsafe { take_value(super::aurora_direct_channel_send(channel, int_value(9))) };
@@ -1500,7 +1514,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "task-join-error" => {
                 let task = boxed_value(Value::Task(TaskValue::from_handle(thread::spawn(|| {
-                    Err("boom".to_string())
+                    Err(Diagnostic::new("boom"))
                 }))));
                 super::aurora_direct_task_join(task);
             }

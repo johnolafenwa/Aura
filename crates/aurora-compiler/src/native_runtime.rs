@@ -7,20 +7,20 @@ use std::slice;
 use std::str;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{OnceLock, RwLock};
-use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_value::{
-    cast_numeric_value, io_error, io_read_line, option_none, option_some, render_float, result_err,
-    result_ok, send_error_closed, sleep_with_runtime_scheduler, wait_for_select_progress,
-    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpListenerValue,
-    HttpResponseValue, InstanceValue, MapValue, RangeValue, RuntimeSchedulerWakeReason, SetValue,
-    TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
-    TryRecvResult, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
-    WebSocketListenerValue, WebSocketValue,
+    cast_numeric_value, current_lightweight_task_cancellation, io_error, io_read_line, option_none,
+    option_some, render_float, result_err, result_ok, run_lightweight_root_task, send_error_closed,
+    sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
+    wait_for_select_progress, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, RangeValue,
+    RuntimeSchedulerWakeReason, SetValue, TaskGroupValue, TcpListenerValue, TcpStreamValue,
+    TlsListenerValue, TlsStreamValue, TryRecvResult, UdpSocketValue, UnixListenerValue,
+    UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::Type;
 
@@ -139,6 +139,9 @@ static DIRECT_PROGRAM_SOURCE: OnceLock<ProgramSourceContext> = OnceLock::new();
 struct Deadline(Instant);
 
 fn current_cancellation() -> CancellationContext {
+    if let Some(cancellation) = current_lightweight_task_cancellation() {
+        return cancellation;
+    }
     DIRECT_CANCELLATION.with(|slot| slot.borrow().clone())
 }
 
@@ -388,22 +391,21 @@ fn render_runtime_diagnostic(diagnostic: Diagnostic) -> String {
     }
 }
 
-fn runtime_error(message: impl AsRef<str>) -> ! {
+fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
     let _ = writeln!(
         io::stderr().lock(),
         "{}",
-        render_runtime_diagnostic(Diagnostic::new(message.as_ref()))
+        render_runtime_diagnostic(diagnostic)
     );
     process::exit(1);
 }
 
+fn runtime_error(message: impl AsRef<str>) -> ! {
+    runtime_diagnostic_error(Diagnostic::new(message.as_ref()))
+}
+
 fn runtime_error_at(span: Span, message: impl AsRef<str>) -> ! {
-    let _ = writeln!(
-        io::stderr().lock(),
-        "{}",
-        render_runtime_diagnostic(Diagnostic::at(span, message.as_ref()))
-    );
-    process::exit(1);
+    runtime_diagnostic_error(Diagnostic::at(span, message.as_ref()))
 }
 
 fn runtime_span(line: i64, column: i64) -> Option<Span> {
@@ -675,6 +677,26 @@ pub extern "C" fn aurora_direct_runtime_init(
         path: decode_bytes(path_ptr, path_len),
         source: decode_bytes(source_ptr, source_len),
     });
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_run_root(thunk_ptr: i64) -> i32 {
+    let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
+    let result = run_lightweight_root_task(move || {
+        with_cancellation_scope(CancellationContext::default(), || {
+            let result_ptr = unsafe { thunk(std::ptr::null(), 0) };
+            Ok(unsafe { consume_value(result_ptr) })
+        })
+    });
+    match result {
+        Ok(Value::Int(value)) => value.as_i128().unwrap_or_default() as i32,
+        Ok(Value::Unit) => 0,
+        Ok(other) => runtime_error(format!(
+            "direct main entry must return `int32` or `None`, found `{}`",
+            value_type_name(&other)
+        )),
+        Err(error) => runtime_diagnostic_error(error),
+    }
 }
 
 #[no_mangle]
@@ -2473,7 +2495,7 @@ pub extern "C" fn aurora_direct_task_join(task: *mut OpaqueValue) -> *mut Opaque
     match unsafe { value_ref(task) } {
         Value::Task(task) => match task.join_result() {
             Ok(value) => boxed_value(value),
-            Err(error) => runtime_error(error),
+            Err(error) => runtime_diagnostic_error(error),
         },
         other => runtime_error(format!(
             "expected `Task`, found `{}`",
@@ -2516,7 +2538,7 @@ pub extern "C" fn aurora_direct_task_group_close(
                 }
             }
             if let Some(error) = first_error {
-                runtime_error(error);
+                runtime_diagnostic_error(error);
             }
             boxed_value(Value::Unit)
         }
@@ -4432,19 +4454,18 @@ pub extern "C" fn aurora_direct_spawn_call(
     } else {
         current_cancellation()
     };
-    let handle = thread::spawn(move || {
+    let task = spawn_lightweight_task_with_cancellation(cancellation.clone(), move || {
         with_cancellation_scope(cancellation, || {
             let result_ptr = unsafe { thunk(args.as_ptr(), args.len()) };
             Ok(unsafe { consume_value(result_ptr) })
         })
-    });
+    })
+    .unwrap_or_else(|error| runtime_diagnostic_error(error));
 
     if detached != 0 {
-        std::mem::drop(handle);
         return boxed_value(Value::Unit);
     }
 
-    let task = TaskValue::from_handle(handle);
     if let Some(group) = group {
         group.register_task(task.clone());
     }

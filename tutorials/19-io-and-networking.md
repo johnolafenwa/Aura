@@ -14,7 +14,7 @@ import fs
 import net
 ```
 
-The current runtime model keeps Aurora tasks thread-backed, but queue waits, timer waits, and the maintained socket/HTTP surface now share the same evented runtime scheduler underneath instead of spinning or blocking on per-operation sleeps.
+The current runtime model uses scheduler-backed lightweight tasks, and queue waits, timer waits, and the maintained socket/HTTP surface now share the same evented runtime scheduler underneath instead of spinning or blocking on per-operation sleeps.
 
 ## Standard Input And Output
 
@@ -303,7 +303,7 @@ This surface is deliberately explicit but no longer relies on the old blocking/p
 
 - queue waits, `sleep(...)`, `select`, socket waits, and the maintained HTTP helpers all run through the shared runtime scheduler
 - socket-backed networking and HTTP convenience helpers use nonblocking descriptors with timeout and cancellation support
-- Aurora tasks are still thread-backed rather than multiplexed coroutines
+- Aurora tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
 - ordinary file operations still execute synchronously for now
 
 That keeps the execution model straightforward while removing the old timeout-spin loops and blocking HTTP special case.

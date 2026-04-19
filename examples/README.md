@@ -395,7 +395,7 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
 ### `concurrency/`
 
 - `queues_spawn.au`
-  - typed queues, `queue()`, `spawn`, `get()`, and `result()`
+  - typed queues, `queue()`, scheduler-backed `spawn`, `get()`, and `result()`
   - prints:
     - `2`
     - `4`

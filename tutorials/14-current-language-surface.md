@@ -523,6 +523,6 @@ Current expression/ergonomics limitations:
 - `spawn` and `TaskGroup.start(...)` support named functions plus associated methods without `self`
 - concurrency uses only the maintained `Queue[T]`, `queue()`, `Task.result()`, `tasks()`, and `TaskGroup.start(...)` surface
 - queue waits, `sleep(...)`, `select`, socket waits, and the maintained HTTP helpers all use the shared evented runtime scheduler
-- Aurora tasks are still thread-backed, and ordinary file I/O still executes synchronously
+- Aurora tasks are scheduler-backed lightweight tasks, and ordinary file I/O still executes synchronously
 - Unix domain sockets require a Unix host at runtime
 - borrowed return labels such as `borrow[shared]` are supported on borrowed parameters and returns for advanced zero-copy APIs

@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::fs::{self, File as StdFile, OpenOptions};
@@ -8,9 +9,11 @@ use std::net::{
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock};
-use std::thread::JoinHandle;
+use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
+use corosensei::stack::DefaultStack;
+use corosensei::{Coroutine, CoroutineResult, Yielder};
 use httparse::{
     Request as HttpParseRequest, Response as HttpParseResponse, Status as HttpParseStatus,
 };
@@ -216,6 +219,8 @@ pub struct TlsStreamValue {
 
 struct TaskState {
     handle: Mutex<TaskHandle>,
+    ready: Condvar,
+    lightweight: bool,
 }
 
 struct TaskGroupState {
@@ -295,15 +300,59 @@ struct TlsStreamState {
     stream: Mutex<Option<TlsStreamKind>>,
 }
 
+type TaskResult = std::result::Result<Value, Diagnostic>;
+
 enum TaskHandle {
-    Running(Option<JoinHandle<std::result::Result<Value, String>>>),
-    Completed(std::result::Result<Value, String>),
+    Running { waiters: Vec<u64> },
+    Completed(TaskResult),
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct CancellationContext {
     flags: Vec<Arc<AtomicBool>>,
 }
+
+enum TaskYield {
+    Wait(TaskWaitRegistration),
+    Park,
+}
+
+#[derive(Clone)]
+struct TaskWaitRegistration {
+    channels: Vec<ChannelValue>,
+    ignore_closed_channels: bool,
+    deadline: Option<Instant>,
+    cancellation: Option<CancellationContext>,
+    fd_wait: Option<FdWaitRegistration>,
+}
+
+#[derive(Clone, Copy)]
+struct FdWaitRegistration {
+    fd: libc::c_int,
+    events: libc::c_short,
+}
+
+struct LightweightTaskContext {
+    scheduler: *mut LightweightTaskScheduler,
+    task_id: u64,
+    yielder: Cell<*const Yielder<RuntimeSchedulerWakeReason, TaskYield>>,
+    cancellation: Option<CancellationContext>,
+}
+
+struct LightweightTaskRecord {
+    state: Arc<TaskState>,
+    context: Box<LightweightTaskContext>,
+    coroutine: Coroutine<RuntimeSchedulerWakeReason, TaskYield, TaskResult>,
+}
+
+struct LightweightTaskScheduler {
+    next_task_id: u64,
+    ready: VecDeque<(u64, RuntimeSchedulerWakeReason)>,
+    waiting: BTreeMap<u64, TaskWaitRegistration>,
+    tasks: BTreeMap<u64, LightweightTaskRecord>,
+}
+
+const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 struct RuntimeSchedulerRegistration {
@@ -889,6 +938,16 @@ fn wait_for_runtime_scheduler(
         return RuntimeSchedulerWakeReason::TimedOut;
     }
 
+    if let Some(reason) = yield_current_lightweight_wait(TaskWaitRegistration {
+        channels: channels.clone(),
+        ignore_closed_channels,
+        deadline,
+        cancellation: cancellation.cloned(),
+        fd_wait: None,
+    }) {
+        return reason;
+    }
+
     runtime_scheduler()
         .register(
             channels,
@@ -920,6 +979,343 @@ pub(crate) fn sleep_with_runtime_scheduler(
 ) {
     let deadline = Instant::now().checked_add(duration);
     let _ = wait_for_runtime_scheduler(Vec::new(), false, deadline, cancellation);
+}
+
+thread_local! {
+    static CURRENT_LIGHTWEIGHT_TASK_CONTEXT: Cell<*const LightweightTaskContext> =
+        const { Cell::new(std::ptr::null()) };
+    static CURRENT_LIGHTWEIGHT_TASK_CANCELLATION: std::cell::RefCell<Option<CancellationContext>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+struct LightweightTaskContextGuard {
+    previous: *const LightweightTaskContext,
+    previous_cancellation: Option<CancellationContext>,
+}
+
+impl Drop for LightweightTaskContextGuard {
+    fn drop(&mut self) {
+        CURRENT_LIGHTWEIGHT_TASK_CONTEXT.with(|slot| slot.set(self.previous));
+        CURRENT_LIGHTWEIGHT_TASK_CANCELLATION
+            .with(|slot| *slot.borrow_mut() = self.previous_cancellation.take());
+    }
+}
+
+fn enter_lightweight_task_context(context: &LightweightTaskContext) -> LightweightTaskContextGuard {
+    let previous = CURRENT_LIGHTWEIGHT_TASK_CONTEXT.with(|slot| {
+        let previous = slot.get();
+        slot.set(context as *const _);
+        previous
+    });
+    let previous_cancellation = CURRENT_LIGHTWEIGHT_TASK_CANCELLATION.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let previous = slot.clone();
+        *slot = context.cancellation.clone();
+        previous
+    });
+    LightweightTaskContextGuard {
+        previous,
+        previous_cancellation,
+    }
+}
+
+fn current_lightweight_task_context() -> Option<&'static LightweightTaskContext> {
+    CURRENT_LIGHTWEIGHT_TASK_CONTEXT.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { &*ptr })
+        }
+    })
+}
+
+pub(crate) fn current_lightweight_task_cancellation() -> Option<CancellationContext> {
+    CURRENT_LIGHTWEIGHT_TASK_CANCELLATION.with(|slot| slot.borrow().clone())
+}
+
+fn yield_current_lightweight_task(wait: TaskYield) -> Option<RuntimeSchedulerWakeReason> {
+    let context = current_lightweight_task_context()?;
+    let yielder_ptr = context.yielder.get();
+    if yielder_ptr.is_null() {
+        return None;
+    }
+    let yielder = unsafe { &*yielder_ptr };
+    Some(yielder.suspend(wait))
+}
+
+fn yield_current_lightweight_wait(
+    wait: TaskWaitRegistration,
+) -> Option<RuntimeSchedulerWakeReason> {
+    yield_current_lightweight_task(TaskYield::Wait(wait))
+}
+
+fn park_current_lightweight_task() -> Option<RuntimeSchedulerWakeReason> {
+    yield_current_lightweight_task(TaskYield::Park)
+}
+
+impl TaskWaitRegistration {
+    fn ready_reason(&self, fd_ready: bool) -> Option<RuntimeSchedulerWakeReason> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(CancellationContext::is_cancelled)
+        {
+            return Some(RuntimeSchedulerWakeReason::Cancelled);
+        }
+        if self
+            .channels
+            .iter()
+            .any(|channel| channel.is_ready_for_scheduler_recv(self.ignore_closed_channels))
+        {
+            return Some(RuntimeSchedulerWakeReason::Ready);
+        }
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Some(RuntimeSchedulerWakeReason::TimedOut);
+        }
+        if fd_ready {
+            return Some(RuntimeSchedulerWakeReason::Ready);
+        }
+        None
+    }
+}
+
+impl LightweightTaskScheduler {
+    fn new() -> Self {
+        Self {
+            next_task_id: 1,
+            ready: VecDeque::new(),
+            waiting: BTreeMap::new(),
+            tasks: BTreeMap::new(),
+        }
+    }
+
+    fn spawn_task<F>(
+        &mut self,
+        cancellation: Option<CancellationContext>,
+        entry: F,
+    ) -> std::result::Result<TaskValue, Diagnostic>
+    where
+        F: FnOnce() -> TaskResult + 'static,
+    {
+        let task_id = self.next_task_id;
+        self.next_task_id += 1;
+
+        let state = Arc::new(TaskState {
+            handle: Mutex::new(TaskHandle::Running {
+                waiters: Vec::new(),
+            }),
+            ready: Condvar::new(),
+            lightweight: true,
+        });
+        let context = Box::new(LightweightTaskContext {
+            scheduler: self as *mut _,
+            task_id,
+            yielder: Cell::new(std::ptr::null()),
+            cancellation,
+        });
+        let context_ptr = &*context as *const LightweightTaskContext;
+        let stack = DefaultStack::new(LIGHTWEIGHT_TASK_STACK_SIZE).map_err(|error| {
+            Diagnostic::new(format!("failed to allocate Aurora task stack: {error}"))
+        })?;
+        let coroutine = Coroutine::with_stack(stack, move |yielder, _| {
+            let context = unsafe { &*context_ptr };
+            context.yielder.set(yielder as *const _);
+            entry()
+        });
+
+        self.tasks.insert(
+            task_id,
+            LightweightTaskRecord {
+                state: state.clone(),
+                context,
+                coroutine,
+            },
+        );
+        self.ready
+            .push_back((task_id, RuntimeSchedulerWakeReason::Ready));
+        Ok(TaskValue { inner: state })
+    }
+
+    fn complete_task(&mut self, task_id: u64, task_state: &Arc<TaskState>, result: TaskResult) {
+        self.waiting.remove(&task_id);
+        let waiters = {
+            let mut state = lock_mutex(&task_state.handle);
+            let waiters = match &mut *state {
+                TaskHandle::Running { waiters } => std::mem::take(waiters),
+                TaskHandle::Completed(_) => Vec::new(),
+            };
+            *state = TaskHandle::Completed(result.clone());
+            task_state.ready.notify_all();
+            waiters
+        };
+        for waiter in waiters {
+            self.waiting.remove(&waiter);
+            self.ready
+                .push_back((waiter, RuntimeSchedulerWakeReason::Ready));
+        }
+    }
+
+    fn resume_task(&mut self, task_id: u64, reason: RuntimeSchedulerWakeReason) {
+        let Some(mut record) = self.tasks.remove(&task_id) else {
+            return;
+        };
+        self.waiting.remove(&task_id);
+        let _guard = enter_lightweight_task_context(&record.context);
+        match record.coroutine.resume(reason) {
+            CoroutineResult::Yield(TaskYield::Wait(wait)) => {
+                self.waiting.insert(task_id, wait);
+                self.tasks.insert(task_id, record);
+            }
+            CoroutineResult::Yield(TaskYield::Park) => {
+                self.tasks.insert(task_id, record);
+            }
+            CoroutineResult::Return(result) => {
+                self.complete_task(task_id, &record.state, result);
+            }
+        }
+    }
+
+    fn promote_ready_waiters(&mut self, fd_ready: Option<&BTreeMap<u64, bool>>) {
+        let mut ready = Vec::new();
+        for (task_id, wait) in &self.waiting {
+            let fd_ready = fd_ready
+                .and_then(|ready_map| ready_map.get(task_id))
+                .copied()
+                .unwrap_or(false);
+            if let Some(reason) = wait.ready_reason(fd_ready) {
+                ready.push((*task_id, reason));
+            }
+        }
+        for (task_id, reason) in ready {
+            self.waiting.remove(&task_id);
+            self.ready.push_back((task_id, reason));
+        }
+    }
+
+    fn wait_for_external_events(&mut self) {
+        self.promote_ready_waiters(None);
+        if !self.ready.is_empty() {
+            return;
+        }
+
+        let next_deadline = self.waiting.values().filter_map(|wait| wait.deadline).min();
+        let mut task_ids = Vec::new();
+        let mut descriptors = Vec::new();
+        for (task_id, wait) in &self.waiting {
+            if let Some(fd_wait) = wait.fd_wait {
+                task_ids.push(*task_id);
+                descriptors.push(libc::pollfd {
+                    fd: fd_wait.fd,
+                    events: fd_wait.events,
+                    revents: 0,
+                });
+            }
+        }
+
+        if descriptors.is_empty() {
+            if let Some(deadline) = next_deadline {
+                let now = Instant::now();
+                if deadline > now {
+                    thread::sleep(deadline.saturating_duration_since(now));
+                }
+            } else {
+                // Only irrecoverable deadlocks end up here (for example, every task parked on
+                // queue waits with no remaining runnable producer). Avoid a hot spin while
+                // preserving the historical "wait forever" behavior for such programs.
+                thread::park_timeout(StdDuration::from_millis(1));
+            }
+            self.promote_ready_waiters(None);
+            return;
+        }
+
+        let timeout_ms = match next_deadline {
+            Some(deadline) => {
+                let now = Instant::now();
+                if deadline <= now {
+                    0
+                } else {
+                    duration_to_poll_timeout(deadline.saturating_duration_since(now))
+                }
+            }
+            None => -1,
+        };
+
+        let result =
+            unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, timeout_ms) };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                thread::park_timeout(StdDuration::from_millis(1));
+            }
+            self.promote_ready_waiters(None);
+            return;
+        }
+
+        let mut fd_ready = BTreeMap::new();
+        for (task_id, descriptor) in task_ids.into_iter().zip(descriptors.into_iter()) {
+            if descriptor.revents != 0 {
+                fd_ready.insert(task_id, true);
+            }
+        }
+        self.promote_ready_waiters(Some(&fd_ready));
+    }
+
+    fn run_until_root(&mut self, root: &TaskValue) -> TaskResult {
+        loop {
+            if let Some(result) = root.completed_result() {
+                return result;
+            }
+
+            if let Some((task_id, reason)) = self.ready.pop_front() {
+                self.resume_task(task_id, reason);
+                continue;
+            }
+
+            self.wait_for_external_events();
+        }
+    }
+}
+
+pub(crate) fn spawn_lightweight_task<F>(entry: F) -> std::result::Result<TaskValue, Diagnostic>
+where
+    F: FnOnce() -> TaskResult + 'static,
+{
+    let Some(context) = current_lightweight_task_context() else {
+        return Err(Diagnostic::new(
+            "lightweight Aurora task spawn requires an active task scheduler",
+        ));
+    };
+    let scheduler = unsafe { &mut *context.scheduler };
+    scheduler.spawn_task(None, entry)
+}
+
+pub(crate) fn spawn_lightweight_task_with_cancellation<F>(
+    cancellation: CancellationContext,
+    entry: F,
+) -> std::result::Result<TaskValue, Diagnostic>
+where
+    F: FnOnce() -> TaskResult + 'static,
+{
+    let Some(context) = current_lightweight_task_context() else {
+        return Err(Diagnostic::new(
+            "lightweight Aurora task spawn requires an active task scheduler",
+        ));
+    };
+    let scheduler = unsafe { &mut *context.scheduler };
+    scheduler.spawn_task(Some(cancellation), entry)
+}
+
+pub(crate) fn run_lightweight_root_task<F>(entry: F) -> TaskResult
+where
+    F: FnOnce() -> TaskResult + 'static,
+{
+    let mut scheduler = Box::new(LightweightTaskScheduler::new());
+    let root = scheduler.spawn_task(None, entry)?;
+    scheduler.run_until_root(&root)
 }
 
 impl PartialEq for VecValue {
@@ -1220,6 +1616,18 @@ fn deadline_from_timeout(timeout: Option<StdDuration>) -> Option<Instant> {
     timeout.and_then(|duration| Instant::now().checked_add(duration))
 }
 
+fn duration_to_poll_timeout(duration: StdDuration) -> libc::c_int {
+    if duration.is_zero() {
+        return 0;
+    }
+    let millis = duration.as_millis();
+    if millis > i32::MAX as u128 {
+        i32::MAX
+    } else {
+        millis as libc::c_int
+    }
+}
+
 fn next_wait_slice(
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
@@ -1293,12 +1701,24 @@ fn wait_for_fd_event(
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<()> {
+    if let Some(reason) = yield_current_lightweight_wait(TaskWaitRegistration {
+        channels: Vec::new(),
+        ignore_closed_channels: false,
+        deadline,
+        cancellation: cancellation.cloned(),
+        fd_wait: Some(FdWaitRegistration { fd, events }),
+    }) {
+        return match reason {
+            RuntimeSchedulerWakeReason::Ready => Ok(()),
+            RuntimeSchedulerWakeReason::TimedOut => Err(timeout_resource_error()),
+            RuntimeSchedulerWakeReason::Cancelled => Err(cancelled_resource_error()),
+        };
+    }
+
     loop {
         let slice = next_wait_slice(deadline, cancellation)?;
         let timeout_ms = match slice {
-            Some(slice) => {
-                i32::try_from(slice.as_millis().min(i32::MAX as u128)).unwrap_or(i32::MAX)
-            }
+            Some(slice) => duration_to_poll_timeout(slice),
             None => -1,
         };
         let mut descriptor = libc::pollfd {
@@ -3626,33 +4046,70 @@ impl TaskGroupValue {
 }
 
 impl TaskValue {
-    pub(crate) fn from_handle(handle: JoinHandle<std::result::Result<Value, String>>) -> Self {
-        Self {
-            inner: Arc::new(TaskState {
-                handle: Mutex::new(TaskHandle::Running(Some(handle))),
-            }),
+    fn completed_result(&self) -> Option<TaskResult> {
+        let state = lock_mutex(&self.inner.handle);
+        match &*state {
+            TaskHandle::Completed(result) => Some(result.clone()),
+            TaskHandle::Running { .. } => None,
         }
     }
 
-    pub(crate) fn join_result(&self) -> std::result::Result<Value, String> {
-        let handle = {
-            let mut state = lock_mutex(&self.inner.handle);
-            match &mut *state {
-                TaskHandle::Completed(result) => return result.clone(),
-                TaskHandle::Running(handle) => handle.take(),
+    #[cfg(test)]
+    pub(crate) fn from_handle(handle: thread::JoinHandle<TaskResult>) -> Self {
+        let inner = Arc::new(TaskState {
+            handle: Mutex::new(TaskHandle::Running {
+                waiters: Vec::new(),
+            }),
+            ready: Condvar::new(),
+            lightweight: false,
+        });
+        let state = inner.clone();
+        thread::spawn(move || {
+            let result = match handle.join() {
+                Ok(result) => result,
+                Err(_) => Err(Diagnostic::new("spawned task panicked")),
+            };
+            let mut task_state = lock_mutex(&state.handle);
+            *task_state = TaskHandle::Completed(result);
+            state.ready.notify_all();
+        });
+        Self { inner }
+    }
+
+    pub(crate) fn join_result(&self) -> TaskResult {
+        loop {
+            if let Some(result) = self.completed_result() {
+                return result;
             }
-        };
 
-        let Some(handle) = handle else {
-            return Err("task result handle was not available".to_string());
-        };
+            if self.inner.lightweight {
+                if let Some(context) = current_lightweight_task_context() {
+                    {
+                        let mut state = lock_mutex(&self.inner.handle);
+                        match &mut *state {
+                            TaskHandle::Completed(result) => return result.clone(),
+                            TaskHandle::Running { waiters } => {
+                                if !waiters.contains(&context.task_id) {
+                                    waiters.push(context.task_id);
+                                }
+                            }
+                        }
+                    }
+                    let _ = park_current_lightweight_task();
+                    continue;
+                }
+            }
 
-        let result = handle
-            .join()
-            .map_err(|_| "spawned task panicked".to_string())?;
-        let mut state = lock_mutex(&self.inner.handle);
-        *state = TaskHandle::Completed(result.clone());
-        result
+            let mut state = lock_mutex(&self.inner.handle);
+            loop {
+                match &*state {
+                    TaskHandle::Completed(result) => return result.clone(),
+                    TaskHandle::Running { .. } => {
+                        state = wait_condvar(&self.inner.ready, state);
+                    }
+                }
+            }
+        }
     }
 }
 

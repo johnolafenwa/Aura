@@ -14,7 +14,9 @@ use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Mutex;
+use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 
 const POINT_SOURCE: &str = include_str!("../../../examples/point.au");
@@ -445,6 +447,36 @@ fn repo_root() -> PathBuf {
         .and_then(|path| path.parent())
         .expect("compiler crate should live under repo root")
         .to_path_buf()
+}
+
+fn escape_aurora_string(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(target_os = "linux")]
+fn current_process_thread_count() -> usize {
+    fs::read_dir("/proc/self/task")
+        .expect("linux thread directory should exist")
+        .count()
+}
+
+#[cfg(target_os = "macos")]
+fn current_process_thread_count() -> usize {
+    let output = Command::new("ps")
+        .args(["-M", "-p", &std::process::id().to_string()])
+        .output()
+        .expect("ps should report process threads");
+    assert!(
+        output.status.success(),
+        "ps should succeed when counting threads"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("ps output should be utf-8");
+    stdout.lines().skip(1).count()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn current_process_thread_count() -> usize {
+    1
 }
 
 fn type_ref(name: &str) -> TypeRef {
@@ -1880,6 +1912,71 @@ def main() -> int32:
         elapsed < StdDuration::from_millis(120),
         "select cancellation should return promptly; elapsed {:?}",
         elapsed
+    );
+}
+
+#[test]
+fn lightweight_tasks_scale_to_thousands_of_waiting_tasks() {
+    let temp = TempDir::new("aurora-lightweight-task-scale");
+    let ready_path = temp.path().join("ready.txt");
+    let ready_literal = escape_aurora_string(&ready_path.display().to_string());
+    let source = format!(
+        r#"
+import fs
+
+def sleeper(started: Queue[int32]) -> None:
+    started.put(1)
+    while not cancelled():
+        sleep(10s)
+
+def wait_for_count(queue: Queue[int32], expected: int32):
+    mut seen = 0
+    while seen < expected:
+        match queue.get():
+            case Option.Some(_):
+                seen = seen + 1
+            case Option.None:
+                pass
+
+def main() -> int32:
+    started: Queue[int32] = queue()
+    with tasks() as group:
+        for i in range(3000):
+            group.start(sleeper, started)
+        wait_for_count(started, 3000)
+        match fs.write_string("{ready_path}", "ready"):
+            case Result.Ok(_):
+                sleep(500ms)
+            case Result.Err(_):
+                group.cancel()
+                return 1
+        group.cancel()
+    return 0
+"#,
+        ready_path = ready_literal
+    );
+
+    let baseline_threads = current_process_thread_count();
+    let source_handle = thread::spawn(move || run_source(&source));
+    let deadline = Instant::now() + StdDuration::from_secs(5);
+    while !ready_path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "lightweight task stress never signalled readiness"
+        );
+        thread::sleep(StdDuration::from_millis(10));
+    }
+    let running_threads = current_process_thread_count();
+    let output = source_handle
+        .join()
+        .expect("lightweight task stress worker should not panic")
+        .expect("lightweight task stress source should run");
+    assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
+    assert!(
+        running_threads <= baseline_threads + 32,
+        "lightweight task stress should stay near the baseline thread count; baseline {}, running {}",
+        baseline_threads,
+        running_threads
     );
 }
 

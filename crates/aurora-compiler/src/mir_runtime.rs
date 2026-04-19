@@ -1,10 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Write};
-use std::panic;
+use std::panic::{self, AssertUnwindSafe};
 use std::slice;
 use std::str;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::UnaryOp;
@@ -16,40 +15,32 @@ use crate::mir::{
 };
 use crate::runtime_value::{
     cast_numeric_value, io_error, io_read_line, option_none, option_some, result_err, result_ok,
-    send_error_closed, sleep_with_runtime_scheduler, wait_for_select_progress, CancellationContext,
-    ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue, HttpListenerValue,
-    HttpResponseValue, InstanceValue, MapValue, RangeValue, RunOutput, RuntimeSchedulerWakeReason,
-    SetValue, TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue, TlsListenerValue,
-    TlsStreamValue, TryRecvResult, UdpDatagramValue, UdpSocketValue, UnixListenerValue,
-    UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    run_lightweight_root_task, send_error_closed, sleep_with_runtime_scheduler,
+    spawn_lightweight_task, wait_for_select_progress, CancellationContext, ChannelValue,
+    EnumVariantValue, FileValue, HttpExchangeValue, HttpListenerValue, HttpResponseValue,
+    InstanceValue, MapValue, RangeValue, RunOutput, RuntimeSchedulerWakeReason, SetValue,
+    TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
+    TryRecvResult, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
+    VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{substitute_type, Type};
 
 pub fn run(module: &MirModule) -> Result<RunOutput> {
     let module = module.clone();
-    let handle = match thread::Builder::new()
-        .name("aurora-mir-runtime".to_string())
-        .stack_size(64 * 1024 * 1024)
-        .spawn(move || {
-            let stdout = Arc::new(Mutex::new(String::new()));
-            let mut runtime =
-                MirRuntime::new(module, stdout.clone(), CancellationContext::default());
-            let value = runtime.run_main()?;
-            let rendered_stdout = lock_stdout(&stdout).clone();
-            Ok(RunOutput {
-                value,
-                stdout: rendered_stdout,
-            })
-        }) {
-        Ok(handle) => handle,
-        Err(error) => {
-            return Err(Diagnostic::new(format!(
-                "failed to start Aurora MIR runtime thread: {}",
-                error
-            )))
-        }
-    };
-    match handle.join() {
+    let result = panic::catch_unwind(AssertUnwindSafe(move || {
+        let stdout = Arc::new(Mutex::new(String::new()));
+        let task_stdout = stdout.clone();
+        let value = run_lightweight_root_task(move || {
+            let mut runtime = MirRuntime::new(module, task_stdout, CancellationContext::default());
+            runtime.run_main()
+        })?;
+        let rendered_stdout = lock_stdout(&stdout).clone();
+        Ok(RunOutput {
+            value,
+            stdout: rendered_stdout,
+        })
+    }));
+    match result {
         Ok(result) => result,
         Err(_) => Err(Diagnostic::new(
             "Aurora MIR runtime panicked while executing the program",
@@ -2015,16 +2006,13 @@ impl MirRuntime {
 
         let module = (*self.module).clone();
         let stdout = self.stdout.clone();
-        let function_for_thread = function.clone();
-        let handle = thread::spawn(move || {
+        let function_for_task = function.clone();
+        let task = spawn_lightweight_task(move || {
             let mut runtime = MirRuntime::new(module, stdout, cancellation);
             runtime
-                .call_function(&function_for_thread, None, bound_args)
+                .call_function(&function_for_task, None, bound_args)
                 .map(|outcome| outcome.value)
-                .map_err(|error| error.message)
-        });
-
-        let task = TaskValue::from_handle(handle);
+        })?;
         if let Some(group) = group_value {
             group.register_task(task.clone());
         }
@@ -4069,7 +4057,7 @@ impl MirRuntime {
     }
 
     fn join_task(&mut self, task: TaskValue) -> Result<Value> {
-        task.join_result().map_err(Diagnostic::new)
+        task.join_result()
     }
 
     fn close_task_group(
