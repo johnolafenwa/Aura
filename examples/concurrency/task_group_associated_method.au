@@ -6,15 +6,7 @@ def main() -> int32:
     with TaskGroup() as group:
         task = group.start(Worker.run, 4)
         other = group.start(Worker.run, 6)
-        match task.result():
-            case TaskResult.Ready(value):
-                print(value)
-            case _:
-                return 1
-        match other.result():
-            case TaskResult.Ready(value):
-                print(value)
-            case _:
-                return 1
+        print(task.result_or(-1))
+        print(other.result_or(-1))
 
     return 0

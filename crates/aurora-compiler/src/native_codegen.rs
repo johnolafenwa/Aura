@@ -265,12 +265,20 @@ struct NativeCodegen<'a> {
     channel_try_send: FuncId,
     channel_recv: FuncId,
     channel_recv_timeout_value: FuncId,
+    channel_recv_or_none: FuncId,
+    channel_recv_or_none_timeout_value: FuncId,
+    channel_recv_or_value: FuncId,
+    channel_recv_or_value_timeout_value: FuncId,
     channel_close: FuncId,
     task_group_new: FuncId,
     task_group_cancel: FuncId,
     task_group_close: FuncId,
     task_join: FuncId,
     task_join_timeout_value: FuncId,
+    task_join_or_none: FuncId,
+    task_join_or_none_timeout_value: FuncId,
+    task_join_or_value: FuncId,
+    task_join_or_value_timeout_value: FuncId,
     wait_any: FuncId,
     wait_any_timeout_value: FuncId,
     wait_all: FuncId,
@@ -306,6 +314,8 @@ struct NativeCodegen<'a> {
     process_child_stdout: FuncId,
     process_child_stderr: FuncId,
     process_child_wait: FuncId,
+    process_child_wait_or_none: FuncId,
+    process_child_wait_ok: FuncId,
     process_child_kill: FuncId,
     process_child_terminate: FuncId,
     process_child_close: FuncId,
@@ -320,6 +330,7 @@ struct NativeCodegen<'a> {
     process_completed_success: FuncId,
     process_completed_stdout: FuncId,
     process_completed_stderr: FuncId,
+    process_completed_check: FuncId,
     net_connect: FuncId,
     net_connect_timeout: FuncId,
     net_listen: FuncId,
@@ -647,12 +658,20 @@ impl<'a> NativeCodegen<'a> {
             channel_try_send => ("aurora_direct_channel_try_send", [types::I64, types::I64], Some(types::I64)),
             channel_recv => ("aurora_direct_channel_recv", [types::I64], Some(types::I64)),
             channel_recv_timeout_value => ("aurora_direct_channel_recv_timeout_value", [types::I64, types::I64], Some(types::I64)),
+            channel_recv_or_none => ("aurora_direct_channel_recv_or_none", [types::I64], Some(types::I64)),
+            channel_recv_or_none_timeout_value => ("aurora_direct_channel_recv_or_none_timeout_value", [types::I64, types::I64], Some(types::I64)),
+            channel_recv_or_value => ("aurora_direct_channel_recv_or_value", [types::I64, types::I64], Some(types::I64)),
+            channel_recv_or_value_timeout_value => ("aurora_direct_channel_recv_or_value_timeout_value", [types::I64, types::I64, types::I64], Some(types::I64)),
             channel_close => ("aurora_direct_channel_close", [types::I64], Some(types::I64)),
             task_group_new => ("aurora_direct_task_group_new", [], Some(types::I64)),
             task_group_cancel => ("aurora_direct_task_group_cancel", [types::I64], Some(types::I64)),
             task_group_close => ("aurora_direct_task_group_close", [types::I64, types::I64], Some(types::I64)),
             task_join => ("aurora_direct_task_join", [types::I64], Some(types::I64)),
             task_join_timeout_value => ("aurora_direct_task_join_timeout_value", [types::I64, types::I64], Some(types::I64)),
+            task_join_or_none => ("aurora_direct_task_join_or_none", [types::I64], Some(types::I64)),
+            task_join_or_none_timeout_value => ("aurora_direct_task_join_or_none_timeout_value", [types::I64, types::I64], Some(types::I64)),
+            task_join_or_value => ("aurora_direct_task_join_or_value", [types::I64, types::I64], Some(types::I64)),
+            task_join_or_value_timeout_value => ("aurora_direct_task_join_or_value_timeout_value", [types::I64, types::I64, types::I64], Some(types::I64)),
             wait_any => ("aurora_direct_wait_any", [types::I64], Some(types::I64)),
             wait_any_timeout_value => ("aurora_direct_wait_any_timeout_value", [types::I64, types::I64], Some(types::I64)),
             wait_all => ("aurora_direct_wait_all", [types::I64], Some(types::I64)),
@@ -688,6 +707,8 @@ impl<'a> NativeCodegen<'a> {
             process_child_stdout => ("aurora_direct_process_child_stdout", [types::I64], Some(types::I64)),
             process_child_stderr => ("aurora_direct_process_child_stderr", [types::I64], Some(types::I64)),
             process_child_wait => ("aurora_direct_process_child_wait", [types::I64, types::I64], Some(types::I64)),
+            process_child_wait_or_none => ("aurora_direct_process_child_wait_or_none", [types::I64, types::I64], Some(types::I64)),
+            process_child_wait_ok => ("aurora_direct_process_child_wait_ok", [types::I64, types::I64], Some(types::I64)),
             process_child_kill => ("aurora_direct_process_child_kill", [types::I64], Some(types::I64)),
             process_child_terminate => ("aurora_direct_process_child_terminate", [types::I64], Some(types::I64)),
             process_child_close => ("aurora_direct_process_child_close", [types::I64], Some(types::I64)),
@@ -702,6 +723,7 @@ impl<'a> NativeCodegen<'a> {
             process_completed_success => ("aurora_direct_process_completed_success", [types::I64], Some(types::I64)),
             process_completed_stdout => ("aurora_direct_process_completed_stdout", [types::I64], Some(types::I64)),
             process_completed_stderr => ("aurora_direct_process_completed_stderr", [types::I64], Some(types::I64)),
+            process_completed_check => ("aurora_direct_process_completed_check", [types::I64], Some(types::I64)),
             net_connect => ("aurora_direct_net_connect", [types::I64], Some(types::I64)),
             net_connect_timeout => ("aurora_direct_net_connect_timeout", [types::I64, types::I64], Some(types::I64)),
             net_listen => ("aurora_direct_net_listen", [types::I64], Some(types::I64)),
@@ -961,12 +983,20 @@ impl<'a> NativeCodegen<'a> {
             channel_try_send,
             channel_recv,
             channel_recv_timeout_value,
+            channel_recv_or_none,
+            channel_recv_or_none_timeout_value,
+            channel_recv_or_value,
+            channel_recv_or_value_timeout_value,
             channel_close,
             task_group_new,
             task_group_cancel,
             task_group_close,
             task_join,
             task_join_timeout_value,
+            task_join_or_none,
+            task_join_or_none_timeout_value,
+            task_join_or_value,
+            task_join_or_value_timeout_value,
             wait_any,
             wait_any_timeout_value,
             wait_all,
@@ -1002,6 +1032,8 @@ impl<'a> NativeCodegen<'a> {
             process_child_stdout,
             process_child_stderr,
             process_child_wait,
+            process_child_wait_or_none,
+            process_child_wait_ok,
             process_child_kill,
             process_child_terminate,
             process_child_close,
@@ -1016,6 +1048,7 @@ impl<'a> NativeCodegen<'a> {
             process_completed_success,
             process_completed_stdout,
             process_completed_stderr,
+            process_completed_check,
             net_connect,
             net_connect_timeout,
             net_listen,
@@ -1607,6 +1640,18 @@ impl<'a> NativeCodegen<'a> {
         let channel_recv_timeout_value = self
             .object
             .declare_func_in_func(self.channel_recv_timeout_value, builder.func);
+        let channel_recv_or_none = self
+            .object
+            .declare_func_in_func(self.channel_recv_or_none, builder.func);
+        let channel_recv_or_none_timeout_value = self
+            .object
+            .declare_func_in_func(self.channel_recv_or_none_timeout_value, builder.func);
+        let channel_recv_or_value = self
+            .object
+            .declare_func_in_func(self.channel_recv_or_value, builder.func);
+        let channel_recv_or_value_timeout_value = self
+            .object
+            .declare_func_in_func(self.channel_recv_or_value_timeout_value, builder.func);
         let channel_close = self
             .object
             .declare_func_in_func(self.channel_close, builder.func);
@@ -1625,6 +1670,18 @@ impl<'a> NativeCodegen<'a> {
         let task_join_timeout_value = self
             .object
             .declare_func_in_func(self.task_join_timeout_value, builder.func);
+        let task_join_or_none = self
+            .object
+            .declare_func_in_func(self.task_join_or_none, builder.func);
+        let task_join_or_none_timeout_value = self
+            .object
+            .declare_func_in_func(self.task_join_or_none_timeout_value, builder.func);
+        let task_join_or_value = self
+            .object
+            .declare_func_in_func(self.task_join_or_value, builder.func);
+        let task_join_or_value_timeout_value = self
+            .object
+            .declare_func_in_func(self.task_join_or_value_timeout_value, builder.func);
         let wait_any = self
             .object
             .declare_func_in_func(self.wait_any, builder.func);
@@ -1728,6 +1785,12 @@ impl<'a> NativeCodegen<'a> {
         let process_child_wait = self
             .object
             .declare_func_in_func(self.process_child_wait, builder.func);
+        let process_child_wait_or_none = self
+            .object
+            .declare_func_in_func(self.process_child_wait_or_none, builder.func);
+        let process_child_wait_ok = self
+            .object
+            .declare_func_in_func(self.process_child_wait_ok, builder.func);
         let process_child_kill = self
             .object
             .declare_func_in_func(self.process_child_kill, builder.func);
@@ -1770,6 +1833,9 @@ impl<'a> NativeCodegen<'a> {
         let process_completed_stderr = self
             .object
             .declare_func_in_func(self.process_completed_stderr, builder.func);
+        let process_completed_check = self
+            .object
+            .declare_func_in_func(self.process_completed_check, builder.func);
         let net_connect = self
             .object
             .declare_func_in_func(self.net_connect, builder.func);
@@ -2138,12 +2204,20 @@ impl<'a> NativeCodegen<'a> {
             channel_try_send,
             channel_recv,
             channel_recv_timeout_value,
+            channel_recv_or_none,
+            channel_recv_or_none_timeout_value,
+            channel_recv_or_value,
+            channel_recv_or_value_timeout_value,
             channel_close,
             task_group_new,
             task_group_cancel,
             task_group_close,
             task_join,
             task_join_timeout_value,
+            task_join_or_none,
+            task_join_or_none_timeout_value,
+            task_join_or_value,
+            task_join_or_value_timeout_value,
             wait_any,
             wait_any_timeout_value,
             wait_all,
@@ -2179,6 +2253,8 @@ impl<'a> NativeCodegen<'a> {
             process_child_stdout,
             process_child_stderr,
             process_child_wait,
+            process_child_wait_or_none,
+            process_child_wait_ok,
             process_child_kill,
             process_child_terminate,
             process_child_close,
@@ -2193,6 +2269,7 @@ impl<'a> NativeCodegen<'a> {
             process_completed_success,
             process_completed_stdout,
             process_completed_stderr,
+            process_completed_check,
             net_connect,
             net_connect_timeout,
             net_listen,
@@ -2586,12 +2663,20 @@ struct FunctionCompiler<'a> {
     channel_try_send: cranelift_codegen::ir::FuncRef,
     channel_recv: cranelift_codegen::ir::FuncRef,
     channel_recv_timeout_value: cranelift_codegen::ir::FuncRef,
+    channel_recv_or_none: cranelift_codegen::ir::FuncRef,
+    channel_recv_or_none_timeout_value: cranelift_codegen::ir::FuncRef,
+    channel_recv_or_value: cranelift_codegen::ir::FuncRef,
+    channel_recv_or_value_timeout_value: cranelift_codegen::ir::FuncRef,
     channel_close: cranelift_codegen::ir::FuncRef,
     task_group_new: cranelift_codegen::ir::FuncRef,
     task_group_cancel: cranelift_codegen::ir::FuncRef,
     task_group_close: cranelift_codegen::ir::FuncRef,
     task_join: cranelift_codegen::ir::FuncRef,
     task_join_timeout_value: cranelift_codegen::ir::FuncRef,
+    task_join_or_none: cranelift_codegen::ir::FuncRef,
+    task_join_or_none_timeout_value: cranelift_codegen::ir::FuncRef,
+    task_join_or_value: cranelift_codegen::ir::FuncRef,
+    task_join_or_value_timeout_value: cranelift_codegen::ir::FuncRef,
     wait_any: cranelift_codegen::ir::FuncRef,
     wait_any_timeout_value: cranelift_codegen::ir::FuncRef,
     wait_all: cranelift_codegen::ir::FuncRef,
@@ -2627,6 +2712,8 @@ struct FunctionCompiler<'a> {
     process_child_stdout: cranelift_codegen::ir::FuncRef,
     process_child_stderr: cranelift_codegen::ir::FuncRef,
     process_child_wait: cranelift_codegen::ir::FuncRef,
+    process_child_wait_or_none: cranelift_codegen::ir::FuncRef,
+    process_child_wait_ok: cranelift_codegen::ir::FuncRef,
     process_child_kill: cranelift_codegen::ir::FuncRef,
     process_child_terminate: cranelift_codegen::ir::FuncRef,
     process_child_close: cranelift_codegen::ir::FuncRef,
@@ -2641,6 +2728,7 @@ struct FunctionCompiler<'a> {
     process_completed_success: cranelift_codegen::ir::FuncRef,
     process_completed_stdout: cranelift_codegen::ir::FuncRef,
     process_completed_stderr: cranelift_codegen::ir::FuncRef,
+    process_completed_check: cranelift_codegen::ir::FuncRef,
     net_connect: cranelift_codegen::ir::FuncRef,
     net_connect_timeout: cranelift_codegen::ir::FuncRef,
     net_listen: cranelift_codegen::ir::FuncRef,
@@ -6501,6 +6589,48 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named("process.Wait".to_string(), Vec::new()),
                         ))
                     }
+                    "wait_or_none" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self.builder.ins().call(
+                            self.process_child_wait_or_none,
+                            &[object.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named(
+                                        "Option".to_string(),
+                                        vec![Type::Named(
+                                            "process.ExitStatus".to_string(),
+                                            Vec::new(),
+                                        )],
+                                    ),
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "wait_ok" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_child_wait_ok, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("process.ExitStatus".to_string(), Vec::new()),
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
                     "kill" => {
                         if !args.is_empty() {
                             return Err(
@@ -6782,6 +6912,26 @@ impl<'a> FunctionCompiler<'a> {
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::named("String"),
+                        ))
+                    }
+                    "check" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `check()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_completed_check, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Unit,
+                                    Type::Named("process.Error".to_string(), Vec::new()),
+                                ],
+                            ),
                         ))
                     }
                     _ => Err(format!(
@@ -8077,6 +8227,75 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
+                    "get_or_none" => {
+                        let inst = match args {
+                            [] => self
+                                .builder
+                                .ins()
+                                .call(self.channel_recv_or_none, &[object.values[0]]),
+                            [argument] => {
+                                if argument.name.as_deref() != Some("timeout")
+                                    && argument.name.is_some()
+                                {
+                                    return Err(
+                                        "direct backend expected `get_or_none()` or `get_or_none(timeout=...)`"
+                                            .to_string(),
+                                    );
+                                }
+                                let timeout = self.load_operand(&argument.value)?;
+                                let timeout = self.ensure_opaque(timeout)?;
+                                self.builder.ins().call(
+                                    self.channel_recv_or_none_timeout_value,
+                                    &[object.values[0], timeout.values[0]],
+                                )
+                            }
+                            _ => {
+                                return Err(
+                                    "direct backend expected `get_or_none()` or `get_or_none(timeout=...)`"
+                                        .to_string(),
+                                )
+                            }
+                        };
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![class_args
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                            ),
+                        ))
+                    }
+                    "get_or" => {
+                        let bound = ordered_optional_named_args(&["default", "timeout"], args)?;
+                        let default = bound[0].ok_or_else(|| {
+                            "direct backend expected `get_or()` to receive `default`".to_string()
+                        })?;
+                        let loaded = self.load_operand(&default.value)?;
+                        let loaded = self.ensure_opaque(loaded)?;
+                        let inst = match bound[1] {
+                            Some(timeout) => {
+                                let timeout = self.load_operand(&timeout.value)?;
+                                let timeout = self.ensure_opaque(timeout)?;
+                                self.builder.ins().call(
+                                    self.channel_recv_or_value_timeout_value,
+                                    &[object.values[0], loaded.values[0], timeout.values[0]],
+                                )
+                            }
+                            None => self.builder.ins().call(
+                                self.channel_recv_or_value,
+                                &[object.values[0], loaded.values[0]],
+                            ),
+                        };
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            class_args
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| Type::named("Unknown")),
+                        ))
+                    }
                     "close" => {
                         if !args.is_empty() {
                             return Err("direct backend expected `close()` to take no arguments"
@@ -8132,6 +8351,69 @@ impl<'a> FunctionCompiler<'a> {
                                 "TaskResult".to_string(),
                                 vec![class_args.first().cloned().unwrap_or(Type::Unit)],
                             ),
+                        ))
+                    }
+                    "result_or_none" => {
+                        let inst = match args {
+                            [] => self
+                                .builder
+                                .ins()
+                                .call(self.task_join_or_none, &[object.values[0]]),
+                            [argument] => {
+                                if argument.name.as_deref() != Some("timeout")
+                                    && argument.name.is_some()
+                                {
+                                    return Err(
+                                        "direct backend expected `result_or_none()` or `result_or_none(timeout=...)`"
+                                            .to_string(),
+                                    );
+                                }
+                                let timeout = self.load_operand(&argument.value)?;
+                                let timeout = self.ensure_opaque(timeout)?;
+                                self.builder.ins().call(
+                                    self.task_join_or_none_timeout_value,
+                                    &[object.values[0], timeout.values[0]],
+                                )
+                            }
+                            _ => {
+                                return Err(
+                                    "direct backend expected `result_or_none()` or `result_or_none(timeout=...)`"
+                                        .to_string(),
+                                )
+                            }
+                        };
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Option".to_string(),
+                                vec![class_args.first().cloned().unwrap_or(Type::Unit)],
+                            ),
+                        ))
+                    }
+                    "result_or" => {
+                        let bound = ordered_optional_named_args(&["default", "timeout"], args)?;
+                        let default = bound[0].ok_or_else(|| {
+                            "direct backend expected `result_or()` to receive `default`".to_string()
+                        })?;
+                        let loaded = self.load_operand(&default.value)?;
+                        let loaded = self.ensure_opaque(loaded)?;
+                        let inst = match bound[1] {
+                            Some(timeout) => {
+                                let timeout = self.load_operand(&timeout.value)?;
+                                let timeout = self.ensure_opaque(timeout)?;
+                                self.builder.ins().call(
+                                    self.task_join_or_value_timeout_value,
+                                    &[object.values[0], loaded.values[0], timeout.values[0]],
+                                )
+                            }
+                            None => self.builder.ins().call(
+                                self.task_join_or_value,
+                                &[object.values[0], loaded.values[0]],
+                            ),
+                        };
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            class_args.first().cloned().unwrap_or(Type::Unit),
                         ))
                     }
                     _ => Err(format!(

@@ -20,15 +20,7 @@ def roundtrip() -> Result[None, process.Error]:
             case Option.None:
                 pass
 
-        match child.wait(timeout=2s):
-            case Wait.Exited(status):
-                print(status)
-            case Wait.TimedOut:
-                print("timed out")
-            case Wait.Cancelled:
-                print("cancelled")
-            case Wait.Failed(error):
-                print(error)
+        print(try child.wait_ok(timeout=2s))
 
     return Result.Ok(None)
 

@@ -3404,6 +3404,17 @@ impl ProcessCompletedValue {
                 && matches!(payloads.as_slice(), [Value::Int(code)] if code.as_i128() == Some(0))
         )
     }
+
+    pub(crate) fn check(&self) -> std::result::Result<(), Value> {
+        if self.success() {
+            Ok(())
+        } else {
+            Err(process_error_other(format!(
+                "process exited with {}",
+                self.status().render()
+            )))
+        }
+    }
 }
 
 impl ProcessChildValue {
@@ -3493,6 +3504,36 @@ impl ProcessChildValue {
                 return ProcessChildWaitStatus::TimedOut;
             }
             sleep_with_runtime_scheduler(StdDuration::from_millis(5), cancellation);
+        }
+    }
+
+    pub(crate) fn wait_or_none(
+        &self,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> std::result::Result<Option<StdExitStatus>, Value> {
+        match self.wait(timeout, cancellation) {
+            ProcessChildWaitStatus::Exited(status) => Ok(Some(status)),
+            ProcessChildWaitStatus::TimedOut => Ok(None),
+            ProcessChildWaitStatus::Cancelled => Err(process_error_cancelled()),
+            ProcessChildWaitStatus::Failed(error) => Err(process_error_io(error)),
+        }
+    }
+
+    pub(crate) fn wait_ok(
+        &self,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> std::result::Result<StdExitStatus, Value> {
+        match self.wait(timeout, cancellation) {
+            ProcessChildWaitStatus::Exited(status) if status.success() => Ok(status),
+            ProcessChildWaitStatus::Exited(status) => Err(process_error_other(format!(
+                "process exited with {}",
+                process_exit_status(status).render()
+            ))),
+            ProcessChildWaitStatus::TimedOut => Err(process_error_timed_out()),
+            ProcessChildWaitStatus::Cancelled => Err(process_error_cancelled()),
+            ProcessChildWaitStatus::Failed(error) => Err(process_error_io(error)),
         }
     }
 
@@ -5318,6 +5359,14 @@ pub(crate) fn process_error_spawn(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "Error".to_string(),
         variant_name: "Spawn".to_string(),
+        payloads: vec![Value::String(message)],
+    })
+}
+
+pub(crate) fn process_error_other(message: String) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "Error".to_string(),
+        variant_name: "Other".to_string(),
         payloads: vec![Value::String(message)],
     })
 }

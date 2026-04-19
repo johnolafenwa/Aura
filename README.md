@@ -101,9 +101,9 @@ Current bootstrap compiler workflow:
 - `cargo run -p aura -- run examples/io/bytes_file_io.au`
   - execute binary file helpers plus `fs.File.read_bytes()` / `write_bytes(...)`
 - `cargo run -p aura -- run examples/io/process_run.au`
-  - execute shell-free subprocess helpers through `process.run(...)`, captured stdio, and `process.Completed`
+  - execute shell-free subprocess helpers through `process.run(...)`, captured stdio, and `process.Completed.check()`
 - `cargo run -p aura -- run examples/io/process_pipes.au`
-  - execute `process.start(...)`, interactive `process.Pipe` I/O, and timeout-aware child waiting
+  - execute `process.start(...)`, interactive `process.Pipe` I/O, and `process.Child.wait_ok(...)`
 - `cargo run -p aura -- run examples/io/tcp_echo.au`
   - execute the maintained builtin TCP networking surface through `net.listen(...)`, `net.connect(...)`, and `TcpStream` / `TcpListener`
 - `cargo run -p aura -- run examples/io/tcp_bytes.au`

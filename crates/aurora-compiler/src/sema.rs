@@ -6633,7 +6633,7 @@ impl<'a> FunctionChecker<'a> {
                                         ],
                                     ))
                                 }
-                                BuiltinMember::QueueGet => {
+                                BuiltinMember::QueueGet | BuiltinMember::QueueGetOrNone => {
                                     if let Some(timeout_arg) = ordered_args[0] {
                                         let actual = self.type_of_expr_hint(
                                             &timeout_arg.value,
@@ -6650,10 +6650,59 @@ impl<'a> FunctionChecker<'a> {
                                             ));
                                         }
                                     }
-                                    Ok(Type::Named(
-                                        "QueueReceive".to_string(),
-                                        vec![receiver_args[0].clone()],
-                                    ))
+                                    if matches!(builtin_member, BuiltinMember::QueueGetOrNone) {
+                                        Ok(Type::Named(
+                                            "Option".to_string(),
+                                            vec![receiver_args[0].clone()],
+                                        ))
+                                    } else {
+                                        Ok(Type::Named(
+                                            "QueueReceive".to_string(),
+                                            vec![receiver_args[0].clone()],
+                                        ))
+                                    }
+                                }
+                                BuiltinMember::QueueGetOr => {
+                                    let default_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`get_or` requires a `default` argument",
+                                    )?;
+                                    let actual = self.type_of_expr_hint(
+                                        &default_arg.value,
+                                        locals,
+                                        Some(&receiver_args[0]),
+                                    )?;
+                                    if actual != receiver_args[0] {
+                                        return Err(Diagnostic::at(
+                                            default_arg.span,
+                                            format!(
+                                                "`get_or` expects `{}`, found `{}`",
+                                                receiver_args[0], actual
+                                            ),
+                                        ));
+                                    }
+                                    if !self.is_copy_type(&receiver_args[0]) {
+                                        self.consume_value_expr(&default_arg.value, locals)?;
+                                    }
+                                    if let Some(timeout_arg) = ordered_args[1] {
+                                        let actual = self.type_of_expr_hint(
+                                            &timeout_arg.value,
+                                            locals,
+                                            Some(&Type::named("Duration")),
+                                        )?;
+                                        if actual != Type::named("Duration") {
+                                            return Err(Diagnostic::at(
+                                                timeout_arg.span,
+                                                format!(
+                                                    "`get_or(timeout=...)` expects `Duration`, found `{}`",
+                                                    actual
+                                                ),
+                                            ));
+                                        }
+                                    }
+                                    Ok(receiver_args[0].clone())
                                 }
                                 BuiltinMember::QueueClose => Ok(Type::Unit),
                                 _ => unreachable!("unexpected queue builtin member"),
@@ -6665,7 +6714,7 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
-                                BuiltinMember::TaskResult => {
+                                BuiltinMember::TaskResult | BuiltinMember::TaskResultOrNone => {
                                     if let Some(timeout_arg) = ordered_args[0] {
                                         let actual = self.type_of_expr_hint(
                                             &timeout_arg.value,
@@ -6682,10 +6731,59 @@ impl<'a> FunctionChecker<'a> {
                                             ));
                                         }
                                     }
-                                    Ok(Type::Named(
-                                        "TaskResult".to_string(),
-                                        vec![receiver_args[0].clone()],
-                                    ))
+                                    if matches!(builtin_member, BuiltinMember::TaskResultOrNone) {
+                                        Ok(Type::Named(
+                                            "Option".to_string(),
+                                            vec![receiver_args[0].clone()],
+                                        ))
+                                    } else {
+                                        Ok(Type::Named(
+                                            "TaskResult".to_string(),
+                                            vec![receiver_args[0].clone()],
+                                        ))
+                                    }
+                                }
+                                BuiltinMember::TaskResultOr => {
+                                    let default_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`result_or` requires a `default` argument",
+                                    )?;
+                                    let actual = self.type_of_expr_hint(
+                                        &default_arg.value,
+                                        locals,
+                                        Some(&receiver_args[0]),
+                                    )?;
+                                    if actual != receiver_args[0] {
+                                        return Err(Diagnostic::at(
+                                            default_arg.span,
+                                            format!(
+                                                "`result_or` expects `{}`, found `{}`",
+                                                receiver_args[0], actual
+                                            ),
+                                        ));
+                                    }
+                                    if !self.is_copy_type(&receiver_args[0]) {
+                                        self.consume_value_expr(&default_arg.value, locals)?;
+                                    }
+                                    if let Some(timeout_arg) = ordered_args[1] {
+                                        let actual = self.type_of_expr_hint(
+                                            &timeout_arg.value,
+                                            locals,
+                                            Some(&Type::named("Duration")),
+                                        )?;
+                                        if actual != Type::named("Duration") {
+                                            return Err(Diagnostic::at(
+                                                timeout_arg.span,
+                                                format!(
+                                                    "`result_or(timeout=...)` expects `Duration`, found `{}`",
+                                                    actual
+                                                ),
+                                            ));
+                                        }
+                                    }
+                                    Ok(receiver_args[0].clone())
                                 }
                                 _ => unreachable!("unexpected task builtin member"),
                             };
@@ -6856,6 +6954,39 @@ impl<'a> FunctionChecker<'a> {
                                     )?;
                                     Ok(Type::named("process.Wait"))
                                 }
+                                BuiltinMember::ProcessChildWaitOrNone => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "wait_or_none(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Named(
+                                                "Option".to_string(),
+                                                vec![Type::named("process.ExitStatus")],
+                                            ),
+                                            crate::builtin_modules::process_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::ProcessChildWaitOk => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "wait_ok(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::named("process.ExitStatus"),
+                                            crate::builtin_modules::process_error_type(),
+                                        ],
+                                    ))
+                                }
                                 BuiltinMember::ProcessChildKill
                                 | BuiltinMember::ProcessChildTerminate => Ok(Type::Named(
                                     "Result".to_string(),
@@ -7005,6 +7136,10 @@ impl<'a> FunctionChecker<'a> {
                                 | BuiltinMember::ProcessCompletedStderr => {
                                     Ok(Type::named("String"))
                                 }
+                                BuiltinMember::ProcessCompletedCheck => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![Type::Unit, crate::builtin_modules::process_error_type()],
+                                )),
                                 _ => unreachable!("unexpected process completed builtin member"),
                             };
                         }

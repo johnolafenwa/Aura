@@ -59,6 +59,8 @@ def inspect(child: process.Child, pipe: process.Pipe, completed: process.Complet
         case Option.None:
             pass
     print(child.wait(timeout=10ms))
+    print(child.wait_or_none(timeout=10ms))
+    print(child.wait_ok(timeout=10ms))
     print(child.kill())
     print(child.terminate())
     print(pipe.read_all())
@@ -72,6 +74,7 @@ def inspect(child: process.Child, pipe: process.Pipe, completed: process.Complet
     print(completed.success())
     print(completed.stdout())
     print(completed.stderr())
+    print(completed.check())
     print(status)
     print(wait)
     print(stdio)
@@ -85,6 +88,8 @@ def boot() -> Result[None, process.Error]:
         print(running.stdout())
         print(running.stderr())
         print(running.wait(timeout=10ms))
+        print(running.wait_or_none(timeout=10ms))
+        print(running.wait_ok(timeout=10ms))
 
     completed = try process.run(["/usr/bin/printenv", "AURORA_PROCESS_VAR"], cwd=Option.None, env=env, stdin=process.null(), stdout=process.pipe(), stderr=process.pipe(), timeout=1s)
     print(completed.status())
@@ -158,18 +163,7 @@ def echo_with_cat() -> Result[None, process.Error]:
                 print("missing stdout")
                 return Result.Ok(None)
 
-        match child.wait(timeout=2s):
-            case Wait.Exited(status):
-                print(status)
-            case Wait.TimedOut:
-                print("timed out")
-                return Result.Ok(None)
-            case Wait.Cancelled:
-                print("cancelled")
-                return Result.Ok(None)
-            case Wait.Failed(error):
-                print(error)
-                return Result.Ok(None)
+        print(try child.wait_ok(timeout=2s))
     return Result.Ok(None)
 
 def main() -> int32:
@@ -187,12 +181,37 @@ def main() -> int32:
             print(error)
             return 1
 
+    match run_checked_echo():
+        case Result.Ok(_):
+            pass
+        case Result.Err(error):
+            print(error)
+            return 1
+
+    match wait_for_sleep_timeout():
+        case Result.Ok(_):
+            pass
+        case Result.Err(error):
+            print(error)
+            return 1
+
     match echo_with_cat():
         case Result.Ok(_):
             return 0
         case Result.Err(error):
             print(error)
             return 1
+
+def run_checked_echo() -> Result[None, process.Error]:
+    completed = try process.run(["/bin/echo", "checked"], stdout=process.pipe(), stderr=process.pipe(), timeout=2s)
+    try completed.check()
+    print(completed.stdout().trim())
+    return Result.Ok(None)
+
+def wait_for_sleep_timeout() -> Result[None, process.Error]:
+    with sleeping = try process.start(["/bin/sleep", "1"], stdin=process.null(), stdout=process.null(), stderr=process.null()):
+        print(try sleeping.wait_or_none(timeout=1ms))
+    return Result.Ok(None)
 "#,
         cwd = cwd,
     );
@@ -201,7 +220,7 @@ def main() -> int32:
     assert_eq!(
         output.stdout,
         format!(
-            "present\n0\nExitStatus.Exited(0)\n{cwd}\n0\nExitStatus.Exited(0)\necho from cat\nExitStatus.Exited(0)\n",
+            "present\n0\nExitStatus.Exited(0)\n{cwd}\n0\nExitStatus.Exited(0)\nchecked\nOption.None\necho from cat\nExitStatus.Exited(0)\n",
             cwd = cwd,
         )
     );

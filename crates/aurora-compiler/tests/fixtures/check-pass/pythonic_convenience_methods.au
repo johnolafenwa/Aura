@@ -1,0 +1,60 @@
+import process
+
+def produce() -> int32:
+    sleep(10ms)
+    return 4
+
+def run_process_examples() -> Result[None, process.Error]:
+    completed = try process.run(["/bin/echo", "aurora"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s)
+    try completed.check()
+    print(completed.stdout().trim())
+
+    with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.null()):
+        match child.stdin():
+            case Option.Some(stdin_pipe):
+                try stdin_pipe.write_all("ping\n", timeout=500ms)
+                try stdin_pipe.flush()
+                stdin_pipe.close()
+            case Option.None:
+                print("missing stdin")
+                return Result.Ok(None)
+
+        match child.stdout():
+            case Option.Some(stdout_pipe):
+                line = try stdout_pipe.read_line(timeout=500ms)
+                match line:
+                    case Option.Some(text):
+                        print(text.trim())
+                    case Option.None:
+                        print("missing stdout text")
+                        return Result.Ok(None)
+            case Option.None:
+                print("missing stdout")
+                return Result.Ok(None)
+
+        print(try child.wait_ok(timeout=1s))
+
+    with sleeper = try process.start(["/bin/sleep", "1"], stdin=process.null(), stdout=process.null(), stderr=process.null()):
+        print(try sleeper.wait_or_none(timeout=1ms))
+
+    return Result.Ok(None)
+
+def main() -> int32:
+    jobs = Queue[int32]()
+    print(jobs.get_or(7, timeout=1ms))
+    jobs.put(4)
+    print(jobs.get_or(7))
+    print(jobs.get_or_none(timeout=1ms))
+
+    with TaskGroup() as group:
+        slow = group.start(produce)
+        print(slow.result_or(8, timeout=1ms))
+        print(slow.result_or(8, timeout=50ms))
+        print(slow.result_or_none(timeout=50ms))
+
+    match run_process_examples():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

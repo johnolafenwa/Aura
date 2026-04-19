@@ -1,8 +1,4 @@
 def main() -> int32:
     jobs = Queue[int32]()
-    match jobs.get(timeout=5ms):
-        case QueueReceive.TimedOut:
-            print("timeout")
-        case _:
-            pass
+    print(jobs.get_or_none(timeout=5ms))
     return 0

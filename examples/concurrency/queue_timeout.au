@@ -1,14 +1,5 @@
 def main() -> int32:
-    jobs = Queue[int32]()
-
-    match jobs.get(timeout=1ms):
-        case QueueReceive.Item(value):
-            print(value)
-        case QueueReceive.TimedOut:
-            print("timeout")
-        case QueueReceive.Closed:
-            print("closed")
-        case QueueReceive.Cancelled:
-            print("cancelled")
+    jobs = Queue[String]()
+    print(jobs.get_or("timeout", timeout=1ms))
 
     return 0

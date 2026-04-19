@@ -366,9 +366,8 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `5`
     - `68`
 - `process_run.au`
-  - shell-free `process.run(...)`, captured stdout/stderr, and `process.Completed`
+  - shell-free `process.run(...)`, captured stdout/stderr, and `process.Completed.check()`
   - prints:
-    - `true`
     - `aurora process`
     - `0`
     - `ExitStatus.Exited(0)`
@@ -407,7 +406,7 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
 ### `concurrency/`
 
 - `task_group_start.au`
-  - structured task startup with `TaskGroup.start(...)`, `Queue[T]()`, `QueueReceive[T]`, and `TaskResult[T]`
+  - structured task startup with `TaskGroup.start(...)`, `Queue[T]().get_or_none()`, and `Task.result_or(...)`
   - prints:
     - `2`
     - `4`
@@ -418,7 +417,7 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `1`
     - `2`
 - `queue_timeout.au`
-  - `Queue.get(timeout=...)` for the ordinary timeout case
+  - `Queue.get_or(default, timeout=...)` for the ordinary timeout case
   - prints `timeout`
 - `bounded_queue.au`
   - `Queue[T](capacity=...)` and `Queue.put(...)` waiting for bounded-capacity space on the shared scheduler
@@ -459,11 +458,11 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `3`
     - `2`
 - `queue_get_timeout.au`
-  - short timeout handling through `Queue.get(timeout=...)`
-  - prints `timeout`
+  - short timeout handling through `Queue.get_or_none(timeout=...)`
+  - prints `Option.None`
 - `queue_get_timeout_named.au`
-  - named timeout arguments on `Queue.get(timeout=...)`
-  - prints `timeout`
+  - named timeout arguments on `Queue.get_or_none(timeout=...)`
+  - prints `Option.None`
 - `task_group_wait_helpers.au`
   - `wait_any(...)`, `wait_all(...)`, `Task.result(timeout=...)`, and bounded queue send/receive outcomes
   - prints:

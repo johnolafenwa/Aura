@@ -1661,6 +1661,15 @@ impl<'a> AnalysisBuilder<'a> {
                         .unwrap_or(Type::Unit);
                     Some(Type::Named("QueueReceive".to_string(), vec![payload]))
                 }
+                BuiltinMember::QueueGetOrNone => {
+                    let payload = receiver_type
+                        .type_arguments()
+                        .first()
+                        .cloned()
+                        .unwrap_or(Type::Unit);
+                    Some(Type::Named("Option".to_string(), vec![payload]))
+                }
+                BuiltinMember::QueueGetOr => receiver_type.type_arguments().first().cloned(),
                 BuiltinMember::QueueClose | BuiltinMember::TaskGroupCancel => Some(Type::Unit),
                 BuiltinMember::TaskResult => Some(Type::Named(
                     "TaskResult".to_string(),
@@ -1670,6 +1679,15 @@ impl<'a> AnalysisBuilder<'a> {
                         .cloned()
                         .unwrap_or(Type::Unit)],
                 )),
+                BuiltinMember::TaskResultOrNone => Some(Type::Named(
+                    "Option".to_string(),
+                    vec![receiver_type
+                        .type_arguments()
+                        .first()
+                        .cloned()
+                        .unwrap_or(Type::Unit)],
+                )),
+                BuiltinMember::TaskResultOr => receiver_type.type_arguments().first().cloned(),
                 BuiltinMember::TaskGroupStart => {
                     Some(Type::Named("Task".to_string(), vec![Type::Unit]))
                 }
@@ -1683,6 +1701,23 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::ProcessChildWait => {
                     Some(Type::Named("process.Wait".to_string(), Vec::new()))
                 }
+                BuiltinMember::ProcessChildWaitOrNone => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named(
+                            "Option".to_string(),
+                            vec![Type::Named("process.ExitStatus".to_string(), Vec::new())],
+                        ),
+                        Type::Named("process.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::ProcessChildWaitOk => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("process.ExitStatus".to_string(), Vec::new()),
+                        Type::Named("process.Error".to_string(), Vec::new()),
+                    ],
+                )),
                 BuiltinMember::ProcessChildKill | BuiltinMember::ProcessChildTerminate => {
                     Some(Type::Named(
                         "Result".to_string(),
@@ -1734,6 +1769,13 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::ProcessCompletedStdout | BuiltinMember::ProcessCompletedStderr => {
                     Some(Type::named("String"))
                 }
+                BuiltinMember::ProcessCompletedCheck => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Unit,
+                        Type::Named("process.Error".to_string(), Vec::new()),
+                    ],
+                )),
                 BuiltinMember::FileReadAll => Some(Type::Named(
                     "Result".to_string(),
                     vec![
@@ -3196,6 +3238,8 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::ProcessChildStdout,
         BuiltinMember::ProcessChildStderr,
         BuiltinMember::ProcessChildWait,
+        BuiltinMember::ProcessChildWaitOrNone,
+        BuiltinMember::ProcessChildWaitOk,
         BuiltinMember::ProcessChildKill,
         BuiltinMember::ProcessChildTerminate,
         BuiltinMember::ProcessChildClose,
@@ -3210,6 +3254,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::ProcessCompletedSuccess,
         BuiltinMember::ProcessCompletedStdout,
         BuiltinMember::ProcessCompletedStderr,
+        BuiltinMember::ProcessCompletedCheck,
         BuiltinMember::FloatSqrt,
         BuiltinMember::StringLen,
         BuiltinMember::StringContains,
@@ -3250,8 +3295,12 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::QueuePut,
         BuiltinMember::QueueTryPut,
         BuiltinMember::QueueGet,
+        BuiltinMember::QueueGetOrNone,
+        BuiltinMember::QueueGetOr,
         BuiltinMember::QueueClose,
         BuiltinMember::TaskResult,
+        BuiltinMember::TaskResultOrNone,
+        BuiltinMember::TaskResultOr,
         BuiltinMember::TaskGroupStart,
         BuiltinMember::TaskGroupStartSoon,
         BuiltinMember::TaskGroupCancel,

@@ -6,15 +6,6 @@ def main() -> int32:
     jobs = Queue[int32]()
     with TaskGroup() as group:
         group.start_soon(producer, jobs)
-
-        match jobs.get():
-            case QueueReceive.Item(value):
-                print(value)
-            case QueueReceive.Closed:
-                print(0)
-            case QueueReceive.TimedOut:
-                print(0)
-            case QueueReceive.Cancelled:
-                print(0)
+        print(jobs.get_or(0))
 
     return 0

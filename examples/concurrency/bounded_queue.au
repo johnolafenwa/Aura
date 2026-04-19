@@ -2,27 +2,10 @@ def consumer(inbox: Queue[int32]) -> int32:
     sleep(5ms)
 
     mut total: int32 = 0
-    match inbox.get():
-        case QueueReceive.Item(value):
-            total += value
-        case QueueReceive.Closed:
-            return total
-        case QueueReceive.TimedOut:
-            return total
-        case QueueReceive.Cancelled:
-            return total
+    total += inbox.get_or(0)
 
     sleep(5ms)
-
-    match inbox.get():
-        case QueueReceive.Item(value):
-            total += value
-        case QueueReceive.Closed:
-            pass
-        case QueueReceive.TimedOut:
-            pass
-        case QueueReceive.Cancelled:
-            pass
+    total += inbox.get_or(0)
 
     return total
 
@@ -46,11 +29,5 @@ def main() -> int32:
                 return 1
 
         jobs.close()
-        match worker.result():
-            case TaskResult.Ready(total):
-                print(total)
-            case TaskResult.Cancelled:
-                return 1
-            case TaskResult.TimedOut:
-                return 1
+        print(worker.result_or(-1))
     return 0

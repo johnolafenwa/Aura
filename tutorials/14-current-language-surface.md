@@ -376,6 +376,8 @@ Current builtin I/O, networking, and process surface:
 - `process.Child.stdout()`
 - `process.Child.stderr()`
 - `process.Child.wait(timeout=...)`
+- `process.Child.wait_or_none(timeout=...)`
+- `process.Child.wait_ok(timeout=...)`
 - `process.Child.kill()`
 - `process.Child.terminate()`
 - `process.Child.close()`
@@ -390,6 +392,7 @@ Current builtin I/O, networking, and process surface:
 - `process.Completed.success()`
 - `process.Completed.stdout()`
 - `process.Completed.stderr()`
+- `process.Completed.check()`
 
 Current builtin member methods include:
 
@@ -444,8 +447,12 @@ Current builtin member methods include:
 - `Queue.put(...)`
 - `Queue.try_put(...)`
 - `Queue.get(...)`
+- `Queue.get_or_none(...)`
+- `Queue.get_or(...)`
 - `Queue.close()`
 - `Task.result(timeout=...)`
+- `Task.result_or_none(timeout=...)`
+- `Task.result_or(timeout=...)`
 - `TaskGroup.start(...)`
 - `TaskGroup.start_soon(...)`
 - `TaskGroup.cancel()`
@@ -500,8 +507,12 @@ Current collection notes:
 - `Queue[T]` supports `Queue[T](capacity=...)` for bounded-capacity queues on the shared runtime scheduler
 - `Queue.put(...)` returns `Result[None, SendError[T]]`, where `SendError[T]` currently includes `Closed(value)`, `Cancelled(value)`, `TimedOut(value)`, and `Full(value)`
 - `Queue.get(timeout=...)` returns `QueueReceive[T]`, distinguishing `Item(value)`, `Closed`, `TimedOut`, and `Cancelled`
+- `Queue.get_or_none(timeout=...)` returns `Option[T]` for the common case where closed, timed out, and cancelled waits all map to “no value”
+- `Queue.get_or(default, timeout=...)` returns either the queued value or a caller-provided fallback
 - `wait_any(...)` returns `WaitAny[T]`
 - `wait_all(...)` returns `WaitAll[T]`
+- `Task.result_or_none(timeout=...)` returns `Option[T]` for the common case where timeout and cancellation both map to “no result yet”
+- `Task.result_or(default, timeout=...)` returns either the task result or a caller-provided fallback
 
 ## Tooling
 

@@ -649,6 +649,19 @@ const BUILTIN_MEMBERS = {
       documentation: "Waits for the child process to finish, optionally timing out."
     },
     {
+      name: "wait_or_none",
+      kind: "method",
+      detail: "wait_or_none(timeout: Duration = ...) -> Result[Option[process.ExitStatus], process.Error]",
+      documentation: "Waits for the child to finish and returns `Option.None` on timeout."
+    },
+    {
+      name: "wait_ok",
+      kind: "method",
+      detail: "wait_ok(timeout: Duration = ...) -> Result[process.ExitStatus, process.Error]",
+      documentation:
+        "Waits for the child to exit successfully, treating timeouts, cancellation, and non-zero exits as `process.Error`."
+    },
+    {
       name: "kill",
       kind: "method",
       detail: "kill() -> Result[None, process.Error]",
@@ -735,6 +748,13 @@ const BUILTIN_MEMBERS = {
       kind: "method",
       detail: "stderr() -> String",
       documentation: "Returns the captured stderr text."
+    },
+    {
+      name: "check",
+      kind: "method",
+      detail: "check() -> Result[None, process.Error]",
+      documentation:
+        "Returns `Result.Ok(None)` when the child exited successfully and `Result.Err(process.Error)` otherwise."
     }
   ],
   net: [
@@ -1370,6 +1390,20 @@ const BUILTIN_MEMBERS = {
         "Receives the next value from the queue and reports `QueueReceive.Item(value)`, `QueueReceive.Closed`, `QueueReceive.TimedOut`, or `QueueReceive.Cancelled`."
     },
     {
+      name: "get_or_none",
+      kind: "method",
+      detail: "get_or_none(timeout: Duration = ...) -> Option[T]",
+      documentation:
+        "Receives the next value from the queue, returning `Option.None` when the queue times out, is cancelled, or is closed and empty."
+    },
+    {
+      name: "get_or",
+      kind: "method",
+      detail: "get_or(default: T, timeout: Duration = ...) -> T",
+      documentation:
+        "Receives the next value from the queue or returns `default` when the queue times out, is cancelled, or is closed and empty."
+    },
+    {
       name: "close",
       kind: "method",
       detail: "close() -> None",
@@ -1383,6 +1417,20 @@ const BUILTIN_MEMBERS = {
       detail: "result(timeout: Duration = ...) -> TaskResult[T]",
       documentation:
         "Waits for the task to finish and reports `TaskResult.Ready(value)`, `TaskResult.TimedOut`, or `TaskResult.Cancelled`."
+    },
+    {
+      name: "result_or_none",
+      kind: "method",
+      detail: "result_or_none(timeout: Duration = ...) -> Option[T]",
+      documentation:
+        "Waits for the task result and returns `Option.None` when the task times out or is cancelled."
+    },
+    {
+      name: "result_or",
+      kind: "method",
+      detail: "result_or(default: T, timeout: Duration = ...) -> T",
+      documentation:
+        "Waits for the task result or returns `default` when the task times out or is cancelled."
     }
   ],
   TaskGroup: [
@@ -3702,6 +3750,12 @@ function specializeMemberReturnType(receiverType, member) {
     if (member.name === "get") {
       return `QueueReceive[${inner}]`;
     }
+    if (member.name === "get_or_none") {
+      return `Option[${inner}]`;
+    }
+    if (member.name === "get_or") {
+      return inner;
+    }
     if (member.name === "put" || member.name === "try_put") {
       return `Result[None, SendError[${inner}]]`;
     }
@@ -3713,9 +3767,34 @@ function specializeMemberReturnType(receiverType, member) {
     if (!match) {
       return parseBuiltinDetailReturnType(member.detail);
     }
+    const inner = normalizeType(match[1]);
     if (member.name === "result") {
-      return `TaskResult[${normalizeType(match[1])}]`;
+      return `TaskResult[${inner}]`;
     }
+    if (member.name === "result_or_none") {
+      return `Option[${inner}]`;
+    }
+    if (member.name === "result_or") {
+      return inner;
+    }
+    return parseBuiltinDetailReturnType(member.detail);
+  }
+
+  if (base === "process.Child") {
+    if (member.name === "wait_or_none") {
+      return "Result[Option[process.ExitStatus], process.Error]";
+    }
+    if (member.name === "wait_ok") {
+      return "Result[process.ExitStatus, process.Error]";
+    }
+    return parseBuiltinDetailReturnType(member.detail);
+  }
+
+  if (base === "process.Completed") {
+    if (member.name === "check") {
+      return "Result[None, process.Error]";
+    }
+    return parseBuiltinDetailReturnType(member.detail);
   }
 
   if (base === "TaskGroup") {

@@ -134,6 +134,8 @@ Process constructors:
 - `stdout()`
 - `stderr()`
 - `wait(timeout=...)`
+- `wait_or_none(timeout=...)`
+- `wait_ok(timeout=...)`
 - `kill()`
 - `terminate()`
 - `close()`
@@ -154,6 +156,7 @@ Process constructors:
 - `success()`
 - `stdout()`
 - `stderr()`
+- `check()`
 
 `process.Child.close()` is cleanup-oriented: it sends a graceful terminate signal first, waits briefly, and escalates to kill if the child does not exit promptly.
 
@@ -164,7 +167,7 @@ import process
 
 def run_echo() -> Result[None, process.Error]:
     completed = try process.run(["/bin/echo", "aurora process"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s)
-    print(completed.success())
+    try completed.check()
     print(completed.stdout().trim())
     return Result.Ok(None)
 ```
@@ -193,6 +196,7 @@ def roundtrip() -> Result[None, process.Error]:
                         pass
             case Option.None:
                 pass
+        print(try child.wait_ok(timeout=2s))
         return Result.Ok(None)
 ```
 

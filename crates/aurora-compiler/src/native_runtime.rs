@@ -15,11 +15,11 @@ use crate::integer::IntegerValue;
 use crate::runtime_value::{
     cast_numeric_value, current_lightweight_task_cancellation, decode_process_stdio, io_error,
     io_read_line, option_none, option_some, process_error_cancelled, process_error_io,
-    process_error_no_command, process_error_spawn, process_error_timed_out, process_stdio_inherit,
-    process_stdio_null, process_stdio_pipe, process_wait_cancelled, process_wait_exited,
-    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, render_float, result_err, result_ok,
-    run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
+    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
+    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_wait_cancelled,
+    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
+    queue_receive_closed, queue_receive_item, queue_receive_timed_out, render_float, result_err,
+    result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
     send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
     spawn_lightweight_task_with_cancellation, task_result_cancelled, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_ready, wait_all_timed_out,
@@ -2557,6 +2557,108 @@ pub extern "C" fn aurora_direct_channel_recv_timeout_value(
 }
 
 #[no_mangle]
+pub extern "C" fn aurora_direct_channel_recv_or_none(
+    channel: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(channel) } {
+        Value::Channel(channel) => boxed_value(
+            match channel.recv_result_with_cancellation(None, Some(&current_cancellation())) {
+                RecvValueResult::Value(value) => option_some(value),
+                RecvValueResult::Closed
+                | RecvValueResult::TimedOut
+                | RecvValueResult::Cancelled => option_none(),
+            },
+        ),
+        other => runtime_error(format!(
+            "expected `Queue`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_channel_recv_or_none_timeout_value(
+    channel: *mut OpaqueValue,
+    duration: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let millis = extract_duration_millis(unsafe { value_ref(duration) });
+    let millis = match u64::try_from(millis) {
+        Ok(millis) => millis,
+        Err(_) => runtime_error("invalid queue timeout duration"),
+    };
+    match unsafe { value_ref(channel) } {
+        Value::Channel(channel) => boxed_value(
+            match channel.recv_result_with_cancellation(
+                Some(StdDuration::from_millis(millis)),
+                Some(&current_cancellation()),
+            ) {
+                RecvValueResult::Value(value) => option_some(value),
+                RecvValueResult::Closed
+                | RecvValueResult::TimedOut
+                | RecvValueResult::Cancelled => option_none(),
+            },
+        ),
+        other => runtime_error(format!(
+            "expected `Queue`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_channel_recv_or_value(
+    channel: *mut OpaqueValue,
+    default: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let default = unsafe { take_value(default) };
+    match unsafe { value_ref(channel) } {
+        Value::Channel(channel) => boxed_value(
+            match channel.recv_result_with_cancellation(None, Some(&current_cancellation())) {
+                RecvValueResult::Value(value) => value,
+                RecvValueResult::Closed
+                | RecvValueResult::TimedOut
+                | RecvValueResult::Cancelled => default,
+            },
+        ),
+        other => runtime_error(format!(
+            "expected `Queue`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_channel_recv_or_value_timeout_value(
+    channel: *mut OpaqueValue,
+    default: *mut OpaqueValue,
+    duration: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let default = unsafe { take_value(default) };
+    let millis = extract_duration_millis(unsafe { value_ref(duration) });
+    let millis = match u64::try_from(millis) {
+        Ok(millis) => millis,
+        Err(_) => runtime_error("invalid queue timeout duration"),
+    };
+    match unsafe { value_ref(channel) } {
+        Value::Channel(channel) => boxed_value(
+            match channel.recv_result_with_cancellation(
+                Some(StdDuration::from_millis(millis)),
+                Some(&current_cancellation()),
+            ) {
+                RecvValueResult::Value(value) => value,
+                RecvValueResult::Closed
+                | RecvValueResult::TimedOut
+                | RecvValueResult::Cancelled => default,
+            },
+        ),
+        other => runtime_error(format!(
+            "expected `Queue`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn aurora_direct_channel_close(channel: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(channel) } {
         Value::Channel(channel) => {
@@ -2611,6 +2713,106 @@ pub extern "C" fn aurora_direct_task_join_timeout_value(
             },
             TaskWaitStatus::TimedOut => boxed_value(task_result_timed_out()),
             TaskWaitStatus::Cancelled => boxed_value(task_result_cancelled()),
+        },
+        other => runtime_error(format!(
+            "expected `Task`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_task_join_or_none(task: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(task) } {
+        Value::Task(task) => {
+            match task.wait_result_with_cancellation(None, Some(&current_cancellation())) {
+                TaskWaitStatus::Ready(result) => match result {
+                    Ok(value) => boxed_value(option_some(value)),
+                    Err(error) => runtime_diagnostic_error(error),
+                },
+                TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(option_none()),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `Task`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_task_join_or_none_timeout_value(
+    task: *mut OpaqueValue,
+    duration: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let millis = extract_duration_millis(unsafe { value_ref(duration) });
+    let millis = match u64::try_from(millis) {
+        Ok(millis) => millis,
+        Err(_) => runtime_error("invalid task result timeout duration"),
+    };
+    match unsafe { value_ref(task) } {
+        Value::Task(task) => match task.wait_result_with_cancellation(
+            Some(StdDuration::from_millis(millis)),
+            Some(&current_cancellation()),
+        ) {
+            TaskWaitStatus::Ready(result) => match result {
+                Ok(value) => boxed_value(option_some(value)),
+                Err(error) => runtime_diagnostic_error(error),
+            },
+            TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(option_none()),
+        },
+        other => runtime_error(format!(
+            "expected `Task`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_task_join_or_value(
+    task: *mut OpaqueValue,
+    default: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let default = unsafe { take_value(default) };
+    match unsafe { value_ref(task) } {
+        Value::Task(task) => {
+            match task.wait_result_with_cancellation(None, Some(&current_cancellation())) {
+                TaskWaitStatus::Ready(result) => match result {
+                    Ok(value) => boxed_value(value),
+                    Err(error) => runtime_diagnostic_error(error),
+                },
+                TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(default),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `Task`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_task_join_or_value_timeout_value(
+    task: *mut OpaqueValue,
+    default: *mut OpaqueValue,
+    duration: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let default = unsafe { take_value(default) };
+    let millis = extract_duration_millis(unsafe { value_ref(duration) });
+    let millis = match u64::try_from(millis) {
+        Ok(millis) => millis,
+        Err(_) => runtime_error("invalid task result timeout duration"),
+    };
+    match unsafe { value_ref(task) } {
+        Value::Task(task) => match task.wait_result_with_cancellation(
+            Some(StdDuration::from_millis(millis)),
+            Some(&current_cancellation()),
+        ) {
+            TaskWaitStatus::Ready(result) => match result {
+                Ok(value) => boxed_value(value),
+                Err(error) => runtime_diagnostic_error(error),
+            },
+            TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(default),
         },
         other => runtime_error(format!(
             "expected `Task`, found `{}`",
@@ -3381,6 +3583,45 @@ pub extern "C" fn aurora_direct_process_child_wait(
 }
 
 #[no_mangle]
+pub extern "C" fn aurora_direct_process_child_wait_or_none(
+    child: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = process_optional_timeout_from_ptr(timeout, "wait_or_none(timeout=...)");
+    match unsafe { value_ref(child) } {
+        Value::ProcessChild(child) => match child
+            .wait_or_none(timeout, Some(&current_cancellation()))
+        {
+            Ok(Some(status)) => boxed_value(result_ok(option_some(process_exit_status(status)))),
+            Ok(None) => boxed_value(result_ok(option_none())),
+            Err(error) => boxed_value(result_err(error)),
+        },
+        other => runtime_error(format!(
+            "expected `process.Child`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_child_wait_ok(
+    child: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = process_optional_timeout_from_ptr(timeout, "wait_ok(timeout=...)");
+    match unsafe { value_ref(child) } {
+        Value::ProcessChild(child) => match child.wait_ok(timeout, Some(&current_cancellation())) {
+            Ok(status) => boxed_value(result_ok(process_exit_status(status))),
+            Err(error) => boxed_value(result_err(error)),
+        },
+        other => runtime_error(format!(
+            "expected `process.Child`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn aurora_direct_process_child_kill(child: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(child) } {
         Value::ProcessChild(child) => match child.kill() {
@@ -3597,6 +3838,22 @@ pub extern "C" fn aurora_direct_process_completed_stderr(
 ) -> *mut OpaqueValue {
     match unsafe { value_ref(completed) } {
         Value::ProcessCompleted(completed) => boxed_value(Value::String(completed.stderr())),
+        other => runtime_error(format!(
+            "expected `process.Completed`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_process_completed_check(
+    completed: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(completed) } {
+        Value::ProcessCompleted(completed) => match completed.check() {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(error)),
+        },
         other => runtime_error(format!(
             "expected `process.Completed`, found `{}`",
             value_type_name(other)

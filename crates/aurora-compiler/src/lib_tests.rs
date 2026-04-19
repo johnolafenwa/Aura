@@ -305,7 +305,7 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
     (
         "examples/concurrency/queue_get_timeout_named.au",
         include_str!("../../../examples/concurrency/queue_get_timeout_named.au"),
-        "timeout\n",
+        "Option.None\n",
     ),
     (
         "examples/control_flow.au",
@@ -1034,7 +1034,7 @@ fn mir_runtime_runs_queue_get_timeout_example_natively() {
     let source = include_str!("../../../examples/concurrency/queue_get_timeout.au");
     let mir = lower_source_to_mir(source).expect("queue_get_timeout example should lower to MIR");
     let output = run_mir(&mir).expect("queue_get_timeout example should run directly through MIR");
-    assert_eq!(output.stdout, "timeout\n");
+    assert_eq!(output.stdout, "Option.None\n");
     assert_eq!(output.value, zero_exit_value());
 }
 
@@ -1540,7 +1540,7 @@ fn categorized_examples_run_with_expected_output() {
             (
                 "examples/concurrency/queue_get_timeout.au",
                 EXAMPLE_CASES[23].1,
-                "timeout\n",
+                "Option.None\n",
             ),
             (
                 "examples/concurrency/sleep_builtin.au",
@@ -1650,7 +1650,7 @@ fn categorized_examples_run_with_expected_output() {
             (
                 "examples/io/process_run.au",
                 EXAMPLE_CASES[45].1,
-                "true\naurora process\n0\nExitStatus.Exited(0)\n",
+                "aurora process\n0\nExitStatus.Exited(0)\n",
             ),
             (
                 "examples/io/process_pipes.au",

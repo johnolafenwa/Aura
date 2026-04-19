@@ -183,6 +183,10 @@ const VALUE_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
     CallableParam::required("value"),
     CallableParam::optional("timeout"),
 ];
+const DEFAULT_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
+    CallableParam::required("default"),
+    CallableParam::optional("timeout"),
+];
 const QUEUE_GET_PARAMS: [CallableParam<'static>; 1] = [CallableParam::optional("timeout")];
 const TIMEOUT_ONLY_PARAMS: [CallableParam<'static>; 1] = [CallableParam::optional("timeout")];
 const VEC_INDEX_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("index")];
@@ -516,8 +520,12 @@ pub enum BuiltinMember {
     QueuePut,
     QueueTryPut,
     QueueGet,
+    QueueGetOrNone,
+    QueueGetOr,
     QueueClose,
     TaskResult,
+    TaskResultOrNone,
+    TaskResultOr,
     TaskGroupStart,
     TaskGroupStartSoon,
     TaskGroupCancel,
@@ -592,6 +600,8 @@ pub enum BuiltinMember {
     ProcessChildStdout,
     ProcessChildStderr,
     ProcessChildWait,
+    ProcessChildWaitOrNone,
+    ProcessChildWaitOk,
     ProcessChildKill,
     ProcessChildTerminate,
     ProcessChildClose,
@@ -606,6 +616,7 @@ pub enum BuiltinMember {
     ProcessCompletedSuccess,
     ProcessCompletedStdout,
     ProcessCompletedStderr,
+    ProcessCompletedCheck,
 }
 
 impl BuiltinMember {
@@ -676,8 +687,12 @@ impl BuiltinMember {
             ("Queue", "put") => Some(Self::QueuePut),
             ("Queue", "try_put") => Some(Self::QueueTryPut),
             ("Queue", "get") => Some(Self::QueueGet),
+            ("Queue", "get_or_none") => Some(Self::QueueGetOrNone),
+            ("Queue", "get_or") => Some(Self::QueueGetOr),
             ("Queue", "close") => Some(Self::QueueClose),
             ("Task", "result") => Some(Self::TaskResult),
+            ("Task", "result_or_none") => Some(Self::TaskResultOrNone),
+            ("Task", "result_or") => Some(Self::TaskResultOr),
             ("TaskGroup", "start") => Some(Self::TaskGroupStart),
             ("TaskGroup", "start_soon") => Some(Self::TaskGroupStartSoon),
             ("TaskGroup", "cancel") => Some(Self::TaskGroupCancel),
@@ -752,6 +767,8 @@ impl BuiltinMember {
             ("process.Child", "stdout") => Some(Self::ProcessChildStdout),
             ("process.Child", "stderr") => Some(Self::ProcessChildStderr),
             ("process.Child", "wait") => Some(Self::ProcessChildWait),
+            ("process.Child", "wait_or_none") => Some(Self::ProcessChildWaitOrNone),
+            ("process.Child", "wait_ok") => Some(Self::ProcessChildWaitOk),
             ("process.Child", "kill") => Some(Self::ProcessChildKill),
             ("process.Child", "terminate") => Some(Self::ProcessChildTerminate),
             ("process.Child", "close") => Some(Self::ProcessChildClose),
@@ -766,6 +783,7 @@ impl BuiltinMember {
             ("process.Completed", "success") => Some(Self::ProcessCompletedSuccess),
             ("process.Completed", "stdout") => Some(Self::ProcessCompletedStdout),
             ("process.Completed", "stderr") => Some(Self::ProcessCompletedStderr),
+            ("process.Completed", "check") => Some(Self::ProcessCompletedCheck),
             _ => None,
         }
     }
@@ -821,8 +839,12 @@ impl BuiltinMember {
             Self::QueuePut => "put",
             Self::QueueTryPut => "try_put",
             Self::QueueGet => "get",
+            Self::QueueGetOrNone => "get_or_none",
+            Self::QueueGetOr => "get_or",
             Self::QueueClose => "close",
             Self::TaskResult => "result",
+            Self::TaskResultOrNone => "result_or_none",
+            Self::TaskResultOr => "result_or",
             Self::TaskGroupStart => "start",
             Self::TaskGroupStartSoon => "start_soon",
             Self::TaskGroupCancel => "cancel",
@@ -897,6 +919,8 @@ impl BuiltinMember {
             Self::ProcessChildStdout => "stdout",
             Self::ProcessChildStderr => "stderr",
             Self::ProcessChildWait => "wait",
+            Self::ProcessChildWaitOrNone => "wait_or_none",
+            Self::ProcessChildWaitOk => "wait_ok",
             Self::ProcessChildKill => "kill",
             Self::ProcessChildTerminate => "terminate",
             Self::ProcessChildClose => "close",
@@ -911,6 +935,7 @@ impl BuiltinMember {
             Self::ProcessCompletedSuccess => "success",
             Self::ProcessCompletedStdout => "stdout",
             Self::ProcessCompletedStderr => "stderr",
+            Self::ProcessCompletedCheck => "check",
         }
     }
 
@@ -967,8 +992,12 @@ impl BuiltinMember {
             Self::QueuePut => "put(value: T, timeout: Duration = ...) -> Result[None, SendError[T]]",
             Self::QueueTryPut => "try_put(value: T) -> Result[None, SendError[T]]",
             Self::QueueGet => "get(timeout: Duration = ...) -> QueueReceive[T]",
+            Self::QueueGetOrNone => "get_or_none(timeout: Duration = ...) -> Option[T]",
+            Self::QueueGetOr => "get_or(default: T, timeout: Duration = ...) -> T",
             Self::QueueClose => "close() -> None",
             Self::TaskResult => "result(timeout: Duration = ...) -> TaskResult[T]",
+            Self::TaskResultOrNone => "result_or_none(timeout: Duration = ...) -> Option[T]",
+            Self::TaskResultOr => "result_or(default: T, timeout: Duration = ...) -> T",
             Self::TaskGroupStart => "start(function, ...) -> Task[T]",
             Self::TaskGroupStartSoon => "start_soon(function, ...) -> None",
             Self::TaskGroupCancel => "cancel() -> None",
@@ -1043,6 +1072,12 @@ impl BuiltinMember {
             Self::ProcessChildStdout => "stdout() -> Option[process.Pipe]",
             Self::ProcessChildStderr => "stderr() -> Option[process.Pipe]",
             Self::ProcessChildWait => "wait(timeout: Duration = ...) -> process.Wait",
+            Self::ProcessChildWaitOrNone => {
+                "wait_or_none(timeout: Duration = ...) -> Result[Option[process.ExitStatus], process.Error]"
+            }
+            Self::ProcessChildWaitOk => {
+                "wait_ok(timeout: Duration = ...) -> Result[process.ExitStatus, process.Error]"
+            }
             Self::ProcessChildKill => "kill() -> Result[None, process.Error]",
             Self::ProcessChildTerminate => "terminate() -> Result[None, process.Error]",
             Self::ProcessChildClose => "close() -> None",
@@ -1065,6 +1100,7 @@ impl BuiltinMember {
             Self::ProcessCompletedSuccess => "success() -> bool",
             Self::ProcessCompletedStdout => "stdout() -> String",
             Self::ProcessCompletedStderr => "stderr() -> String",
+            Self::ProcessCompletedCheck => "check() -> Result[None, process.Error]",
         }
     }
 
@@ -1159,9 +1195,21 @@ impl BuiltinMember {
             Self::QueueGet => {
                 "Receives the next queue outcome as `QueueReceive.Item(value)`, `QueueReceive.Closed`, `QueueReceive.TimedOut`, or `QueueReceive.Cancelled`."
             }
+            Self::QueueGetOrNone => {
+                "Receives the next queue value and returns `Option.Some(value)`, or `Option.None` when the queue is closed, the timeout expires, or cancellation interrupts the wait."
+            }
+            Self::QueueGetOr => {
+                "Receives the next queue value or returns `default` when the queue is closed, the timeout expires, or cancellation interrupts the wait."
+            }
             Self::QueueClose => "Closes the queue and wakes blocked receivers.",
             Self::TaskResult => {
                 "Waits for the task to finish and reports `TaskResult.Ready(value)`, `TaskResult.TimedOut`, or `TaskResult.Cancelled`."
+            }
+            Self::TaskResultOrNone => {
+                "Waits for the task result and returns `Option.Some(value)`, or `Option.None` when the timeout expires or cancellation interrupts the wait."
+            }
+            Self::TaskResultOr => {
+                "Waits for the task result or returns `default` when the timeout expires or cancellation interrupts the wait."
             }
             Self::TaskGroupStart => "Starts a child task in the current task group.",
             Self::TaskGroupStartSoon => {
@@ -1241,6 +1289,12 @@ impl BuiltinMember {
             Self::ProcessChildStdout => "Returns the child's piped stdout handle when stdout was configured with `process.pipe()`.",
             Self::ProcessChildStderr => "Returns the child's piped stderr handle when stderr was configured with `process.pipe()`.",
             Self::ProcessChildWait => "Waits for the child process to exit and reports exit, timeout, cancellation, or wait failure.",
+            Self::ProcessChildWaitOrNone => {
+                "Waits for the child process to exit and returns `Result.Ok(Option.Some(status))`, `Result.Ok(Option.None)` on timeout, or `Result.Err(...)` for cancellation or wait failures."
+            }
+            Self::ProcessChildWaitOk => {
+                "Waits for the child process to exit and returns the exit status for a successful exit, or `process.Error` for timeouts, cancellation, wait failures, or non-zero exits."
+            }
             Self::ProcessChildKill => "Immediately kills the child process.",
             Self::ProcessChildTerminate => "Requests graceful child-process termination.",
             Self::ProcessChildClose => "Closes the child resource, terminating it if it is still running.",
@@ -1255,6 +1309,9 @@ impl BuiltinMember {
             Self::ProcessCompletedSuccess => "Returns true when the completed process exited with code 0.",
             Self::ProcessCompletedStdout => "Returns the stdout captured by `process.run(...)`.",
             Self::ProcessCompletedStderr => "Returns the stderr captured by `process.run(...)`.",
+            Self::ProcessCompletedCheck => {
+                "Returns `Result.Ok(None)` when the completed process exited successfully, or `Result.Err(process.Error)` for abnormal exits."
+            }
         }
     }
 
@@ -1325,6 +1382,8 @@ impl BuiltinMember {
             | Self::TlsListenerAccept
             | Self::TlsStreamReadLine
             | Self::ProcessChildWait
+            | Self::ProcessChildWaitOrNone
+            | Self::ProcessChildWaitOk
             | Self::ProcessPipeReadLine => bind_call_arguments(
                 &format!("`{}`", self.name()),
                 &TIMEOUT_ONLY_PARAMS,
@@ -1339,9 +1398,37 @@ impl BuiltinMember {
                 span,
                 CallConvention::PositionalOrNamed,
             ),
+            Self::QueueGetOrNone => bind_call_arguments(
+                "`get_or_none`",
+                &TIMEOUT_ONLY_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::QueueGetOr => bind_call_arguments(
+                "`get_or`",
+                &DEFAULT_TIMEOUT_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
             Self::TaskResult => bind_call_arguments(
                 "`result`",
                 &TIMEOUT_ONLY_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::TaskResultOrNone => bind_call_arguments(
+                "`result_or_none`",
+                &TIMEOUT_ONLY_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::TaskResultOr => bind_call_arguments(
+                "`result_or`",
+                &DEFAULT_TIMEOUT_PARAMS,
                 args,
                 span,
                 CallConvention::PositionalOrNamed,
@@ -1595,7 +1682,8 @@ impl BuiltinMember {
             | Self::ProcessCompletedStatus
             | Self::ProcessCompletedSuccess
             | Self::ProcessCompletedStdout
-            | Self::ProcessCompletedStderr => bind_call_arguments(
+            | Self::ProcessCompletedStderr
+            | Self::ProcessCompletedCheck => bind_call_arguments(
                 &format!("`{}`", self.name()),
                 &[],
                 args,

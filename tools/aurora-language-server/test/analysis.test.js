@@ -807,21 +807,29 @@ test("queue and task builtins appear in completions and diagnostics", () => {
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `task`/.test(diagnostic.message)));
   assert.ok(!diagnostics.some((diagnostic) => /unknown name `jobs`/.test(diagnostic.message)));
 
-  const channelLine = concurrencySource.split("\n").findIndex((line) => line.includes("match jobs.get():"));
+  const channelLine = concurrencySource
+    .split("\n")
+    .findIndex((line) => line.includes("match jobs.get_or_none():"));
   const channelText = concurrencySource.split("\n")[channelLine];
   const channelCharacter = channelText.indexOf(".") + 1;
   const channelItems = completionsForDocument(concurrencySource, channelLine, channelCharacter, ".");
   const channelNames = new Set(channelItems.map((item) => item.name));
   assert.ok(channelNames.has("put"));
   assert.ok(channelNames.has("get"));
+  assert.ok(channelNames.has("get_or_none"));
+  assert.ok(channelNames.has("get_or"));
   assert.ok(channelNames.has("close"));
 
-  const taskLine = concurrencySource.split("\n").findIndex((line) => line.includes("task.result()"));
+  const taskLine = concurrencySource
+    .split("\n")
+    .findIndex((line) => line.includes("task.result_or(-1)"));
   const taskText = concurrencySource.split("\n")[taskLine];
   const taskCharacter = taskText.indexOf(".") + 1;
   const taskItems = completionsForDocument(concurrencySource, taskLine, taskCharacter, ".");
   const taskNames = new Set(taskItems.map((item) => item.name));
   assert.ok(taskNames.has("result"));
+  assert.ok(taskNames.has("result_or_none"));
+  assert.ok(taskNames.has("result_or"));
 });
 
 test("structured concurrency bindings and builtins do not report false diagnostics", () => {
@@ -1221,6 +1229,8 @@ test("fallback analysis helper specializes builtin member return types and unres
   const mapMembers = byName("Map");
   const vecMembers = byName("Vec");
   const fileMembers = byName("fs.File");
+  const processChildMembers = byName("process.Child");
+  const processCompletedMembers = byName("process.Completed");
   const tcpStreamMembers = byName("net.TcpStream");
   const udpMembers = byName("net.UdpSocket");
   const datagramMembers = byName("net.UdpDatagram");
@@ -1343,6 +1353,14 @@ test("fallback analysis helper specializes builtin member return types and unres
     "QueueReceive[int32]"
   );
   assert.equal(
+    _testing.specializeMemberReturnType("Queue[int32]", queueMembers.get("get_or_none")),
+    "Option[int32]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Queue[int32]", queueMembers.get("get_or")),
+    "int32"
+  );
+  assert.equal(
     _testing.specializeMemberReturnType("Queue[int32]", { name: "close", detail: "close() -> None" }),
     "None"
   );
@@ -1363,6 +1381,14 @@ test("fallback analysis helper specializes builtin member return types and unres
     _testing.specializeMemberReturnType("Task", taskMembers.get("result")),
     "TaskResult[T]"
   );
+  assert.equal(
+    _testing.specializeMemberReturnType("Task[int32]", taskMembers.get("result_or_none")),
+    "Option[int32]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("Task[int32]", taskMembers.get("result_or")),
+    "int32"
+  );
 
   const taskGroupMembers = byName("TaskGroup");
   assert.equal(
@@ -1376,6 +1402,18 @@ test("fallback analysis helper specializes builtin member return types and unres
   assert.equal(
     _testing.specializeMemberReturnType("TaskGroup", taskGroupMembers.get("start_soon")),
     "None"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("process.Child", processChildMembers.get("wait_or_none")),
+    "Result[Option[process.ExitStatus], process.Error]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("process.Child", processChildMembers.get("wait_ok")),
+    "Result[process.ExitStatus, process.Error]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("process.Completed", processCompletedMembers.get("check")),
+    "Result[None, process.Error]"
   );
   assert.equal(
     _testing.specializeMemberReturnType("fs.File", fileMembers.get("read_bytes")),
@@ -1444,6 +1482,8 @@ test("fallback analysis testing helpers expose builtin metadata and utility help
     "net.UnixStream",
     "net.TlsListener",
     "net.TlsStream",
+    "process.Child",
+    "process.Completed",
     "Queue",
     "Task",
     "TaskGroup"

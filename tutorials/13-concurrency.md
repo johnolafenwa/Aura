@@ -9,6 +9,10 @@ The maintained user-facing model is:
 - `TaskGroup.start(...) -> Task[T]`
 - `TaskGroup.start_soon(...) -> None`
 - `Task[T].result(timeout=...) -> TaskResult[T]`
+- `Task[T].result_or_none(timeout=...) -> Option[T]`
+- `Task[T].result_or(default, timeout=...) -> T`
+- `Queue[T].get_or_none(timeout=...) -> Option[T]`
+- `Queue[T].get_or(default, timeout=...) -> T`
 - `wait_any(...)` and `wait_all(...)`
 
 Aurora no longer exposes the older unstructured task forms. Every task belongs to a `TaskGroup`.
@@ -31,7 +35,14 @@ With a bounded queue, `put(...)` waits until capacity is available instead of le
 
 ### Receiving Values
 
-`get()` returns `QueueReceive[T]`:
+For ordinary code, use the convenience forms:
+
+```python
+print(jobs.get_or_none(timeout=100ms))
+print(jobs.get_or(0, timeout=100ms))
+```
+
+Use `get(timeout=...)` when you need to distinguish all wait states. It returns `QueueReceive[T]`:
 
 ```python
 match jobs.get():
@@ -43,25 +54,6 @@ match jobs.get():
         print("timed out")
     case QueueReceive.Cancelled:
         print("cancelled")
-```
-
-The variants are:
-
-- `QueueReceive.Item(value)` when a value is available
-- `QueueReceive.Closed` when the queue is closed and empty
-- `QueueReceive.TimedOut` when a timeout expires
-- `QueueReceive.Cancelled` when task-group cancellation interrupts the wait
-
-For ordinary timeout handling, use `get(timeout=...)`:
-
-```python
-match jobs.get(timeout=100ms):
-    case QueueReceive.Item(value):
-        print(value)
-    case QueueReceive.TimedOut:
-        print("timeout")
-    case _:
-        pass
 ```
 
 See [examples/concurrency/queue_timeout.au](../examples/concurrency/queue_timeout.au) and [examples/concurrency/queue_get_timeout_named.au](../examples/concurrency/queue_get_timeout_named.au).
@@ -116,12 +108,8 @@ Task groups tie child tasks to a lexical scope:
 with TaskGroup() as group:
     first = group.start(worker, jobs)
     second = group.start(worker, jobs)
-
-    match first.result():
-        case TaskResult.Ready(value):
-            print(value)
-        case _:
-            pass
+    print(first.result_or(-1))
+    print(second.result_or(-1))
 ```
 
 When the `with` block ends, any still-running child tasks are joined. This keeps child work scoped to the parent block.
@@ -161,7 +149,14 @@ See [examples/concurrency/task_group_associated_method.au](../examples/concurren
 
 ### Task Results
 
-`Task.result()` returns `TaskResult[T]`:
+For ordinary code, use:
+
+```python
+print(task.result_or_none(timeout=100ms))
+print(task.result_or(-1, timeout=100ms))
+```
+
+Use `Task.result(timeout=...)` when you need to distinguish all wait states. It returns `TaskResult[T]`:
 
 ```python
 match task.result():
@@ -172,8 +167,6 @@ match task.result():
     case TaskResult.Cancelled:
         print("cancelled")
 ```
-
-`Task.result(timeout=...)` adds a timeout-aware wait without changing the result type.
 
 ## Waiting On Multiple Tasks
 
@@ -252,19 +245,13 @@ def main() -> int32:
         task = group.start(producer, jobs)
 
         while true:
-            match jobs.get():
-                case QueueReceive.Item(value):
+            match jobs.get_or_none():
+                case Option.Some(value):
                     print(value)
-                case QueueReceive.Closed:
+                case Option.None:
                     break
-                case _:
-                    pass
 
-        match task.result():
-            case TaskResult.Ready(total):
-                print(total)
-            case _:
-                return 1
+        print(task.result_or(-1))
     return 0
 ```
 

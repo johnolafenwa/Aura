@@ -16,20 +16,21 @@ use crate::mir::{
 use crate::runtime_value::{
     cast_numeric_value, decode_process_stdio, io_error, io_read_line, option_none, option_some,
     process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
-    process_error_timed_out, process_stdio_inherit, process_stdio_null, process_stdio_pipe,
-    process_wait_cancelled, process_wait_exited, process_wait_failed, process_wait_timed_out,
-    queue_receive_cancelled, queue_receive_closed, queue_receive_item, queue_receive_timed_out,
-    result_err, result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled,
-    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
-    spawn_lightweight_task, task_result_cancelled, task_result_ready, task_result_timed_out,
-    wait_all_cancelled, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_ready,
-    wait_any_timed_out, wait_for_runtime_scheduler, CancellationContext, ChannelValue,
-    EnumVariantValue, FileValue, HttpExchangeValue, HttpListenerValue, HttpResponseValue,
-    InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
-    ProcessPipeValue, RangeValue, RecvValueResult, RunOutput, RuntimeSchedulerWakeReason,
-    SendValueError, SetValue, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
-    TcpStreamValue, TlsListenerValue, TlsStreamValue, UdpDatagramValue, UdpSocketValue,
-    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
+    process_stdio_pipe, process_wait_cancelled, process_wait_exited, process_wait_failed,
+    process_wait_timed_out, queue_receive_cancelled, queue_receive_closed, queue_receive_item,
+    queue_receive_timed_out, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
+    send_error_cancelled, send_error_closed, send_error_full, send_error_timed_out,
+    sleep_with_runtime_scheduler, spawn_lightweight_task, task_result_cancelled, task_result_ready,
+    task_result_timed_out, wait_all_cancelled, wait_all_ready, wait_all_timed_out,
+    wait_any_cancelled, wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
+    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, ProcessChildValue,
+    ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue, RangeValue, RecvValueResult,
+    RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue, TaskValue,
+    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
+    UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
+    WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -2170,6 +2171,39 @@ impl MirRuntime {
                     },
                 )
             }
+            "get_or_none" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["timeout"], values)?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[0].value), "get_or_none(timeout=...)")?;
+                Ok(
+                    match channel.recv_result_with_cancellation(timeout, Some(&self.cancellation)) {
+                        RecvValueResult::Value(value) => option_some(value),
+                        RecvValueResult::Closed
+                        | RecvValueResult::TimedOut
+                        | RecvValueResult::Cancelled => option_none(),
+                    },
+                )
+            }
+            "get_or" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["default", "timeout"], values)?;
+                let Some(default) = bound.first().map(|arg| arg.value.clone()) else {
+                    return Err(Diagnostic::new(
+                        "internal error: `get_or` should bind a default argument",
+                    ));
+                };
+                let timeout =
+                    expect_optional_timeout(Some(&bound[1].value), "get_or(timeout=...)")?;
+                Ok(
+                    match channel.recv_result_with_cancellation(timeout, Some(&self.cancellation)) {
+                        RecvValueResult::Value(value) => value,
+                        RecvValueResult::Closed
+                        | RecvValueResult::TimedOut
+                        | RecvValueResult::Cancelled => default,
+                    },
+                )
+            }
             "close" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`close` does not take arguments"));
@@ -2926,6 +2960,35 @@ impl MirRuntime {
                     expect_optional_timeout(Some(&bound[0].value), "result(timeout=...)")?;
                 self.join_task(task, timeout)
             }
+            "result_or_none" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["timeout"], values)?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[0].value), "result_or_none(timeout=...)")?;
+                Ok(
+                    match task.wait_result_with_cancellation(timeout, Some(&self.cancellation)) {
+                        TaskWaitStatus::Ready(result) => option_some(result?),
+                        TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => option_none(),
+                    },
+                )
+            }
+            "result_or" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["default", "timeout"], values)?;
+                let Some(default) = bound.first().map(|arg| arg.value.clone()) else {
+                    return Err(Diagnostic::new(
+                        "internal error: `result_or` should bind a default argument",
+                    ));
+                };
+                let timeout =
+                    expect_optional_timeout(Some(&bound[1].value), "result_or(timeout=...)")?;
+                Ok(
+                    match task.wait_result_with_cancellation(timeout, Some(&self.cancellation)) {
+                        TaskWaitStatus::Ready(result) => result?,
+                        TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => default,
+                    },
+                )
+            }
             _ => Err(Diagnostic::new(format!(
                 "unsupported task method `{}`",
                 field
@@ -3580,6 +3643,25 @@ impl MirRuntime {
                     }
                 })
             }
+            "wait_or_none" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_process_optional_timeout(&bound[0].value, "wait_or_none(timeout=...)")?;
+                match child.wait_or_none(timeout, Some(&self.cancellation)) {
+                    Ok(Some(status)) => Ok(result_ok(option_some(process_exit_status(status)))),
+                    Ok(None) => Ok(result_ok(option_none())),
+                    Err(error) => Ok(result_err(error)),
+                }
+            }
+            "wait_ok" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_process_optional_timeout(&bound[0].value, "wait_ok(timeout=...)")?;
+                match child.wait_ok(timeout, Some(&self.cancellation)) {
+                    Ok(status) => Ok(result_ok(process_exit_status(status))),
+                    Err(error) => Ok(result_err(error)),
+                }
+            }
             "kill" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 match child.kill() {
@@ -3710,6 +3792,13 @@ impl MirRuntime {
             "stderr" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 Ok(Value::String(completed.stderr()))
+            }
+            "check" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match completed.check() {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(error)),
+                }
             }
             _ => Err(Diagnostic::new(format!(
                 "unsupported MIR process completed method `{}`",
