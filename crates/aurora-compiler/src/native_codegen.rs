@@ -4,7 +4,7 @@ use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::immediates::Ieee64;
 use cranelift_codegen::ir::TrapCode;
 use cranelift_codegen::ir::{
-    types, AbiParam, InstBuilder, MemFlags, Signature, UserFuncName, Value,
+    types, AbiParam, FuncRef, InstBuilder, MemFlags, Signature, UserFuncName, Value,
 };
 use cranelift_codegen::isa::CallConv;
 use cranelift_codegen::settings::{self, Configurable};
@@ -269,6 +269,107 @@ struct NativeCodegen<'a> {
     task_group_cancel: FuncId,
     task_group_close: FuncId,
     task_join: FuncId,
+    io_write: FuncId,
+    io_flush: FuncId,
+    io_read_line: FuncId,
+    fs_exists: FuncId,
+    fs_read_to_string: FuncId,
+    fs_read_bytes: FuncId,
+    fs_write_string: FuncId,
+    fs_write_bytes: FuncId,
+    fs_append_string: FuncId,
+    fs_append_bytes: FuncId,
+    fs_create_dir: FuncId,
+    fs_read_dir: FuncId,
+    fs_remove_file: FuncId,
+    fs_open: FuncId,
+    fs_create: FuncId,
+    fs_append: FuncId,
+    file_read_all: FuncId,
+    file_read_bytes: FuncId,
+    file_write_all: FuncId,
+    file_write_bytes: FuncId,
+    file_flush: FuncId,
+    file_close: FuncId,
+    net_connect: FuncId,
+    net_connect_timeout: FuncId,
+    net_listen: FuncId,
+    net_udp_bind: FuncId,
+    net_unix_listen: FuncId,
+    net_unix_connect: FuncId,
+    net_unix_connect_timeout: FuncId,
+    net_tls_listen: FuncId,
+    net_tls_connect: FuncId,
+    net_tls_connect_timeout: FuncId,
+    net_http_listen: FuncId,
+    net_http_request_text: FuncId,
+    net_http_request_text_timeout: FuncId,
+    net_http_request_bytes: FuncId,
+    net_http_request_bytes_timeout: FuncId,
+    net_websocket_listen: FuncId,
+    net_websocket_connect: FuncId,
+    net_websocket_connect_timeout: FuncId,
+    tcp_listener_accept: FuncId,
+    tcp_listener_local_addr: FuncId,
+    tcp_listener_close: FuncId,
+    tcp_stream_read_all: FuncId,
+    tcp_stream_read_line: FuncId,
+    tcp_stream_read_bytes: FuncId,
+    tcp_stream_read_exact: FuncId,
+    tcp_stream_write_all: FuncId,
+    tcp_stream_write_bytes: FuncId,
+    tcp_stream_flush: FuncId,
+    tcp_stream_local_addr: FuncId,
+    tcp_stream_peer_addr: FuncId,
+    tcp_stream_shutdown_read: FuncId,
+    tcp_stream_shutdown_write: FuncId,
+    tcp_stream_shutdown_both: FuncId,
+    tcp_stream_close: FuncId,
+    udp_socket_send_text: FuncId,
+    udp_socket_send_bytes: FuncId,
+    udp_socket_recv: FuncId,
+    udp_socket_recv_from: FuncId,
+    udp_socket_local_addr: FuncId,
+    udp_socket_peer_addr: FuncId,
+    udp_socket_close: FuncId,
+    udp_datagram_address: FuncId,
+    udp_datagram_bytes: FuncId,
+    udp_datagram_text: FuncId,
+    http_listener_accept: FuncId,
+    http_listener_local_addr: FuncId,
+    http_listener_close: FuncId,
+    http_exchange_method: FuncId,
+    http_exchange_path: FuncId,
+    http_exchange_headers: FuncId,
+    http_exchange_body_text: FuncId,
+    http_exchange_body_bytes: FuncId,
+    http_exchange_respond_text: FuncId,
+    http_exchange_respond_bytes: FuncId,
+    http_response_status: FuncId,
+    http_response_reason: FuncId,
+    http_response_headers: FuncId,
+    http_response_text: FuncId,
+    http_response_bytes: FuncId,
+    websocket_listener_accept: FuncId,
+    websocket_listener_local_addr: FuncId,
+    websocket_send_text: FuncId,
+    websocket_send_bytes: FuncId,
+    websocket_recv_text: FuncId,
+    websocket_recv_bytes: FuncId,
+    websocket_close: FuncId,
+    unix_listener_accept: FuncId,
+    unix_listener_close: FuncId,
+    unix_stream_read_line: FuncId,
+    unix_stream_read_exact: FuncId,
+    unix_stream_write_all: FuncId,
+    unix_stream_close: FuncId,
+    tls_listener_accept: FuncId,
+    tls_listener_local_addr: FuncId,
+    tls_listener_close: FuncId,
+    tls_stream_read_line: FuncId,
+    tls_stream_read_exact: FuncId,
+    tls_stream_write_all: FuncId,
+    tls_stream_close: FuncId,
     cancelled: FuncId,
     deadline_new: FuncId,
     deadline_ready: FuncId,
@@ -303,6 +404,87 @@ fn split_field_path_segments<'a>(
         Some((head, rest)) => Ok((*head, rest)),
         None => Err("internal error: direct backend received an empty field path".to_string()),
     }
+}
+
+fn ordered_named_args<'a>(
+    expected_names: &[&str],
+    args: &'a [MirArg],
+) -> std::result::Result<Vec<&'a MirArg>, String> {
+    let mut values = vec![None; expected_names.len()];
+    let mut next_positional = 0usize;
+    for argument in args {
+        if let Some(name) = argument.name.as_deref() {
+            let Some(index) = expected_names
+                .iter()
+                .position(|candidate| *candidate == name)
+            else {
+                return Err(format!(
+                    "direct backend does not recognize builtin argument `{}`",
+                    name
+                ));
+            };
+            if values[index].is_some() {
+                return Err(format!(
+                    "direct backend received duplicate builtin argument `{}`",
+                    name
+                ));
+            }
+            values[index] = Some(argument);
+            continue;
+        }
+        while next_positional < values.len() && values[next_positional].is_some() {
+            next_positional += 1;
+        }
+        if next_positional >= values.len() {
+            return Err("direct backend received too many builtin arguments".to_string());
+        }
+        values[next_positional] = Some(argument);
+        next_positional += 1;
+    }
+    values
+        .into_iter()
+        .map(|value| {
+            value.ok_or_else(|| "direct backend is missing a builtin argument".to_string())
+        })
+        .collect()
+}
+
+fn ordered_optional_named_args<'a>(
+    expected_names: &[&str],
+    args: &'a [MirArg],
+) -> std::result::Result<Vec<Option<&'a MirArg>>, String> {
+    let mut values = vec![None; expected_names.len()];
+    let mut next_positional = 0usize;
+    for argument in args {
+        if let Some(name) = argument.name.as_deref() {
+            let Some(index) = expected_names
+                .iter()
+                .position(|candidate| *candidate == name)
+            else {
+                return Err(format!(
+                    "direct backend does not recognize builtin argument `{}`",
+                    name
+                ));
+            };
+            if values[index].is_some() {
+                return Err(format!(
+                    "direct backend received duplicate builtin argument `{}`",
+                    name
+                ));
+            }
+            values[index] = Some(argument);
+            continue;
+        }
+        while next_positional < values.len() && values[next_positional].is_some() {
+            next_positional += 1;
+        }
+        if next_positional >= values.len() {
+            return Err("direct backend received too many builtin arguments".to_string());
+        }
+        values[next_positional] = Some(argument);
+        next_positional += 1;
+    }
+    Ok(values)
 }
 
 impl<'a> NativeCodegen<'a> {
@@ -443,6 +625,107 @@ impl<'a> NativeCodegen<'a> {
             task_group_cancel => ("aurora_direct_task_group_cancel", [types::I64], Some(types::I64)),
             task_group_close => ("aurora_direct_task_group_close", [types::I64, types::I64], Some(types::I64)),
             task_join => ("aurora_direct_task_join", [types::I64], Some(types::I64)),
+            io_write => ("aurora_direct_io_write", [types::I64], Some(types::I64)),
+            io_flush => ("aurora_direct_io_flush", [], Some(types::I64)),
+            io_read_line => ("aurora_direct_io_read_line", [], Some(types::I64)),
+            fs_exists => ("aurora_direct_fs_exists", [types::I64], Some(types::I64)),
+            fs_read_to_string => ("aurora_direct_fs_read_to_string", [types::I64], Some(types::I64)),
+            fs_read_bytes => ("aurora_direct_fs_read_bytes", [types::I64], Some(types::I64)),
+            fs_write_string => ("aurora_direct_fs_write_string", [types::I64, types::I64], Some(types::I64)),
+            fs_write_bytes => ("aurora_direct_fs_write_bytes", [types::I64, types::I64], Some(types::I64)),
+            fs_append_string => ("aurora_direct_fs_append_string", [types::I64, types::I64], Some(types::I64)),
+            fs_append_bytes => ("aurora_direct_fs_append_bytes", [types::I64, types::I64], Some(types::I64)),
+            fs_create_dir => ("aurora_direct_fs_create_dir", [types::I64], Some(types::I64)),
+            fs_read_dir => ("aurora_direct_fs_read_dir", [types::I64], Some(types::I64)),
+            fs_remove_file => ("aurora_direct_fs_remove_file", [types::I64], Some(types::I64)),
+            fs_open => ("aurora_direct_fs_open", [types::I64], Some(types::I64)),
+            fs_create => ("aurora_direct_fs_create", [types::I64], Some(types::I64)),
+            fs_append => ("aurora_direct_fs_append", [types::I64], Some(types::I64)),
+            file_read_all => ("aurora_direct_file_read_all", [types::I64], Some(types::I64)),
+            file_read_bytes => ("aurora_direct_file_read_bytes", [types::I64], Some(types::I64)),
+            file_write_all => ("aurora_direct_file_write_all", [types::I64, types::I64], Some(types::I64)),
+            file_write_bytes => ("aurora_direct_file_write_bytes", [types::I64, types::I64], Some(types::I64)),
+            file_flush => ("aurora_direct_file_flush", [types::I64], Some(types::I64)),
+            file_close => ("aurora_direct_file_close", [types::I64], Some(types::I64)),
+            net_connect => ("aurora_direct_net_connect", [types::I64], Some(types::I64)),
+            net_connect_timeout => ("aurora_direct_net_connect_timeout", [types::I64, types::I64], Some(types::I64)),
+            net_listen => ("aurora_direct_net_listen", [types::I64], Some(types::I64)),
+            net_udp_bind => ("aurora_direct_net_udp_bind", [types::I64], Some(types::I64)),
+            net_unix_listen => ("aurora_direct_net_unix_listen", [types::I64], Some(types::I64)),
+            net_unix_connect => ("aurora_direct_net_unix_connect", [types::I64], Some(types::I64)),
+            net_unix_connect_timeout => ("aurora_direct_net_unix_connect_timeout", [types::I64, types::I64], Some(types::I64)),
+            net_tls_listen => ("aurora_direct_net_tls_listen", [types::I64, types::I64, types::I64], Some(types::I64)),
+            net_tls_connect => ("aurora_direct_net_tls_connect", [types::I64, types::I64, types::I64], Some(types::I64)),
+            net_tls_connect_timeout => ("aurora_direct_net_tls_connect_timeout", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            net_http_listen => ("aurora_direct_net_http_listen", [types::I64], Some(types::I64)),
+            net_http_request_text => ("aurora_direct_net_http_request_text", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            net_http_request_text_timeout => ("aurora_direct_net_http_request_text_timeout", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            net_http_request_bytes => ("aurora_direct_net_http_request_bytes", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            net_http_request_bytes_timeout => ("aurora_direct_net_http_request_bytes_timeout", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            net_websocket_listen => ("aurora_direct_net_websocket_listen", [types::I64], Some(types::I64)),
+            net_websocket_connect => ("aurora_direct_net_websocket_connect", [types::I64], Some(types::I64)),
+            net_websocket_connect_timeout => ("aurora_direct_net_websocket_connect_timeout", [types::I64, types::I64], Some(types::I64)),
+            tcp_listener_accept => ("aurora_direct_tcp_listener_accept", [types::I64, types::I64], Some(types::I64)),
+            tcp_listener_local_addr => ("aurora_direct_tcp_listener_local_addr", [types::I64], Some(types::I64)),
+            tcp_listener_close => ("aurora_direct_tcp_listener_close", [types::I64], Some(types::I64)),
+            tcp_stream_read_all => ("aurora_direct_tcp_stream_read_all", [types::I64, types::I64], Some(types::I64)),
+            tcp_stream_read_line => ("aurora_direct_tcp_stream_read_line", [types::I64, types::I64], Some(types::I64)),
+            tcp_stream_read_bytes => ("aurora_direct_tcp_stream_read_bytes", [types::I64, types::I64, types::I64], Some(types::I64)),
+            tcp_stream_read_exact => ("aurora_direct_tcp_stream_read_exact", [types::I64, types::I64, types::I64], Some(types::I64)),
+            tcp_stream_write_all => ("aurora_direct_tcp_stream_write_all", [types::I64, types::I64, types::I64], Some(types::I64)),
+            tcp_stream_write_bytes => ("aurora_direct_tcp_stream_write_bytes", [types::I64, types::I64, types::I64], Some(types::I64)),
+            tcp_stream_flush => ("aurora_direct_tcp_stream_flush", [types::I64], Some(types::I64)),
+            tcp_stream_local_addr => ("aurora_direct_tcp_stream_local_addr", [types::I64], Some(types::I64)),
+            tcp_stream_peer_addr => ("aurora_direct_tcp_stream_peer_addr", [types::I64], Some(types::I64)),
+            tcp_stream_shutdown_read => ("aurora_direct_tcp_stream_shutdown_read", [types::I64], Some(types::I64)),
+            tcp_stream_shutdown_write => ("aurora_direct_tcp_stream_shutdown_write", [types::I64], Some(types::I64)),
+            tcp_stream_shutdown_both => ("aurora_direct_tcp_stream_shutdown_both", [types::I64], Some(types::I64)),
+            tcp_stream_close => ("aurora_direct_tcp_stream_close", [types::I64], Some(types::I64)),
+            udp_socket_send_text => ("aurora_direct_udp_socket_send_text", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            udp_socket_send_bytes => ("aurora_direct_udp_socket_send_bytes", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            udp_socket_recv => ("aurora_direct_udp_socket_recv", [types::I64, types::I64, types::I64], Some(types::I64)),
+            udp_socket_recv_from => ("aurora_direct_udp_socket_recv_from", [types::I64, types::I64, types::I64], Some(types::I64)),
+            udp_socket_local_addr => ("aurora_direct_udp_socket_local_addr", [types::I64], Some(types::I64)),
+            udp_socket_peer_addr => ("aurora_direct_udp_socket_peer_addr", [types::I64], Some(types::I64)),
+            udp_socket_close => ("aurora_direct_udp_socket_close", [types::I64], Some(types::I64)),
+            udp_datagram_address => ("aurora_direct_udp_datagram_address", [types::I64], Some(types::I64)),
+            udp_datagram_bytes => ("aurora_direct_udp_datagram_bytes", [types::I64], Some(types::I64)),
+            udp_datagram_text => ("aurora_direct_udp_datagram_text", [types::I64], Some(types::I64)),
+            http_listener_accept => ("aurora_direct_http_listener_accept", [types::I64, types::I64], Some(types::I64)),
+            http_listener_local_addr => ("aurora_direct_http_listener_local_addr", [types::I64], Some(types::I64)),
+            http_listener_close => ("aurora_direct_http_listener_close", [types::I64], Some(types::I64)),
+            http_exchange_method => ("aurora_direct_http_exchange_method", [types::I64], Some(types::I64)),
+            http_exchange_path => ("aurora_direct_http_exchange_path", [types::I64], Some(types::I64)),
+            http_exchange_headers => ("aurora_direct_http_exchange_headers", [types::I64], Some(types::I64)),
+            http_exchange_body_text => ("aurora_direct_http_exchange_body_text", [types::I64], Some(types::I64)),
+            http_exchange_body_bytes => ("aurora_direct_http_exchange_body_bytes", [types::I64], Some(types::I64)),
+            http_exchange_respond_text => ("aurora_direct_http_exchange_respond_text", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            http_exchange_respond_bytes => ("aurora_direct_http_exchange_respond_bytes", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            http_response_status => ("aurora_direct_http_response_status", [types::I64], Some(types::I64)),
+            http_response_reason => ("aurora_direct_http_response_reason", [types::I64], Some(types::I64)),
+            http_response_headers => ("aurora_direct_http_response_headers", [types::I64], Some(types::I64)),
+            http_response_text => ("aurora_direct_http_response_text", [types::I64], Some(types::I64)),
+            http_response_bytes => ("aurora_direct_http_response_bytes", [types::I64], Some(types::I64)),
+            websocket_listener_accept => ("aurora_direct_websocket_listener_accept", [types::I64, types::I64], Some(types::I64)),
+            websocket_listener_local_addr => ("aurora_direct_websocket_listener_local_addr", [types::I64], Some(types::I64)),
+            websocket_send_text => ("aurora_direct_websocket_send_text", [types::I64, types::I64, types::I64], Some(types::I64)),
+            websocket_send_bytes => ("aurora_direct_websocket_send_bytes", [types::I64, types::I64, types::I64], Some(types::I64)),
+            websocket_recv_text => ("aurora_direct_websocket_recv_text", [types::I64, types::I64], Some(types::I64)),
+            websocket_recv_bytes => ("aurora_direct_websocket_recv_bytes", [types::I64, types::I64], Some(types::I64)),
+            websocket_close => ("aurora_direct_websocket_close", [types::I64], Some(types::I64)),
+            unix_listener_accept => ("aurora_direct_unix_listener_accept", [types::I64, types::I64], Some(types::I64)),
+            unix_listener_close => ("aurora_direct_unix_listener_close", [types::I64], Some(types::I64)),
+            unix_stream_read_line => ("aurora_direct_unix_stream_read_line", [types::I64, types::I64], Some(types::I64)),
+            unix_stream_read_exact => ("aurora_direct_unix_stream_read_exact", [types::I64, types::I64, types::I64], Some(types::I64)),
+            unix_stream_write_all => ("aurora_direct_unix_stream_write_all", [types::I64, types::I64, types::I64], Some(types::I64)),
+            unix_stream_close => ("aurora_direct_unix_stream_close", [types::I64], Some(types::I64)),
+            tls_listener_accept => ("aurora_direct_tls_listener_accept", [types::I64, types::I64], Some(types::I64)),
+            tls_listener_local_addr => ("aurora_direct_tls_listener_local_addr", [types::I64], Some(types::I64)),
+            tls_listener_close => ("aurora_direct_tls_listener_close", [types::I64], Some(types::I64)),
+            tls_stream_read_line => ("aurora_direct_tls_stream_read_line", [types::I64, types::I64], Some(types::I64)),
+            tls_stream_read_exact => ("aurora_direct_tls_stream_read_exact", [types::I64, types::I64, types::I64], Some(types::I64)),
+            tls_stream_write_all => ("aurora_direct_tls_stream_write_all", [types::I64, types::I64, types::I64], Some(types::I64)),
+            tls_stream_close => ("aurora_direct_tls_stream_close", [types::I64], Some(types::I64)),
             cancelled => ("aurora_direct_cancelled", [], Some(types::I64)),
             deadline_new => ("aurora_direct_deadline_new", [types::I64], Some(types::I64)),
             deadline_ready => ("aurora_direct_deadline_ready", [types::I64], Some(types::I64)),
@@ -630,6 +913,107 @@ impl<'a> NativeCodegen<'a> {
             task_group_cancel,
             task_group_close,
             task_join,
+            io_write,
+            io_flush,
+            io_read_line,
+            fs_exists,
+            fs_read_to_string,
+            fs_read_bytes,
+            fs_write_string,
+            fs_write_bytes,
+            fs_append_string,
+            fs_append_bytes,
+            fs_create_dir,
+            fs_read_dir,
+            fs_remove_file,
+            fs_open,
+            fs_create,
+            fs_append,
+            file_read_all,
+            file_read_bytes,
+            file_write_all,
+            file_write_bytes,
+            file_flush,
+            file_close,
+            net_connect,
+            net_connect_timeout,
+            net_listen,
+            net_udp_bind,
+            net_unix_listen,
+            net_unix_connect,
+            net_unix_connect_timeout,
+            net_tls_listen,
+            net_tls_connect,
+            net_tls_connect_timeout,
+            net_http_listen,
+            net_http_request_text,
+            net_http_request_text_timeout,
+            net_http_request_bytes,
+            net_http_request_bytes_timeout,
+            net_websocket_listen,
+            net_websocket_connect,
+            net_websocket_connect_timeout,
+            tcp_listener_accept,
+            tcp_listener_local_addr,
+            tcp_listener_close,
+            tcp_stream_read_all,
+            tcp_stream_read_line,
+            tcp_stream_read_bytes,
+            tcp_stream_read_exact,
+            tcp_stream_write_all,
+            tcp_stream_write_bytes,
+            tcp_stream_flush,
+            tcp_stream_local_addr,
+            tcp_stream_peer_addr,
+            tcp_stream_shutdown_read,
+            tcp_stream_shutdown_write,
+            tcp_stream_shutdown_both,
+            tcp_stream_close,
+            udp_socket_send_text,
+            udp_socket_send_bytes,
+            udp_socket_recv,
+            udp_socket_recv_from,
+            udp_socket_local_addr,
+            udp_socket_peer_addr,
+            udp_socket_close,
+            udp_datagram_address,
+            udp_datagram_bytes,
+            udp_datagram_text,
+            http_listener_accept,
+            http_listener_local_addr,
+            http_listener_close,
+            http_exchange_method,
+            http_exchange_path,
+            http_exchange_headers,
+            http_exchange_body_text,
+            http_exchange_body_bytes,
+            http_exchange_respond_text,
+            http_exchange_respond_bytes,
+            http_response_status,
+            http_response_reason,
+            http_response_headers,
+            http_response_text,
+            http_response_bytes,
+            websocket_listener_accept,
+            websocket_listener_local_addr,
+            websocket_send_text,
+            websocket_send_bytes,
+            websocket_recv_text,
+            websocket_recv_bytes,
+            websocket_close,
+            unix_listener_accept,
+            unix_listener_close,
+            unix_stream_read_line,
+            unix_stream_read_exact,
+            unix_stream_write_all,
+            unix_stream_close,
+            tls_listener_accept,
+            tls_listener_local_addr,
+            tls_listener_close,
+            tls_stream_read_line,
+            tls_stream_read_exact,
+            tls_stream_write_all,
+            tls_stream_close,
             cancelled,
             deadline_new,
             deadline_ready,
@@ -1177,6 +1561,307 @@ impl<'a> NativeCodegen<'a> {
         let task_join = self
             .object
             .declare_func_in_func(self.task_join, builder.func);
+        let io_write = self
+            .object
+            .declare_func_in_func(self.io_write, builder.func);
+        let io_flush = self
+            .object
+            .declare_func_in_func(self.io_flush, builder.func);
+        let io_read_line = self
+            .object
+            .declare_func_in_func(self.io_read_line, builder.func);
+        let fs_exists = self
+            .object
+            .declare_func_in_func(self.fs_exists, builder.func);
+        let fs_read_to_string = self
+            .object
+            .declare_func_in_func(self.fs_read_to_string, builder.func);
+        let fs_read_bytes = self
+            .object
+            .declare_func_in_func(self.fs_read_bytes, builder.func);
+        let fs_write_string = self
+            .object
+            .declare_func_in_func(self.fs_write_string, builder.func);
+        let fs_write_bytes = self
+            .object
+            .declare_func_in_func(self.fs_write_bytes, builder.func);
+        let fs_append_string = self
+            .object
+            .declare_func_in_func(self.fs_append_string, builder.func);
+        let fs_append_bytes = self
+            .object
+            .declare_func_in_func(self.fs_append_bytes, builder.func);
+        let fs_create_dir = self
+            .object
+            .declare_func_in_func(self.fs_create_dir, builder.func);
+        let fs_read_dir = self
+            .object
+            .declare_func_in_func(self.fs_read_dir, builder.func);
+        let fs_remove_file = self
+            .object
+            .declare_func_in_func(self.fs_remove_file, builder.func);
+        let fs_open = self.object.declare_func_in_func(self.fs_open, builder.func);
+        let fs_create = self
+            .object
+            .declare_func_in_func(self.fs_create, builder.func);
+        let fs_append = self
+            .object
+            .declare_func_in_func(self.fs_append, builder.func);
+        let file_read_all = self
+            .object
+            .declare_func_in_func(self.file_read_all, builder.func);
+        let file_read_bytes = self
+            .object
+            .declare_func_in_func(self.file_read_bytes, builder.func);
+        let file_write_all = self
+            .object
+            .declare_func_in_func(self.file_write_all, builder.func);
+        let file_write_bytes = self
+            .object
+            .declare_func_in_func(self.file_write_bytes, builder.func);
+        let file_flush = self
+            .object
+            .declare_func_in_func(self.file_flush, builder.func);
+        let file_close = self
+            .object
+            .declare_func_in_func(self.file_close, builder.func);
+        let net_connect = self
+            .object
+            .declare_func_in_func(self.net_connect, builder.func);
+        let net_connect_timeout = self
+            .object
+            .declare_func_in_func(self.net_connect_timeout, builder.func);
+        let net_listen = self
+            .object
+            .declare_func_in_func(self.net_listen, builder.func);
+        let net_udp_bind = self
+            .object
+            .declare_func_in_func(self.net_udp_bind, builder.func);
+        let net_unix_listen = self
+            .object
+            .declare_func_in_func(self.net_unix_listen, builder.func);
+        let net_unix_connect = self
+            .object
+            .declare_func_in_func(self.net_unix_connect, builder.func);
+        let net_unix_connect_timeout = self
+            .object
+            .declare_func_in_func(self.net_unix_connect_timeout, builder.func);
+        let net_tls_listen = self
+            .object
+            .declare_func_in_func(self.net_tls_listen, builder.func);
+        let net_tls_connect = self
+            .object
+            .declare_func_in_func(self.net_tls_connect, builder.func);
+        let net_tls_connect_timeout = self
+            .object
+            .declare_func_in_func(self.net_tls_connect_timeout, builder.func);
+        let net_http_listen = self
+            .object
+            .declare_func_in_func(self.net_http_listen, builder.func);
+        let net_http_request_text = self
+            .object
+            .declare_func_in_func(self.net_http_request_text, builder.func);
+        let net_http_request_text_timeout = self
+            .object
+            .declare_func_in_func(self.net_http_request_text_timeout, builder.func);
+        let net_http_request_bytes = self
+            .object
+            .declare_func_in_func(self.net_http_request_bytes, builder.func);
+        let net_http_request_bytes_timeout = self
+            .object
+            .declare_func_in_func(self.net_http_request_bytes_timeout, builder.func);
+        let net_websocket_listen = self
+            .object
+            .declare_func_in_func(self.net_websocket_listen, builder.func);
+        let net_websocket_connect = self
+            .object
+            .declare_func_in_func(self.net_websocket_connect, builder.func);
+        let net_websocket_connect_timeout = self
+            .object
+            .declare_func_in_func(self.net_websocket_connect_timeout, builder.func);
+        let tcp_listener_accept = self
+            .object
+            .declare_func_in_func(self.tcp_listener_accept, builder.func);
+        let tcp_listener_local_addr = self
+            .object
+            .declare_func_in_func(self.tcp_listener_local_addr, builder.func);
+        let tcp_listener_close = self
+            .object
+            .declare_func_in_func(self.tcp_listener_close, builder.func);
+        let tcp_stream_read_all = self
+            .object
+            .declare_func_in_func(self.tcp_stream_read_all, builder.func);
+        let tcp_stream_read_line = self
+            .object
+            .declare_func_in_func(self.tcp_stream_read_line, builder.func);
+        let tcp_stream_read_bytes = self
+            .object
+            .declare_func_in_func(self.tcp_stream_read_bytes, builder.func);
+        let tcp_stream_read_exact = self
+            .object
+            .declare_func_in_func(self.tcp_stream_read_exact, builder.func);
+        let tcp_stream_write_all = self
+            .object
+            .declare_func_in_func(self.tcp_stream_write_all, builder.func);
+        let tcp_stream_write_bytes = self
+            .object
+            .declare_func_in_func(self.tcp_stream_write_bytes, builder.func);
+        let tcp_stream_flush = self
+            .object
+            .declare_func_in_func(self.tcp_stream_flush, builder.func);
+        let tcp_stream_local_addr = self
+            .object
+            .declare_func_in_func(self.tcp_stream_local_addr, builder.func);
+        let tcp_stream_peer_addr = self
+            .object
+            .declare_func_in_func(self.tcp_stream_peer_addr, builder.func);
+        let tcp_stream_shutdown_read = self
+            .object
+            .declare_func_in_func(self.tcp_stream_shutdown_read, builder.func);
+        let tcp_stream_shutdown_write = self
+            .object
+            .declare_func_in_func(self.tcp_stream_shutdown_write, builder.func);
+        let tcp_stream_shutdown_both = self
+            .object
+            .declare_func_in_func(self.tcp_stream_shutdown_both, builder.func);
+        let tcp_stream_close = self
+            .object
+            .declare_func_in_func(self.tcp_stream_close, builder.func);
+        let udp_socket_send_text = self
+            .object
+            .declare_func_in_func(self.udp_socket_send_text, builder.func);
+        let udp_socket_send_bytes = self
+            .object
+            .declare_func_in_func(self.udp_socket_send_bytes, builder.func);
+        let udp_socket_recv = self
+            .object
+            .declare_func_in_func(self.udp_socket_recv, builder.func);
+        let udp_socket_recv_from = self
+            .object
+            .declare_func_in_func(self.udp_socket_recv_from, builder.func);
+        let udp_socket_local_addr = self
+            .object
+            .declare_func_in_func(self.udp_socket_local_addr, builder.func);
+        let udp_socket_peer_addr = self
+            .object
+            .declare_func_in_func(self.udp_socket_peer_addr, builder.func);
+        let udp_socket_close = self
+            .object
+            .declare_func_in_func(self.udp_socket_close, builder.func);
+        let udp_datagram_address = self
+            .object
+            .declare_func_in_func(self.udp_datagram_address, builder.func);
+        let udp_datagram_bytes = self
+            .object
+            .declare_func_in_func(self.udp_datagram_bytes, builder.func);
+        let udp_datagram_text = self
+            .object
+            .declare_func_in_func(self.udp_datagram_text, builder.func);
+        let http_listener_accept = self
+            .object
+            .declare_func_in_func(self.http_listener_accept, builder.func);
+        let http_listener_local_addr = self
+            .object
+            .declare_func_in_func(self.http_listener_local_addr, builder.func);
+        let http_listener_close = self
+            .object
+            .declare_func_in_func(self.http_listener_close, builder.func);
+        let http_exchange_method = self
+            .object
+            .declare_func_in_func(self.http_exchange_method, builder.func);
+        let http_exchange_path = self
+            .object
+            .declare_func_in_func(self.http_exchange_path, builder.func);
+        let http_exchange_headers = self
+            .object
+            .declare_func_in_func(self.http_exchange_headers, builder.func);
+        let http_exchange_body_text = self
+            .object
+            .declare_func_in_func(self.http_exchange_body_text, builder.func);
+        let http_exchange_body_bytes = self
+            .object
+            .declare_func_in_func(self.http_exchange_body_bytes, builder.func);
+        let http_exchange_respond_text = self
+            .object
+            .declare_func_in_func(self.http_exchange_respond_text, builder.func);
+        let http_exchange_respond_bytes = self
+            .object
+            .declare_func_in_func(self.http_exchange_respond_bytes, builder.func);
+        let http_response_status = self
+            .object
+            .declare_func_in_func(self.http_response_status, builder.func);
+        let http_response_reason = self
+            .object
+            .declare_func_in_func(self.http_response_reason, builder.func);
+        let http_response_headers = self
+            .object
+            .declare_func_in_func(self.http_response_headers, builder.func);
+        let http_response_text = self
+            .object
+            .declare_func_in_func(self.http_response_text, builder.func);
+        let http_response_bytes = self
+            .object
+            .declare_func_in_func(self.http_response_bytes, builder.func);
+        let websocket_listener_accept = self
+            .object
+            .declare_func_in_func(self.websocket_listener_accept, builder.func);
+        let websocket_listener_local_addr = self
+            .object
+            .declare_func_in_func(self.websocket_listener_local_addr, builder.func);
+        let websocket_send_text = self
+            .object
+            .declare_func_in_func(self.websocket_send_text, builder.func);
+        let websocket_send_bytes = self
+            .object
+            .declare_func_in_func(self.websocket_send_bytes, builder.func);
+        let websocket_recv_text = self
+            .object
+            .declare_func_in_func(self.websocket_recv_text, builder.func);
+        let websocket_recv_bytes = self
+            .object
+            .declare_func_in_func(self.websocket_recv_bytes, builder.func);
+        let websocket_close = self
+            .object
+            .declare_func_in_func(self.websocket_close, builder.func);
+        let unix_listener_accept = self
+            .object
+            .declare_func_in_func(self.unix_listener_accept, builder.func);
+        let unix_listener_close = self
+            .object
+            .declare_func_in_func(self.unix_listener_close, builder.func);
+        let unix_stream_read_line = self
+            .object
+            .declare_func_in_func(self.unix_stream_read_line, builder.func);
+        let unix_stream_read_exact = self
+            .object
+            .declare_func_in_func(self.unix_stream_read_exact, builder.func);
+        let unix_stream_write_all = self
+            .object
+            .declare_func_in_func(self.unix_stream_write_all, builder.func);
+        let unix_stream_close = self
+            .object
+            .declare_func_in_func(self.unix_stream_close, builder.func);
+        let tls_listener_accept = self
+            .object
+            .declare_func_in_func(self.tls_listener_accept, builder.func);
+        let tls_listener_local_addr = self
+            .object
+            .declare_func_in_func(self.tls_listener_local_addr, builder.func);
+        let tls_listener_close = self
+            .object
+            .declare_func_in_func(self.tls_listener_close, builder.func);
+        let tls_stream_read_line = self
+            .object
+            .declare_func_in_func(self.tls_stream_read_line, builder.func);
+        let tls_stream_read_exact = self
+            .object
+            .declare_func_in_func(self.tls_stream_read_exact, builder.func);
+        let tls_stream_write_all = self
+            .object
+            .declare_func_in_func(self.tls_stream_write_all, builder.func);
+        let tls_stream_close = self
+            .object
+            .declare_func_in_func(self.tls_stream_close, builder.func);
         let cancelled = self
             .object
             .declare_func_in_func(self.cancelled, builder.func);
@@ -1324,6 +2009,107 @@ impl<'a> NativeCodegen<'a> {
             task_group_cancel,
             task_group_close,
             task_join,
+            io_write,
+            io_flush,
+            io_read_line,
+            fs_exists,
+            fs_read_to_string,
+            fs_read_bytes,
+            fs_write_string,
+            fs_write_bytes,
+            fs_append_string,
+            fs_append_bytes,
+            fs_create_dir,
+            fs_read_dir,
+            fs_remove_file,
+            fs_open,
+            fs_create,
+            fs_append,
+            file_read_all,
+            file_read_bytes,
+            file_write_all,
+            file_write_bytes,
+            file_flush,
+            file_close,
+            net_connect,
+            net_connect_timeout,
+            net_listen,
+            net_udp_bind,
+            net_unix_listen,
+            net_unix_connect,
+            net_unix_connect_timeout,
+            net_tls_listen,
+            net_tls_connect,
+            net_tls_connect_timeout,
+            net_http_listen,
+            net_http_request_text,
+            net_http_request_text_timeout,
+            net_http_request_bytes,
+            net_http_request_bytes_timeout,
+            net_websocket_listen,
+            net_websocket_connect,
+            net_websocket_connect_timeout,
+            tcp_listener_accept,
+            tcp_listener_local_addr,
+            tcp_listener_close,
+            tcp_stream_read_all,
+            tcp_stream_read_line,
+            tcp_stream_read_bytes,
+            tcp_stream_read_exact,
+            tcp_stream_write_all,
+            tcp_stream_write_bytes,
+            tcp_stream_flush,
+            tcp_stream_local_addr,
+            tcp_stream_peer_addr,
+            tcp_stream_shutdown_read,
+            tcp_stream_shutdown_write,
+            tcp_stream_shutdown_both,
+            tcp_stream_close,
+            udp_socket_send_text,
+            udp_socket_send_bytes,
+            udp_socket_recv,
+            udp_socket_recv_from,
+            udp_socket_local_addr,
+            udp_socket_peer_addr,
+            udp_socket_close,
+            udp_datagram_address,
+            udp_datagram_bytes,
+            udp_datagram_text,
+            http_listener_accept,
+            http_listener_local_addr,
+            http_listener_close,
+            http_exchange_method,
+            http_exchange_path,
+            http_exchange_headers,
+            http_exchange_body_text,
+            http_exchange_body_bytes,
+            http_exchange_respond_text,
+            http_exchange_respond_bytes,
+            http_response_status,
+            http_response_reason,
+            http_response_headers,
+            http_response_text,
+            http_response_bytes,
+            websocket_listener_accept,
+            websocket_listener_local_addr,
+            websocket_send_text,
+            websocket_send_bytes,
+            websocket_recv_text,
+            websocket_recv_bytes,
+            websocket_close,
+            unix_listener_accept,
+            unix_listener_close,
+            unix_stream_read_line,
+            unix_stream_read_exact,
+            unix_stream_write_all,
+            unix_stream_close,
+            tls_listener_accept,
+            tls_listener_local_addr,
+            tls_listener_close,
+            tls_stream_read_line,
+            tls_stream_read_exact,
+            tls_stream_write_all,
+            tls_stream_close,
             cancelled,
             deadline_new,
             deadline_ready,
@@ -1644,6 +2430,107 @@ struct FunctionCompiler<'a> {
     task_group_cancel: cranelift_codegen::ir::FuncRef,
     task_group_close: cranelift_codegen::ir::FuncRef,
     task_join: cranelift_codegen::ir::FuncRef,
+    io_write: cranelift_codegen::ir::FuncRef,
+    io_flush: cranelift_codegen::ir::FuncRef,
+    io_read_line: cranelift_codegen::ir::FuncRef,
+    fs_exists: cranelift_codegen::ir::FuncRef,
+    fs_read_to_string: cranelift_codegen::ir::FuncRef,
+    fs_read_bytes: cranelift_codegen::ir::FuncRef,
+    fs_write_string: cranelift_codegen::ir::FuncRef,
+    fs_write_bytes: cranelift_codegen::ir::FuncRef,
+    fs_append_string: cranelift_codegen::ir::FuncRef,
+    fs_append_bytes: cranelift_codegen::ir::FuncRef,
+    fs_create_dir: cranelift_codegen::ir::FuncRef,
+    fs_read_dir: cranelift_codegen::ir::FuncRef,
+    fs_remove_file: cranelift_codegen::ir::FuncRef,
+    fs_open: cranelift_codegen::ir::FuncRef,
+    fs_create: cranelift_codegen::ir::FuncRef,
+    fs_append: cranelift_codegen::ir::FuncRef,
+    file_read_all: cranelift_codegen::ir::FuncRef,
+    file_read_bytes: cranelift_codegen::ir::FuncRef,
+    file_write_all: cranelift_codegen::ir::FuncRef,
+    file_write_bytes: cranelift_codegen::ir::FuncRef,
+    file_flush: cranelift_codegen::ir::FuncRef,
+    file_close: cranelift_codegen::ir::FuncRef,
+    net_connect: cranelift_codegen::ir::FuncRef,
+    net_connect_timeout: cranelift_codegen::ir::FuncRef,
+    net_listen: cranelift_codegen::ir::FuncRef,
+    net_udp_bind: cranelift_codegen::ir::FuncRef,
+    net_unix_listen: cranelift_codegen::ir::FuncRef,
+    net_unix_connect: cranelift_codegen::ir::FuncRef,
+    net_unix_connect_timeout: cranelift_codegen::ir::FuncRef,
+    net_tls_listen: cranelift_codegen::ir::FuncRef,
+    net_tls_connect: cranelift_codegen::ir::FuncRef,
+    net_tls_connect_timeout: cranelift_codegen::ir::FuncRef,
+    net_http_listen: cranelift_codegen::ir::FuncRef,
+    net_http_request_text: cranelift_codegen::ir::FuncRef,
+    net_http_request_text_timeout: cranelift_codegen::ir::FuncRef,
+    net_http_request_bytes: cranelift_codegen::ir::FuncRef,
+    net_http_request_bytes_timeout: cranelift_codegen::ir::FuncRef,
+    net_websocket_listen: cranelift_codegen::ir::FuncRef,
+    net_websocket_connect: cranelift_codegen::ir::FuncRef,
+    net_websocket_connect_timeout: cranelift_codegen::ir::FuncRef,
+    tcp_listener_accept: cranelift_codegen::ir::FuncRef,
+    tcp_listener_local_addr: cranelift_codegen::ir::FuncRef,
+    tcp_listener_close: cranelift_codegen::ir::FuncRef,
+    tcp_stream_read_all: cranelift_codegen::ir::FuncRef,
+    tcp_stream_read_line: cranelift_codegen::ir::FuncRef,
+    tcp_stream_read_bytes: cranelift_codegen::ir::FuncRef,
+    tcp_stream_read_exact: cranelift_codegen::ir::FuncRef,
+    tcp_stream_write_all: cranelift_codegen::ir::FuncRef,
+    tcp_stream_write_bytes: cranelift_codegen::ir::FuncRef,
+    tcp_stream_flush: cranelift_codegen::ir::FuncRef,
+    tcp_stream_local_addr: cranelift_codegen::ir::FuncRef,
+    tcp_stream_peer_addr: cranelift_codegen::ir::FuncRef,
+    tcp_stream_shutdown_read: cranelift_codegen::ir::FuncRef,
+    tcp_stream_shutdown_write: cranelift_codegen::ir::FuncRef,
+    tcp_stream_shutdown_both: cranelift_codegen::ir::FuncRef,
+    tcp_stream_close: cranelift_codegen::ir::FuncRef,
+    udp_socket_send_text: cranelift_codegen::ir::FuncRef,
+    udp_socket_send_bytes: cranelift_codegen::ir::FuncRef,
+    udp_socket_recv: cranelift_codegen::ir::FuncRef,
+    udp_socket_recv_from: cranelift_codegen::ir::FuncRef,
+    udp_socket_local_addr: cranelift_codegen::ir::FuncRef,
+    udp_socket_peer_addr: cranelift_codegen::ir::FuncRef,
+    udp_socket_close: cranelift_codegen::ir::FuncRef,
+    udp_datagram_address: cranelift_codegen::ir::FuncRef,
+    udp_datagram_bytes: cranelift_codegen::ir::FuncRef,
+    udp_datagram_text: cranelift_codegen::ir::FuncRef,
+    http_listener_accept: cranelift_codegen::ir::FuncRef,
+    http_listener_local_addr: cranelift_codegen::ir::FuncRef,
+    http_listener_close: cranelift_codegen::ir::FuncRef,
+    http_exchange_method: cranelift_codegen::ir::FuncRef,
+    http_exchange_path: cranelift_codegen::ir::FuncRef,
+    http_exchange_headers: cranelift_codegen::ir::FuncRef,
+    http_exchange_body_text: cranelift_codegen::ir::FuncRef,
+    http_exchange_body_bytes: cranelift_codegen::ir::FuncRef,
+    http_exchange_respond_text: cranelift_codegen::ir::FuncRef,
+    http_exchange_respond_bytes: cranelift_codegen::ir::FuncRef,
+    http_response_status: cranelift_codegen::ir::FuncRef,
+    http_response_reason: cranelift_codegen::ir::FuncRef,
+    http_response_headers: cranelift_codegen::ir::FuncRef,
+    http_response_text: cranelift_codegen::ir::FuncRef,
+    http_response_bytes: cranelift_codegen::ir::FuncRef,
+    websocket_listener_accept: cranelift_codegen::ir::FuncRef,
+    websocket_listener_local_addr: cranelift_codegen::ir::FuncRef,
+    websocket_send_text: cranelift_codegen::ir::FuncRef,
+    websocket_send_bytes: cranelift_codegen::ir::FuncRef,
+    websocket_recv_text: cranelift_codegen::ir::FuncRef,
+    websocket_recv_bytes: cranelift_codegen::ir::FuncRef,
+    websocket_close: cranelift_codegen::ir::FuncRef,
+    unix_listener_accept: cranelift_codegen::ir::FuncRef,
+    unix_listener_close: cranelift_codegen::ir::FuncRef,
+    unix_stream_read_line: cranelift_codegen::ir::FuncRef,
+    unix_stream_read_exact: cranelift_codegen::ir::FuncRef,
+    unix_stream_write_all: cranelift_codegen::ir::FuncRef,
+    unix_stream_close: cranelift_codegen::ir::FuncRef,
+    tls_listener_accept: cranelift_codegen::ir::FuncRef,
+    tls_listener_local_addr: cranelift_codegen::ir::FuncRef,
+    tls_listener_close: cranelift_codegen::ir::FuncRef,
+    tls_stream_read_line: cranelift_codegen::ir::FuncRef,
+    tls_stream_read_exact: cranelift_codegen::ir::FuncRef,
+    tls_stream_write_all: cranelift_codegen::ir::FuncRef,
+    tls_stream_close: cranelift_codegen::ir::FuncRef,
     cancelled: cranelift_codegen::ir::FuncRef,
     deadline_new: cranelift_codegen::ir::FuncRef,
     deadline_ready: cranelift_codegen::ir::FuncRef,
@@ -1748,6 +2635,11 @@ impl<'a> FunctionCompiler<'a> {
         };
         self.mark_temporary_opaque_owned(&value);
         value
+    }
+
+    fn runtime_call_results(&mut self, callee: FuncRef, args: &[Value]) -> Vec<Value> {
+        let inst = self.builder.ins().call(callee, args);
+        self.builder.inst_results(inst).to_vec()
     }
 
     fn drop_deadlines(&mut self, deadlines: &[Value]) {
@@ -2499,6 +3391,45 @@ impl<'a> FunctionCompiler<'a> {
                 ty: DirectType::Scalar(ScalarKind::Unit),
             });
         }
+        if matches!(
+            name,
+            "io::write"
+                | "io::flush"
+                | "io::read_line"
+                | "fs::exists"
+                | "fs::read_to_string"
+                | "fs::read_bytes"
+                | "fs::write_string"
+                | "fs::write_bytes"
+                | "fs::append_string"
+                | "fs::append_bytes"
+                | "fs::create_dir"
+                | "fs::read_dir"
+                | "fs::remove_file"
+                | "fs::open"
+                | "fs::create"
+                | "fs::append"
+                | "net::connect"
+                | "net::connect_timeout"
+                | "net::listen"
+                | "net::udp_bind"
+                | "net::unix_listen"
+                | "net::unix_connect"
+                | "net::unix_connect_timeout"
+                | "net::tls_listen"
+                | "net::tls_connect"
+                | "net::tls_connect_timeout"
+                | "net::http_listen"
+                | "net::http_request_text"
+                | "net::http_request_text_timeout"
+                | "net::http_request_bytes"
+                | "net::http_request_bytes_timeout"
+                | "net::websocket_listen"
+                | "net::websocket_connect"
+                | "net::websocket_connect_timeout"
+        ) {
+            return self.compile_builtin_io_named_call(name, args);
+        }
         if name == "abs" {
             let [argument] = args else {
                 return Err("direct backend expected `abs()` to receive one argument".to_string());
@@ -2714,6 +3645,300 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.inst_results(inst).to_vec(),
             Type::named("Range"),
         ))
+    }
+
+    fn lower_optional_opaque_arg(
+        &mut self,
+        argument: Option<&MirArg>,
+    ) -> std::result::Result<Value, String> {
+        if let Some(argument) = argument {
+            let loaded = self.load_operand(&argument.value)?;
+            let value = self.ensure_opaque(loaded)?;
+            Ok(value.values[0])
+        } else {
+            Ok(self.builder.ins().iconst(types::I64, 0))
+        }
+    }
+
+    fn compile_builtin_io_named_call(
+        &mut self,
+        name: &str,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let expected_names: &[&str] = match name {
+            "io::write" => &["text"],
+            "io::flush" | "io::read_line" => &[],
+            "fs::exists" | "fs::read_to_string" | "fs::read_bytes" | "fs::create_dir"
+            | "fs::read_dir" | "fs::remove_file" | "fs::open" | "fs::create" | "fs::append"
+            | "net::unix_listen" | "net::unix_connect" => &["path"],
+            "net::connect"
+            | "net::listen"
+            | "net::udp_bind"
+            | "net::http_listen"
+            | "net::websocket_listen" => &["address"],
+            "net::websocket_connect" => &["url"],
+            "fs::write_string" | "fs::append_string" => &["path", "text"],
+            "fs::write_bytes" | "fs::append_bytes" => &["path", "bytes"],
+            "net::connect_timeout" => &["address", "timeout"],
+            "net::unix_connect_timeout" => &["path", "timeout"],
+            "net::websocket_connect_timeout" => &["url", "timeout"],
+            "net::tls_listen" => &["address", "cert_pem_path", "key_pem_path"],
+            "net::tls_connect" => &["address", "server_name", "ca_pem_path"],
+            "net::tls_connect_timeout" => &["address", "server_name", "ca_pem_path", "timeout"],
+            "net::http_request_text" => &["method", "url", "body", "headers"],
+            "net::http_request_text_timeout" => &["method", "url", "body", "headers", "timeout"],
+            "net::http_request_bytes" => &["method", "url", "bytes", "headers"],
+            "net::http_request_bytes_timeout" => &["method", "url", "bytes", "headers", "timeout"],
+            _ => {
+                return Err(format!(
+                    "direct backend does not know builtin I/O call `{}`",
+                    name
+                ))
+            }
+        };
+        let func = match name {
+            "io::write" => self.io_write,
+            "io::flush" => self.io_flush,
+            "io::read_line" => self.io_read_line,
+            "fs::exists" => self.fs_exists,
+            "fs::read_to_string" => self.fs_read_to_string,
+            "fs::read_bytes" => self.fs_read_bytes,
+            "fs::write_string" => self.fs_write_string,
+            "fs::write_bytes" => self.fs_write_bytes,
+            "fs::append_string" => self.fs_append_string,
+            "fs::append_bytes" => self.fs_append_bytes,
+            "fs::create_dir" => self.fs_create_dir,
+            "fs::read_dir" => self.fs_read_dir,
+            "fs::remove_file" => self.fs_remove_file,
+            "fs::open" => self.fs_open,
+            "fs::create" => self.fs_create,
+            "fs::append" => self.fs_append,
+            "net::connect" => self.net_connect,
+            "net::connect_timeout" => self.net_connect_timeout,
+            "net::listen" => self.net_listen,
+            "net::udp_bind" => self.net_udp_bind,
+            "net::unix_listen" => self.net_unix_listen,
+            "net::unix_connect" => self.net_unix_connect,
+            "net::unix_connect_timeout" => self.net_unix_connect_timeout,
+            "net::tls_listen" => self.net_tls_listen,
+            "net::tls_connect" => self.net_tls_connect,
+            "net::tls_connect_timeout" => self.net_tls_connect_timeout,
+            "net::http_listen" => self.net_http_listen,
+            "net::http_request_text" => self.net_http_request_text,
+            "net::http_request_text_timeout" => self.net_http_request_text_timeout,
+            "net::http_request_bytes" => self.net_http_request_bytes,
+            "net::http_request_bytes_timeout" => self.net_http_request_bytes_timeout,
+            "net::websocket_listen" => self.net_websocket_listen,
+            "net::websocket_connect" => self.net_websocket_connect,
+            "net::websocket_connect_timeout" => self.net_websocket_connect_timeout,
+            _ => unreachable!(),
+        };
+        let bound = ordered_optional_named_args(expected_names, args)?;
+        let mut lowered_args = Vec::new();
+        for (index, argument) in bound.iter().enumerate() {
+            let optional_timeout = matches!(
+                name,
+                "net::connect_timeout"
+                    | "net::unix_connect_timeout"
+                    | "net::tls_connect_timeout"
+                    | "net::http_request_text_timeout"
+                    | "net::http_request_bytes_timeout"
+                    | "net::websocket_connect_timeout"
+            ) && index == expected_names.len() - 1;
+            if optional_timeout {
+                lowered_args.push(self.lower_optional_opaque_arg(*argument)?);
+                continue;
+            }
+            let argument = argument
+                .ok_or_else(|| "direct backend is missing a builtin argument".to_string())?;
+            let loaded = self.load_operand(&argument.value)?;
+            let value = self.ensure_opaque(loaded)?;
+            lowered_args.push(value.values[0]);
+        }
+        let inst = self.builder.ins().call(func, &lowered_args);
+        let results = self.builder.inst_results(inst).to_vec();
+        let io_error_ty = Type::Named("io.Error".to_string(), Vec::new());
+        let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+        match name {
+            "fs::exists" => Ok(ValueRef {
+                values: results,
+                ty: DirectType::Scalar(ScalarKind::Bool),
+            }),
+            "io::write" | "io::flush" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                ),
+            )),
+            "io::read_line" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Option".to_string(), vec![Type::named("String")]),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                ),
+            )),
+            "fs::read_to_string" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::named("String"),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                ),
+            )),
+            "fs::read_bytes" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![bytes_ty.clone(), io_error_ty.clone()],
+                ),
+            )),
+            "fs::write_string" | "fs::write_bytes" | "fs::append_string" | "fs::append_bytes"
+            | "fs::create_dir" | "fs::remove_file" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named("Result".to_string(), vec![Type::Unit, io_error_ty.clone()]),
+            )),
+            "fs::read_dir" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                        io_error_ty.clone(),
+                    ],
+                ),
+            )),
+            "fs::open" | "fs::create" | "fs::append" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("fs.File".to_string(), Vec::new()),
+                        io_error_ty.clone(),
+                    ],
+                ),
+            )),
+            "net::connect" | "net::connect_timeout" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.TcpStream".to_string(), Vec::new()),
+                        io_error_ty.clone(),
+                    ],
+                ),
+            )),
+            "net::listen" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.TcpListener".to_string(), Vec::new()),
+                        io_error_ty.clone(),
+                    ],
+                ),
+            )),
+            "net::udp_bind" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.UdpSocket".to_string(), Vec::new()),
+                        io_error_ty.clone(),
+                    ],
+                ),
+            )),
+            "net::unix_listen" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.UnixListener".to_string(), Vec::new()),
+                        io_error_ty.clone(),
+                    ],
+                ),
+            )),
+            "net::unix_connect" | "net::unix_connect_timeout" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.UnixStream".to_string(), Vec::new()),
+                        io_error_ty.clone(),
+                    ],
+                ),
+            )),
+            "net::tls_listen" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.TlsListener".to_string(), Vec::new()),
+                        io_error_ty.clone(),
+                    ],
+                ),
+            )),
+            "net::tls_connect" | "net::tls_connect_timeout" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.TlsStream".to_string(), Vec::new()),
+                        io_error_ty.clone(),
+                    ],
+                ),
+            )),
+            "net::http_listen" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.HttpListener".to_string(), Vec::new()),
+                        io_error_ty.clone(),
+                    ],
+                ),
+            )),
+            "net::http_request_text"
+            | "net::http_request_text_timeout"
+            | "net::http_request_bytes"
+            | "net::http_request_bytes_timeout" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.HttpResponse".to_string(), Vec::new()),
+                        io_error_ty.clone(),
+                    ],
+                ),
+            )),
+            "net::websocket_listen" => Ok(self.owned_opaque_result(
+                results,
+                Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.WebSocketListener".to_string(), Vec::new()),
+                        io_error_ty.clone(),
+                    ],
+                ),
+            )),
+            "net::websocket_connect" | "net::websocket_connect_timeout" => Ok(self
+                .owned_opaque_result(
+                    results,
+                    Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::Named("net.WebSocket".to_string(), Vec::new()),
+                            io_error_ty.clone(),
+                        ],
+                    ),
+                )),
+            _ => unreachable!(),
+        }
     }
 
     fn compile_for_range(
@@ -3907,6 +5132,27 @@ impl<'a> FunctionCompiler<'a> {
                             Type::named("String"),
                         ))
                     }
+                    "add" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `add()` to receive one string argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded_value = self.load_operand(&argument.value)?;
+                        let value = self.ensure_opaque(loaded_value)?;
+                        let binary_opcode = self.binary_opcode(BinaryOp::Add);
+                        let opcode = self.builder.ins().iconst(types::I64, binary_opcode);
+                        let zero = self.builder.ins().iconst(types::I64, 0);
+                        let inst = self.builder.ins().call(
+                            self.binary_value,
+                            &[opcode, object.values[0], value.values[0], zero, zero],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::named("String"),
+                        ))
+                    }
                     "to_lower" => {
                         if !args.is_empty() {
                             return Err(
@@ -4751,6 +5997,1270 @@ impl<'a> FunctionCompiler<'a> {
                             Type::Named("Option".to_string(), vec![element_ty]),
                         ))
                     }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "fs.File" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "read_all" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `read_all()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.file_read_all, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "read_bytes" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `read_bytes()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.file_read_bytes, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "write_all" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `write_all()` to receive one argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded = self.load_operand(&argument.value)?;
+                        let text = self.ensure_opaque(loaded)?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.file_write_all, &[object.values[0], text.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "write_bytes" => {
+                        let [argument] = args else {
+                            return Err(
+                                "direct backend expected `write_bytes()` to receive one argument"
+                                    .to_string(),
+                            );
+                        };
+                        let loaded = self.load_operand(&argument.value)?;
+                        let bytes = self.ensure_opaque(loaded)?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.file_write_bytes, &[object.values[0], bytes.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "flush" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `flush()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.file_flush, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "close" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `close()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.file_close, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Unit),
+                        })
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "net.TcpListener" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "accept" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tcp_listener_accept, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("net.TcpStream".to_string(), Vec::new()),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "local_addr" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `local_addr()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tcp_listener_local_addr, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "close" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `close()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tcp_listener_close, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Unit),
+                        })
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "net.TcpStream" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "read_all" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tcp_stream_read_all, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "read_line" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tcp_stream_read_line, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "read_bytes" => {
+                        let bound = ordered_optional_named_args(&["max_bytes", "timeout"], args)?;
+                        let count = bound[0].ok_or_else(|| {
+                            "direct backend expected `read_bytes()` to receive `max_bytes`"
+                                .to_string()
+                        })?;
+                        let loaded_count = self.load_operand(&count.value)?;
+                        let count = self
+                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let count = self.ensure_opaque(count)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.tcp_stream_read_bytes,
+                            &[object.values[0], count.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named(
+                                        "Option".to_string(),
+                                        vec![Type::Named(
+                                            "Vec".to_string(),
+                                            vec![Type::named("uint8")],
+                                        )],
+                                    ),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "read_exact" => {
+                        let bound = ordered_optional_named_args(&["count", "timeout"], args)?;
+                        let count = bound[0].ok_or_else(|| {
+                            "direct backend expected `read_exact()` to receive `count`".to_string()
+                        })?;
+                        let loaded_count = self.load_operand(&count.value)?;
+                        let count = self
+                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let count = self.ensure_opaque(count)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.tcp_stream_read_exact,
+                            &[object.values[0], count.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "write_all" => {
+                        let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
+                        let argument = bound[0].ok_or_else(|| {
+                            "direct backend expected `write_all()` to receive `text`".to_string()
+                        })?;
+                        let loaded = self.load_operand(&argument.value)?;
+                        let text = self.ensure_opaque(loaded)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.tcp_stream_write_all,
+                            &[object.values[0], text.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "write_bytes" => {
+                        let bound = ordered_optional_named_args(&["bytes", "timeout"], args)?;
+                        let argument = bound[0].ok_or_else(|| {
+                            "direct backend expected `write_bytes()` to receive `bytes`".to_string()
+                        })?;
+                        let loaded = self.load_operand(&argument.value)?;
+                        let bytes = self.ensure_opaque(loaded)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.tcp_stream_write_bytes,
+                            &[object.values[0], bytes.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "flush" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `flush()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tcp_stream_flush, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "local_addr" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `local_addr()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tcp_stream_local_addr, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "peer_addr" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `peer_addr()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tcp_stream_peer_addr, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "shutdown_read" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `shutdown_read()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tcp_stream_shutdown_read, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "shutdown_write" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `shutdown_write()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tcp_stream_shutdown_write, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "shutdown_both" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `shutdown_both()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tcp_stream_shutdown_both, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "close" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `close()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tcp_stream_close, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Unit),
+                        })
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "net.UdpSocket" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "send_text" => {
+                        let bound =
+                            ordered_optional_named_args(&["address", "text", "timeout"], args)?;
+                        let address = bound[0].ok_or_else(|| {
+                            "direct backend expected `send_text()` to receive `address`".to_string()
+                        })?;
+                        let text = bound[1].ok_or_else(|| {
+                            "direct backend expected `send_text()` to receive `text`".to_string()
+                        })?;
+                        let loaded_address = self.load_operand(&address.value)?;
+                        let address = self.ensure_opaque(loaded_address)?;
+                        let loaded_text = self.load_operand(&text.value)?;
+                        let text = self.ensure_opaque(loaded_text)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[2])?;
+                        let inst = self.builder.ins().call(
+                            self.udp_socket_send_text,
+                            &[object.values[0], address.values[0], text.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "send_bytes" => {
+                        let bound =
+                            ordered_optional_named_args(&["address", "bytes", "timeout"], args)?;
+                        let address = bound[0].ok_or_else(|| {
+                            "direct backend expected `send_bytes()` to receive `address`"
+                                .to_string()
+                        })?;
+                        let bytes = bound[1].ok_or_else(|| {
+                            "direct backend expected `send_bytes()` to receive `bytes`".to_string()
+                        })?;
+                        let loaded_address = self.load_operand(&address.value)?;
+                        let address = self.ensure_opaque(loaded_address)?;
+                        let loaded_bytes = self.load_operand(&bytes.value)?;
+                        let bytes = self.ensure_opaque(loaded_bytes)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[2])?;
+                        let inst = self.builder.ins().call(
+                            self.udp_socket_send_bytes,
+                            &[
+                                object.values[0],
+                                address.values[0],
+                                bytes.values[0],
+                                timeout,
+                            ],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "recv" => {
+                        let bound = ordered_optional_named_args(&["max_bytes", "timeout"], args)?;
+                        let count = bound[0].ok_or_else(|| {
+                            "direct backend expected `recv()` to receive `max_bytes`".to_string()
+                        })?;
+                        let loaded_count = self.load_operand(&count.value)?;
+                        let count = self
+                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let count = self.ensure_opaque(count)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.udp_socket_recv,
+                            &[object.values[0], count.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named(
+                                        "Option".to_string(),
+                                        vec![Type::Named(
+                                            "Vec".to_string(),
+                                            vec![Type::named("uint8")],
+                                        )],
+                                    ),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "recv_from" => {
+                        let bound = ordered_optional_named_args(&["max_bytes", "timeout"], args)?;
+                        let count = bound[0].ok_or_else(|| {
+                            "direct backend expected `recv_from()` to receive `max_bytes`"
+                                .to_string()
+                        })?;
+                        let loaded_count = self.load_operand(&count.value)?;
+                        let count = self
+                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let count = self.ensure_opaque(count)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.udp_socket_recv_from,
+                            &[object.values[0], count.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named(
+                                        "Option".to_string(),
+                                        vec![Type::Named(
+                                            "net.UdpDatagram".to_string(),
+                                            Vec::new(),
+                                        )],
+                                    ),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "local_addr" => {
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.udp_socket_local_addr, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "peer_addr" => {
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.udp_socket_peer_addr, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "close" => {
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.udp_socket_close, &[object.values[0]]);
+                        Ok(ValueRef {
+                            values: self.builder.inst_results(inst).to_vec(),
+                            ty: DirectType::Scalar(ScalarKind::Unit),
+                        })
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "net.UdpDatagram" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "address" => {
+                        let results = self
+                            .runtime_call_results(self.udp_datagram_address, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(results, Type::named("String")))
+                    }
+                    "bytes" => {
+                        let results =
+                            self.runtime_call_results(self.udp_datagram_bytes, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            results,
+                            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                        ))
+                    }
+                    "text" => {
+                        let results =
+                            self.runtime_call_results(self.udp_datagram_text, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            results,
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "net.HttpListener" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "accept" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.http_listener_accept, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("net.HttpExchange".to_string(), Vec::new()),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "local_addr" => {
+                        let results = self.runtime_call_results(
+                            self.http_listener_local_addr,
+                            &[object.values[0]],
+                        );
+                        Ok(self.owned_opaque_result(
+                            results,
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "close" => Ok(ValueRef {
+                        values: self
+                            .runtime_call_results(self.http_listener_close, &[object.values[0]]),
+                        ty: DirectType::Scalar(ScalarKind::Unit),
+                    }),
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "net.HttpExchange" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "method" => {
+                        let results = self
+                            .runtime_call_results(self.http_exchange_method, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(results, Type::named("String")))
+                    }
+                    "path" => {
+                        let results =
+                            self.runtime_call_results(self.http_exchange_path, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(results, Type::named("String")))
+                    }
+                    "headers" => {
+                        let results = self
+                            .runtime_call_results(self.http_exchange_headers, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            results,
+                            Type::Named(
+                                "Map".to_string(),
+                                vec![Type::named("String"), Type::named("String")],
+                            ),
+                        ))
+                    }
+                    "body_text" => {
+                        let results = self.runtime_call_results(
+                            self.http_exchange_body_text,
+                            &[object.values[0]],
+                        );
+                        Ok(self.owned_opaque_result(
+                            results,
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "body_bytes" => {
+                        let results = self.runtime_call_results(
+                            self.http_exchange_body_bytes,
+                            &[object.values[0]],
+                        );
+                        Ok(self.owned_opaque_result(
+                            results,
+                            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                        ))
+                    }
+                    "respond_text" => {
+                        let bound = ordered_named_args(&["status", "text", "headers"], args)?;
+                        let loaded_status = self.load_operand(&bound[0].value)?;
+                        let status = self
+                            .coerce_value(loaded_status, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let status = self.ensure_opaque(status)?;
+                        let loaded_text = self.load_operand(&bound[1].value)?;
+                        let text = self.ensure_opaque(loaded_text)?;
+                        let loaded_headers = self.load_operand(&bound[2].value)?;
+                        let headers = self.ensure_opaque(loaded_headers)?;
+                        let inst = self.builder.ins().call(
+                            self.http_exchange_respond_text,
+                            &[
+                                object.values[0],
+                                status.values[0],
+                                text.values[0],
+                                headers.values[0],
+                            ],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "respond_bytes" => {
+                        let bound = ordered_named_args(&["status", "bytes", "headers"], args)?;
+                        let loaded_status = self.load_operand(&bound[0].value)?;
+                        let status = self
+                            .coerce_value(loaded_status, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let status = self.ensure_opaque(status)?;
+                        let loaded_bytes = self.load_operand(&bound[1].value)?;
+                        let bytes = self.ensure_opaque(loaded_bytes)?;
+                        let loaded_headers = self.load_operand(&bound[2].value)?;
+                        let headers = self.ensure_opaque(loaded_headers)?;
+                        let inst = self.builder.ins().call(
+                            self.http_exchange_respond_bytes,
+                            &[
+                                object.values[0],
+                                status.values[0],
+                                bytes.values[0],
+                                headers.values[0],
+                            ],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "close" => Ok(unit_value(&mut self.builder)),
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "net.HttpResponse" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "status" => {
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.http_response_status, &[object.values[0]]);
+                        let status = self.builder.inst_results(inst)[0];
+                        self.emit_int32_bounds_check(status, None);
+                        Ok(ValueRef {
+                            values: vec![status],
+                            ty: DirectType::Scalar(ScalarKind::Int32),
+                        })
+                    }
+                    "reason" => {
+                        let results = self
+                            .runtime_call_results(self.http_response_reason, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(results, Type::named("String")))
+                    }
+                    "headers" => {
+                        let results = self
+                            .runtime_call_results(self.http_response_headers, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            results,
+                            Type::Named(
+                                "Map".to_string(),
+                                vec![Type::named("String"), Type::named("String")],
+                            ),
+                        ))
+                    }
+                    "text" => {
+                        let results =
+                            self.runtime_call_results(self.http_response_text, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            results,
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "bytes" => {
+                        let results = self
+                            .runtime_call_results(self.http_response_bytes, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            results,
+                            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                        ))
+                    }
+                    "close" => Ok(unit_value(&mut self.builder)),
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "net.WebSocketListener" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "accept" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.websocket_listener_accept, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("net.WebSocket".to_string(), Vec::new()),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "local_addr" => {
+                        let results = self.runtime_call_results(
+                            self.websocket_listener_local_addr,
+                            &[object.values[0]],
+                        );
+                        Ok(self.owned_opaque_result(
+                            results,
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "close" => Ok(unit_value(&mut self.builder)),
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "net.WebSocket" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "send_text" => {
+                        let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
+                        let text = bound[0].ok_or_else(|| {
+                            "direct backend expected `send_text()` to receive `text`".to_string()
+                        })?;
+                        let loaded_text = self.load_operand(&text.value)?;
+                        let text = self.ensure_opaque(loaded_text)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.websocket_send_text,
+                            &[object.values[0], text.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "send_bytes" => {
+                        let bound = ordered_optional_named_args(&["bytes", "timeout"], args)?;
+                        let bytes = bound[0].ok_or_else(|| {
+                            "direct backend expected `send_bytes()` to receive `bytes`".to_string()
+                        })?;
+                        let loaded_bytes = self.load_operand(&bytes.value)?;
+                        let bytes = self.ensure_opaque(loaded_bytes)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.websocket_send_bytes,
+                            &[object.values[0], bytes.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "recv_text" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.websocket_recv_text, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "recv_bytes" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.websocket_recv_bytes, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named(
+                                        "Option".to_string(),
+                                        vec![Type::Named(
+                                            "Vec".to_string(),
+                                            vec![Type::named("uint8")],
+                                        )],
+                                    ),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "close" => Ok(ValueRef {
+                        values: self
+                            .runtime_call_results(self.websocket_close, &[object.values[0]]),
+                        ty: DirectType::Scalar(ScalarKind::Unit),
+                    }),
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "net.UnixListener" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "accept" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.unix_listener_accept, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("net.UnixStream".to_string(), Vec::new()),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "close" => Ok(ValueRef {
+                        values: self
+                            .runtime_call_results(self.unix_listener_close, &[object.values[0]]),
+                        ty: DirectType::Scalar(ScalarKind::Unit),
+                    }),
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "net.UnixStream" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "read_line" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.unix_stream_read_line, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "read_exact" => {
+                        let bound = ordered_optional_named_args(&["count", "timeout"], args)?;
+                        let count = bound[0].ok_or_else(|| {
+                            "direct backend expected `read_exact()` to receive `count`".to_string()
+                        })?;
+                        let loaded_count = self.load_operand(&count.value)?;
+                        let count = self
+                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let count = self.ensure_opaque(count)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.unix_stream_read_exact,
+                            &[object.values[0], count.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "write_all" => {
+                        let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
+                        let text = bound[0].ok_or_else(|| {
+                            "direct backend expected `write_all()` to receive `text`".to_string()
+                        })?;
+                        let loaded_text = self.load_operand(&text.value)?;
+                        let text = self.ensure_opaque(loaded_text)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.unix_stream_write_all,
+                            &[object.values[0], text.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "close" => Ok(ValueRef {
+                        values: self
+                            .runtime_call_results(self.unix_stream_close, &[object.values[0]]),
+                        ty: DirectType::Scalar(ScalarKind::Unit),
+                    }),
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "net.TlsListener" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "accept" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tls_listener_accept, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("net.TlsStream".to_string(), Vec::new()),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "local_addr" => {
+                        let results = self.runtime_call_results(
+                            self.tls_listener_local_addr,
+                            &[object.values[0]],
+                        );
+                        Ok(self.owned_opaque_result(
+                            results,
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::named("String"),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "close" => Ok(ValueRef {
+                        values: self
+                            .runtime_call_results(self.tls_listener_close, &[object.values[0]]),
+                        ty: DirectType::Scalar(ScalarKind::Unit),
+                    }),
+                    _ => Err(format!(
+                        "direct backend does not know runtime member `{}.{}`",
+                        name, field
+                    )),
+                };
+            }
+            if name == "net.TlsStream" {
+                let object = self.ensure_opaque(object)?;
+                return match field {
+                    "read_line" => {
+                        let bound = ordered_optional_named_args(&["timeout"], args)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.tls_stream_read_line, &[object.values[0], timeout]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "read_exact" => {
+                        let bound = ordered_optional_named_args(&["count", "timeout"], args)?;
+                        let count = bound[0].ok_or_else(|| {
+                            "direct backend expected `read_exact()` to receive `count`".to_string()
+                        })?;
+                        let loaded_count = self.load_operand(&count.value)?;
+                        let count = self
+                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
+                        let count = self.ensure_opaque(count)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.tls_stream_read_exact,
+                            &[object.values[0], count.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![
+                                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                                    Type::Named("io.Error".to_string(), Vec::new()),
+                                ],
+                            ),
+                        ))
+                    }
+                    "write_all" => {
+                        let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
+                        let text = bound[0].ok_or_else(|| {
+                            "direct backend expected `write_all()` to receive `text`".to_string()
+                        })?;
+                        let loaded_text = self.load_operand(&text.value)?;
+                        let text = self.ensure_opaque(loaded_text)?;
+                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
+                        let inst = self.builder.ins().call(
+                            self.tls_stream_write_all,
+                            &[object.values[0], text.values[0], timeout],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "Result".to_string(),
+                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                            ),
+                        ))
+                    }
+                    "close" => Ok(ValueRef {
+                        values: self
+                            .runtime_call_results(self.tls_stream_close, &[object.values[0]]),
+                        ty: DirectType::Scalar(ScalarKind::Unit),
+                    }),
                     _ => Err(format!(
                         "direct backend does not know runtime member `{}.{}`",
                         name, field
@@ -5955,6 +8465,202 @@ fn infer_rvalue_type(
                 Some(DirectType::Scalar(ScalarKind::Bool))
             }
             CallTarget::Name(name) if name == "sleep" => Some(DirectType::Scalar(ScalarKind::Unit)),
+            CallTarget::Name(name) if name == "io::write" || name == "io::flush" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                )))
+            }
+            CallTarget::Name(name) if name == "io::read_line" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Option".to_string(), vec![Type::named("String")]),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name) if name == "fs::exists" => {
+                Some(DirectType::Scalar(ScalarKind::Bool))
+            }
+            CallTarget::Name(name) if name == "fs::read_to_string" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::named("String"),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name) if name == "fs::read_bytes" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name)
+                if matches!(
+                    name.as_str(),
+                    "fs::write_string"
+                        | "fs::write_bytes"
+                        | "fs::append_string"
+                        | "fs::append_bytes"
+                        | "fs::create_dir"
+                        | "fs::remove_file"
+                ) =>
+            {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                )))
+            }
+            CallTarget::Name(name) if name == "fs::read_dir" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name)
+                if matches!(name.as_str(), "fs::open" | "fs::create" | "fs::append") =>
+            {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("fs.File".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name)
+                if matches!(name.as_str(), "net::connect" | "net::connect_timeout") =>
+            {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.TcpStream".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name) if name == "net::listen" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.TcpListener".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name) if name == "net::udp_bind" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.UdpSocket".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name) if name == "net::unix_listen" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.UnixListener".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name)
+                if matches!(
+                    name.as_str(),
+                    "net::unix_connect" | "net::unix_connect_timeout"
+                ) =>
+            {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.UnixStream".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name) if name == "net::tls_listen" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.TlsListener".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name)
+                if matches!(
+                    name.as_str(),
+                    "net::tls_connect" | "net::tls_connect_timeout"
+                ) =>
+            {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.TlsStream".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name) if name == "net::http_listen" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.HttpListener".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name)
+                if matches!(
+                    name.as_str(),
+                    "net::http_request_text"
+                        | "net::http_request_text_timeout"
+                        | "net::http_request_bytes"
+                        | "net::http_request_bytes_timeout"
+                ) =>
+            {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.HttpResponse".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name) if name == "net::websocket_listen" => {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.WebSocketListener".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
+            CallTarget::Name(name)
+                if matches!(
+                    name.as_str(),
+                    "net::websocket_connect" | "net::websocket_connect_timeout"
+                ) =>
+            {
+                Some(DirectType::Opaque(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.WebSocket".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )))
+            }
             CallTarget::Name(name) if name == "parse_int32" => {
                 Some(DirectType::Opaque(Type::Named(
                     "Result".to_string(),
@@ -6149,6 +8855,7 @@ fn builtin_opaque_member_return_type(
             vec![Type::named("String")],
         ))),
         ("String", "replace")
+        | ("String", "add")
         | ("String", "to_lower")
         | ("String", "to_upper")
         | ("String", "trim")
@@ -6291,6 +8998,372 @@ fn builtin_opaque_member_return_type(
             Some(DirectType::Scalar(ScalarKind::Unit))
         }
         ("Task", "result") => direct_type(args.first().unwrap_or(&Type::Unit), classes),
+        ("fs.File", "read_all") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::named("String"),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("fs.File", "read_bytes") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("fs.File", "write_all") | ("fs.File", "write_bytes") | ("fs.File", "flush") => {
+            direct_type(
+                &Type::Named(
+                    "Result".to_string(),
+                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                ),
+                classes,
+            )
+        }
+        ("fs.File", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("net.TcpListener", "accept") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("net.TcpStream".to_string(), Vec::new()),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.TcpListener", "local_addr") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::named("String"),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.TcpListener", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("net.TcpStream", "read_all")
+        | ("net.TcpStream", "local_addr")
+        | ("net.TcpStream", "peer_addr") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::named("String"),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.TcpStream", "read_line") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.TcpStream", "read_bytes") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named(
+                        "Option".to_string(),
+                        vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
+                    ),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.TcpStream", "read_exact") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.TcpStream", "write_all")
+        | ("net.TcpStream", "write_bytes")
+        | ("net.TcpStream", "flush")
+        | ("net.TcpStream", "shutdown_read")
+        | ("net.TcpStream", "shutdown_write")
+        | ("net.TcpStream", "shutdown_both") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+            ),
+            classes,
+        ),
+        ("net.TcpStream", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("net.UdpSocket", "send_text") | ("net.UdpSocket", "send_bytes") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+            ),
+            classes,
+        ),
+        ("net.UdpSocket", "recv") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named(
+                        "Option".to_string(),
+                        vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
+                    ),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.UdpSocket", "recv_from") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named(
+                        "Option".to_string(),
+                        vec![Type::Named("net.UdpDatagram".to_string(), Vec::new())],
+                    ),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.UdpSocket", "local_addr") | ("net.UdpSocket", "peer_addr") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::named("String"),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.UdpSocket", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("net.UdpDatagram", "address") => direct_type(&Type::named("String"), classes),
+        ("net.UdpDatagram", "bytes") => direct_type(
+            &Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            classes,
+        ),
+        ("net.UdpDatagram", "text") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::named("String"),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.HttpListener", "accept") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("net.HttpExchange".to_string(), Vec::new()),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.HttpListener", "local_addr") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::named("String"),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.HttpListener", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("net.HttpExchange", "method") | ("net.HttpExchange", "path") => {
+            direct_type(&Type::named("String"), classes)
+        }
+        ("net.HttpExchange", "headers") | ("net.HttpResponse", "headers") => direct_type(
+            &Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("String")],
+            ),
+            classes,
+        ),
+        ("net.HttpExchange", "body_text") | ("net.HttpResponse", "text") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::named("String"),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.HttpExchange", "body_bytes") | ("net.HttpResponse", "bytes") => direct_type(
+            &Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+            classes,
+        ),
+        ("net.HttpExchange", "respond_text") | ("net.HttpExchange", "respond_bytes") => {
+            direct_type(
+                &Type::Named(
+                    "Result".to_string(),
+                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                ),
+                classes,
+            )
+        }
+        ("net.HttpExchange", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("net.HttpResponse", "status") => direct_type(&Type::named("int32"), classes),
+        ("net.HttpResponse", "reason") => direct_type(&Type::named("String"), classes),
+        ("net.HttpResponse", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("net.WebSocketListener", "accept") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("net.WebSocket".to_string(), Vec::new()),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.WebSocketListener", "local_addr") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::named("String"),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.WebSocketListener", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("net.WebSocket", "send_text") | ("net.WebSocket", "send_bytes") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+            ),
+            classes,
+        ),
+        ("net.WebSocket", "recv_text") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.WebSocket", "recv_bytes") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named(
+                        "Option".to_string(),
+                        vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
+                    ),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.WebSocket", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("net.UnixListener", "accept") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("net.UnixStream".to_string(), Vec::new()),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.UnixListener", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("net.UnixStream", "read_line") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.UnixStream", "read_exact") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.UnixStream", "write_all") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+            ),
+            classes,
+        ),
+        ("net.UnixStream", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("net.TlsListener", "accept") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("net.TlsStream".to_string(), Vec::new()),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.TlsListener", "local_addr") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::named("String"),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.TlsListener", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
+        ("net.TlsStream", "read_line") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.TlsStream", "read_exact") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("net.TlsStream", "write_all") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+            ),
+            classes,
+        ),
+        ("net.TlsStream", "close") => Some(DirectType::Scalar(ScalarKind::Unit)),
         _ => None,
     }
 }

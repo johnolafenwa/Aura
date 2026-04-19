@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod ast;
+mod builtin_modules;
 pub mod call;
 pub mod diag;
 pub mod integer;
@@ -41,7 +42,7 @@ pub fn parse_source(source: &str) -> Result<ast::Module> {
 
 pub fn check_source(source: &str) -> Result<Program> {
     let module = parse_source(source)?;
-    sema::check(module)
+    check_module_with_builtin_imports(module)
 }
 
 pub fn run_source(source: &str) -> Result<RunOutput> {
@@ -59,6 +60,58 @@ pub fn run_path_with_source(path: &Path, source: &str) -> Result<RunOutput> {
 pub fn lower_source_to_mir(source: &str) -> Result<MirModule> {
     let program = check_source(source)?;
     Ok(lower_to_mir(&program))
+}
+
+fn builtin_imports(module: &ast::Module) -> Result<BTreeMap<String, ImportedBinding>> {
+    let mut bindings = BTreeMap::new();
+    for import in &module.imports {
+        match &import.kind {
+            ImportKind::Module { path } => {
+                if let Some(namespace) = builtin_modules::builtin_module_namespace(path) {
+                    insert_namespace_import(&mut bindings, path, namespace, import.span)?;
+                }
+            }
+            ImportKind::From { module_path, names } => {
+                if builtin_modules::builtin_module_namespace(module_path).is_some() {
+                    for name in names {
+                        let binding = builtin_modules::builtin_imported_binding(
+                            module_path,
+                            name,
+                            import.span,
+                        )?;
+                        if bindings.insert(name.clone(), binding).is_some() {
+                            return Err(Diagnostic::at(
+                                import.span,
+                                format!("duplicate import binding `{}`", name),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(bindings)
+}
+
+fn builtin_module_registry_with_user(
+    user_modules: impl IntoIterator<Item = (String, ModuleNamespace)>,
+) -> BTreeMap<String, ModuleNamespace> {
+    let mut registry = builtin_modules::builtin_module_registry();
+    registry.extend(user_modules);
+    registry
+}
+
+fn check_module_with_builtin_imports(module: ast::Module) -> Result<Program> {
+    let imported_bindings = builtin_imports(&module)?;
+    let module_registry = builtin_module_registry_with_user(BTreeMap::new());
+    sema::check_with_context(
+        module,
+        ModuleContext {
+            module_name: "<main>".to_string(),
+            imported_bindings,
+            module_registry,
+        },
+    )
 }
 
 pub fn lower_path_with_source_to_mir(path: &Path, source: &str) -> Result<MirModule> {
@@ -199,6 +252,22 @@ impl ModuleLoader {
         for import in &module.imports {
             match &import.kind {
                 ImportKind::From { module_path, names } => {
+                    if builtin_modules::builtin_module_namespace(module_path).is_some() {
+                        for name in names {
+                            let binding = builtin_modules::builtin_imported_binding(
+                                module_path,
+                                name,
+                                import.span,
+                            )?;
+                            if bindings.insert(name.clone(), binding).is_some() {
+                                return Err(Diagnostic::at(
+                                    import.span,
+                                    format!("duplicate import binding `{}`", name),
+                                ));
+                            }
+                        }
+                        continue;
+                    }
                     let imported =
                         self.load_imported_module(current_path, module_path, import.span)?;
                     for name in names {
@@ -231,6 +300,10 @@ impl ModuleLoader {
                     }
                 }
                 ImportKind::Module { path } => {
+                    if let Some(leaf) = builtin_modules::builtin_module_namespace(path) {
+                        insert_namespace_import(&mut bindings, path, leaf, import.span)?;
+                        continue;
+                    }
                     let imported = self.load_imported_module(current_path, path, import.span)?;
                     let leaf = exported_namespace(path, &imported);
                     insert_namespace_import(&mut bindings, path, leaf, import.span)?;
@@ -241,21 +314,18 @@ impl ModuleLoader {
     }
 
     fn build_module_registry(&self) -> BTreeMap<String, ModuleNamespace> {
-        self.cache
-            .values()
-            .map(|loaded| {
-                let path = loaded
-                    .program
-                    .module_name
-                    .split('.')
-                    .map(|segment| segment.to_string())
-                    .collect::<Vec<_>>();
-                (
-                    loaded.program.module_name.clone(),
-                    exported_namespace(&path, &loaded.program),
-                )
-            })
-            .collect()
+        builtin_module_registry_with_user(self.cache.values().map(|loaded| {
+            let path = loaded
+                .program
+                .module_name
+                .split('.')
+                .map(|segment| segment.to_string())
+                .collect::<Vec<_>>();
+            (
+                loaded.program.module_name.clone(),
+                exported_namespace(&path, &loaded.program),
+            )
+        }))
     }
 
     fn load_imported_module(

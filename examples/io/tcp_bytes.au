@@ -1,0 +1,37 @@
+import io
+import net
+
+def serve(listener: net.TcpListener) -> Result[None, io.Error]:
+    with server_listener = listener:
+        stream = try server_listener.accept(timeout=5s)
+        with server_stream = stream:
+            payload = try server_stream.read_exact(4, timeout=5s)
+            print(payload.len())
+            try server_stream.write_bytes(payload, timeout=5s)
+            return Result.Ok(None)
+
+def run() -> Result[None, io.Error]:
+    with tasks() as group:
+        listener = try net.listen("127.0.0.1:0")
+        address = try listener.local_addr()
+        server = group.start(serve, listener)
+
+        stream = try net.connect_timeout(address, 5s)
+        with client_stream = stream:
+            try client_stream.write_bytes([116 as uint8, 101 as uint8, 115 as uint8, 116 as uint8], timeout=5s)
+            match try client_stream.read_bytes(8, timeout=5s):
+                case Option.Some(reply):
+                    print(reply[0])
+                case Option.None:
+                    return Result.Ok(None)
+
+        try server.result()
+        return Result.Ok(None)
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

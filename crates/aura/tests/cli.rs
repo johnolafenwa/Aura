@@ -4,6 +4,9 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
+use rcgen::generate_simple_self_signed;
+
 fn aura_bin() -> &'static str {
     env!("CARGO_BIN_EXE_aura")
 }
@@ -1243,6 +1246,71 @@ fn build_with_direct_backend_supports_string_parsing_and_formatting_example() {
 }
 
 #[test]
+fn build_with_direct_backend_supports_file_io_example() {
+    assert_direct_backend_example_runs(
+        "examples/io/read_text_file.au",
+        "file-io-direct",
+        "true\ntrue\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_bytes_file_io_example() {
+    assert_direct_backend_example_runs(
+        "examples/io/bytes_file_io.au",
+        "bytes-file-io-direct",
+        "4\n65\n67\n5\n68\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_tcp_echo_example() {
+    assert_direct_backend_example_runs("examples/io/tcp_echo.au", "tcp-echo-direct", "echo:ping\n");
+}
+
+#[test]
+fn build_with_direct_backend_supports_tcp_bytes_example() {
+    assert_direct_backend_example_runs("examples/io/tcp_bytes.au", "tcp-bytes-direct", "4\n116\n");
+}
+
+#[test]
+fn build_with_direct_backend_supports_udp_echo_example() {
+    assert_direct_backend_example_runs(
+        "examples/io/udp_echo.au",
+        "udp-echo-direct",
+        "udp:ping\nping\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_http_roundtrip_example() {
+    assert_direct_backend_example_runs(
+        "examples/io/http_roundtrip.au",
+        "http-roundtrip-direct",
+        "200\nPOST:/hello:body:ok\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_supports_websocket_roundtrip_example() {
+    assert_direct_backend_example_runs(
+        "examples/io/websocket_roundtrip.au",
+        "websocket-roundtrip-direct",
+        "ws:hi\n",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn build_with_direct_backend_supports_unix_and_tls_example() {
+    assert_direct_backend_example_runs(
+        "examples/io/unix_tls_roundtrip.au",
+        "unix-tls-roundtrip-direct",
+        "unix:ping\n9\n",
+    );
+}
+
+#[test]
 fn build_with_direct_backend_supports_try_and_result_example() {
     assert_direct_backend_example_runs(
         "examples/error_handling/try_result.au",
@@ -1752,6 +1820,71 @@ fn default_build_supports_string_parsing_and_formatting_example() {
         "examples/strings/string_parsing_and_formatting.au",
         "string-parsing-formatting-auto",
         "42\n-9000000000\n3.5\ntrue\naurora-lang-tests\ntrue\n12\n4\n9\n3.0\n",
+    );
+}
+
+#[test]
+fn default_build_supports_file_io_example() {
+    assert_default_backend_example_runs(
+        "examples/io/read_text_file.au",
+        "file-io-auto",
+        "true\ntrue\n",
+    );
+}
+
+#[test]
+fn default_build_supports_bytes_file_io_example() {
+    assert_default_backend_example_runs(
+        "examples/io/bytes_file_io.au",
+        "bytes-file-io-auto",
+        "4\n65\n67\n5\n68\n",
+    );
+}
+
+#[test]
+fn default_build_supports_tcp_echo_example() {
+    assert_default_backend_example_runs("examples/io/tcp_echo.au", "tcp-echo-auto", "echo:ping\n");
+}
+
+#[test]
+fn default_build_supports_tcp_bytes_example() {
+    assert_default_backend_example_runs("examples/io/tcp_bytes.au", "tcp-bytes-auto", "4\n116\n");
+}
+
+#[test]
+fn default_build_supports_udp_echo_example() {
+    assert_default_backend_example_runs(
+        "examples/io/udp_echo.au",
+        "udp-echo-auto",
+        "udp:ping\nping\n",
+    );
+}
+
+#[test]
+fn default_build_supports_http_roundtrip_example() {
+    assert_default_backend_example_runs(
+        "examples/io/http_roundtrip.au",
+        "http-roundtrip-auto",
+        "200\nPOST:/hello:body:ok\n",
+    );
+}
+
+#[test]
+fn default_build_supports_websocket_roundtrip_example() {
+    assert_default_backend_example_runs(
+        "examples/io/websocket_roundtrip.au",
+        "websocket-roundtrip-auto",
+        "ws:hi\n",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn default_build_supports_unix_and_tls_example() {
+    assert_default_backend_example_runs(
+        "examples/io/unix_tls_roundtrip.au",
+        "unix-tls-roundtrip-auto",
+        "unix:ping\n9\n",
     );
 }
 
@@ -2601,6 +2734,149 @@ fn run_executes_string_parsing_and_formatting_example() {
 }
 
 #[test]
+fn run_executes_file_io_example() {
+    let fixture = repo_root().join("examples/io/read_text_file.au");
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run on file io example");
+
+    assert!(
+        output.status.success(),
+        "run should succeed for file io example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "true\ntrue\n");
+}
+
+#[test]
+fn run_executes_bytes_file_io_example() {
+    let fixture = repo_root().join("examples/io/bytes_file_io.au");
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run on bytes file io example");
+
+    assert!(
+        output.status.success(),
+        "run should succeed for bytes file io example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "4\n65\n67\n5\n68\n"
+    );
+}
+
+#[test]
+fn run_executes_tcp_echo_example() {
+    let fixture = repo_root().join("examples/io/tcp_echo.au");
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run on tcp echo example");
+
+    assert!(
+        output.status.success(),
+        "run should succeed for tcp echo example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "echo:ping\n");
+}
+
+#[test]
+fn run_executes_tcp_bytes_example() {
+    let fixture = repo_root().join("examples/io/tcp_bytes.au");
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run on tcp bytes example");
+
+    assert!(
+        output.status.success(),
+        "run should succeed for tcp bytes example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "4\n116\n");
+}
+
+#[test]
+fn run_executes_udp_echo_example() {
+    let fixture = repo_root().join("examples/io/udp_echo.au");
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run on udp echo example");
+
+    assert!(
+        output.status.success(),
+        "run should succeed for udp echo example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "udp:ping\nping\n");
+}
+
+#[test]
+fn run_executes_http_roundtrip_example() {
+    let fixture = repo_root().join("examples/io/http_roundtrip.au");
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run on http roundtrip example");
+
+    assert!(
+        output.status.success(),
+        "run should succeed for http roundtrip example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "200\nPOST:/hello:body:ok\n"
+    );
+}
+
+#[test]
+fn run_executes_websocket_roundtrip_example() {
+    let fixture = repo_root().join("examples/io/websocket_roundtrip.au");
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run on websocket roundtrip example");
+
+    assert!(
+        output.status.success(),
+        "run should succeed for websocket roundtrip example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ws:hi\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn run_executes_unix_and_tls_roundtrip_example() {
+    let fixture = repo_root().join("examples/io/unix_tls_roundtrip.au");
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&fixture)
+        .output()
+        .expect("failed to run aura run on unix/tls roundtrip example");
+
+    assert!(
+        output.status.success(),
+        "run should succeed for unix/tls roundtrip example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "unix:ping\n9\n");
+}
+
+#[test]
 fn run_executes_string_map_and_numeric_builtins() {
     let temp = TempDir::new("aurora-run-string-map-numbers");
     let source_path = temp.path().join("main.au");
@@ -2913,4 +3189,208 @@ def main() -> int32:
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
+}
+
+#[test]
+fn direct_backend_build_supports_advanced_io_and_network_surface() {
+    let temp = TempDir::new("aurora-cli-direct-advanced-io-net");
+    let file_path = temp.path().join("data.bin");
+    let source = format!(
+        r#"import io
+import fs
+import net
+
+def serve_udp(socket: net.UdpSocket) -> Result[String, io.Error]:
+    with server_socket = socket:
+        match try server_socket.recv_from(1024, timeout=1s):
+            case Option.Some(packet):
+                text = try packet.text()
+                try server_socket.send_text(packet.address(), "udp:" + text, timeout=1s)
+                return Result.Ok(text)
+            case Option.None:
+                return Result.Ok("missing")
+
+def serve_http(listener: net.HttpListener) -> Result[None, io.Error]:
+    with server_listener = listener:
+        exchange = try server_listener.accept(timeout=1s)
+        with request = exchange:
+            body = try request.body_text()
+            headers = request.headers()
+            try request.respond_text(200, request.method() + ":" + request.path() + ":" + body + ":" + headers["X-Test"], {{"Content-Type": "text/plain"}})
+            return Result.Ok(None)
+
+def serve_ws(listener: net.WebSocketListener) -> Result[None, io.Error]:
+    with server_listener = listener:
+        socket = try server_listener.accept(timeout=1s)
+        with server_socket = socket:
+            match try server_socket.recv_text(timeout=1s):
+                case Option.Some(text):
+                    try server_socket.send_text("ws:" + text, timeout=1s)
+                    return Result.Ok(None)
+                case Option.None:
+                    return Result.Ok(None)
+
+def run() -> Result[None, io.Error]:
+    bytes: Vec[uint8] = [65 as uint8, 66 as uint8]
+    try fs.write_bytes("{path}", bytes)
+    try fs.append_bytes("{path}", [67 as uint8, 10 as uint8])
+    read_back = try fs.read_bytes("{path}")
+    print(read_back.len())
+    print(read_back[0])
+    print(read_back[2])
+
+    with tasks() as group:
+        udp_listener = try net.udp_bind("127.0.0.1:0")
+        udp_addr = try udp_listener.local_addr()
+        udp_task = group.start(serve_udp, udp_listener)
+        udp_client = try net.udp_bind("127.0.0.1:0")
+        with client_socket = udp_client:
+            try client_socket.send_text(udp_addr, "ping", timeout=1s)
+            match try client_socket.recv_from(1024, timeout=1s):
+                case Option.Some(packet):
+                    print(try packet.text())
+                case Option.None:
+                    return Result.Ok(None)
+        print(try udp_task.result())
+
+        http_listener = try net.http_listen("127.0.0.1:0")
+        http_addr = try http_listener.local_addr()
+        http_task = group.start(serve_http, http_listener)
+        headers: Map[String, String] = {{"X-Test": "ok"}}
+        response = try net.http_request_text_timeout("POST", "http://" + http_addr + "/hello", "body", headers, 1s)
+        with http_response = response:
+            print(http_response.status())
+            print(try http_response.text())
+        try http_task.result()
+
+        ws_listener = try net.websocket_listen("127.0.0.1:0")
+        ws_addr = try ws_listener.local_addr()
+        ws_task = group.start(serve_ws, ws_listener)
+        client = try net.websocket_connect_timeout("ws://" + ws_addr + "/", 1s)
+        with ws_client = client:
+            try ws_client.send_text("hi", timeout=1s)
+            match try ws_client.recv_text(timeout=1s):
+                case Option.Some(text):
+                    print(text)
+                case Option.None:
+                    return Result.Ok(None)
+        try ws_task.result()
+
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#,
+        path = file_path.display()
+    );
+
+    let (_build, run) = build_and_run_direct_source("aurora-cli-direct-advanced-io-net", &source);
+    assert!(
+        run.status.success(),
+        "direct backend advanced io/network binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "4\n65\n67\nudp:ping\nping\n200\nPOST:/hello:body:ok\nws:hi\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_backend_build_supports_unix_and_tls_network_surface() {
+    let temp = TempDir::new("aurora-cli-direct-unix-tls");
+    let unix_path = PathBuf::from(format!(
+        "/tmp/aurora-cli-{}-{}.sock",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos()
+    ));
+
+    let certificate = generate_simple_self_signed(vec!["localhost".to_string()])
+        .expect("should generate self-signed certificate");
+    let cert_pem = certificate.cert.pem();
+    let key_pem = certificate.key_pair.serialize_pem();
+    let cert_path = temp.path().join("cert.pem");
+    let key_path = temp.path().join("key.pem");
+    fs::write(&cert_path, cert_pem).expect("should write cert pem");
+    fs::write(&key_path, key_pem).expect("should write key pem");
+
+    let source = format!(
+        r#"import io
+import net
+
+def serve_unix(listener: net.UnixListener) -> Result[None, io.Error]:
+    with server_listener = listener:
+        stream = try server_listener.accept(timeout=1s)
+        with server_stream = stream:
+            match try server_stream.read_line(timeout=1s):
+                case Option.Some(text):
+                    try server_stream.write_all("unix:" + text, timeout=1s)
+                    return Result.Ok(None)
+                case Option.None:
+                    return Result.Ok(None)
+
+def serve_tls(listener: net.TlsListener) -> Result[None, io.Error]:
+    with server_listener = listener:
+        stream = try server_listener.accept(timeout=2s)
+        with server_stream = stream:
+            _payload = try server_stream.read_exact(5, timeout=2s)
+            try server_stream.write_all("tls:ping!", timeout=2s)
+            return Result.Ok(None)
+
+def run() -> Result[None, io.Error]:
+    with tasks() as group:
+        unix_listener = try net.unix_listen("{unix_path}")
+        unix_task = group.start(serve_unix, unix_listener)
+        client = try net.unix_connect_timeout("{unix_path}", 1s)
+        with unix_client = client:
+            try unix_client.write_all("ping\n", timeout=1s)
+            match try unix_client.read_line(timeout=1s):
+                case Option.Some(text):
+                    print(text)
+                case Option.None:
+                    return Result.Ok(None)
+        try unix_task.result()
+
+        tls_listener = try net.tls_listen("127.0.0.1:0", "{cert_path}", "{key_path}")
+        tls_addr = try tls_listener.local_addr()
+        tls_task = group.start(serve_tls, tls_listener)
+        stream = try net.tls_connect_timeout(tls_addr, "localhost", "{cert_path}", 2s)
+        with tls_client = stream:
+            try tls_client.write_all("ping!", timeout=2s)
+            reply = try tls_client.read_exact(9, timeout=2s)
+            print(reply.len())
+        try tls_task.result()
+
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#,
+        unix_path = unix_path.display(),
+        cert_path = cert_path.display(),
+        key_path = key_path.display()
+    );
+
+    let (_build, run) = build_and_run_direct_source("aurora-cli-direct-unix-tls", &source);
+    let _ = fs::remove_file(&unix_path);
+    assert!(
+        run.status.success(),
+        "direct backend unix/tls binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "unix:ping\n9\n");
 }

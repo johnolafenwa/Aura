@@ -174,8 +174,11 @@ const SQRT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value
 const PARSE_TEXT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
 const AFTER_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("duration")];
 const SLEEP_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("duration")];
+const FILE_WRITE_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("text")];
+const FILE_WRITE_BYTES_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("bytes")];
 const QUEUE_PUT_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
 const QUEUE_GET_PARAMS: [CallableParam<'static>; 1] = [CallableParam::optional("timeout")];
+const TIMEOUT_ONLY_PARAMS: [CallableParam<'static>; 1] = [CallableParam::optional("timeout")];
 const VEC_INDEX_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("index")];
 const VEC_PUSH_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
 const VEC_SET_PARAMS: [CallableParam<'static>; 2] = [
@@ -204,6 +207,42 @@ const MAP_SET_PARAMS: [CallableParam<'static>; 2] = [
 ];
 const MAP_EXTEND_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("other")];
 const SET_VALUE_PARAMS: [CallableParam<'static>; 1] = [CallableParam::required("value")];
+const COUNT_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
+    CallableParam::required("count"),
+    CallableParam::optional("timeout"),
+];
+const MAX_BYTES_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
+    CallableParam::required("max_bytes"),
+    CallableParam::optional("timeout"),
+];
+const TEXT_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
+    CallableParam::required("text"),
+    CallableParam::optional("timeout"),
+];
+const BYTES_TIMEOUT_PARAMS: [CallableParam<'static>; 2] = [
+    CallableParam::required("bytes"),
+    CallableParam::optional("timeout"),
+];
+const ADDRESS_TEXT_TIMEOUT_PARAMS: [CallableParam<'static>; 3] = [
+    CallableParam::required("address"),
+    CallableParam::required("text"),
+    CallableParam::optional("timeout"),
+];
+const ADDRESS_BYTES_TIMEOUT_PARAMS: [CallableParam<'static>; 3] = [
+    CallableParam::required("address"),
+    CallableParam::required("bytes"),
+    CallableParam::optional("timeout"),
+];
+const STATUS_TEXT_HEADERS_PARAMS: [CallableParam<'static>; 3] = [
+    CallableParam::required("status"),
+    CallableParam::required("text"),
+    CallableParam::required("headers"),
+];
+const STATUS_BYTES_HEADERS_PARAMS: [CallableParam<'static>; 3] = [
+    CallableParam::required("status"),
+    CallableParam::required("bytes"),
+    CallableParam::required("headers"),
+];
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BuiltinFunction {
@@ -492,6 +531,73 @@ pub enum BuiltinMember {
     TaskResult,
     TaskGroupStart,
     TaskGroupCancel,
+    FileReadAll,
+    FileReadBytes,
+    FileWriteAll,
+    FileWriteBytes,
+    FileFlush,
+    FileClose,
+    TcpListenerAccept,
+    TcpListenerLocalAddr,
+    TcpListenerClose,
+    TcpStreamReadAll,
+    TcpStreamReadLine,
+    TcpStreamReadBytes,
+    TcpStreamReadExact,
+    TcpStreamWriteAll,
+    TcpStreamWriteBytes,
+    TcpStreamFlush,
+    TcpStreamLocalAddr,
+    TcpStreamPeerAddr,
+    TcpStreamShutdownRead,
+    TcpStreamShutdownWrite,
+    TcpStreamShutdownBoth,
+    TcpStreamClose,
+    UdpSocketSendText,
+    UdpSocketSendBytes,
+    UdpSocketRecv,
+    UdpSocketRecvFrom,
+    UdpSocketLocalAddr,
+    UdpSocketPeerAddr,
+    UdpSocketClose,
+    UdpDatagramAddress,
+    UdpDatagramBytes,
+    UdpDatagramText,
+    HttpListenerAccept,
+    HttpListenerLocalAddr,
+    HttpListenerClose,
+    HttpExchangeMethod,
+    HttpExchangePath,
+    HttpExchangeHeaders,
+    HttpExchangeBodyText,
+    HttpExchangeBodyBytes,
+    HttpExchangeRespondText,
+    HttpExchangeRespondBytes,
+    HttpResponseStatus,
+    HttpResponseReason,
+    HttpResponseHeaders,
+    HttpResponseText,
+    HttpResponseBytes,
+    WebSocketListenerAccept,
+    WebSocketListenerLocalAddr,
+    WebSocketSendText,
+    WebSocketSendBytes,
+    WebSocketRecvText,
+    WebSocketRecvBytes,
+    WebSocketClose,
+    UnixListenerAccept,
+    UnixListenerClose,
+    UnixStreamReadLine,
+    UnixStreamReadExact,
+    UnixStreamWriteAll,
+    UnixStreamClose,
+    TlsListenerAccept,
+    TlsListenerLocalAddr,
+    TlsListenerClose,
+    TlsStreamReadLine,
+    TlsStreamReadExact,
+    TlsStreamWriteAll,
+    TlsStreamClose,
 }
 
 impl BuiltinMember {
@@ -565,6 +671,73 @@ impl BuiltinMember {
             ("Task", "result") => Some(Self::TaskResult),
             ("TaskGroup", "start") => Some(Self::TaskGroupStart),
             ("TaskGroup", "cancel") => Some(Self::TaskGroupCancel),
+            ("fs.File", "read_all") => Some(Self::FileReadAll),
+            ("fs.File", "read_bytes") => Some(Self::FileReadBytes),
+            ("fs.File", "write_all") => Some(Self::FileWriteAll),
+            ("fs.File", "write_bytes") => Some(Self::FileWriteBytes),
+            ("fs.File", "flush") => Some(Self::FileFlush),
+            ("fs.File", "close") => Some(Self::FileClose),
+            ("net.TcpListener", "accept") => Some(Self::TcpListenerAccept),
+            ("net.TcpListener", "local_addr") => Some(Self::TcpListenerLocalAddr),
+            ("net.TcpListener", "close") => Some(Self::TcpListenerClose),
+            ("net.TcpStream", "read_all") => Some(Self::TcpStreamReadAll),
+            ("net.TcpStream", "read_line") => Some(Self::TcpStreamReadLine),
+            ("net.TcpStream", "read_bytes") => Some(Self::TcpStreamReadBytes),
+            ("net.TcpStream", "read_exact") => Some(Self::TcpStreamReadExact),
+            ("net.TcpStream", "write_all") => Some(Self::TcpStreamWriteAll),
+            ("net.TcpStream", "write_bytes") => Some(Self::TcpStreamWriteBytes),
+            ("net.TcpStream", "flush") => Some(Self::TcpStreamFlush),
+            ("net.TcpStream", "local_addr") => Some(Self::TcpStreamLocalAddr),
+            ("net.TcpStream", "peer_addr") => Some(Self::TcpStreamPeerAddr),
+            ("net.TcpStream", "shutdown_read") => Some(Self::TcpStreamShutdownRead),
+            ("net.TcpStream", "shutdown_write") => Some(Self::TcpStreamShutdownWrite),
+            ("net.TcpStream", "shutdown_both") => Some(Self::TcpStreamShutdownBoth),
+            ("net.TcpStream", "close") => Some(Self::TcpStreamClose),
+            ("net.UdpSocket", "send_text") => Some(Self::UdpSocketSendText),
+            ("net.UdpSocket", "send_bytes") => Some(Self::UdpSocketSendBytes),
+            ("net.UdpSocket", "recv") => Some(Self::UdpSocketRecv),
+            ("net.UdpSocket", "recv_from") => Some(Self::UdpSocketRecvFrom),
+            ("net.UdpSocket", "local_addr") => Some(Self::UdpSocketLocalAddr),
+            ("net.UdpSocket", "peer_addr") => Some(Self::UdpSocketPeerAddr),
+            ("net.UdpSocket", "close") => Some(Self::UdpSocketClose),
+            ("net.UdpDatagram", "address") => Some(Self::UdpDatagramAddress),
+            ("net.UdpDatagram", "bytes") => Some(Self::UdpDatagramBytes),
+            ("net.UdpDatagram", "text") => Some(Self::UdpDatagramText),
+            ("net.HttpListener", "accept") => Some(Self::HttpListenerAccept),
+            ("net.HttpListener", "local_addr") => Some(Self::HttpListenerLocalAddr),
+            ("net.HttpListener", "close") => Some(Self::HttpListenerClose),
+            ("net.HttpExchange", "method") => Some(Self::HttpExchangeMethod),
+            ("net.HttpExchange", "path") => Some(Self::HttpExchangePath),
+            ("net.HttpExchange", "headers") => Some(Self::HttpExchangeHeaders),
+            ("net.HttpExchange", "body_text") => Some(Self::HttpExchangeBodyText),
+            ("net.HttpExchange", "body_bytes") => Some(Self::HttpExchangeBodyBytes),
+            ("net.HttpExchange", "respond_text") => Some(Self::HttpExchangeRespondText),
+            ("net.HttpExchange", "respond_bytes") => Some(Self::HttpExchangeRespondBytes),
+            ("net.HttpResponse", "status") => Some(Self::HttpResponseStatus),
+            ("net.HttpResponse", "reason") => Some(Self::HttpResponseReason),
+            ("net.HttpResponse", "headers") => Some(Self::HttpResponseHeaders),
+            ("net.HttpResponse", "text") => Some(Self::HttpResponseText),
+            ("net.HttpResponse", "bytes") => Some(Self::HttpResponseBytes),
+            ("net.WebSocketListener", "accept") => Some(Self::WebSocketListenerAccept),
+            ("net.WebSocketListener", "local_addr") => Some(Self::WebSocketListenerLocalAddr),
+            ("net.WebSocket", "send_text") => Some(Self::WebSocketSendText),
+            ("net.WebSocket", "send_bytes") => Some(Self::WebSocketSendBytes),
+            ("net.WebSocket", "recv_text") => Some(Self::WebSocketRecvText),
+            ("net.WebSocket", "recv_bytes") => Some(Self::WebSocketRecvBytes),
+            ("net.WebSocket", "close") => Some(Self::WebSocketClose),
+            ("net.UnixListener", "accept") => Some(Self::UnixListenerAccept),
+            ("net.UnixListener", "close") => Some(Self::UnixListenerClose),
+            ("net.UnixStream", "read_line") => Some(Self::UnixStreamReadLine),
+            ("net.UnixStream", "read_exact") => Some(Self::UnixStreamReadExact),
+            ("net.UnixStream", "write_all") => Some(Self::UnixStreamWriteAll),
+            ("net.UnixStream", "close") => Some(Self::UnixStreamClose),
+            ("net.TlsListener", "accept") => Some(Self::TlsListenerAccept),
+            ("net.TlsListener", "local_addr") => Some(Self::TlsListenerLocalAddr),
+            ("net.TlsListener", "close") => Some(Self::TlsListenerClose),
+            ("net.TlsStream", "read_line") => Some(Self::TlsStreamReadLine),
+            ("net.TlsStream", "read_exact") => Some(Self::TlsStreamReadExact),
+            ("net.TlsStream", "write_all") => Some(Self::TlsStreamWriteAll),
+            ("net.TlsStream", "close") => Some(Self::TlsStreamClose),
             _ => None,
         }
     }
@@ -623,6 +796,73 @@ impl BuiltinMember {
             Self::TaskResult => "result",
             Self::TaskGroupStart => "start",
             Self::TaskGroupCancel => "cancel",
+            Self::FileReadAll => "read_all",
+            Self::FileReadBytes => "read_bytes",
+            Self::FileWriteAll => "write_all",
+            Self::FileWriteBytes => "write_bytes",
+            Self::FileFlush => "flush",
+            Self::FileClose => "close",
+            Self::TcpListenerAccept => "accept",
+            Self::TcpListenerLocalAddr => "local_addr",
+            Self::TcpListenerClose => "close",
+            Self::TcpStreamReadAll => "read_all",
+            Self::TcpStreamReadLine => "read_line",
+            Self::TcpStreamReadBytes => "read_bytes",
+            Self::TcpStreamReadExact => "read_exact",
+            Self::TcpStreamWriteAll => "write_all",
+            Self::TcpStreamWriteBytes => "write_bytes",
+            Self::TcpStreamFlush => "flush",
+            Self::TcpStreamLocalAddr => "local_addr",
+            Self::TcpStreamPeerAddr => "peer_addr",
+            Self::TcpStreamShutdownRead => "shutdown_read",
+            Self::TcpStreamShutdownWrite => "shutdown_write",
+            Self::TcpStreamShutdownBoth => "shutdown_both",
+            Self::TcpStreamClose => "close",
+            Self::UdpSocketSendText => "send_text",
+            Self::UdpSocketSendBytes => "send_bytes",
+            Self::UdpSocketRecv => "recv",
+            Self::UdpSocketRecvFrom => "recv_from",
+            Self::UdpSocketLocalAddr => "local_addr",
+            Self::UdpSocketPeerAddr => "peer_addr",
+            Self::UdpSocketClose => "close",
+            Self::UdpDatagramAddress => "address",
+            Self::UdpDatagramBytes => "bytes",
+            Self::UdpDatagramText => "text",
+            Self::HttpListenerAccept => "accept",
+            Self::HttpListenerLocalAddr => "local_addr",
+            Self::HttpListenerClose => "close",
+            Self::HttpExchangeMethod => "method",
+            Self::HttpExchangePath => "path",
+            Self::HttpExchangeHeaders => "headers",
+            Self::HttpExchangeBodyText => "body_text",
+            Self::HttpExchangeBodyBytes => "body_bytes",
+            Self::HttpExchangeRespondText => "respond_text",
+            Self::HttpExchangeRespondBytes => "respond_bytes",
+            Self::HttpResponseStatus => "status",
+            Self::HttpResponseReason => "reason",
+            Self::HttpResponseHeaders => "headers",
+            Self::HttpResponseText => "text",
+            Self::HttpResponseBytes => "bytes",
+            Self::WebSocketListenerAccept => "accept",
+            Self::WebSocketListenerLocalAddr => "local_addr",
+            Self::WebSocketSendText => "send_text",
+            Self::WebSocketSendBytes => "send_bytes",
+            Self::WebSocketRecvText => "recv_text",
+            Self::WebSocketRecvBytes => "recv_bytes",
+            Self::WebSocketClose => "close",
+            Self::UnixListenerAccept => "accept",
+            Self::UnixListenerClose => "close",
+            Self::UnixStreamReadLine => "read_line",
+            Self::UnixStreamReadExact => "read_exact",
+            Self::UnixStreamWriteAll => "write_all",
+            Self::UnixStreamClose => "close",
+            Self::TlsListenerAccept => "accept",
+            Self::TlsListenerLocalAddr => "local_addr",
+            Self::TlsListenerClose => "close",
+            Self::TlsStreamReadLine => "read_line",
+            Self::TlsStreamReadExact => "read_exact",
+            Self::TlsStreamWriteAll => "write_all",
+            Self::TlsStreamClose => "close",
         }
     }
 
@@ -682,6 +922,73 @@ impl BuiltinMember {
             Self::TaskResult => "result() -> T",
             Self::TaskGroupStart => "start(function, ...) -> Task[T]",
             Self::TaskGroupCancel => "cancel() -> None",
+            Self::FileReadAll => "read_all() -> Result[String, io.Error]",
+            Self::FileReadBytes => "read_bytes() -> Result[Vec[uint8], io.Error]",
+            Self::FileWriteAll => "write_all(text: String) -> Result[None, io.Error]",
+            Self::FileWriteBytes => "write_bytes(bytes: Vec[uint8]) -> Result[None, io.Error]",
+            Self::FileFlush => "flush() -> Result[None, io.Error]",
+            Self::FileClose => "close() -> None",
+            Self::TcpListenerAccept => "accept(timeout: Duration = ...) -> Result[net.TcpStream, io.Error]",
+            Self::TcpListenerLocalAddr => "local_addr() -> Result[String, io.Error]",
+            Self::TcpListenerClose => "close() -> None",
+            Self::TcpStreamReadAll => "read_all(timeout: Duration = ...) -> Result[String, io.Error]",
+            Self::TcpStreamReadLine => "read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]",
+            Self::TcpStreamReadBytes => "read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]",
+            Self::TcpStreamReadExact => "read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]",
+            Self::TcpStreamWriteAll => "write_all(text: String, timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::TcpStreamWriteBytes => "write_bytes(bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::TcpStreamFlush => "flush() -> Result[None, io.Error]",
+            Self::TcpStreamLocalAddr => "local_addr() -> Result[String, io.Error]",
+            Self::TcpStreamPeerAddr => "peer_addr() -> Result[String, io.Error]",
+            Self::TcpStreamShutdownRead => "shutdown_read() -> Result[None, io.Error]",
+            Self::TcpStreamShutdownWrite => "shutdown_write() -> Result[None, io.Error]",
+            Self::TcpStreamShutdownBoth => "shutdown_both() -> Result[None, io.Error]",
+            Self::TcpStreamClose => "close() -> None",
+            Self::UdpSocketSendText => "send_text(address: String, text: String, timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::UdpSocketSendBytes => "send_bytes(address: String, bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::UdpSocketRecv => "recv(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]",
+            Self::UdpSocketRecvFrom => "recv_from(max_bytes: int32, timeout: Duration = ...) -> Result[Option[net.UdpDatagram], io.Error]",
+            Self::UdpSocketLocalAddr => "local_addr() -> Result[String, io.Error]",
+            Self::UdpSocketPeerAddr => "peer_addr() -> Result[String, io.Error]",
+            Self::UdpSocketClose => "close() -> None",
+            Self::UdpDatagramAddress => "address() -> String",
+            Self::UdpDatagramBytes => "bytes() -> Vec[uint8]",
+            Self::UdpDatagramText => "text() -> Result[String, io.Error]",
+            Self::HttpListenerAccept => "accept(timeout: Duration = ...) -> Result[net.HttpExchange, io.Error]",
+            Self::HttpListenerLocalAddr => "local_addr() -> Result[String, io.Error]",
+            Self::HttpListenerClose => "close() -> None",
+            Self::HttpExchangeMethod => "method() -> String",
+            Self::HttpExchangePath => "path() -> String",
+            Self::HttpExchangeHeaders => "headers() -> Map[String, String]",
+            Self::HttpExchangeBodyText => "body_text() -> Result[String, io.Error]",
+            Self::HttpExchangeBodyBytes => "body_bytes() -> Vec[uint8]",
+            Self::HttpExchangeRespondText => "respond_text(status: int32, text: String, headers: Map[String, String]) -> Result[None, io.Error]",
+            Self::HttpExchangeRespondBytes => "respond_bytes(status: int32, bytes: Vec[uint8], headers: Map[String, String]) -> Result[None, io.Error]",
+            Self::HttpResponseStatus => "status() -> int32",
+            Self::HttpResponseReason => "reason() -> String",
+            Self::HttpResponseHeaders => "headers() -> Map[String, String]",
+            Self::HttpResponseText => "text() -> Result[String, io.Error]",
+            Self::HttpResponseBytes => "bytes() -> Vec[uint8]",
+            Self::WebSocketListenerAccept => "accept(timeout: Duration = ...) -> Result[net.WebSocket, io.Error]",
+            Self::WebSocketListenerLocalAddr => "local_addr() -> Result[String, io.Error]",
+            Self::WebSocketSendText => "send_text(text: String, timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::WebSocketSendBytes => "send_bytes(bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::WebSocketRecvText => "recv_text(timeout: Duration = ...) -> Result[Option[String], io.Error]",
+            Self::WebSocketRecvBytes => "recv_bytes(timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]",
+            Self::WebSocketClose => "close() -> None",
+            Self::UnixListenerAccept => "accept(timeout: Duration = ...) -> Result[net.UnixStream, io.Error]",
+            Self::UnixListenerClose => "close() -> None",
+            Self::UnixStreamReadLine => "read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]",
+            Self::UnixStreamReadExact => "read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]",
+            Self::UnixStreamWriteAll => "write_all(text: String, timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::UnixStreamClose => "close() -> None",
+            Self::TlsListenerAccept => "accept(timeout: Duration = ...) -> Result[net.TlsStream, io.Error]",
+            Self::TlsListenerLocalAddr => "local_addr() -> Result[String, io.Error]",
+            Self::TlsListenerClose => "close() -> None",
+            Self::TlsStreamReadLine => "read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]",
+            Self::TlsStreamReadExact => "read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]",
+            Self::TlsStreamWriteAll => "write_all(text: String, timeout: Duration = ...) -> Result[None, io.Error]",
+            Self::TlsStreamClose => "close() -> None",
         }
     }
 
@@ -779,6 +1086,73 @@ impl BuiltinMember {
             Self::TaskGroupCancel => {
                 "Signals cancellation to child tasks in the current task group."
             }
+            Self::FileReadAll => "Reads the remaining file contents into a `String`.",
+            Self::FileReadBytes => "Reads the remaining file contents into `Vec[uint8]`.",
+            Self::FileWriteAll => "Writes all of `text` to the file, returning an `io.Error` on failure.",
+            Self::FileWriteBytes => "Writes all of `bytes` to the file, returning an `io.Error` on failure.",
+            Self::FileFlush => "Flushes pending file writes to the operating system.",
+            Self::FileClose => "Closes the file handle so the resource can no longer be used.",
+            Self::TcpListenerAccept => "Accepts the next incoming TCP connection, optionally timing out.",
+            Self::TcpListenerLocalAddr => "Returns the bound local address for the listener.",
+            Self::TcpListenerClose => "Closes the TCP listener handle.",
+            Self::TcpStreamReadAll => "Reads the remaining TCP stream contents into a `String` until the peer closes.",
+            Self::TcpStreamReadLine => "Reads a UTF-8 line from the TCP stream, returning `Option.None` on EOF.",
+            Self::TcpStreamReadBytes => "Reads up to `max_bytes` raw bytes from the TCP stream.",
+            Self::TcpStreamReadExact => "Reads exactly `count` raw bytes from the TCP stream or returns an `io.Error`.",
+            Self::TcpStreamWriteAll => "Writes all of `text` to the TCP stream.",
+            Self::TcpStreamWriteBytes => "Writes all of `bytes` to the TCP stream.",
+            Self::TcpStreamFlush => "Flushes pending TCP stream writes.",
+            Self::TcpStreamLocalAddr => "Returns the local address for the TCP stream.",
+            Self::TcpStreamPeerAddr => "Returns the connected peer address for the TCP stream.",
+            Self::TcpStreamShutdownRead => "Shuts down the read half of the TCP stream.",
+            Self::TcpStreamShutdownWrite => "Shuts down the write half of the TCP stream.",
+            Self::TcpStreamShutdownBoth => "Shuts down both halves of the TCP stream.",
+            Self::TcpStreamClose => "Closes the TCP stream handle.",
+            Self::UdpSocketSendText => "Sends UTF-8 text to a UDP address.",
+            Self::UdpSocketSendBytes => "Sends raw bytes to a UDP address.",
+            Self::UdpSocketRecv => "Receives raw bytes from a connected UDP socket.",
+            Self::UdpSocketRecvFrom => "Receives a datagram and source address from a UDP socket.",
+            Self::UdpSocketLocalAddr => "Returns the local address for the UDP socket.",
+            Self::UdpSocketPeerAddr => "Returns the connected peer address for the UDP socket.",
+            Self::UdpSocketClose => "Closes the UDP socket handle.",
+            Self::UdpDatagramAddress => "Returns the source address for the UDP datagram.",
+            Self::UdpDatagramBytes => "Returns the datagram payload as raw bytes.",
+            Self::UdpDatagramText => "Decodes the datagram payload as UTF-8 text.",
+            Self::HttpListenerAccept => "Accepts the next incoming HTTP request.",
+            Self::HttpListenerLocalAddr => "Returns the bound local address for the HTTP listener.",
+            Self::HttpListenerClose => "Closes the HTTP listener handle.",
+            Self::HttpExchangeMethod => "Returns the HTTP request method.",
+            Self::HttpExchangePath => "Returns the HTTP request path.",
+            Self::HttpExchangeHeaders => "Returns the HTTP request headers as a map.",
+            Self::HttpExchangeBodyText => "Returns the HTTP request body decoded as UTF-8.",
+            Self::HttpExchangeBodyBytes => "Returns the HTTP request body as raw bytes.",
+            Self::HttpExchangeRespondText => "Sends a text HTTP response for the current request.",
+            Self::HttpExchangeRespondBytes => "Sends a binary HTTP response for the current request.",
+            Self::HttpResponseStatus => "Returns the HTTP response status code.",
+            Self::HttpResponseReason => "Returns the HTTP response reason phrase.",
+            Self::HttpResponseHeaders => "Returns the HTTP response headers as a map.",
+            Self::HttpResponseText => "Returns the HTTP response body decoded as UTF-8.",
+            Self::HttpResponseBytes => "Returns the HTTP response body as raw bytes.",
+            Self::WebSocketListenerAccept => "Accepts the next incoming WebSocket connection.",
+            Self::WebSocketListenerLocalAddr => "Returns the bound local address for the WebSocket listener.",
+            Self::WebSocketSendText => "Sends a text WebSocket frame.",
+            Self::WebSocketSendBytes => "Sends a binary WebSocket frame.",
+            Self::WebSocketRecvText => "Receives the next text WebSocket frame.",
+            Self::WebSocketRecvBytes => "Receives the next binary WebSocket frame.",
+            Self::WebSocketClose => "Closes the WebSocket connection.",
+            Self::UnixListenerAccept => "Accepts the next incoming Unix domain stream connection.",
+            Self::UnixListenerClose => "Closes the Unix listener handle.",
+            Self::UnixStreamReadLine => "Reads a UTF-8 line from the Unix stream.",
+            Self::UnixStreamReadExact => "Reads exactly `count` bytes from the Unix stream.",
+            Self::UnixStreamWriteAll => "Writes all of `text` to the Unix stream.",
+            Self::UnixStreamClose => "Closes the Unix stream handle.",
+            Self::TlsListenerAccept => "Accepts the next incoming TLS connection.",
+            Self::TlsListenerLocalAddr => "Returns the bound local address for the TLS listener.",
+            Self::TlsListenerClose => "Closes the TLS listener handle.",
+            Self::TlsStreamReadLine => "Reads a UTF-8 line from the TLS stream.",
+            Self::TlsStreamReadExact => "Reads exactly `count` bytes from the TLS stream.",
+            Self::TlsStreamWriteAll => "Writes all of `text` to the TLS stream.",
+            Self::TlsStreamClose => "Closes the TLS stream handle.",
         }
     }
 
@@ -814,12 +1188,42 @@ impl BuiltinMember {
             | Self::StringClone
             | Self::TaskResult
             | Self::QueueClose
-            | Self::TaskGroupCancel => bind_call_arguments(
+            | Self::TaskGroupCancel
+            | Self::FileReadAll
+            | Self::FileReadBytes
+            | Self::FileFlush
+            | Self::FileClose
+            | Self::TcpListenerLocalAddr
+            | Self::TcpListenerClose
+            | Self::TcpStreamFlush
+            | Self::TcpStreamLocalAddr
+            | Self::TcpStreamPeerAddr
+            | Self::TcpStreamShutdownRead
+            | Self::TcpStreamShutdownWrite
+            | Self::TcpStreamShutdownBoth
+            | Self::TcpStreamClose => bind_call_arguments(
                 &format!("`{}`", self.name()),
                 &[],
                 args,
                 span,
                 CallConvention::PositionalOnly,
+            ),
+            Self::TcpListenerAccept
+            | Self::TcpStreamReadAll
+            | Self::TcpStreamReadLine
+            | Self::WebSocketRecvText
+            | Self::WebSocketRecvBytes
+            | Self::WebSocketListenerAccept
+            | Self::HttpListenerAccept
+            | Self::UnixListenerAccept
+            | Self::UnixStreamReadLine
+            | Self::TlsListenerAccept
+            | Self::TlsStreamReadLine => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &TIMEOUT_ONLY_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
             ),
             Self::QueueGet => bind_call_arguments(
                 "`get`",
@@ -943,6 +1347,120 @@ impl BuiltinMember {
                 args,
                 span,
                 CallConvention::PositionalOrNamed,
+            ),
+            Self::FileWriteAll => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &FILE_WRITE_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::FileWriteBytes => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &FILE_WRITE_BYTES_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::TcpStreamWriteAll | Self::UnixStreamWriteAll | Self::TlsStreamWriteAll => {
+                bind_call_arguments(
+                    &format!("`{}`", self.name()),
+                    &TEXT_TIMEOUT_PARAMS,
+                    args,
+                    span,
+                    CallConvention::PositionalOrNamed,
+                )
+            }
+            Self::TcpStreamWriteBytes | Self::WebSocketSendBytes => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &BYTES_TIMEOUT_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::TcpStreamReadBytes | Self::UdpSocketRecv | Self::UdpSocketRecvFrom => {
+                bind_call_arguments(
+                    &format!("`{}`", self.name()),
+                    &MAX_BYTES_TIMEOUT_PARAMS,
+                    args,
+                    span,
+                    CallConvention::PositionalOrNamed,
+                )
+            }
+            Self::TcpStreamReadExact | Self::UnixStreamReadExact | Self::TlsStreamReadExact => {
+                bind_call_arguments(
+                    &format!("`{}`", self.name()),
+                    &COUNT_TIMEOUT_PARAMS,
+                    args,
+                    span,
+                    CallConvention::PositionalOrNamed,
+                )
+            }
+            Self::UdpSocketSendText => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &ADDRESS_TEXT_TIMEOUT_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::UdpSocketSendBytes => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &ADDRESS_BYTES_TIMEOUT_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::HttpExchangeRespondText => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &STATUS_TEXT_HEADERS_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::HttpExchangeRespondBytes => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &STATUS_BYTES_HEADERS_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::WebSocketSendText => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &TEXT_TIMEOUT_PARAMS,
+                args,
+                span,
+                CallConvention::PositionalOrNamed,
+            ),
+            Self::UdpSocketLocalAddr
+            | Self::UdpSocketPeerAddr
+            | Self::UdpSocketClose
+            | Self::UdpDatagramAddress
+            | Self::UdpDatagramBytes
+            | Self::UdpDatagramText
+            | Self::HttpListenerLocalAddr
+            | Self::HttpListenerClose
+            | Self::HttpExchangeMethod
+            | Self::HttpExchangePath
+            | Self::HttpExchangeHeaders
+            | Self::HttpExchangeBodyText
+            | Self::HttpExchangeBodyBytes
+            | Self::HttpResponseStatus
+            | Self::HttpResponseReason
+            | Self::HttpResponseHeaders
+            | Self::HttpResponseText
+            | Self::HttpResponseBytes
+            | Self::WebSocketListenerLocalAddr
+            | Self::WebSocketClose
+            | Self::UnixListenerClose
+            | Self::UnixStreamClose
+            | Self::TlsListenerLocalAddr
+            | Self::TlsListenerClose
+            | Self::TlsStreamClose => bind_call_arguments(
+                &format!("`{}`", self.name()),
+                &[],
+                args,
+                span,
+                CallConvention::PositionalOnly,
             ),
             Self::TaskGroupStart => bind_call_arguments(
                 "`start`",

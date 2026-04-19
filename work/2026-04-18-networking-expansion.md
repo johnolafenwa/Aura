@@ -1,0 +1,22 @@
+# 2026-04-18 Networking Expansion
+
+- Session start: 2026-04-18 22:44:15 BST
+- Goal: expand the maintained Aurora networking surface beyond blocking TCP-only support, including binary I/O, timeout-aware and cancellation-aware socket operations, broader network protocols, maintained examples/tutorials, and full compiler/runtime/tooling verification.
+- Session completed: 2026-04-19 01:45:44 BST
+- Total elapsed: 3h 01m 29s
+- Work completed:
+  - expanded the maintained `io` / `fs` / `net` surface from the initial blocking file/TCP subset to the richer blocking network stack now exercised by maintained examples and tests: byte-oriented file I/O, timeout-aware TCP operations, UDP, HTTP, WebSocket, Unix-socket, and TLS networking
+  - added and stabilized compiler-backed builtin-module analysis/completion coverage for the new file and network resource members, including the advanced `fs.File`, `net.Tcp*`, `net.Udp*`, `net.Http*`, `net.WebSocket*`, `net.Unix*`, and `net.Tls*` surfaces
+  - added maintained compiler integration coverage in `crates/aurora-compiler/tests/io_network.rs` for builtin module checking and public-path execution of the expanded I/O/network surface
+  - regenerated the bundled local TLS certificate material and then made `examples/io/unix_tls_roundtrip.au` self-contained by embedding the self-signed PEM strings and writing temporary cert/key files at runtime so the example no longer depends on repo-root-relative asset paths
+  - increased maintained network-example timeouts and fixed the WebSocket listener accept path to force accepted sockets back to blocking mode before the handshake, removing the suite-load flake that was surfacing as `Handshake not finished`
+  - removed dead networking helper/runtime leftovers from `runtime_value.rs` so the finished network pass no longer leaves dead-code warnings behind during `cargo test`
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p aurora-compiler`
+  - `cargo test -p aura`
+  - `npm run test:lsp`
+  - `npm run check:extension`
+- Follow-up:
+  - no open follow-up remains inside the requested maintained blocking I/O/networking surface
+  - future work, if wanted, is separate runtime expansion rather than unfinished fallout from this pass: evented/non-blocking scheduling, richer socket configuration, additional protocols, and deeper cancellation semantics

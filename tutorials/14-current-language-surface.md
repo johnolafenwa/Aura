@@ -48,6 +48,21 @@ Builtin scalar and utility type names currently accepted by the compiler:
 - `None`
 - `Duration`
 - `Range`
+- `io.Error`
+- `fs.File`
+- `net.TcpListener`
+- `net.TcpStream`
+- `net.UdpSocket`
+- `net.UdpDatagram`
+- `net.HttpListener`
+- `net.HttpExchange`
+- `net.HttpResponse`
+- `net.WebSocketListener`
+- `net.WebSocket`
+- `net.UnixListener`
+- `net.UnixStream`
+- `net.TlsListener`
+- `net.TlsStream`
 
 Builtin generic or runtime-facing types currently accepted:
 
@@ -232,11 +247,122 @@ Current builtin functions:
 - `parse_int64`
 - `parse_float64`
 
+Current builtin module namespaces:
+
+- `io`
+- `fs`
+- `net`
+
 Current builtin `range(...)` notes:
 
 - supports `range(stop)` and `range(start, stop)`
 - supports the matching named-argument forms
 - currently requires bounds that fit the bootstrap compiler's signed index space
+
+Current builtin I/O and networking surface:
+
+- `io.write(...)`
+- `io.flush()`
+- `io.read_line()`
+- `fs.exists(...)`
+- `fs.read_to_string(...)`
+- `fs.read_bytes(...)`
+- `fs.write_string(...)`
+- `fs.write_bytes(...)`
+- `fs.append_string(...)`
+- `fs.append_bytes(...)`
+- `fs.create_dir(...)`
+- `fs.read_dir(...)`
+- `fs.remove_file(...)`
+- `fs.open(...)`
+- `fs.create(...)`
+- `fs.append(...)`
+- `fs.File.read_all()`
+- `fs.File.read_bytes()`
+- `fs.File.write_all(...)`
+- `fs.File.write_bytes(...)`
+- `fs.File.flush()`
+- `fs.File.close()`
+- `net.connect(...)`
+- `net.connect_timeout(...)`
+- `net.listen(...)`
+- `net.udp_bind(...)`
+- `net.http_listen(...)`
+- `net.http_request_text(...)`
+- `net.http_request_text_timeout(...)`
+- `net.http_request_bytes(...)`
+- `net.http_request_bytes_timeout(...)`
+- `net.websocket_listen(...)`
+- `net.websocket_connect(...)`
+- `net.websocket_connect_timeout(...)`
+- `net.unix_listen(...)`
+- `net.unix_connect(...)`
+- `net.unix_connect_timeout(...)`
+- `net.tls_listen(...)`
+- `net.tls_connect(...)`
+- `net.tls_connect_timeout(...)`
+- `net.TcpListener.accept(timeout=...)`
+- `net.TcpListener.local_addr()`
+- `net.TcpListener.close()`
+- `net.TcpStream.read_all(timeout=...)`
+- `net.TcpStream.read_line(timeout=...)`
+- `net.TcpStream.read_bytes(...)`
+- `net.TcpStream.read_exact(...)`
+- `net.TcpStream.write_all(...)`
+- `net.TcpStream.write_bytes(...)`
+- `net.TcpStream.flush()`
+- `net.TcpStream.local_addr()`
+- `net.TcpStream.peer_addr()`
+- `net.TcpStream.shutdown_read()`
+- `net.TcpStream.shutdown_write()`
+- `net.TcpStream.shutdown_both()`
+- `net.TcpStream.close()`
+- `net.UdpSocket.send_text(...)`
+- `net.UdpSocket.send_bytes(...)`
+- `net.UdpSocket.recv(...)`
+- `net.UdpSocket.recv_from(...)`
+- `net.UdpSocket.local_addr()`
+- `net.UdpSocket.peer_addr()`
+- `net.UdpSocket.close()`
+- `net.UdpDatagram.address()`
+- `net.UdpDatagram.bytes()`
+- `net.UdpDatagram.text()`
+- `net.HttpListener.accept(timeout=...)`
+- `net.HttpListener.local_addr()`
+- `net.HttpListener.close()`
+- `net.HttpExchange.method()`
+- `net.HttpExchange.path()`
+- `net.HttpExchange.headers()`
+- `net.HttpExchange.body_text()`
+- `net.HttpExchange.body_bytes()`
+- `net.HttpExchange.respond_text(...)`
+- `net.HttpExchange.respond_bytes(...)`
+- `net.HttpResponse.status()`
+- `net.HttpResponse.reason()`
+- `net.HttpResponse.headers()`
+- `net.HttpResponse.text()`
+- `net.HttpResponse.bytes()`
+- `net.WebSocketListener.accept(timeout=...)`
+- `net.WebSocketListener.local_addr()`
+- `net.WebSocketListener.close()`
+- `net.WebSocket.send_text(...)`
+- `net.WebSocket.send_bytes(...)`
+- `net.WebSocket.recv_text(...)`
+- `net.WebSocket.recv_bytes(...)`
+- `net.WebSocket.close()`
+- `net.UnixListener.accept(timeout=...)`
+- `net.UnixListener.close()`
+- `net.UnixStream.read_line(timeout=...)`
+- `net.UnixStream.read_exact(...)`
+- `net.UnixStream.write_all(...)`
+- `net.UnixStream.close()`
+- `net.TlsListener.accept(timeout=...)`
+- `net.TlsListener.local_addr()`
+- `net.TlsListener.close()`
+- `net.TlsStream.read_line(timeout=...)`
+- `net.TlsStream.read_exact(...)`
+- `net.TlsStream.write_all(...)`
+- `net.TlsStream.close()`
 
 Current builtin member methods include:
 
@@ -384,7 +510,7 @@ Current module/import limitations:
 - directly checking or analyzing a nested package file now infers the nearest package root that satisfies its imports
 - `import a.b` exposes module namespaces for calls like `a.b.func(...)`, `a.b.Type(...)`, and `a.b.Enum.Variant`
 - type annotations may use namespace-imported types such as `a.b.Type`
-- the current runtimes stop with a friendly recursion-depth diagnostic after 1024 nested Aurora calls
+- the current MIR-backed runtime stops with a friendly recursion-depth diagnostic after 256 nested Aurora calls
 - package manifests, local path dependencies, and git dependencies are now implemented
 
 Current expression/ergonomics limitations:
@@ -396,4 +522,6 @@ Current expression/ergonomics limitations:
 - `queue[T]()` is supported when you want to avoid relying on expected type context
 - `spawn` and `TaskGroup.start(...)` support named functions plus associated methods without `self`
 - concurrency uses only the maintained `Queue[T]`, `queue()`, `Task.result()`, `tasks()`, and `TaskGroup.start(...)` surface
+- file and network I/O are currently blocking operations rather than part of an evented async runtime
+- Unix domain sockets require a Unix host at runtime
 - borrowed return labels such as `borrow[shared]` are supported on borrowed parameters and returns for advanced zero-copy APIs

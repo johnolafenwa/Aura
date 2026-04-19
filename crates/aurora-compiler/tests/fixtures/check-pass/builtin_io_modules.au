@@ -1,0 +1,22 @@
+import io
+import fs
+import net
+
+def read_file(path: String) -> Result[String, io.Error]:
+    with file = try fs.open(path):
+        return file.read_all()
+
+def write_file(path: String, text: String) -> Result[None, io.Error]:
+    with file = try fs.create(path):
+        try file.write_all(text)
+        try file.flush()
+        return Result.Ok(None)
+
+def handle(stream: net.TcpStream) -> Result[None, io.Error]:
+    with socket = stream:
+        try socket.write_all("ok")
+        try socket.flush()
+        return Result.Ok(None)
+
+def main() -> int32:
+    return 0

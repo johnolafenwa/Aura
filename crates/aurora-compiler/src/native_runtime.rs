@@ -14,9 +14,12 @@ use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_value::{
-    cast_numeric_value, option_none, option_some, render_float, result_err, result_ok,
-    send_error_closed, CancellationContext, ChannelValue, EnumVariantValue, InstanceValue,
-    MapValue, RangeValue, SetValue, TaskGroupValue, TaskValue, TryRecvResult, Value, VecValue,
+    cast_numeric_value, io_error, io_read_line, option_none, option_some, render_float, result_err,
+    result_ok, send_error_closed, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, RangeValue, SetValue,
+    TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
+    TryRecvResult, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
+    WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::Type;
 
@@ -37,6 +40,16 @@ fn write_stdout(text: &str) {
         let _ = writeln!(io::stderr().lock(), "failed to write to stdout: {}", error);
         process::exit(1);
     }
+}
+
+fn write_stdout_result(text: &str) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    with_sigpipe_blocked(|| stdout.write_all(text.as_bytes()))
+}
+
+fn flush_stdout_result() -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    with_sigpipe_blocked(|| stdout.flush())
 }
 
 #[cfg(unix)]
@@ -242,6 +255,130 @@ fn decode_bytes(ptr: *const u8, len: usize) -> String {
         .to_string()
 }
 
+fn bytes_vec_value(bytes: Vec<u8>) -> Value {
+    Value::Vec(VecValue {
+        element_type: Type::named("uint8"),
+        elements: bytes
+            .into_iter()
+            .map(|byte| Value::Int(IntegerValue::from_signed(byte as i128)))
+            .collect(),
+    })
+}
+
+fn headers_map_value(headers: Vec<(String, String)>) -> Value {
+    Value::Map(MapValue {
+        key_type: Type::named("String"),
+        value_type: Type::named("String"),
+        entries: headers
+            .into_iter()
+            .map(|(key, value)| (Value::String(key), Value::String(value)))
+            .collect(),
+    })
+}
+
+fn expect_string_value(value: &Value, label: &str) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        other => runtime_error(format!(
+            "`{}` expects `String`, found `{}`",
+            label,
+            value_type_name(other)
+        )),
+    }
+}
+
+fn expect_bytes_value(value: &Value, label: &str) -> Vec<u8> {
+    match value {
+        Value::Vec(vector)
+            if (vector.element_type == Type::named("uint8")
+                || vector.element_type == Type::named("Unknown"))
+                && vector
+                    .elements
+                    .iter()
+                    .all(|element| matches!(element, Value::Int(_))) =>
+        {
+            let mut bytes = Vec::with_capacity(vector.elements.len());
+            for element in &vector.elements {
+                let Value::Int(value) = element else {
+                    runtime_error(format!("`{}` expects `Vec[uint8]`", label));
+                };
+                let byte = value
+                    .as_i128()
+                    .and_then(|value| u8::try_from(value).ok())
+                    .unwrap_or_else(|| runtime_error(format!("`{}` expects `Vec[uint8]`", label)));
+                bytes.push(byte);
+            }
+            bytes
+        }
+        other => runtime_error(format!(
+            "`{}` expects `Vec[uint8]`, found `{}`",
+            label,
+            value_type_name(other)
+        )),
+    }
+}
+
+fn expect_i32_value(value: &Value, label: &str) -> i32 {
+    match value {
+        Value::Int(number) => number
+            .as_i128()
+            .and_then(|value| i32::try_from(value).ok())
+            .unwrap_or_else(|| runtime_error(format!("`{}` expects `int32`", label))),
+        other => runtime_error(format!(
+            "`{}` expects `int32`, found `{}`",
+            label,
+            value_type_name(other)
+        )),
+    }
+}
+
+fn expect_headers_map(value: &Value, label: &str) -> Vec<(String, String)> {
+    match value {
+        Value::Map(map)
+            if (map.key_type == Type::named("String")
+                || map.key_type == Type::named("Unknown"))
+                && (map.value_type == Type::named("String")
+                    || map.value_type == Type::named("Unknown")) =>
+        {
+            map.entries
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        expect_string_value(key, label),
+                        expect_string_value(value, label),
+                    )
+                })
+                .collect()
+        }
+        other => runtime_error(format!(
+            "`{}` expects `Map[String, String]`, found `{}`",
+            label,
+            value_type_name(other)
+        )),
+    }
+}
+
+fn optional_timeout_from_ptr(value: *mut OpaqueValue, label: &str) -> Option<StdDuration> {
+    if value.is_null() {
+        return None;
+    }
+    match unsafe { value_ref(value) } {
+        Value::Unit => None,
+        Value::Duration(duration) => Some(
+            u64::try_from(duration)
+                .map(StdDuration::from_millis)
+                .unwrap_or_else(|_| {
+                    runtime_error(format!("`{}` duration must be non-negative", label))
+                }),
+        ),
+        other => runtime_error(format!(
+            "`{}` expects `Duration`, found `{}`",
+            label,
+            value_type_name(other)
+        )),
+    }
+}
+
 fn render_runtime_diagnostic(diagnostic: Diagnostic) -> String {
     if let Some(context) = DIRECT_PROGRAM_SOURCE.get() {
         diagnostic.render_with_source(&context.path, &context.source)
@@ -293,6 +430,56 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::Channel(_) => "Queue".to_string(),
         Value::Task(_) => "Task".to_string(),
         Value::TaskGroup(_) => "TaskGroup".to_string(),
+        Value::File(_) => "fs.File".to_string(),
+        Value::TcpListener(_) => "net.TcpListener".to_string(),
+        Value::TcpStream(_) => "net.TcpStream".to_string(),
+        Value::UdpSocket(_) => "net.UdpSocket".to_string(),
+        Value::UdpDatagram(_) => "net.UdpDatagram".to_string(),
+        Value::HttpListener(_) => "net.HttpListener".to_string(),
+        Value::HttpExchange(_) => "net.HttpExchange".to_string(),
+        Value::HttpResponse(_) => "net.HttpResponse".to_string(),
+        Value::WebSocketListener(_) => "net.WebSocketListener".to_string(),
+        Value::WebSocket(_) => "net.WebSocket".to_string(),
+        Value::UnixListener(_) => "net.UnixListener".to_string(),
+        Value::UnixStream(_) => "net.UnixStream".to_string(),
+        Value::TlsListener(_) => "net.TlsListener".to_string(),
+        Value::TlsStream(_) => "net.TlsStream".to_string(),
+    }
+}
+
+fn inferred_collection_type(value: &Value) -> Type {
+    match value {
+        Value::String(_) => Type::named("String"),
+        Value::Bool(_) => Type::named("bool"),
+        Value::Float(_) => Type::named("float64"),
+        Value::Vec(vector) => Type::Named("Vec".to_string(), vec![vector.element_type.clone()]),
+        Value::Set(set) => Type::Named("Set".to_string(), vec![set.element_type.clone()]),
+        Value::Map(map) => Type::Named(
+            "Map".to_string(),
+            vec![map.key_type.clone(), map.value_type.clone()],
+        ),
+        Value::Duration(_) => Type::named("Duration"),
+        Value::Range(_) => Type::named("Range"),
+        Value::Instance(instance) => Type::named(instance.class_name.clone()),
+        Value::EnumVariant(variant) => Type::named(variant.enum_name.clone()),
+        Value::Channel(_) => Type::named("Queue"),
+        Value::Task(_) => Type::named("Task"),
+        Value::TaskGroup(_) => Type::named("TaskGroup"),
+        Value::File(_) => Type::named("fs.File"),
+        Value::TcpListener(_) => Type::named("net.TcpListener"),
+        Value::TcpStream(_) => Type::named("net.TcpStream"),
+        Value::UdpSocket(_) => Type::named("net.UdpSocket"),
+        Value::UdpDatagram(_) => Type::named("net.UdpDatagram"),
+        Value::HttpListener(_) => Type::named("net.HttpListener"),
+        Value::HttpExchange(_) => Type::named("net.HttpExchange"),
+        Value::HttpResponse(_) => Type::named("net.HttpResponse"),
+        Value::WebSocketListener(_) => Type::named("net.WebSocketListener"),
+        Value::WebSocket(_) => Type::named("net.WebSocket"),
+        Value::UnixListener(_) => Type::named("net.UnixListener"),
+        Value::UnixStream(_) => Type::named("net.UnixStream"),
+        Value::TlsListener(_) => Type::named("net.TlsListener"),
+        Value::TlsStream(_) => Type::named("net.TlsStream"),
+        Value::Int(_) | Value::ModuleNamespace(_) | Value::Unit => Type::named("Unknown"),
     }
 }
 
@@ -1117,7 +1304,13 @@ pub extern "C" fn aurora_direct_vec_push_in_place(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     let value = unsafe { take_value(value) };
-    with_vector_mut(vec, |vector| vector.elements.push(value));
+    let inferred = inferred_collection_type(&value);
+    with_vector_mut(vec, |vector| {
+        if vector.element_type == Type::named("Unknown") && inferred != Type::named("Unknown") {
+            vector.element_type = inferred;
+        }
+        vector.elements.push(value);
+    });
     boxed_value(Value::Unit)
 }
 
@@ -1363,7 +1556,16 @@ pub extern "C" fn aurora_direct_map_set_in_place(
 ) -> *mut OpaqueValue {
     let key = unsafe { take_value(key) };
     let value = unsafe { take_value(value) };
+    let inferred_key_type = inferred_collection_type(&key);
+    let inferred_value_type = inferred_collection_type(&value);
     let previous = with_map_mut(map, |map| {
+        if map.key_type == Type::named("Unknown") && inferred_key_type != Type::named("Unknown") {
+            map.key_type = inferred_key_type.clone();
+        }
+        if map.value_type == Type::named("Unknown") && inferred_value_type != Type::named("Unknown")
+        {
+            map.value_type = inferred_value_type.clone();
+        }
         if let Some(index) = map
             .entries
             .iter()
@@ -1596,7 +1798,11 @@ pub extern "C" fn aurora_direct_set_insert_in_place(
     value: *mut OpaqueValue,
 ) -> i64 {
     let value = unsafe { take_value(value) };
+    let inferred = inferred_collection_type(&value);
     let inserted = with_set_mut(set, |set| {
+        if set.element_type == Type::named("Unknown") && inferred != Type::named("Unknown") {
+            set.element_type = inferred.clone();
+        }
         if set.elements.iter().any(|candidate| *candidate == value) {
             false
         } else {
@@ -1850,6 +2056,20 @@ pub extern "C" fn aurora_direct_value_type_matches(
         Value::Channel(_) => expected == "Queue",
         Value::Task(_) => expected == "Task",
         Value::TaskGroup(_) => expected == "TaskGroup",
+        Value::File(_) => expected == "fs.File",
+        Value::TcpListener(_) => expected == "net.TcpListener",
+        Value::TcpStream(_) => expected == "net.TcpStream",
+        Value::UdpSocket(_) => expected == "net.UdpSocket",
+        Value::UdpDatagram(_) => expected == "net.UdpDatagram",
+        Value::HttpListener(_) => expected == "net.HttpListener",
+        Value::HttpExchange(_) => expected == "net.HttpExchange",
+        Value::HttpResponse(_) => expected == "net.HttpResponse",
+        Value::WebSocketListener(_) => expected == "net.WebSocketListener",
+        Value::WebSocket(_) => expected == "net.WebSocket",
+        Value::UnixListener(_) => expected == "net.UnixListener",
+        Value::UnixStream(_) => expected == "net.UnixStream",
+        Value::TlsListener(_) => expected == "net.TlsListener",
+        Value::TlsStream(_) => expected == "net.TlsStream",
         Value::Duration(_) => expected == "Duration",
         Value::Range(_) => expected == "Range",
         Value::Bool(_) => expected == "bool",
@@ -2190,6 +2410,1774 @@ pub extern "C" fn aurora_direct_task_group_close(
         }
         other => runtime_error(format!(
             "expected `TaskGroup`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_io_write(text: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(text) } {
+        Value::String(text) => match write_stdout_result(&text) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_io_flush() -> *mut OpaqueValue {
+    match flush_stdout_result() {
+        Ok(()) => boxed_value(result_ok(Value::Unit)),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_io_read_line() -> *mut OpaqueValue {
+    match io_read_line() {
+        Ok(Some(line)) => boxed_value(result_ok(option_some(Value::String(line)))),
+        Ok(None) => boxed_value(result_ok(option_none())),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_fs_exists(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(path) } {
+        Value::String(path) => boxed_value(Value::Bool(std::path::Path::new(&path).exists())),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_fs_read_to_string(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(path) } {
+        Value::String(path) => match std::fs::read_to_string(path) {
+            Ok(text) => boxed_value(result_ok(Value::String(text))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_fs_read_bytes(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(path) } {
+        Value::String(path) => match std::fs::read(path) {
+            Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_fs_write_string(
+    path: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let path = match unsafe { value_ref(path) } {
+        Value::String(path) => path.clone(),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    };
+    let text = match unsafe { value_ref(text) } {
+        Value::String(text) => text.clone(),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    };
+    match std::fs::write(path, text) {
+        Ok(()) => boxed_value(result_ok(Value::Unit)),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_fs_write_bytes(
+    path: *mut OpaqueValue,
+    bytes: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let path = expect_string_value(&unsafe { value_ref(path) }, "fs.write_bytes(...)");
+    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "fs.write_bytes(...)");
+    match std::fs::write(path, bytes) {
+        Ok(()) => boxed_value(result_ok(Value::Unit)),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_fs_append_string(
+    path: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let path = match unsafe { value_ref(path) } {
+        Value::String(path) => path.clone(),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    };
+    let text = match unsafe { value_ref(text) } {
+        Value::String(text) => text.clone(),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    };
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(text.as_bytes()))
+    {
+        Ok(()) => boxed_value(result_ok(Value::Unit)),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_fs_append_bytes(
+    path: *mut OpaqueValue,
+    bytes: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let path = expect_string_value(&unsafe { value_ref(path) }, "fs.append_bytes(...)");
+    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "fs.append_bytes(...)");
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(&bytes))
+    {
+        Ok(()) => boxed_value(result_ok(Value::Unit)),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_fs_create_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(path) } {
+        Value::String(path) => match std::fs::create_dir_all(path) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(path) } {
+        Value::String(path) => match std::fs::read_dir(path) {
+            Ok(entries) => {
+                let mut names = entries
+                    .filter_map(|entry| entry.ok())
+                    .map(|entry| Value::String(entry.file_name().to_string_lossy().to_string()))
+                    .collect::<Vec<_>>();
+                names.sort_by_key(|value| value.render());
+                boxed_value(result_ok(Value::Vec(VecValue {
+                    element_type: Type::named("String"),
+                    elements: names,
+                })))
+            }
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_fs_remove_file(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(path) } {
+        Value::String(path) => match std::fs::remove_file(path) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_fs_open(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(path) } {
+        Value::String(path) => match FileValue::open(&path) {
+            Ok(file) => boxed_value(result_ok(Value::File(file))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_fs_create(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(path) } {
+        Value::String(path) => match FileValue::create(&path) {
+            Ok(file) => boxed_value(result_ok(Value::File(file))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_fs_append(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(path) } {
+        Value::String(path) => match FileValue::append(&path) {
+            Ok(file) => boxed_value(result_ok(Value::File(file))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_file_read_all(file: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(file) } {
+        Value::File(file) => match file.read_all() {
+            Ok(text) => boxed_value(result_ok(Value::String(text))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `fs.File`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_file_read_bytes(file: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(file) } {
+        Value::File(file) => match file.read_bytes() {
+            Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `fs.File`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_file_write_all(
+    file: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let text = match unsafe { value_ref(text) } {
+        Value::String(text) => text.clone(),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    };
+    match unsafe { value_ref(file) } {
+        Value::File(file) => match file.write_all(&text) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `fs.File`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_file_write_bytes(
+    file: *mut OpaqueValue,
+    bytes: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "write_bytes(...)");
+    match unsafe { value_ref(file) } {
+        Value::File(file) => match file.write_bytes(&bytes) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `fs.File`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_file_flush(file: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(file) } {
+        Value::File(file) => match file.flush() {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `fs.File`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_file_close(file: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(file) } {
+        Value::File(file) => {
+            file.close();
+            boxed_value(Value::Unit)
+        }
+        other => runtime_error(format!(
+            "expected `fs.File`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_connect(address: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(address) } {
+        Value::String(address) => {
+            match TcpStreamValue::connect(&address, None, Some(&current_cancellation())) {
+                Ok(stream) => boxed_value(result_ok(Value::TcpStream(stream))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_connect_timeout(
+    address: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "net.connect_timeout(...)");
+    match unsafe { value_ref(address) } {
+        Value::String(address) => {
+            match TcpStreamValue::connect(&address, timeout, Some(&current_cancellation())) {
+                Ok(stream) => boxed_value(result_ok(Value::TcpStream(stream))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_listen(address: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(address) } {
+        Value::String(address) => match TcpListenerValue::bind(&address) {
+            Ok(listener) => boxed_value(result_ok(Value::TcpListener(listener))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_udp_bind(address: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(address) } {
+        Value::String(address) => match UdpSocketValue::bind(&address) {
+            Ok(socket) => boxed_value(result_ok(Value::UdpSocket(socket))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_unix_listen(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(path) } {
+        Value::String(path) => match UnixListenerValue::bind(&path) {
+            Ok(listener) => boxed_value(result_ok(Value::UnixListener(listener))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_unix_connect(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(path) } {
+        Value::String(path) => {
+            match UnixStreamValue::connect(&path, None, Some(&current_cancellation())) {
+                Ok(stream) => boxed_value(result_ok(Value::UnixStream(stream))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_unix_connect_timeout(
+    path: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "net.unix_connect_timeout(...)");
+    match unsafe { value_ref(path) } {
+        Value::String(path) => {
+            match UnixStreamValue::connect(&path, timeout, Some(&current_cancellation())) {
+                Ok(stream) => boxed_value(result_ok(Value::UnixStream(stream))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_tls_listen(
+    address: *mut OpaqueValue,
+    cert_pem_path: *mut OpaqueValue,
+    key_pem_path: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let address = expect_string_value(&unsafe { value_ref(address) }, "net.tls_listen(...)");
+    let cert_pem_path =
+        expect_string_value(&unsafe { value_ref(cert_pem_path) }, "net.tls_listen(...)");
+    let key_pem_path =
+        expect_string_value(&unsafe { value_ref(key_pem_path) }, "net.tls_listen(...)");
+    match TlsListenerValue::bind(&address, &cert_pem_path, &key_pem_path) {
+        Ok(listener) => boxed_value(result_ok(Value::TlsListener(listener))),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_tls_connect(
+    address: *mut OpaqueValue,
+    server_name: *mut OpaqueValue,
+    ca_pem_path: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let address = expect_string_value(&unsafe { value_ref(address) }, "net.tls_connect(...)");
+    let server_name =
+        expect_string_value(&unsafe { value_ref(server_name) }, "net.tls_connect(...)");
+    let ca_pem_path =
+        expect_string_value(&unsafe { value_ref(ca_pem_path) }, "net.tls_connect(...)");
+    match TlsStreamValue::connect(
+        &address,
+        &server_name,
+        Some(&ca_pem_path),
+        None,
+        Some(&current_cancellation()),
+    ) {
+        Ok(stream) => boxed_value(result_ok(Value::TlsStream(stream))),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_tls_connect_timeout(
+    address: *mut OpaqueValue,
+    server_name: *mut OpaqueValue,
+    ca_pem_path: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let address = expect_string_value(
+        &unsafe { value_ref(address) },
+        "net.tls_connect_timeout(...)",
+    );
+    let server_name = expect_string_value(
+        &unsafe { value_ref(server_name) },
+        "net.tls_connect_timeout(...)",
+    );
+    let ca_pem_path = expect_string_value(
+        &unsafe { value_ref(ca_pem_path) },
+        "net.tls_connect_timeout(...)",
+    );
+    let timeout = optional_timeout_from_ptr(timeout, "net.tls_connect_timeout(...)");
+    match TlsStreamValue::connect(
+        &address,
+        &server_name,
+        Some(&ca_pem_path),
+        timeout,
+        Some(&current_cancellation()),
+    ) {
+        Ok(stream) => boxed_value(result_ok(Value::TlsStream(stream))),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_http_listen(address: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(address) } {
+        Value::String(address) => match HttpListenerValue::bind(&address) {
+            Ok(listener) => boxed_value(result_ok(Value::HttpListener(listener))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_http_request_text(
+    method: *mut OpaqueValue,
+    url: *mut OpaqueValue,
+    body: *mut OpaqueValue,
+    headers: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let method = expect_string_value(&unsafe { value_ref(method) }, "net.http_request_text(...)");
+    let url = expect_string_value(&unsafe { value_ref(url) }, "net.http_request_text(...)");
+    let body = expect_string_value(&unsafe { value_ref(body) }, "net.http_request_text(...)");
+    let headers = expect_headers_map(&unsafe { value_ref(headers) }, "net.http_request_text(...)");
+    match HttpResponseValue::request_text(&method, &url, &body, headers, None) {
+        Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_http_request_text_timeout(
+    method: *mut OpaqueValue,
+    url: *mut OpaqueValue,
+    body: *mut OpaqueValue,
+    headers: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let method = expect_string_value(
+        &unsafe { value_ref(method) },
+        "net.http_request_text_timeout(...)",
+    );
+    let url = expect_string_value(
+        &unsafe { value_ref(url) },
+        "net.http_request_text_timeout(...)",
+    );
+    let body = expect_string_value(
+        &unsafe { value_ref(body) },
+        "net.http_request_text_timeout(...)",
+    );
+    let headers = expect_headers_map(
+        &unsafe { value_ref(headers) },
+        "net.http_request_text_timeout(...)",
+    );
+    let timeout = optional_timeout_from_ptr(timeout, "net.http_request_text_timeout(...)");
+    match HttpResponseValue::request_text(&method, &url, &body, headers, timeout) {
+        Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_http_request_bytes(
+    method: *mut OpaqueValue,
+    url: *mut OpaqueValue,
+    bytes: *mut OpaqueValue,
+    headers: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let method = expect_string_value(&unsafe { value_ref(method) }, "net.http_request_bytes(...)");
+    let url = expect_string_value(&unsafe { value_ref(url) }, "net.http_request_bytes(...)");
+    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "net.http_request_bytes(...)");
+    let headers = expect_headers_map(
+        &unsafe { value_ref(headers) },
+        "net.http_request_bytes(...)",
+    );
+    match HttpResponseValue::request_bytes(&method, &url, &bytes, headers, None) {
+        Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_http_request_bytes_timeout(
+    method: *mut OpaqueValue,
+    url: *mut OpaqueValue,
+    bytes: *mut OpaqueValue,
+    headers: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let method = expect_string_value(
+        &unsafe { value_ref(method) },
+        "net.http_request_bytes_timeout(...)",
+    );
+    let url = expect_string_value(
+        &unsafe { value_ref(url) },
+        "net.http_request_bytes_timeout(...)",
+    );
+    let bytes = expect_bytes_value(
+        &unsafe { value_ref(bytes) },
+        "net.http_request_bytes_timeout(...)",
+    );
+    let headers = expect_headers_map(
+        &unsafe { value_ref(headers) },
+        "net.http_request_bytes_timeout(...)",
+    );
+    let timeout = optional_timeout_from_ptr(timeout, "net.http_request_bytes_timeout(...)");
+    match HttpResponseValue::request_bytes(&method, &url, &bytes, headers, timeout) {
+        Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_websocket_listen(
+    address: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(address) } {
+        Value::String(address) => match WebSocketListenerValue::bind(&address) {
+            Ok(listener) => boxed_value(result_ok(Value::WebSocketListener(listener))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_websocket_connect(url: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(url) } {
+        Value::String(url) => match WebSocketValue::connect(&url, None) {
+            Ok(socket) => boxed_value(result_ok(Value::WebSocket(socket))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_net_websocket_connect_timeout(
+    url: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "net.websocket_connect_timeout(...)");
+    match unsafe { value_ref(url) } {
+        Value::String(url) => match WebSocketValue::connect(&url, timeout) {
+            Ok(socket) => boxed_value(result_ok(Value::WebSocket(socket))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_listener_accept(
+    listener: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+    match unsafe { value_ref(listener) } {
+        Value::TcpListener(listener) => {
+            match listener.accept(timeout, Some(&current_cancellation())) {
+                Ok(stream) => boxed_value(result_ok(Value::TcpStream(stream))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.TcpListener`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_listener_local_addr(
+    listener: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(listener) } {
+        Value::TcpListener(listener) => match listener.local_addr() {
+            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.TcpListener`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_listener_close(listener: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(listener) } {
+        Value::TcpListener(listener) => {
+            listener.close();
+            boxed_value(Value::Unit)
+        }
+        other => runtime_error(format!(
+            "expected `net.TcpListener`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_stream_read_all(
+    stream: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "read_all(timeout=...)");
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => match stream.read_all(timeout, Some(&current_cancellation())) {
+            Ok(text) => boxed_value(result_ok(Value::String(text))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_stream_read_line(
+    stream: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => {
+            match stream.read_line(timeout, Some(&current_cancellation())) {
+                Ok(Some(line)) => boxed_value(result_ok(option_some(Value::String(line)))),
+                Ok(None) => boxed_value(result_ok(option_none())),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_stream_read_bytes(
+    stream: *mut OpaqueValue,
+    max_bytes: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let max_bytes = expect_i32_value(&unsafe { value_ref(max_bytes) }, "read_bytes(...)");
+    let max_bytes = usize::try_from(max_bytes)
+        .unwrap_or_else(|_| runtime_error("`read_bytes(...)` requires a non-negative max_bytes"));
+    let timeout = optional_timeout_from_ptr(timeout, "read_bytes(timeout=...)");
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => {
+            match stream.read_bytes(max_bytes, timeout, Some(&current_cancellation())) {
+                Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
+                Ok(None) => boxed_value(result_ok(option_none())),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_stream_read_exact(
+    stream: *mut OpaqueValue,
+    count: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let count = expect_i32_value(&unsafe { value_ref(count) }, "read_exact(...)");
+    let count = usize::try_from(count)
+        .unwrap_or_else(|_| runtime_error("`read_exact(...)` requires a non-negative count"));
+    let timeout = optional_timeout_from_ptr(timeout, "read_exact(timeout=...)");
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => {
+            match stream.read_exact(count, timeout, Some(&current_cancellation())) {
+                Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_stream_write_all(
+    stream: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let text = match unsafe { value_ref(text) } {
+        Value::String(text) => text.clone(),
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    };
+    let timeout = optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => {
+            match stream.write_all(&text, timeout, Some(&current_cancellation())) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_stream_write_bytes(
+    stream: *mut OpaqueValue,
+    bytes: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "write_bytes(...)");
+    let timeout = optional_timeout_from_ptr(timeout, "write_bytes(timeout=...)");
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => {
+            match stream.write_bytes(&bytes, timeout, Some(&current_cancellation())) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_stream_shutdown_read(
+    stream: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => match stream.shutdown_read() {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_stream_shutdown_write(
+    stream: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => match stream.shutdown_write() {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_stream_shutdown_both(
+    stream: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => match stream.shutdown_both() {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_stream_flush(stream: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => match stream.flush() {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_stream_local_addr(
+    stream: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => match stream.local_addr() {
+            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_stream_peer_addr(stream: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => match stream.peer_addr() {
+            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tcp_stream_close(stream: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => {
+            stream.close();
+            boxed_value(Value::Unit)
+        }
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_udp_socket_send_text(
+    socket: *mut OpaqueValue,
+    address: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let address = expect_string_value(&unsafe { value_ref(address) }, "send_text(...)");
+    let text = expect_string_value(&unsafe { value_ref(text) }, "send_text(...)");
+    let timeout = optional_timeout_from_ptr(timeout, "send_text(timeout=...)");
+    match unsafe { value_ref(socket) } {
+        Value::UdpSocket(socket) => {
+            match socket.send_to_text(&address, &text, timeout, Some(&current_cancellation())) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.UdpSocket`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_udp_socket_send_bytes(
+    socket: *mut OpaqueValue,
+    address: *mut OpaqueValue,
+    bytes: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let address = expect_string_value(&unsafe { value_ref(address) }, "send_bytes(...)");
+    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "send_bytes(...)");
+    let timeout = optional_timeout_from_ptr(timeout, "send_bytes(timeout=...)");
+    match unsafe { value_ref(socket) } {
+        Value::UdpSocket(socket) => {
+            match socket.send_to_bytes(&address, &bytes, timeout, Some(&current_cancellation())) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.UdpSocket`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_udp_socket_recv(
+    socket: *mut OpaqueValue,
+    max_bytes: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let max_bytes = expect_i32_value(&unsafe { value_ref(max_bytes) }, "recv(...)");
+    let max_bytes = usize::try_from(max_bytes)
+        .unwrap_or_else(|_| runtime_error("`recv(...)` requires a non-negative max_bytes"));
+    let timeout = optional_timeout_from_ptr(timeout, "recv(timeout=...)");
+    match unsafe { value_ref(socket) } {
+        Value::UdpSocket(socket) => {
+            match socket.recv(max_bytes, timeout, Some(&current_cancellation())) {
+                Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
+                Ok(None) => boxed_value(result_ok(option_none())),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.UdpSocket`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_udp_socket_recv_from(
+    socket: *mut OpaqueValue,
+    max_bytes: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let max_bytes = expect_i32_value(&unsafe { value_ref(max_bytes) }, "recv_from(...)");
+    let max_bytes = usize::try_from(max_bytes)
+        .unwrap_or_else(|_| runtime_error("`recv_from(...)` requires a non-negative max_bytes"));
+    let timeout = optional_timeout_from_ptr(timeout, "recv_from(timeout=...)");
+    match unsafe { value_ref(socket) } {
+        Value::UdpSocket(socket) => {
+            match socket.recv_from(max_bytes, timeout, Some(&current_cancellation())) {
+                Ok(Some(datagram)) => {
+                    boxed_value(result_ok(option_some(Value::UdpDatagram(datagram))))
+                }
+                Ok(None) => boxed_value(result_ok(option_none())),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.UdpSocket`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_udp_socket_local_addr(
+    socket: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(socket) } {
+        Value::UdpSocket(socket) => match socket.local_addr() {
+            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.UdpSocket`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_udp_socket_peer_addr(socket: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(socket) } {
+        Value::UdpSocket(socket) => match socket.peer_addr() {
+            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.UdpSocket`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_udp_socket_close(socket: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(socket) } {
+        Value::UdpSocket(socket) => {
+            socket.close();
+            boxed_value(Value::Unit)
+        }
+        other => runtime_error(format!(
+            "expected `net.UdpSocket`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_udp_datagram_address(
+    datagram: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(datagram) } {
+        Value::UdpDatagram(datagram) => boxed_value(Value::String(datagram.address())),
+        other => runtime_error(format!(
+            "expected `net.UdpDatagram`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_udp_datagram_bytes(datagram: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(datagram) } {
+        Value::UdpDatagram(datagram) => boxed_value(bytes_vec_value(datagram.bytes())),
+        other => runtime_error(format!(
+            "expected `net.UdpDatagram`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_udp_datagram_text(datagram: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(datagram) } {
+        Value::UdpDatagram(datagram) => match datagram.text() {
+            Ok(text) => boxed_value(result_ok(Value::String(text))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.UdpDatagram`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_listener_accept(
+    listener: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+    match unsafe { value_ref(listener) } {
+        Value::HttpListener(listener) => match listener.accept(timeout) {
+            Ok(exchange) => boxed_value(result_ok(Value::HttpExchange(exchange))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.HttpListener`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_listener_local_addr(
+    listener: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(listener) } {
+        Value::HttpListener(listener) => match listener.local_addr() {
+            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.HttpListener`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_listener_close(
+    listener: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(listener) } {
+        Value::HttpListener(listener) => {
+            listener.close();
+            boxed_value(Value::Unit)
+        }
+        other => runtime_error(format!(
+            "expected `net.HttpListener`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_exchange_method(
+    exchange: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(exchange) } {
+        Value::HttpExchange(exchange) => boxed_value(Value::String(exchange.method())),
+        other => runtime_error(format!(
+            "expected `net.HttpExchange`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_exchange_path(exchange: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(exchange) } {
+        Value::HttpExchange(exchange) => boxed_value(Value::String(exchange.path())),
+        other => runtime_error(format!(
+            "expected `net.HttpExchange`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_exchange_headers(
+    exchange: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(exchange) } {
+        Value::HttpExchange(exchange) => boxed_value(headers_map_value(exchange.headers())),
+        other => runtime_error(format!(
+            "expected `net.HttpExchange`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_exchange_body_text(
+    exchange: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(exchange) } {
+        Value::HttpExchange(exchange) => match exchange.body_text() {
+            Ok(text) => boxed_value(result_ok(Value::String(text))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.HttpExchange`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_exchange_body_bytes(
+    exchange: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(exchange) } {
+        Value::HttpExchange(exchange) => boxed_value(bytes_vec_value(exchange.body_bytes())),
+        other => runtime_error(format!(
+            "expected `net.HttpExchange`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_exchange_respond_text(
+    exchange: *mut OpaqueValue,
+    status: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+    headers: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let status = expect_i32_value(&unsafe { value_ref(status) }, "respond_text(...)");
+    let text = expect_string_value(&unsafe { value_ref(text) }, "respond_text(...)");
+    let headers = expect_headers_map(&unsafe { value_ref(headers) }, "respond_text(...)");
+    match unsafe { value_ref(exchange) } {
+        Value::HttpExchange(exchange) => match exchange.respond_text(status, &text, headers) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.HttpExchange`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_exchange_respond_bytes(
+    exchange: *mut OpaqueValue,
+    status: *mut OpaqueValue,
+    bytes: *mut OpaqueValue,
+    headers: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let status = expect_i32_value(&unsafe { value_ref(status) }, "respond_bytes(...)");
+    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "respond_bytes(...)");
+    let headers = expect_headers_map(&unsafe { value_ref(headers) }, "respond_bytes(...)");
+    match unsafe { value_ref(exchange) } {
+        Value::HttpExchange(exchange) => match exchange.respond_bytes(status, &bytes, headers) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.HttpExchange`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_response_status(response: *mut OpaqueValue) -> i64 {
+    match unsafe { value_ref(response) } {
+        Value::HttpResponse(response) => i64::from(response.status()),
+        other => runtime_error(format!(
+            "expected `net.HttpResponse`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_response_reason(
+    response: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(response) } {
+        Value::HttpResponse(response) => boxed_value(Value::String(response.reason())),
+        other => runtime_error(format!(
+            "expected `net.HttpResponse`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_response_headers(
+    response: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(response) } {
+        Value::HttpResponse(response) => boxed_value(headers_map_value(response.headers())),
+        other => runtime_error(format!(
+            "expected `net.HttpResponse`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_response_text(response: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(response) } {
+        Value::HttpResponse(response) => match response.text() {
+            Ok(text) => boxed_value(result_ok(Value::String(text))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.HttpResponse`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_http_response_bytes(
+    response: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(response) } {
+        Value::HttpResponse(response) => boxed_value(bytes_vec_value(response.bytes())),
+        other => runtime_error(format!(
+            "expected `net.HttpResponse`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_websocket_listener_accept(
+    listener: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+    match unsafe { value_ref(listener) } {
+        Value::WebSocketListener(listener) => match listener.accept(timeout) {
+            Ok(socket) => boxed_value(result_ok(Value::WebSocket(socket))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.WebSocketListener`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_websocket_listener_local_addr(
+    listener: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(listener) } {
+        Value::WebSocketListener(listener) => match listener.local_addr() {
+            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.WebSocketListener`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_websocket_send_text(
+    socket: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let text = expect_string_value(&unsafe { value_ref(text) }, "send_text(...)");
+    let timeout = optional_timeout_from_ptr(timeout, "send_text(timeout=...)");
+    match unsafe { value_ref(socket) } {
+        Value::WebSocket(socket) => match socket.send_text(&text, timeout) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.WebSocket`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_websocket_send_bytes(
+    socket: *mut OpaqueValue,
+    bytes: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "send_bytes(...)");
+    let timeout = optional_timeout_from_ptr(timeout, "send_bytes(timeout=...)");
+    match unsafe { value_ref(socket) } {
+        Value::WebSocket(socket) => match socket.send_bytes(&bytes, timeout) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.WebSocket`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_websocket_recv_text(
+    socket: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "recv_text(timeout=...)");
+    match unsafe { value_ref(socket) } {
+        Value::WebSocket(socket) => match socket.recv_text(timeout) {
+            Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
+            Ok(None) => boxed_value(result_ok(option_none())),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.WebSocket`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_websocket_recv_bytes(
+    socket: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "recv_bytes(timeout=...)");
+    match unsafe { value_ref(socket) } {
+        Value::WebSocket(socket) => match socket.recv_bytes(timeout) {
+            Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
+            Ok(None) => boxed_value(result_ok(option_none())),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.WebSocket`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_websocket_close(socket: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(socket) } {
+        Value::WebSocket(socket) => {
+            let _ = socket.close();
+            boxed_value(Value::Unit)
+        }
+        other => runtime_error(format!(
+            "expected `net.WebSocket`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_unix_listener_accept(
+    listener: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+    match unsafe { value_ref(listener) } {
+        Value::UnixListener(listener) => {
+            match listener.accept(timeout, Some(&current_cancellation())) {
+                Ok(stream) => boxed_value(result_ok(Value::UnixStream(stream))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.UnixListener`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_unix_listener_close(
+    listener: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(listener) } {
+        Value::UnixListener(listener) => {
+            listener.close();
+            boxed_value(Value::Unit)
+        }
+        other => runtime_error(format!(
+            "expected `net.UnixListener`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_unix_stream_read_line(
+    stream: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
+    match unsafe { value_ref(stream) } {
+        Value::UnixStream(stream) => match stream.read_line(timeout, Some(&current_cancellation()))
+        {
+            Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
+            Ok(None) => boxed_value(result_ok(option_none())),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.UnixStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_unix_stream_read_exact(
+    stream: *mut OpaqueValue,
+    count: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let count = expect_i32_value(&unsafe { value_ref(count) }, "read_exact(...)");
+    let count = usize::try_from(count)
+        .unwrap_or_else(|_| runtime_error("`read_exact(...)` requires a non-negative count"));
+    let timeout = optional_timeout_from_ptr(timeout, "read_exact(timeout=...)");
+    match unsafe { value_ref(stream) } {
+        Value::UnixStream(stream) => {
+            match stream.read_exact(count, timeout, Some(&current_cancellation())) {
+                Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.UnixStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_unix_stream_write_all(
+    stream: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let text = expect_string_value(&unsafe { value_ref(text) }, "write_all(...)");
+    let timeout = optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
+    match unsafe { value_ref(stream) } {
+        Value::UnixStream(stream) => {
+            match stream.write_all(&text, timeout, Some(&current_cancellation())) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.UnixStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_unix_stream_close(stream: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(stream) } {
+        Value::UnixStream(stream) => {
+            stream.close();
+            boxed_value(Value::Unit)
+        }
+        other => runtime_error(format!(
+            "expected `net.UnixStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tls_listener_accept(
+    listener: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+    match unsafe { value_ref(listener) } {
+        Value::TlsListener(listener) => {
+            match listener.accept(timeout, Some(&current_cancellation())) {
+                Ok(stream) => boxed_value(result_ok(Value::TlsStream(stream))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.TlsListener`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tls_listener_local_addr(
+    listener: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    match unsafe { value_ref(listener) } {
+        Value::TlsListener(listener) => match listener.local_addr() {
+            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+        other => runtime_error(format!(
+            "expected `net.TlsListener`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tls_listener_close(listener: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(listener) } {
+        Value::TlsListener(listener) => {
+            listener.close();
+            boxed_value(Value::Unit)
+        }
+        other => runtime_error(format!(
+            "expected `net.TlsListener`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tls_stream_read_line(
+    stream: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let timeout = optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
+    match unsafe { value_ref(stream) } {
+        Value::TlsStream(stream) => {
+            match stream.read_line(timeout, Some(&current_cancellation())) {
+                Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
+                Ok(None) => boxed_value(result_ok(option_none())),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.TlsStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tls_stream_read_exact(
+    stream: *mut OpaqueValue,
+    count: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let count = expect_i32_value(&unsafe { value_ref(count) }, "read_exact(...)");
+    let count = usize::try_from(count)
+        .unwrap_or_else(|_| runtime_error("`read_exact(...)` requires a non-negative count"));
+    let timeout = optional_timeout_from_ptr(timeout, "read_exact(timeout=...)");
+    match unsafe { value_ref(stream) } {
+        Value::TlsStream(stream) => {
+            match stream.read_exact(count, timeout, Some(&current_cancellation())) {
+                Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.TlsStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tls_stream_write_all(
+    stream: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let text = expect_string_value(&unsafe { value_ref(text) }, "write_all(...)");
+    let timeout = optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
+    match unsafe { value_ref(stream) } {
+        Value::TlsStream(stream) => {
+            match stream.write_all(&text, timeout, Some(&current_cancellation())) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `net.TlsStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn aurora_direct_tls_stream_close(stream: *mut OpaqueValue) -> *mut OpaqueValue {
+    match unsafe { value_ref(stream) } {
+        Value::TlsStream(stream) => {
+            stream.close();
+            boxed_value(Value::Unit)
+        }
+        other => runtime_error(format!(
+            "expected `net.TlsStream`, found `{}`",
             value_type_name(other)
         )),
     }

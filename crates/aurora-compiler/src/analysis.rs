@@ -1701,6 +1701,274 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::TaskGroupStart => {
                     Some(Type::Named("Task".to_string(), vec![Type::Unit]))
                 }
+                BuiltinMember::FileReadAll => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::named("String"),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::FileReadBytes => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::FileWriteAll
+                | BuiltinMember::FileWriteBytes
+                | BuiltinMember::FileFlush => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                )),
+                BuiltinMember::FileClose => Some(Type::Unit),
+                BuiltinMember::TcpListenerAccept => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.TcpStream".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::TcpListenerLocalAddr => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::named("String"),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::TcpListenerClose => Some(Type::Unit),
+                BuiltinMember::TcpStreamReadAll
+                | BuiltinMember::TcpStreamLocalAddr
+                | BuiltinMember::TcpStreamPeerAddr => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::named("String"),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::TcpStreamReadLine => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Option".to_string(), vec![Type::named("String")]),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::TcpStreamReadBytes => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named(
+                            "Option".to_string(),
+                            vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
+                        ),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::TcpStreamReadExact => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::TcpStreamWriteAll
+                | BuiltinMember::TcpStreamWriteBytes
+                | BuiltinMember::TcpStreamFlush
+                | BuiltinMember::TcpStreamShutdownRead
+                | BuiltinMember::TcpStreamShutdownWrite
+                | BuiltinMember::TcpStreamShutdownBoth => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                )),
+                BuiltinMember::TcpStreamClose => Some(Type::Unit),
+                BuiltinMember::UdpSocketSendText | BuiltinMember::UdpSocketSendBytes => {
+                    Some(Type::Named(
+                        "Result".to_string(),
+                        vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                    ))
+                }
+                BuiltinMember::UdpSocketRecv => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named(
+                            "Option".to_string(),
+                            vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
+                        ),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::UdpSocketRecvFrom => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named(
+                            "Option".to_string(),
+                            vec![Type::Named("net.UdpDatagram".to_string(), Vec::new())],
+                        ),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::UdpSocketLocalAddr | BuiltinMember::UdpSocketPeerAddr => {
+                    Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("String"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    ))
+                }
+                BuiltinMember::UdpSocketClose => Some(Type::Unit),
+                BuiltinMember::UdpDatagramAddress => Some(Type::named("String")),
+                BuiltinMember::UdpDatagramBytes => {
+                    Some(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
+                }
+                BuiltinMember::UdpDatagramText => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::named("String"),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::HttpListenerAccept => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.HttpExchange".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::HttpListenerLocalAddr => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::named("String"),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::HttpListenerClose => Some(Type::Unit),
+                BuiltinMember::HttpExchangeMethod | BuiltinMember::HttpExchangePath => {
+                    Some(Type::named("String"))
+                }
+                BuiltinMember::HttpExchangeHeaders | BuiltinMember::HttpResponseHeaders => {
+                    Some(Type::Named(
+                        "Map".to_string(),
+                        vec![Type::named("String"), Type::named("String")],
+                    ))
+                }
+                BuiltinMember::HttpExchangeBodyText | BuiltinMember::HttpResponseText => {
+                    Some(Type::Named(
+                        "Result".to_string(),
+                        vec![
+                            Type::named("String"),
+                            Type::Named("io.Error".to_string(), Vec::new()),
+                        ],
+                    ))
+                }
+                BuiltinMember::HttpExchangeBodyBytes | BuiltinMember::HttpResponseBytes => {
+                    Some(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
+                }
+                BuiltinMember::HttpExchangeRespondText
+                | BuiltinMember::HttpExchangeRespondBytes => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                )),
+                BuiltinMember::HttpResponseStatus => Some(Type::named("int32")),
+                BuiltinMember::HttpResponseReason => Some(Type::named("String")),
+                BuiltinMember::WebSocketListenerAccept => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.WebSocket".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::WebSocketListenerLocalAddr => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::named("String"),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::WebSocketSendText | BuiltinMember::WebSocketSendBytes => {
+                    Some(Type::Named(
+                        "Result".to_string(),
+                        vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                    ))
+                }
+                BuiltinMember::WebSocketRecvText => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Option".to_string(), vec![Type::named("String")]),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::WebSocketRecvBytes => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named(
+                            "Option".to_string(),
+                            vec![Type::Named("Vec".to_string(), vec![Type::named("uint8")])],
+                        ),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::WebSocketClose => Some(Type::Unit),
+                BuiltinMember::UnixListenerAccept => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.UnixStream".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::UnixListenerClose => Some(Type::Unit),
+                BuiltinMember::UnixStreamReadLine => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Option".to_string(), vec![Type::named("String")]),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::UnixStreamReadExact => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::UnixStreamWriteAll => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                )),
+                BuiltinMember::UnixStreamClose => Some(Type::Unit),
+                BuiltinMember::TlsListenerAccept => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("net.TlsStream".to_string(), Vec::new()),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::TlsListenerLocalAddr => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::named("String"),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::TlsListenerClose => Some(Type::Unit),
+                BuiltinMember::TlsStreamReadLine => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Option".to_string(), vec![Type::named("String")]),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::TlsStreamReadExact => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::TlsStreamWriteAll => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
+                )),
+                BuiltinMember::TlsStreamClose => Some(Type::Unit),
             };
             return Some(ResolvedMember {
                 hover: builtin_function_hover(builtin_member.detail(), builtin_member.docs()),
@@ -2612,17 +2880,77 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
                 },
             ]);
         }
-        "TaskGroup" => {
-            completions.push(AnalysisCompletion {
-                name: "spawn".to_string(),
-                kind: "method".to_string(),
-                detail: "spawn(function, ...) -> Task[T]".to_string(),
-            });
-        }
         _ => {}
     }
 
     for builtin in [
+        BuiltinMember::FileReadAll,
+        BuiltinMember::FileReadBytes,
+        BuiltinMember::FileWriteAll,
+        BuiltinMember::FileWriteBytes,
+        BuiltinMember::FileFlush,
+        BuiltinMember::FileClose,
+        BuiltinMember::TcpListenerAccept,
+        BuiltinMember::TcpListenerLocalAddr,
+        BuiltinMember::TcpListenerClose,
+        BuiltinMember::TcpStreamReadAll,
+        BuiltinMember::TcpStreamReadLine,
+        BuiltinMember::TcpStreamReadBytes,
+        BuiltinMember::TcpStreamReadExact,
+        BuiltinMember::TcpStreamWriteAll,
+        BuiltinMember::TcpStreamWriteBytes,
+        BuiltinMember::TcpStreamFlush,
+        BuiltinMember::TcpStreamLocalAddr,
+        BuiltinMember::TcpStreamPeerAddr,
+        BuiltinMember::TcpStreamShutdownRead,
+        BuiltinMember::TcpStreamShutdownWrite,
+        BuiltinMember::TcpStreamShutdownBoth,
+        BuiltinMember::TcpStreamClose,
+        BuiltinMember::UdpSocketSendText,
+        BuiltinMember::UdpSocketSendBytes,
+        BuiltinMember::UdpSocketRecv,
+        BuiltinMember::UdpSocketRecvFrom,
+        BuiltinMember::UdpSocketLocalAddr,
+        BuiltinMember::UdpSocketPeerAddr,
+        BuiltinMember::UdpSocketClose,
+        BuiltinMember::UdpDatagramAddress,
+        BuiltinMember::UdpDatagramBytes,
+        BuiltinMember::UdpDatagramText,
+        BuiltinMember::HttpListenerAccept,
+        BuiltinMember::HttpListenerLocalAddr,
+        BuiltinMember::HttpListenerClose,
+        BuiltinMember::HttpExchangeMethod,
+        BuiltinMember::HttpExchangePath,
+        BuiltinMember::HttpExchangeHeaders,
+        BuiltinMember::HttpExchangeBodyText,
+        BuiltinMember::HttpExchangeBodyBytes,
+        BuiltinMember::HttpExchangeRespondText,
+        BuiltinMember::HttpExchangeRespondBytes,
+        BuiltinMember::HttpResponseStatus,
+        BuiltinMember::HttpResponseReason,
+        BuiltinMember::HttpResponseHeaders,
+        BuiltinMember::HttpResponseText,
+        BuiltinMember::HttpResponseBytes,
+        BuiltinMember::WebSocketListenerAccept,
+        BuiltinMember::WebSocketListenerLocalAddr,
+        BuiltinMember::WebSocketSendText,
+        BuiltinMember::WebSocketSendBytes,
+        BuiltinMember::WebSocketRecvText,
+        BuiltinMember::WebSocketRecvBytes,
+        BuiltinMember::WebSocketClose,
+        BuiltinMember::UnixListenerAccept,
+        BuiltinMember::UnixListenerClose,
+        BuiltinMember::UnixStreamReadLine,
+        BuiltinMember::UnixStreamReadExact,
+        BuiltinMember::UnixStreamWriteAll,
+        BuiltinMember::UnixStreamClose,
+        BuiltinMember::TlsListenerAccept,
+        BuiltinMember::TlsListenerLocalAddr,
+        BuiltinMember::TlsListenerClose,
+        BuiltinMember::TlsStreamReadLine,
+        BuiltinMember::TlsStreamReadExact,
+        BuiltinMember::TlsStreamWriteAll,
+        BuiltinMember::TlsStreamClose,
         BuiltinMember::FloatSqrt,
         BuiltinMember::StringLen,
         BuiltinMember::StringContains,

@@ -1,0 +1,55 @@
+import io
+import net
+
+def serve(listener: net.TcpListener) -> Result[None, io.Error]:
+    with server = listener:
+        with stream = try server.accept():
+            message = try stream.read_line()
+            match message:
+                case Option.Some(text):
+                    try stream.write_all("echo:" + text)
+                    try stream.flush()
+                case Option.None:
+                    pass
+        return Result.Ok(None)
+
+def main() -> int32:
+    with group = tasks():
+        match net.listen("127.0.0.1:0"):
+            case Result.Ok(listener):
+                match listener.local_addr():
+                    case Result.Ok(address):
+                        server = group.start(serve, listener)
+                        match net.connect(address):
+                            case Result.Ok(client):
+                                with socket = client:
+                                    match socket.write_all("ping\n"):
+                                        case Result.Ok(_):
+                                            pass
+                                        case Result.Err(_):
+                                            return 1
+                                    match socket.flush():
+                                        case Result.Ok(_):
+                                            pass
+                                        case Result.Err(_):
+                                            return 1
+                                    match socket.read_line():
+                                        case Result.Ok(message):
+                                            match message:
+                                                case Option.Some(text):
+                                                    print(text)
+                                                case Option.None:
+                                                    return 1
+                                        case Result.Err(_):
+                                            return 1
+                            case Result.Err(_):
+                                return 1
+                        match server.result():
+                            case Result.Ok(_):
+                                return 0
+                            case Result.Err(_):
+                                return 1
+                    case Result.Err(_):
+                        return 1
+            case Result.Err(_):
+                return 1

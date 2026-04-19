@@ -52,6 +52,21 @@ const PRIMITIVE_TYPES = new Set([
   "String",
   "None",
   "Duration",
+  "io.Error",
+  "fs.File",
+  "net.TcpListener",
+  "net.TcpStream",
+  "net.UdpSocket",
+  "net.UdpDatagram",
+  "net.HttpListener",
+  "net.HttpExchange",
+  "net.HttpResponse",
+  "net.WebSocketListener",
+  "net.WebSocket",
+  "net.UnixListener",
+  "net.UnixStream",
+  "net.TlsListener",
+  "net.TlsStream",
   "Queue",
   "Task",
   "TaskGroup"
@@ -366,6 +381,769 @@ const BUILTIN_MEMBERS = {
       documentation: "The value component of a `MapEntry[K, V]`."
     }
   ],
+  io: [
+    {
+      name: "write",
+      kind: "method",
+      detail: "write(text: String) -> Result[None, io.Error]",
+      documentation: "Writes `text` to standard output without appending a newline."
+    },
+    {
+      name: "flush",
+      kind: "method",
+      detail: "flush() -> Result[None, io.Error]",
+      documentation: "Flushes standard output."
+    },
+    {
+      name: "read_line",
+      kind: "method",
+      detail: "read_line() -> Result[Option[String], io.Error]",
+      documentation: "Reads the next UTF-8 line from standard input without the trailing newline."
+    },
+    {
+      name: "Error",
+      kind: "field",
+      detail: "Error: io.Error",
+      type: "io.Error",
+      documentation: "The builtin I/O error enum."
+    }
+  ],
+  fs: [
+    {
+      name: "exists",
+      kind: "method",
+      detail: "exists(path: String) -> bool",
+      documentation: "Returns true when `path` exists on disk."
+    },
+    {
+      name: "read_to_string",
+      kind: "method",
+      detail: "read_to_string(path: String) -> Result[String, io.Error]",
+      documentation: "Reads the entire file at `path` as UTF-8 text."
+    },
+    {
+      name: "read_bytes",
+      kind: "method",
+      detail: "read_bytes(path: String) -> Result[Vec[uint8], io.Error]",
+      documentation: "Reads the entire file at `path` as raw bytes."
+    },
+    {
+      name: "write_string",
+      kind: "method",
+      detail: "write_string(path: String, text: String) -> Result[None, io.Error]",
+      documentation: "Creates or truncates `path` and writes `text` to it."
+    },
+    {
+      name: "write_bytes",
+      kind: "method",
+      detail: "write_bytes(path: String, bytes: Vec[uint8]) -> Result[None, io.Error]",
+      documentation: "Creates or truncates `path` and writes `bytes` to it."
+    },
+    {
+      name: "append_string",
+      kind: "method",
+      detail: "append_string(path: String, text: String) -> Result[None, io.Error]",
+      documentation: "Appends `text` to the file at `path`."
+    },
+    {
+      name: "append_bytes",
+      kind: "method",
+      detail: "append_bytes(path: String, bytes: Vec[uint8]) -> Result[None, io.Error]",
+      documentation: "Appends `bytes` to the file at `path`."
+    },
+    {
+      name: "create_dir",
+      kind: "method",
+      detail: "create_dir(path: String) -> Result[None, io.Error]",
+      documentation: "Creates the directory at `path`."
+    },
+    {
+      name: "read_dir",
+      kind: "method",
+      detail: "read_dir(path: String) -> Result[Vec[String], io.Error]",
+      documentation: "Returns the entry names in the directory at `path`."
+    },
+    {
+      name: "remove_file",
+      kind: "method",
+      detail: "remove_file(path: String) -> Result[None, io.Error]",
+      documentation: "Removes the file at `path`."
+    },
+    {
+      name: "open",
+      kind: "method",
+      detail: "open(path: String) -> Result[fs.File, io.Error]",
+      documentation: "Opens `path` for reading."
+    },
+    {
+      name: "create",
+      kind: "method",
+      detail: "create(path: String) -> Result[fs.File, io.Error]",
+      documentation: "Creates or truncates `path` and returns a writable file handle."
+    },
+    {
+      name: "append",
+      kind: "method",
+      detail: "append(path: String) -> Result[fs.File, io.Error]",
+      documentation: "Opens `path` for appending and returns a writable file handle."
+    },
+    {
+      name: "File",
+      kind: "field",
+      detail: "File: fs.File",
+      type: "fs.File",
+      documentation: "The builtin file-handle resource type."
+    }
+  ],
+  "fs.File": [
+    {
+      name: "read_all",
+      kind: "method",
+      detail: "read_all() -> Result[String, io.Error]",
+      documentation: "Reads the remaining contents of the file as UTF-8 text."
+    },
+    {
+      name: "read_bytes",
+      kind: "method",
+      detail: "read_bytes() -> Result[Vec[uint8], io.Error]",
+      documentation: "Reads the remaining contents of the file as raw bytes."
+    },
+    {
+      name: "write_all",
+      kind: "method",
+      detail: "write_all(text: String) -> Result[None, io.Error]",
+      documentation: "Writes all of `text` to the file."
+    },
+    {
+      name: "write_bytes",
+      kind: "method",
+      detail: "write_bytes(bytes: Vec[uint8]) -> Result[None, io.Error]",
+      documentation: "Writes all of `bytes` to the file."
+    },
+    {
+      name: "flush",
+      kind: "method",
+      detail: "flush() -> Result[None, io.Error]",
+      documentation: "Flushes buffered file output."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> Result[None, io.Error]",
+      documentation: "Closes the file handle."
+    }
+  ],
+  net: [
+    {
+      name: "connect",
+      kind: "method",
+      detail: "connect(address: String) -> Result[net.TcpStream, io.Error]",
+      documentation: "Connects to a TCP server at `address`."
+    },
+    {
+      name: "connect_timeout",
+      kind: "method",
+      detail: "connect_timeout(address: String, timeout: Duration) -> Result[net.TcpStream, io.Error]",
+      documentation: "Connects to a TCP server at `address`, failing when the timeout expires."
+    },
+    {
+      name: "listen",
+      kind: "method",
+      detail: "listen(address: String) -> Result[net.TcpListener, io.Error]",
+      documentation: "Starts a TCP listener bound to `address`."
+    },
+    {
+      name: "udp_bind",
+      kind: "method",
+      detail: "udp_bind(address: String) -> Result[net.UdpSocket, io.Error]",
+      documentation: "Binds a UDP socket to `address`."
+    },
+    {
+      name: "http_listen",
+      kind: "method",
+      detail: "http_listen(address: String) -> Result[net.HttpListener, io.Error]",
+      documentation: "Starts a blocking HTTP listener bound to `address`."
+    },
+    {
+      name: "http_request_text",
+      kind: "method",
+      detail: "http_request_text(method: String, url: String, body: String, headers: Map[String, String]) -> Result[net.HttpResponse, io.Error]",
+      documentation: "Performs an HTTP request with a UTF-8 request body."
+    },
+    {
+      name: "http_request_text_timeout",
+      kind: "method",
+      detail: "http_request_text_timeout(method: String, url: String, body: String, headers: Map[String, String], timeout: Duration) -> Result[net.HttpResponse, io.Error]",
+      documentation: "Performs an HTTP request with a UTF-8 request body and explicit timeout."
+    },
+    {
+      name: "http_request_bytes",
+      kind: "method",
+      detail: "http_request_bytes(method: String, url: String, bytes: Vec[uint8], headers: Map[String, String]) -> Result[net.HttpResponse, io.Error]",
+      documentation: "Performs an HTTP request with a binary request body."
+    },
+    {
+      name: "http_request_bytes_timeout",
+      kind: "method",
+      detail: "http_request_bytes_timeout(method: String, url: String, bytes: Vec[uint8], headers: Map[String, String], timeout: Duration) -> Result[net.HttpResponse, io.Error]",
+      documentation: "Performs an HTTP request with a binary request body and explicit timeout."
+    },
+    {
+      name: "websocket_listen",
+      kind: "method",
+      detail: "websocket_listen(address: String) -> Result[net.WebSocketListener, io.Error]",
+      documentation: "Starts a blocking WebSocket listener bound to `address`."
+    },
+    {
+      name: "websocket_connect",
+      kind: "method",
+      detail: "websocket_connect(url: String) -> Result[net.WebSocket, io.Error]",
+      documentation: "Connects to a WebSocket server."
+    },
+    {
+      name: "websocket_connect_timeout",
+      kind: "method",
+      detail: "websocket_connect_timeout(url: String, timeout: Duration) -> Result[net.WebSocket, io.Error]",
+      documentation: "Connects to a WebSocket server with an explicit timeout."
+    },
+    {
+      name: "unix_listen",
+      kind: "method",
+      detail: "unix_listen(path: String) -> Result[net.UnixListener, io.Error]",
+      documentation: "Starts a Unix domain stream listener at `path`."
+    },
+    {
+      name: "unix_connect",
+      kind: "method",
+      detail: "unix_connect(path: String) -> Result[net.UnixStream, io.Error]",
+      documentation: "Connects to a Unix domain stream socket."
+    },
+    {
+      name: "unix_connect_timeout",
+      kind: "method",
+      detail: "unix_connect_timeout(path: String, timeout: Duration) -> Result[net.UnixStream, io.Error]",
+      documentation: "Connects to a Unix domain stream socket with an explicit timeout."
+    },
+    {
+      name: "tls_listen",
+      kind: "method",
+      detail: "tls_listen(address: String, cert_pem_path: String, key_pem_path: String) -> Result[net.TlsListener, io.Error]",
+      documentation: "Starts a TLS listener using PEM certificate and key files."
+    },
+    {
+      name: "tls_connect",
+      kind: "method",
+      detail: "tls_connect(address: String, server_name: String, ca_pem_path: String) -> Result[net.TlsStream, io.Error]",
+      documentation: "Connects to a TLS server using a PEM certificate authority bundle."
+    },
+    {
+      name: "tls_connect_timeout",
+      kind: "method",
+      detail: "tls_connect_timeout(address: String, server_name: String, ca_pem_path: String, timeout: Duration) -> Result[net.TlsStream, io.Error]",
+      documentation: "Connects to a TLS server using a PEM certificate authority bundle and explicit timeout."
+    },
+    {
+      name: "TcpStream",
+      kind: "field",
+      detail: "TcpStream: net.TcpStream",
+      type: "net.TcpStream",
+      documentation: "The builtin TCP stream resource type."
+    },
+    {
+      name: "TcpListener",
+      kind: "field",
+      detail: "TcpListener: net.TcpListener",
+      type: "net.TcpListener",
+      documentation: "The builtin TCP listener resource type."
+    },
+    {
+      name: "UdpSocket",
+      kind: "field",
+      detail: "UdpSocket: net.UdpSocket",
+      type: "net.UdpSocket",
+      documentation: "The builtin UDP socket resource type."
+    },
+    {
+      name: "UdpDatagram",
+      kind: "field",
+      detail: "UdpDatagram: net.UdpDatagram",
+      type: "net.UdpDatagram",
+      documentation: "The builtin received UDP datagram value type."
+    },
+    {
+      name: "HttpListener",
+      kind: "field",
+      detail: "HttpListener: net.HttpListener",
+      type: "net.HttpListener",
+      documentation: "The builtin blocking HTTP listener resource type."
+    },
+    {
+      name: "HttpExchange",
+      kind: "field",
+      detail: "HttpExchange: net.HttpExchange",
+      type: "net.HttpExchange",
+      documentation: "The builtin HTTP request/response exchange resource type."
+    },
+    {
+      name: "HttpResponse",
+      kind: "field",
+      detail: "HttpResponse: net.HttpResponse",
+      type: "net.HttpResponse",
+      documentation: "The builtin HTTP response resource type."
+    },
+    {
+      name: "WebSocketListener",
+      kind: "field",
+      detail: "WebSocketListener: net.WebSocketListener",
+      type: "net.WebSocketListener",
+      documentation: "The builtin blocking WebSocket listener resource type."
+    },
+    {
+      name: "WebSocket",
+      kind: "field",
+      detail: "WebSocket: net.WebSocket",
+      type: "net.WebSocket",
+      documentation: "The builtin WebSocket connection resource type."
+    },
+    {
+      name: "UnixListener",
+      kind: "field",
+      detail: "UnixListener: net.UnixListener",
+      type: "net.UnixListener",
+      documentation: "The builtin Unix domain stream listener resource type."
+    },
+    {
+      name: "UnixStream",
+      kind: "field",
+      detail: "UnixStream: net.UnixStream",
+      type: "net.UnixStream",
+      documentation: "The builtin Unix domain stream connection resource type."
+    },
+    {
+      name: "TlsListener",
+      kind: "field",
+      detail: "TlsListener: net.TlsListener",
+      type: "net.TlsListener",
+      documentation: "The builtin TLS listener resource type."
+    },
+    {
+      name: "TlsStream",
+      kind: "field",
+      detail: "TlsStream: net.TlsStream",
+      type: "net.TlsStream",
+      documentation: "The builtin TLS connection resource type."
+    }
+  ],
+  "net.TcpListener": [
+    {
+      name: "accept",
+      kind: "method",
+      detail: "accept(timeout: Duration = ...) -> Result[net.TcpStream, io.Error]",
+      documentation: "Accepts the next incoming TCP connection, optionally timing out."
+    },
+    {
+      name: "local_addr",
+      kind: "method",
+      detail: "local_addr() -> Result[String, io.Error]",
+      documentation: "Returns the bound local listener address."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the TCP listener."
+    }
+  ],
+  "net.TcpStream": [
+    {
+      name: "read_all",
+      kind: "method",
+      detail: "read_all(timeout: Duration = ...) -> Result[String, io.Error]",
+      documentation: "Reads the remaining stream contents as UTF-8 text until the peer closes."
+    },
+    {
+      name: "read_line",
+      kind: "method",
+      detail: "read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]",
+      documentation: "Reads the next UTF-8 line from the stream without the trailing newline."
+    },
+    {
+      name: "read_bytes",
+      kind: "method",
+      detail: "read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]",
+      documentation: "Reads up to `max_bytes` raw bytes from the TCP stream."
+    },
+    {
+      name: "read_exact",
+      kind: "method",
+      detail: "read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]",
+      documentation: "Reads exactly `count` raw bytes from the TCP stream."
+    },
+    {
+      name: "write_all",
+      kind: "method",
+      detail: "write_all(text: String, timeout: Duration = ...) -> Result[None, io.Error]",
+      documentation: "Writes all of `text` to the stream."
+    },
+    {
+      name: "write_bytes",
+      kind: "method",
+      detail: "write_bytes(bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
+      documentation: "Writes all of `bytes` to the stream."
+    },
+    {
+      name: "flush",
+      kind: "method",
+      detail: "flush() -> Result[None, io.Error]",
+      documentation: "Flushes buffered stream output."
+    },
+    {
+      name: "local_addr",
+      kind: "method",
+      detail: "local_addr() -> Result[String, io.Error]",
+      documentation: "Returns the local socket address."
+    },
+    {
+      name: "peer_addr",
+      kind: "method",
+      detail: "peer_addr() -> Result[String, io.Error]",
+      documentation: "Returns the peer socket address."
+    },
+    {
+      name: "shutdown_read",
+      kind: "method",
+      detail: "shutdown_read() -> Result[None, io.Error]",
+      documentation: "Shuts down the read half of the TCP stream."
+    },
+    {
+      name: "shutdown_write",
+      kind: "method",
+      detail: "shutdown_write() -> Result[None, io.Error]",
+      documentation: "Shuts down the write half of the TCP stream."
+    },
+    {
+      name: "shutdown_both",
+      kind: "method",
+      detail: "shutdown_both() -> Result[None, io.Error]",
+      documentation: "Shuts down both halves of the TCP stream."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the TCP stream."
+    }
+  ],
+  "net.UdpSocket": [
+    {
+      name: "send_text",
+      kind: "method",
+      detail: "send_text(address: String, text: String, timeout: Duration = ...) -> Result[None, io.Error]",
+      documentation: "Sends UTF-8 text to a UDP address."
+    },
+    {
+      name: "send_bytes",
+      kind: "method",
+      detail: "send_bytes(address: String, bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
+      documentation: "Sends raw bytes to a UDP address."
+    },
+    {
+      name: "recv",
+      kind: "method",
+      detail: "recv(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]",
+      documentation: "Receives raw bytes from a connected UDP socket."
+    },
+    {
+      name: "recv_from",
+      kind: "method",
+      detail: "recv_from(max_bytes: int32, timeout: Duration = ...) -> Result[Option[net.UdpDatagram], io.Error]",
+      documentation: "Receives a datagram and source address from a UDP socket."
+    },
+    {
+      name: "local_addr",
+      kind: "method",
+      detail: "local_addr() -> Result[String, io.Error]",
+      documentation: "Returns the local address for the UDP socket."
+    },
+    {
+      name: "peer_addr",
+      kind: "method",
+      detail: "peer_addr() -> Result[String, io.Error]",
+      documentation: "Returns the connected peer address for the UDP socket."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the UDP socket handle."
+    }
+  ],
+  "net.UdpDatagram": [
+    {
+      name: "address",
+      kind: "method",
+      detail: "address() -> String",
+      documentation: "Returns the source address for the UDP datagram."
+    },
+    {
+      name: "bytes",
+      kind: "method",
+      detail: "bytes() -> Vec[uint8]",
+      documentation: "Returns the datagram payload as raw bytes."
+    },
+    {
+      name: "text",
+      kind: "method",
+      detail: "text() -> Result[String, io.Error]",
+      documentation: "Decodes the datagram payload as UTF-8 text."
+    }
+  ],
+  "net.HttpListener": [
+    {
+      name: "accept",
+      kind: "method",
+      detail: "accept(timeout: Duration = ...) -> Result[net.HttpExchange, io.Error]",
+      documentation: "Accepts the next incoming HTTP request."
+    },
+    {
+      name: "local_addr",
+      kind: "method",
+      detail: "local_addr() -> Result[String, io.Error]",
+      documentation: "Returns the bound local address for the HTTP listener."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the HTTP listener handle."
+    }
+  ],
+  "net.HttpExchange": [
+    {
+      name: "method",
+      kind: "method",
+      detail: "method() -> String",
+      documentation: "Returns the HTTP request method."
+    },
+    {
+      name: "path",
+      kind: "method",
+      detail: "path() -> String",
+      documentation: "Returns the HTTP request path."
+    },
+    {
+      name: "headers",
+      kind: "method",
+      detail: "headers() -> Map[String, String]",
+      documentation: "Returns the HTTP request headers as a map."
+    },
+    {
+      name: "body_text",
+      kind: "method",
+      detail: "body_text() -> Result[String, io.Error]",
+      documentation: "Returns the HTTP request body decoded as UTF-8."
+    },
+    {
+      name: "body_bytes",
+      kind: "method",
+      detail: "body_bytes() -> Vec[uint8]",
+      documentation: "Returns the HTTP request body as raw bytes."
+    },
+    {
+      name: "respond_text",
+      kind: "method",
+      detail: "respond_text(status: int32, text: String, headers: Map[String, String]) -> Result[None, io.Error]",
+      documentation: "Sends a text HTTP response for the current request."
+    },
+    {
+      name: "respond_bytes",
+      kind: "method",
+      detail: "respond_bytes(status: int32, bytes: Vec[uint8], headers: Map[String, String]) -> Result[None, io.Error]",
+      documentation: "Sends a binary HTTP response for the current request."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the HTTP exchange handle."
+    }
+  ],
+  "net.HttpResponse": [
+    {
+      name: "status",
+      kind: "method",
+      detail: "status() -> int32",
+      documentation: "Returns the HTTP response status code."
+    },
+    {
+      name: "reason",
+      kind: "method",
+      detail: "reason() -> String",
+      documentation: "Returns the HTTP response reason phrase."
+    },
+    {
+      name: "headers",
+      kind: "method",
+      detail: "headers() -> Map[String, String]",
+      documentation: "Returns the HTTP response headers as a map."
+    },
+    {
+      name: "text",
+      kind: "method",
+      detail: "text() -> Result[String, io.Error]",
+      documentation: "Returns the HTTP response body decoded as UTF-8."
+    },
+    {
+      name: "bytes",
+      kind: "method",
+      detail: "bytes() -> Vec[uint8]",
+      documentation: "Returns the HTTP response body as raw bytes."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the HTTP response handle."
+    }
+  ],
+  "net.WebSocketListener": [
+    {
+      name: "accept",
+      kind: "method",
+      detail: "accept(timeout: Duration = ...) -> Result[net.WebSocket, io.Error]",
+      documentation: "Accepts the next incoming WebSocket connection."
+    },
+    {
+      name: "local_addr",
+      kind: "method",
+      detail: "local_addr() -> Result[String, io.Error]",
+      documentation: "Returns the bound local address for the WebSocket listener."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the WebSocket listener handle."
+    }
+  ],
+  "net.WebSocket": [
+    {
+      name: "send_text",
+      kind: "method",
+      detail: "send_text(text: String, timeout: Duration = ...) -> Result[None, io.Error]",
+      documentation: "Sends a text WebSocket frame."
+    },
+    {
+      name: "send_bytes",
+      kind: "method",
+      detail: "send_bytes(bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, io.Error]",
+      documentation: "Sends a binary WebSocket frame."
+    },
+    {
+      name: "recv_text",
+      kind: "method",
+      detail: "recv_text(timeout: Duration = ...) -> Result[Option[String], io.Error]",
+      documentation: "Receives the next text WebSocket frame."
+    },
+    {
+      name: "recv_bytes",
+      kind: "method",
+      detail: "recv_bytes(timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]",
+      documentation: "Receives the next binary WebSocket frame."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the WebSocket connection."
+    }
+  ],
+  "net.UnixListener": [
+    {
+      name: "accept",
+      kind: "method",
+      detail: "accept(timeout: Duration = ...) -> Result[net.UnixStream, io.Error]",
+      documentation: "Accepts the next incoming Unix domain stream connection."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the Unix listener handle."
+    }
+  ],
+  "net.UnixStream": [
+    {
+      name: "read_line",
+      kind: "method",
+      detail: "read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]",
+      documentation: "Reads a UTF-8 line from the Unix stream."
+    },
+    {
+      name: "read_exact",
+      kind: "method",
+      detail: "read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]",
+      documentation: "Reads exactly `count` bytes from the Unix stream."
+    },
+    {
+      name: "write_all",
+      kind: "method",
+      detail: "write_all(text: String, timeout: Duration = ...) -> Result[None, io.Error]",
+      documentation: "Writes all of `text` to the Unix stream."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the Unix stream handle."
+    }
+  ],
+  "net.TlsListener": [
+    {
+      name: "accept",
+      kind: "method",
+      detail: "accept(timeout: Duration = ...) -> Result[net.TlsStream, io.Error]",
+      documentation: "Accepts the next incoming TLS connection."
+    },
+    {
+      name: "local_addr",
+      kind: "method",
+      detail: "local_addr() -> Result[String, io.Error]",
+      documentation: "Returns the bound local address for the TLS listener."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the TLS listener handle."
+    }
+  ],
+  "net.TlsStream": [
+    {
+      name: "read_line",
+      kind: "method",
+      detail: "read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]",
+      documentation: "Reads a UTF-8 line from the TLS stream."
+    },
+    {
+      name: "read_exact",
+      kind: "method",
+      detail: "read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]",
+      documentation: "Reads exactly `count` bytes from the TLS stream."
+    },
+    {
+      name: "write_all",
+      kind: "method",
+      detail: "write_all(text: String, timeout: Duration = ...) -> Result[None, io.Error]",
+      documentation: "Writes all of `text` to the TLS stream."
+    },
+    {
+      name: "close",
+      kind: "method",
+      detail: "close() -> None",
+      documentation: "Closes the TLS stream handle."
+    }
+  ],
   Queue: [
     {
       name: "put",
@@ -499,6 +1277,7 @@ const BUILTIN_FUNCTIONS = [
 ];
 
 const BUILTIN_FUNCTION_MAP = new Map(BUILTIN_FUNCTIONS.map((item) => [item.name, item]));
+const BUILTIN_MODULE_NAMES = new Set(["io", "fs", "net"]);
 const BUILTIN_ENUMS = new Map([
   [
     "Option",
@@ -567,6 +1346,34 @@ const BUILTIN_ENUMS = new Map([
         }
       ]
     }
+  ],
+  [
+    "io.Error",
+    {
+      kind: "enum",
+      name: "io.Error",
+      detail: "enum io.Error",
+      documentation: "Built-in I/O and network error values.",
+      variants: [
+        { kind: "variant", name: "NotFound", returnType: "io.Error", payloadType: null, detail: "NotFound -> io.Error" },
+        { kind: "variant", name: "PermissionDenied", returnType: "io.Error", payloadType: null, detail: "PermissionDenied -> io.Error" },
+        { kind: "variant", name: "AlreadyExists", returnType: "io.Error", payloadType: null, detail: "AlreadyExists -> io.Error" },
+        { kind: "variant", name: "ConnectionRefused", returnType: "io.Error", payloadType: null, detail: "ConnectionRefused -> io.Error" },
+        { kind: "variant", name: "ConnectionReset", returnType: "io.Error", payloadType: null, detail: "ConnectionReset -> io.Error" },
+        { kind: "variant", name: "ConnectionAborted", returnType: "io.Error", payloadType: null, detail: "ConnectionAborted -> io.Error" },
+        { kind: "variant", name: "NotConnected", returnType: "io.Error", payloadType: null, detail: "NotConnected -> io.Error" },
+        { kind: "variant", name: "AddrInUse", returnType: "io.Error", payloadType: null, detail: "AddrInUse -> io.Error" },
+        { kind: "variant", name: "AddrNotAvailable", returnType: "io.Error", payloadType: null, detail: "AddrNotAvailable -> io.Error" },
+        { kind: "variant", name: "BrokenPipe", returnType: "io.Error", payloadType: null, detail: "BrokenPipe -> io.Error" },
+        { kind: "variant", name: "TimedOut", returnType: "io.Error", payloadType: null, detail: "TimedOut -> io.Error" },
+        { kind: "variant", name: "WouldBlock", returnType: "io.Error", payloadType: null, detail: "WouldBlock -> io.Error" },
+        { kind: "variant", name: "UnexpectedEof", returnType: "io.Error", payloadType: null, detail: "UnexpectedEof -> io.Error" },
+        { kind: "variant", name: "InvalidInput", returnType: "io.Error", payloadType: null, detail: "InvalidInput -> io.Error" },
+        { kind: "variant", name: "InvalidData", returnType: "io.Error", payloadType: null, detail: "InvalidData -> io.Error" },
+        { kind: "variant", name: "Closed", returnType: "io.Error", payloadType: null, detail: "Closed -> io.Error" },
+        { kind: "variant", name: "Other", returnType: "io.Error", payloadType: "String", detail: "Other(String) -> io.Error" }
+      ]
+    }
   ]
 ]);
 
@@ -591,6 +1398,10 @@ function analyzeDocument(text) {
 
     const indent = countIndent(rawLine);
     if (indent !== 0) {
+      continue;
+    }
+
+    if (registerBuiltinImport(moduleInfo, rawLine, trimmed, i)) {
       continue;
     }
 
@@ -641,6 +1452,68 @@ function registerTopLevelSymbol(moduleInfo, registry, symbol, kind) {
     return;
   }
   registry.set(symbol.name, symbol);
+}
+
+function registerBuiltinImport(moduleInfo, rawLine, trimmed, line) {
+  const importMatch = trimmed.match(/^import\s+([a-z][A-Za-z0-9_.]*)$/);
+  if (importMatch && BUILTIN_MODULE_NAMES.has(importMatch[1])) {
+    const name = importMatch[1];
+    moduleInfo.topLevelBindings.set(name, {
+      kind: "module",
+      name,
+      type: name,
+      detail: `module ${name}`,
+      moduleScoped: true,
+      line,
+      startCharacter: rawLine.indexOf(name),
+      endCharacter: rawLine.indexOf(name) + name.length
+    });
+    return true;
+  }
+
+  const fromImportMatch = trimmed.match(/^from\s+([a-z][A-Za-z0-9_.]*)\s+import\s+(.+)$/);
+  if (!fromImportMatch || !BUILTIN_MODULE_NAMES.has(fromImportMatch[1])) {
+    return false;
+  }
+
+  const moduleName = fromImportMatch[1];
+  const names = splitTopLevelCommaSeparated(fromImportMatch[2]);
+  for (const importedName of names) {
+    const name = importedName.trim();
+    const exportSymbol = (BUILTIN_MEMBERS[moduleName] || []).find((item) => item.name === name);
+    if (!name || !exportSymbol) {
+      continue;
+    }
+
+    const startCharacter = rawLine.indexOf(name);
+    if (exportSymbol.kind === "method") {
+      moduleInfo.topLevelBindings.set(name, {
+        kind: "function",
+        name,
+        detail: exportSymbol.detail,
+        returnType: parseBuiltinDetailReturnType(exportSymbol.detail) || "None",
+        documentation: exportSymbol.documentation,
+        moduleScoped: true,
+        line,
+        startCharacter,
+        endCharacter: startCharacter + name.length
+      });
+      continue;
+    }
+
+    moduleInfo.topLevelBindings.set(name, {
+      kind: "binding",
+      name,
+      type: exportSymbol.type || "None",
+      detail: exportSymbol.detail,
+      documentation: exportSymbol.documentation,
+      moduleScoped: true,
+      line,
+      startCharacter,
+      endCharacter: startCharacter + name.length
+    });
+  }
+  return true;
 }
 
 function parseClass(lines, startLine, indent, moduleInfo) {
@@ -1251,7 +2124,13 @@ function collectDiagnosticsForBody(moduleInfo, startLine, endLine, functionInfo)
 
 function extractExpressionSegments(rawLine) {
   const trimmed = rawLine.trim();
-  if (/^(?:copy\s+)?class\b/.test(trimmed) || /^enum\b/.test(trimmed) || /^def\b/.test(trimmed)) {
+  if (
+    /^(?:copy\s+)?class\b/.test(trimmed) ||
+    /^enum\b/.test(trimmed) ||
+    /^def\b/.test(trimmed) ||
+    /^import\b/.test(trimmed) ||
+    /^from\b/.test(trimmed)
+  ) {
     return [];
   }
   if (/^else\s*:/.test(trimmed)) {
@@ -1610,6 +2489,13 @@ function completionsForDocument(text, line, character, triggerCharacter) {
       detail: functionInfoItem.detail
     });
   }
+  for (const binding of moduleInfo.topLevelBindings.values()) {
+    completions.push({
+      name: binding.name,
+      kind: binding.kind || "binding",
+      detail: binding.detail || binding.type || "Aurora binding"
+    });
+  }
   for (const builtin of BUILTIN_FUNCTIONS) {
     completions.push(builtin);
   }
@@ -1807,11 +2693,20 @@ function resolveIdentifierSymbol(moduleInfo, functionInfo, name) {
     };
   }
 
-  if (!functionInfo && moduleInfo.topLevelBindings.has(name)) {
+  if (moduleInfo.topLevelBindings.has(name)) {
     const symbol = moduleInfo.topLevelBindings.get(name);
+    if (functionInfo && !symbol.moduleScoped) {
+      return null;
+    }
+    if (symbol.kind === "function") {
+      return {
+        ...symbol,
+        hover: formatCallableHover("function", symbol.name, [], symbol.returnType || "None")
+      };
+    }
     return {
       ...symbol,
-      hover: formatHover("binding", symbol.name, symbol.type || "None")
+      hover: formatHover(symbol.kind || "binding", symbol.name, symbol.type || "None")
     };
   }
 
@@ -2045,6 +2940,10 @@ function inferExpressionType(expression, moduleInfo, functionInfo) {
   if (functionMatch) {
     if (moduleInfo.functions.has(functionMatch[1])) {
       return moduleInfo.functions.get(functionMatch[1]).returnType;
+    }
+    const importedBinding = moduleInfo.topLevelBindings.get(functionMatch[1]);
+    if (importedBinding && importedBinding.kind === "function") {
+      return importedBinding.returnType || parseBuiltinDetailReturnType(importedBinding.detail);
     }
     if (BUILTIN_FUNCTION_MAP.has(functionMatch[1])) {
       const argsMatch = expr.match(/^[a-zA-Z_][A-Za-z0-9_]*\((.*)\)$/);
@@ -2293,7 +3192,7 @@ function makeDiagnostic(line, startCharacter, endCharacter, message) {
 }
 
 function parseBuiltinDetailReturnType(detail) {
-  const match = detail.match(/->\s*([A-Za-z_][A-Za-z0-9_,\[\] ]*)/);
+  const match = detail.match(/->\s*([A-Za-z_][A-Za-z0-9_.,\[\] ]*)/);
   return match ? normalizeType(match[1]) : null;
 }
 

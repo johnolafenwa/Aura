@@ -92,6 +92,22 @@ Current bootstrap compiler workflow:
   - execute the maintained `String` method surface including `split`, `replace`, case conversion, and prefix/suffix stripping
 - `cargo run -p aura -- run examples/strings/string_parsing_and_formatting.au`
   - execute parsing builtins, scalar/boolean `.to_string()`, and `String.join(...)`
+- `cargo run -p aura -- run examples/io/read_text_file.au`
+  - execute the maintained builtin file I/O surface through `fs.exists(...)`, `fs.read_to_string(...)`, and `io.write(...)`
+- `cargo run -p aura -- run examples/io/bytes_file_io.au`
+  - execute binary file helpers plus `fs.File.read_bytes()` / `write_bytes(...)`
+- `cargo run -p aura -- run examples/io/tcp_echo.au`
+  - execute the maintained builtin TCP networking surface through `net.listen(...)`, `net.connect(...)`, and `TcpStream` / `TcpListener`
+- `cargo run -p aura -- run examples/io/tcp_bytes.au`
+  - execute timeout-aware TCP byte I/O through `connect_timeout(...)`, `read_exact(...)`, `read_bytes(...)`, and `write_bytes(...)`
+- `cargo run -p aura -- run examples/io/udp_echo.au`
+  - execute UDP binding, datagram receive/send, and `net.UdpDatagram`
+- `cargo run -p aura -- run examples/io/http_roundtrip.au`
+  - execute blocking HTTP listener/request helpers plus `HttpExchange` / `HttpResponse`
+- `cargo run -p aura -- run examples/io/websocket_roundtrip.au`
+  - execute blocking WebSocket listener/connect helpers with text frames
+- `cargo run -p aura -- run examples/io/unix_tls_roundtrip.au`
+  - execute the Unix-socket and TLS surface on Unix hosts using bundled PEM assets
 - `cargo run -p aura -- run examples/resources/with_resource.au`
   - execute deterministic scoped cleanup with `with`
 - `cargo run -p aura -- run examples/concurrency/queues_spawn.au`
@@ -154,11 +170,12 @@ Current `build` status:
 - manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aurora.toml`
 - git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
 - the current package-system milestone writes a local `Aurora.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
+- both maintained execution paths now cover the builtin `io`, `fs`, and `net` module surface for blocking text/binary file I/O plus blocking TCP, UDP, HTTP, WebSocket, Unix-socket, and TLS networking
 
 Current `run` status:
 
 - `aura run` now executes programs through the MIR runtime for the current implemented Aurora surface
-- `spawn`, `select`, queues, task groups, `try`, and `with` now run through the same MIR-backed public execution path
+- `spawn`, `select`, queues, task groups, `try`, `with`, blocking file I/O, and the maintained blocking networking surface now run through the same MIR-backed public execution path
 - the maintained execution architecture is now the MIR runtime for `run` plus native direct codegen for `build`
 
 ## VS Code install

@@ -15,9 +15,12 @@ use crate::mir::{
     MirParam, MirReceiverKind, MirSelectKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::runtime_value::{
-    cast_numeric_value, option_none, option_some, result_err, result_ok, send_error_closed,
-    CancellationContext, ChannelValue, EnumVariantValue, InstanceValue, MapValue, RangeValue,
-    RunOutput, SetValue, TaskGroupValue, TaskValue, TryRecvResult, Value, VecValue,
+    cast_numeric_value, io_error, io_read_line, option_none, option_some, result_err, result_ok,
+    send_error_closed, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, RangeValue,
+    RunOutput, SetValue, TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue,
+    TlsListenerValue, TlsStreamValue, TryRecvResult, UdpDatagramValue, UdpSocketValue,
+    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -75,7 +78,10 @@ pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> R
     run(&module)
 }
 
-const MAX_CALL_DEPTH: usize = 1024;
+// Keep the MIR runtime call-depth budget comfortably below the host thread's
+// stack ceiling. Recursive Aurora programs should fail with a diagnostic before
+// the runtime thread can overflow its Rust stack.
+const MAX_CALL_DEPTH: usize = 256;
 const MAX_EMBEDDED_RUNTIME_BYTES: usize = 1 << 30;
 const MAX_RUNTIME_BLOCKS: usize = 1_000_000;
 const MAX_RUNTIME_INSTRUCTIONS: usize = 1_000_000;
@@ -593,6 +599,22 @@ impl MirRuntime {
                 _ => Some(Type::named(&variant.enum_name)),
             },
             Value::Channel(_) | Value::Task(_) | Value::TaskGroup(_) => None,
+            Value::File(_) => Some(Type::Named("fs.File".to_string(), Vec::new())),
+            Value::TcpListener(_) => Some(Type::Named("net.TcpListener".to_string(), Vec::new())),
+            Value::TcpStream(_) => Some(Type::Named("net.TcpStream".to_string(), Vec::new())),
+            Value::UdpSocket(_) => Some(Type::Named("net.UdpSocket".to_string(), Vec::new())),
+            Value::UdpDatagram(_) => Some(Type::Named("net.UdpDatagram".to_string(), Vec::new())),
+            Value::HttpListener(_) => Some(Type::Named("net.HttpListener".to_string(), Vec::new())),
+            Value::HttpExchange(_) => Some(Type::Named("net.HttpExchange".to_string(), Vec::new())),
+            Value::HttpResponse(_) => Some(Type::Named("net.HttpResponse".to_string(), Vec::new())),
+            Value::WebSocketListener(_) => {
+                Some(Type::Named("net.WebSocketListener".to_string(), Vec::new()))
+            }
+            Value::WebSocket(_) => Some(Type::Named("net.WebSocket".to_string(), Vec::new())),
+            Value::UnixListener(_) => Some(Type::Named("net.UnixListener".to_string(), Vec::new())),
+            Value::UnixStream(_) => Some(Type::Named("net.UnixStream".to_string(), Vec::new())),
+            Value::TlsListener(_) => Some(Type::Named("net.TlsListener".to_string(), Vec::new())),
+            Value::TlsStream(_) => Some(Type::Named("net.TlsStream".to_string(), Vec::new())),
         }
     }
 
@@ -1041,6 +1063,49 @@ impl MirRuntime {
         let resource = env.read_place(place)?;
         match resource {
             Value::TaskGroup(group) => self.close_task_group(group, cancel_before_cleanup),
+            Value::File(file) => {
+                file.close();
+                Ok(())
+            }
+            Value::TcpListener(listener) => {
+                listener.close();
+                Ok(())
+            }
+            Value::TcpStream(stream) => {
+                stream.close();
+                Ok(())
+            }
+            Value::UdpSocket(socket) => {
+                socket.close();
+                Ok(())
+            }
+            Value::HttpListener(listener) => {
+                listener.close();
+                Ok(())
+            }
+            Value::HttpExchange(_) => Ok(()),
+            Value::HttpResponse(_) => Ok(()),
+            Value::WebSocketListener(_) => Ok(()),
+            Value::WebSocket(socket) => {
+                let _ = socket.close();
+                Ok(())
+            }
+            Value::UnixListener(listener) => {
+                listener.close();
+                Ok(())
+            }
+            Value::UnixStream(stream) => {
+                stream.close();
+                Ok(())
+            }
+            Value::TlsListener(listener) => {
+                listener.close();
+                Ok(())
+            }
+            Value::TlsStream(stream) => {
+                stream.close();
+                Ok(())
+            }
             Value::Instance(instance) => {
                 let class = self
                     .classes
@@ -1135,14 +1200,16 @@ impl MirRuntime {
             Rvalue::Try { value } => {
                 let value = self.evaluate_operand(value, env)?;
                 let Value::EnumVariant(variant) = value else {
-                    return Err(Diagnostic::new(
-                        "MIR `try` requires a `Result` value at runtime",
-                    ));
+                    return Err(Diagnostic::new(format!(
+                        "MIR `try` requires a `Result` value at runtime, found `{}`",
+                        value.render()
+                    )));
                 };
                 if variant.enum_name != "Result" {
-                    return Err(Diagnostic::new(
-                        "MIR `try` requires a `Result` value at runtime",
-                    ));
+                    return Err(Diagnostic::new(format!(
+                        "MIR `try` requires a `Result` value at runtime, found `{}`",
+                        variant.enum_name
+                    )));
                 }
                 match (variant.variant_name.as_str(), variant.payloads.as_slice()) {
                     ("Ok", [payload]) => Ok(RvalueOutcome::Value(payload.clone())),
@@ -1524,6 +1591,87 @@ impl MirRuntime {
                     };
                 }
 
+                if name == "io::write" {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["text"], values)?;
+                    return match &bound[0].value {
+                        Value::String(text) => {
+                            let mut stdout = lock_stdout(&self.stdout);
+                            stdout.push_str(text);
+                            Ok(result_ok(Value::Unit))
+                        }
+                        other => Err(Diagnostic::new(format!(
+                            "`io.write(...)` expects `String`, found `{}`",
+                            other.render()
+                        ))),
+                    };
+                }
+
+                if name == "io::flush" {
+                    let values = evaluate_named_args(args, env)?;
+                    bind_builtin_args(&[], values)?;
+                    return Ok(result_ok(Value::Unit));
+                }
+
+                if name == "io::read_line" {
+                    let values = evaluate_named_args(args, env)?;
+                    bind_builtin_args(&[], values)?;
+                    return match io_read_line() {
+                        Ok(Some(line)) => Ok(result_ok(option_some(Value::String(line)))),
+                        Ok(None) => Ok(result_ok(option_none())),
+                        Err(error) => Ok(result_err(io_error(error))),
+                    };
+                }
+
+                if name == "fs::exists" {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(&["path"], values)?;
+                    return match &bound[0].value {
+                        Value::String(path) => Ok(Value::Bool(std::path::Path::new(path).exists())),
+                        other => Err(Diagnostic::new(format!(
+                            "`fs.exists(...)` expects `String`, found `{}`",
+                            other.render()
+                        ))),
+                    };
+                }
+
+                if matches!(
+                    name.as_str(),
+                    "fs::read_to_string"
+                        | "fs::read_bytes"
+                        | "fs::write_string"
+                        | "fs::write_bytes"
+                        | "fs::append_string"
+                        | "fs::append_bytes"
+                        | "fs::create_dir"
+                        | "fs::read_dir"
+                        | "fs::remove_file"
+                        | "fs::open"
+                        | "fs::create"
+                        | "fs::append"
+                        | "net::connect"
+                        | "net::connect_timeout"
+                        | "net::listen"
+                        | "net::udp_bind"
+                        | "net::unix_listen"
+                        | "net::unix_connect"
+                        | "net::unix_connect_timeout"
+                        | "net::tls_listen"
+                        | "net::tls_connect"
+                        | "net::tls_connect_timeout"
+                        | "net::http_listen"
+                        | "net::http_request_text"
+                        | "net::http_request_text_timeout"
+                        | "net::http_request_bytes"
+                        | "net::http_request_bytes_timeout"
+                        | "net::websocket_listen"
+                        | "net::websocket_connect"
+                        | "net::websocket_connect_timeout"
+                ) {
+                    let values = evaluate_named_args(args, env)?;
+                    return self.evaluate_builtin_io_call(name, values);
+                }
+
                 if name == "print" || name == "range" {
                     unreachable!("handled earlier");
                 }
@@ -1612,6 +1760,88 @@ impl MirRuntime {
                     }
                     Value::TaskGroup(group) => {
                         return self.evaluate_task_group_method(group.clone(), field, args, env);
+                    }
+                    Value::File(file) => {
+                        return self.evaluate_file_method(file.clone(), field, args, env);
+                    }
+                    Value::TcpListener(listener) => {
+                        return self.evaluate_tcp_listener_method(
+                            listener.clone(),
+                            field,
+                            args,
+                            env,
+                        );
+                    }
+                    Value::TcpStream(stream) => {
+                        return self.evaluate_tcp_stream_method(stream.clone(), field, args, env);
+                    }
+                    Value::UdpSocket(socket) => {
+                        return self.evaluate_udp_socket_method(socket.clone(), field, args, env);
+                    }
+                    Value::UdpDatagram(datagram) => {
+                        return self.evaluate_udp_datagram_method(
+                            datagram.clone(),
+                            field,
+                            args,
+                            env,
+                        );
+                    }
+                    Value::HttpListener(listener) => {
+                        return self.evaluate_http_listener_method(
+                            listener.clone(),
+                            field,
+                            args,
+                            env,
+                        );
+                    }
+                    Value::HttpExchange(exchange) => {
+                        return self.evaluate_http_exchange_method(
+                            exchange.clone(),
+                            field,
+                            args,
+                            env,
+                        );
+                    }
+                    Value::HttpResponse(response) => {
+                        return self.evaluate_http_response_method(
+                            response.clone(),
+                            field,
+                            args,
+                            env,
+                        );
+                    }
+                    Value::WebSocketListener(listener) => {
+                        return self.evaluate_websocket_listener_method(
+                            listener.clone(),
+                            field,
+                            args,
+                            env,
+                        );
+                    }
+                    Value::WebSocket(socket) => {
+                        return self.evaluate_websocket_method(socket.clone(), field, args, env);
+                    }
+                    Value::UnixListener(listener) => {
+                        return self.evaluate_unix_listener_method(
+                            listener.clone(),
+                            field,
+                            args,
+                            env,
+                        );
+                    }
+                    Value::UnixStream(stream) => {
+                        return self.evaluate_unix_stream_method(stream.clone(), field, args, env);
+                    }
+                    Value::TlsListener(listener) => {
+                        return self.evaluate_tls_listener_method(
+                            listener.clone(),
+                            field,
+                            args,
+                            env,
+                        );
+                    }
+                    Value::TlsStream(stream) => {
+                        return self.evaluate_tls_stream_method(stream.clone(), field, args, env);
                     }
                     Value::Instance(instance) => {
                         let resolved_receiver_ty = receiver_place
@@ -2491,6 +2721,14 @@ impl MirRuntime {
                 }
                 Ok(Value::String(rendered_parts.join(&text)))
             }
+            "add" => {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["other"], values)?;
+                let Value::String(other) = bound[0].value.clone() else {
+                    return Err(Diagnostic::new("`add` requires a `String` argument"));
+                };
+                Ok(Value::String(text + &other))
+            }
             "strip_prefix" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["text"], values)?;
@@ -2705,6 +2943,1107 @@ impl MirRuntime {
                     field
                 )))
             }
+        }
+    }
+
+    fn evaluate_builtin_io_call(
+        &mut self,
+        name: &str,
+        values: Vec<EvaluatedMirArg>,
+    ) -> Result<Value> {
+        match name {
+            "fs::read_to_string" => {
+                let bound = bind_builtin_args(&["path"], values)?;
+                match &bound[0].value {
+                    Value::String(path) => match std::fs::read_to_string(path) {
+                        Ok(text) => Ok(result_ok(Value::String(text))),
+                        Err(error) => Ok(result_err(io_error(error))),
+                    },
+                    other => Err(Diagnostic::new(format!(
+                        "`fs.read_to_string(...)` expects `String`, found `{}`",
+                        other.render()
+                    ))),
+                }
+            }
+            "fs::read_bytes" => {
+                let bound = bind_builtin_args(&["path"], values)?;
+                let path = expect_string_value(&bound[0].value, "fs.read_bytes(...)")?;
+                match std::fs::read(path) {
+                    Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "fs::write_string" | "fs::append_string" => {
+                let bound = bind_builtin_args(&["path", "text"], values)?;
+                let (path, text) = match (&bound[0].value, &bound[1].value) {
+                    (Value::String(path), Value::String(text)) => (path, text),
+                    (other, _) if !matches!(other, Value::String(_)) => {
+                        return Err(Diagnostic::new(format!(
+                            "`{}` expects `String` for `path`",
+                            name
+                        )))
+                    }
+                    (_, other) => {
+                        return Err(Diagnostic::new(format!(
+                            "`{}` expects `String` for `text`, found `{}`",
+                            name,
+                            other.render()
+                        )))
+                    }
+                };
+                let outcome = if name == "fs::write_string" {
+                    std::fs::write(path, text)
+                } else {
+                    use std::io::Write;
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .and_then(|mut file| file.write_all(text.as_bytes()))
+                };
+                match outcome {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "fs::write_bytes" | "fs::append_bytes" => {
+                let bound = bind_builtin_args(&["path", "bytes"], values)?;
+                let path = expect_string_value(&bound[0].value, name)?;
+                let bytes = expect_bytes_value(&bound[1].value, name)?;
+                let outcome = if name == "fs::write_bytes" {
+                    std::fs::write(path, bytes)
+                } else {
+                    use std::io::Write;
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .and_then(|mut file| file.write_all(&bytes))
+                };
+                match outcome {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "fs::create_dir" => {
+                let bound = bind_builtin_args(&["path"], values)?;
+                match &bound[0].value {
+                    Value::String(path) => match std::fs::create_dir_all(path) {
+                        Ok(()) => Ok(result_ok(Value::Unit)),
+                        Err(error) => Ok(result_err(io_error(error))),
+                    },
+                    other => Err(Diagnostic::new(format!(
+                        "`fs.create_dir(...)` expects `String`, found `{}`",
+                        other.render()
+                    ))),
+                }
+            }
+            "fs::read_dir" => {
+                let bound = bind_builtin_args(&["path"], values)?;
+                match &bound[0].value {
+                    Value::String(path) => match std::fs::read_dir(path) {
+                        Ok(entries) => {
+                            let mut names = entries
+                                .filter_map(|entry| entry.ok())
+                                .map(|entry| {
+                                    Value::String(entry.file_name().to_string_lossy().to_string())
+                                })
+                                .collect::<Vec<_>>();
+                            names.sort_by_key(|value| value.render());
+                            Ok(result_ok(Value::Vec(VecValue {
+                                element_type: Type::named("String"),
+                                elements: names,
+                            })))
+                        }
+                        Err(error) => Ok(result_err(io_error(error))),
+                    },
+                    other => Err(Diagnostic::new(format!(
+                        "`fs.read_dir(...)` expects `String`, found `{}`",
+                        other.render()
+                    ))),
+                }
+            }
+            "fs::remove_file" => {
+                let bound = bind_builtin_args(&["path"], values)?;
+                match &bound[0].value {
+                    Value::String(path) => match std::fs::remove_file(path) {
+                        Ok(()) => Ok(result_ok(Value::Unit)),
+                        Err(error) => Ok(result_err(io_error(error))),
+                    },
+                    other => Err(Diagnostic::new(format!(
+                        "`fs.remove_file(...)` expects `String`, found `{}`",
+                        other.render()
+                    ))),
+                }
+            }
+            "fs::open" | "fs::create" | "fs::append" => {
+                let bound = bind_builtin_args(&["path"], values)?;
+                match &bound[0].value {
+                    Value::String(path) => {
+                        let opened = match name {
+                            "fs::open" => FileValue::open(path),
+                            "fs::create" => FileValue::create(path),
+                            "fs::append" => FileValue::append(path),
+                            _ => unreachable!(),
+                        };
+                        match opened {
+                            Ok(file) => Ok(result_ok(Value::File(file))),
+                            Err(error) => Ok(result_err(io_error(error))),
+                        }
+                    }
+                    other => Err(Diagnostic::new(format!(
+                        "`{}` expects `String`, found `{}`",
+                        name,
+                        other.render()
+                    ))),
+                }
+            }
+            "net::connect" => {
+                let bound = bind_builtin_args(&["address"], values)?;
+                match &bound[0].value {
+                    Value::String(address) => {
+                        match TcpStreamValue::connect(address, None, Some(&self.cancellation)) {
+                            Ok(stream) => Ok(result_ok(Value::TcpStream(stream))),
+                            Err(error) => Ok(result_err(io_error(error))),
+                        }
+                    }
+                    other => Err(Diagnostic::new(format!(
+                        "`net.connect(...)` expects `String`, found `{}`",
+                        other.render()
+                    ))),
+                }
+            }
+            "net::connect_timeout" => {
+                let bound = bind_builtin_args(&["address", "timeout"], values)?;
+                let address = expect_string_value(&bound[0].value, "net.connect_timeout(...)")?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[1].value), "net.connect_timeout(...)")?;
+                match TcpStreamValue::connect(&address, timeout, Some(&self.cancellation)) {
+                    Ok(stream) => Ok(result_ok(Value::TcpStream(stream))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "net::listen" => {
+                let bound = bind_builtin_args(&["address"], values)?;
+                match &bound[0].value {
+                    Value::String(address) => match TcpListenerValue::bind(address) {
+                        Ok(listener) => Ok(result_ok(Value::TcpListener(listener))),
+                        Err(error) => Ok(result_err(io_error(error))),
+                    },
+                    other => Err(Diagnostic::new(format!(
+                        "`net.listen(...)` expects `String`, found `{}`",
+                        other.render()
+                    ))),
+                }
+            }
+            "net::udp_bind" => {
+                let bound = bind_builtin_args(&["address"], values)?;
+                let address = expect_string_value(&bound[0].value, "net.udp_bind(...)")?;
+                match UdpSocketValue::bind(&address) {
+                    Ok(socket) => Ok(result_ok(Value::UdpSocket(socket))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "net::unix_listen" => {
+                let bound = bind_builtin_args(&["path"], values)?;
+                let path = expect_string_value(&bound[0].value, "net.unix_listen(...)")?;
+                match UnixListenerValue::bind(&path) {
+                    Ok(listener) => Ok(result_ok(Value::UnixListener(listener))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "net::unix_connect" => {
+                let bound = bind_builtin_args(&["path"], values)?;
+                let path = expect_string_value(&bound[0].value, "net.unix_connect(...)")?;
+                match UnixStreamValue::connect(&path, None, Some(&self.cancellation)) {
+                    Ok(stream) => Ok(result_ok(Value::UnixStream(stream))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "net::unix_connect_timeout" => {
+                let bound = bind_builtin_args(&["path", "timeout"], values)?;
+                let path = expect_string_value(&bound[0].value, "net.unix_connect_timeout(...)")?;
+                let timeout = expect_optional_timeout(
+                    Some(&bound[1].value),
+                    "net.unix_connect_timeout(...)",
+                )?;
+                match UnixStreamValue::connect(&path, timeout, Some(&self.cancellation)) {
+                    Ok(stream) => Ok(result_ok(Value::UnixStream(stream))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "net::tls_listen" => {
+                let bound =
+                    bind_builtin_args(&["address", "cert_pem_path", "key_pem_path"], values)?;
+                let address = expect_string_value(&bound[0].value, "net.tls_listen(...)")?;
+                let cert = expect_string_value(&bound[1].value, "net.tls_listen(...)")?;
+                let key = expect_string_value(&bound[2].value, "net.tls_listen(...)")?;
+                match TlsListenerValue::bind(&address, &cert, &key) {
+                    Ok(listener) => Ok(result_ok(Value::TlsListener(listener))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "net::tls_connect" => {
+                let bound = bind_builtin_args(&["address", "server_name", "ca_pem_path"], values)?;
+                let address = expect_string_value(&bound[0].value, "net.tls_connect(...)")?;
+                let server_name = expect_string_value(&bound[1].value, "net.tls_connect(...)")?;
+                let ca = expect_string_value(&bound[2].value, "net.tls_connect(...)")?;
+                match TlsStreamValue::connect(
+                    &address,
+                    &server_name,
+                    Some(&ca),
+                    None,
+                    Some(&self.cancellation),
+                ) {
+                    Ok(stream) => Ok(result_ok(Value::TlsStream(stream))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "net::tls_connect_timeout" => {
+                let bound = bind_builtin_args(
+                    &["address", "server_name", "ca_pem_path", "timeout"],
+                    values,
+                )?;
+                let address = expect_string_value(&bound[0].value, "net.tls_connect_timeout(...)")?;
+                let server_name =
+                    expect_string_value(&bound[1].value, "net.tls_connect_timeout(...)")?;
+                let ca = expect_string_value(&bound[2].value, "net.tls_connect_timeout(...)")?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[3].value), "net.tls_connect_timeout(...)")?;
+                match TlsStreamValue::connect(
+                    &address,
+                    &server_name,
+                    Some(&ca),
+                    timeout,
+                    Some(&self.cancellation),
+                ) {
+                    Ok(stream) => Ok(result_ok(Value::TlsStream(stream))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "net::http_listen" => {
+                let bound = bind_builtin_args(&["address"], values)?;
+                let address = expect_string_value(&bound[0].value, "net.http_listen(...)")?;
+                match HttpListenerValue::bind(&address) {
+                    Ok(listener) => Ok(result_ok(Value::HttpListener(listener))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "net::http_request_text" | "net::http_request_text_timeout" => {
+                let expected = if name == "net::http_request_text" {
+                    &["method", "url", "body", "headers"][..]
+                } else {
+                    &["method", "url", "body", "headers", "timeout"][..]
+                };
+                let bound = bind_builtin_args(expected, values)?;
+                let method = expect_string_value(&bound[0].value, name)?;
+                let url = expect_string_value(&bound[1].value, name)?;
+                let body = expect_string_value(&bound[2].value, name)?;
+                let headers = expect_headers_map(&bound[3].value, name)?;
+                let timeout = if bound.len() == 5 {
+                    expect_optional_timeout(Some(&bound[4].value), name)?
+                } else {
+                    None
+                };
+                match HttpResponseValue::request_text(&method, &url, &body, headers, timeout) {
+                    Ok(response) => Ok(result_ok(Value::HttpResponse(response))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "net::http_request_bytes" | "net::http_request_bytes_timeout" => {
+                let expected = if name == "net::http_request_bytes" {
+                    &["method", "url", "bytes", "headers"][..]
+                } else {
+                    &["method", "url", "bytes", "headers", "timeout"][..]
+                };
+                let bound = bind_builtin_args(expected, values)?;
+                let method = expect_string_value(&bound[0].value, name)?;
+                let url = expect_string_value(&bound[1].value, name)?;
+                let bytes = expect_bytes_value(&bound[2].value, name)?;
+                let headers = expect_headers_map(&bound[3].value, name)?;
+                let timeout = if bound.len() == 5 {
+                    expect_optional_timeout(Some(&bound[4].value), name)?
+                } else {
+                    None
+                };
+                match HttpResponseValue::request_bytes(&method, &url, &bytes, headers, timeout) {
+                    Ok(response) => Ok(result_ok(Value::HttpResponse(response))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "net::websocket_listen" => {
+                let bound = bind_builtin_args(&["address"], values)?;
+                let address = expect_string_value(&bound[0].value, "net.websocket_listen(...)")?;
+                match WebSocketListenerValue::bind(&address) {
+                    Ok(listener) => Ok(result_ok(Value::WebSocketListener(listener))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "net::websocket_connect" => {
+                let bound = bind_builtin_args(&["url"], values)?;
+                let url = expect_string_value(&bound[0].value, "net.websocket_connect(...)")?;
+                match WebSocketValue::connect(&url, None) {
+                    Ok(socket) => Ok(result_ok(Value::WebSocket(socket))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "net::websocket_connect_timeout" => {
+                let bound = bind_builtin_args(&["url", "timeout"], values)?;
+                let url =
+                    expect_string_value(&bound[0].value, "net.websocket_connect_timeout(...)")?;
+                let timeout = expect_optional_timeout(
+                    Some(&bound[1].value),
+                    "net.websocket_connect_timeout(...)",
+                )?;
+                match WebSocketValue::connect(&url, timeout) {
+                    Ok(socket) => Ok(result_ok(Value::WebSocket(socket))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported builtin I/O call `{}`",
+                name
+            ))),
+        }
+    }
+
+    fn evaluate_file_method(
+        &mut self,
+        file: FileValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "read_all" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match file.read_all() {
+                    Ok(text) => Ok(result_ok(Value::String(text))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "read_bytes" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match file.read_bytes() {
+                    Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "write_all" => {
+                let bound = bind_builtin_args(&["text"], evaluate_named_args(args, env)?)?;
+                match &bound[0].value {
+                    Value::String(text) => match file.write_all(text) {
+                        Ok(()) => Ok(result_ok(Value::Unit)),
+                        Err(error) => Ok(result_err(io_error(error))),
+                    },
+                    other => Err(Diagnostic::new(format!(
+                        "`write_all(...)` expects `String`, found `{}`",
+                        other.render()
+                    ))),
+                }
+            }
+            "write_bytes" => {
+                let bound = bind_builtin_args(&["bytes"], evaluate_named_args(args, env)?)?;
+                let bytes = expect_bytes_value(&bound[0].value, "write_bytes(...)")?;
+                match file.write_bytes(&bytes) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "flush" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match file.flush() {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "close" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                file.close();
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR file method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_tcp_listener_method(
+        &mut self,
+        listener: TcpListenerValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "accept" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout = bound
+                    .first()
+                    .map(|argument| {
+                        expect_optional_timeout(Some(&argument.value), "accept(timeout=...)")
+                    })
+                    .transpose()?
+                    .flatten();
+                match listener.accept(timeout, Some(&self.cancellation)) {
+                    Ok(stream) => Ok(result_ok(Value::TcpStream(stream))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "local_addr" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match listener.local_addr() {
+                    Ok(address) => Ok(result_ok(Value::String(address))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "close" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                listener.close();
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR tcp listener method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_tcp_stream_method(
+        &mut self,
+        stream: TcpStreamValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "read_all" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout = bound
+                    .first()
+                    .map(|argument| {
+                        expect_optional_timeout(Some(&argument.value), "read_all(timeout=...)")
+                    })
+                    .transpose()?
+                    .flatten();
+                match stream.read_all(timeout, Some(&self.cancellation)) {
+                    Ok(text) => Ok(result_ok(Value::String(text))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "read_line" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout = bound
+                    .first()
+                    .map(|argument| {
+                        expect_optional_timeout(Some(&argument.value), "read_line(timeout=...)")
+                    })
+                    .transpose()?
+                    .flatten();
+                match stream.read_line(timeout, Some(&self.cancellation)) {
+                    Ok(Some(line)) => Ok(result_ok(option_some(Value::String(line)))),
+                    Ok(None) => Ok(result_ok(option_none())),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "read_bytes" => {
+                let bound =
+                    bind_builtin_args(&["max_bytes", "timeout"], evaluate_named_args(args, env)?)?;
+                let max_bytes =
+                    usize::try_from(expect_i32_value(&bound[0].value, "read_bytes(...)")?)
+                        .map_err(|_| {
+                            Diagnostic::new("`read_bytes(...)` requires a non-negative max_bytes")
+                        })?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[1].value), "read_bytes(timeout=...)")?;
+                match stream.read_bytes(max_bytes, timeout, Some(&self.cancellation)) {
+                    Ok(Some(bytes)) => Ok(result_ok(option_some(bytes_vec_value(bytes)))),
+                    Ok(None) => Ok(result_ok(option_none())),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "read_exact" => {
+                let bound =
+                    bind_builtin_args(&["count", "timeout"], evaluate_named_args(args, env)?)?;
+                let count = usize::try_from(expect_i32_value(&bound[0].value, "read_exact(...)")?)
+                    .map_err(|_| {
+                        Diagnostic::new("`read_exact(...)` requires a non-negative count")
+                    })?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[1].value), "read_exact(timeout=...)")?;
+                match stream.read_exact(count, timeout, Some(&self.cancellation)) {
+                    Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "write_all" => {
+                let bound =
+                    bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
+                match &bound[0].value {
+                    Value::String(text) => {
+                        let timeout = expect_optional_timeout(
+                            Some(&bound[1].value),
+                            "write_all(timeout=...)",
+                        )?;
+                        match stream.write_all(text, timeout, Some(&self.cancellation)) {
+                            Ok(()) => Ok(result_ok(Value::Unit)),
+                            Err(error) => Ok(result_err(io_error(error))),
+                        }
+                    }
+                    other => Err(Diagnostic::new(format!(
+                        "`write_all(...)` expects `String`, found `{}`",
+                        other.render()
+                    ))),
+                }
+            }
+            "write_bytes" => {
+                let bound =
+                    bind_builtin_args(&["bytes", "timeout"], evaluate_named_args(args, env)?)?;
+                let bytes = expect_bytes_value(&bound[0].value, "write_bytes(...)")?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[1].value), "write_bytes(timeout=...)")?;
+                match stream.write_bytes(&bytes, timeout, Some(&self.cancellation)) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "flush" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match stream.flush() {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "local_addr" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match stream.local_addr() {
+                    Ok(address) => Ok(result_ok(Value::String(address))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "peer_addr" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match stream.peer_addr() {
+                    Ok(address) => Ok(result_ok(Value::String(address))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "shutdown_read" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match stream.shutdown_read() {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "shutdown_write" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match stream.shutdown_write() {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "shutdown_both" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match stream.shutdown_both() {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "close" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                stream.close();
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR tcp stream method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_udp_socket_method(
+        &mut self,
+        socket: UdpSocketValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "send_text" => {
+                let bound = bind_builtin_args(
+                    &["address", "text", "timeout"],
+                    evaluate_named_args(args, env)?,
+                )?;
+                let address = expect_string_value(&bound[0].value, "send_text(...)")?;
+                let text = expect_string_value(&bound[1].value, "send_text(...)")?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[2].value), "send_text(timeout=...)")?;
+                match socket.send_to_text(&address, &text, timeout, Some(&self.cancellation)) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "send_bytes" => {
+                let bound = bind_builtin_args(
+                    &["address", "bytes", "timeout"],
+                    evaluate_named_args(args, env)?,
+                )?;
+                let address = expect_string_value(&bound[0].value, "send_bytes(...)")?;
+                let bytes = expect_bytes_value(&bound[1].value, "send_bytes(...)")?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[2].value), "send_bytes(timeout=...)")?;
+                match socket.send_to_bytes(&address, &bytes, timeout, Some(&self.cancellation)) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "recv" => {
+                let bound =
+                    bind_builtin_args(&["max_bytes", "timeout"], evaluate_named_args(args, env)?)?;
+                let max_bytes = usize::try_from(expect_i32_value(&bound[0].value, "recv(...)")?)
+                    .map_err(|_| {
+                        Diagnostic::new("`recv(...)` requires a non-negative max_bytes")
+                    })?;
+                let timeout = expect_optional_timeout(Some(&bound[1].value), "recv(timeout=...)")?;
+                match socket.recv(max_bytes, timeout, Some(&self.cancellation)) {
+                    Ok(Some(bytes)) => Ok(result_ok(option_some(bytes_vec_value(bytes)))),
+                    Ok(None) => Ok(result_ok(option_none())),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "recv_from" => {
+                let bound =
+                    bind_builtin_args(&["max_bytes", "timeout"], evaluate_named_args(args, env)?)?;
+                let max_bytes =
+                    usize::try_from(expect_i32_value(&bound[0].value, "recv_from(...)")?).map_err(
+                        |_| Diagnostic::new("`recv_from(...)` requires a non-negative max_bytes"),
+                    )?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[1].value), "recv_from(timeout=...)")?;
+                match socket.recv_from(max_bytes, timeout, Some(&self.cancellation)) {
+                    Ok(Some(datagram)) => Ok(result_ok(option_some(Value::UdpDatagram(datagram)))),
+                    Ok(None) => Ok(result_ok(option_none())),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "local_addr" => match socket.local_addr() {
+                Ok(address) => Ok(result_ok(Value::String(address))),
+                Err(error) => Ok(result_err(io_error(error))),
+            },
+            "peer_addr" => match socket.peer_addr() {
+                Ok(address) => Ok(result_ok(Value::String(address))),
+                Err(error) => Ok(result_err(io_error(error))),
+            },
+            "close" => {
+                socket.close();
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR udp socket method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_udp_datagram_method(
+        &mut self,
+        datagram: UdpDatagramValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+        match field {
+            "address" => Ok(Value::String(datagram.address())),
+            "bytes" => Ok(bytes_vec_value(datagram.bytes())),
+            "text" => match datagram.text() {
+                Ok(text) => Ok(result_ok(Value::String(text))),
+                Err(error) => Ok(result_err(io_error(error))),
+            },
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR udp datagram method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_http_listener_method(
+        &mut self,
+        listener: HttpListenerValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "accept" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[0].value), "accept(timeout=...)")?;
+                match listener.accept(timeout) {
+                    Ok(exchange) => Ok(result_ok(Value::HttpExchange(exchange))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "local_addr" => match listener.local_addr() {
+                Ok(address) => Ok(result_ok(Value::String(address))),
+                Err(error) => Ok(result_err(io_error(error))),
+            },
+            "close" => {
+                listener.close();
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR http listener method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_http_exchange_method(
+        &mut self,
+        exchange: HttpExchangeValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "method" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(Value::String(exchange.method()))
+            }
+            "path" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(Value::String(exchange.path()))
+            }
+            "headers" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(headers_map_value(exchange.headers()))
+            }
+            "body_text" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match exchange.body_text() {
+                    Ok(text) => Ok(result_ok(Value::String(text))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "body_bytes" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(bytes_vec_value(exchange.body_bytes()))
+            }
+            "respond_text" => {
+                let bound = bind_builtin_args(
+                    &["status", "text", "headers"],
+                    evaluate_named_args(args, env)?,
+                )?;
+                let status = expect_i32_value(&bound[0].value, "respond_text(...)")?;
+                let text = expect_string_value(&bound[1].value, "respond_text(...)")?;
+                let headers = expect_headers_map(&bound[2].value, "respond_text(...)")?;
+                match exchange.respond_text(status, &text, headers) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "respond_bytes" => {
+                let bound = bind_builtin_args(
+                    &["status", "bytes", "headers"],
+                    evaluate_named_args(args, env)?,
+                )?;
+                let status = expect_i32_value(&bound[0].value, "respond_bytes(...)")?;
+                let bytes = expect_bytes_value(&bound[1].value, "respond_bytes(...)")?;
+                let headers = expect_headers_map(&bound[2].value, "respond_bytes(...)")?;
+                match exchange.respond_bytes(status, &bytes, headers) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR http exchange method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_http_response_method(
+        &mut self,
+        response: HttpResponseValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+        match field {
+            "status" => Ok(Value::Int(IntegerValue::from_signed(
+                response.status() as i128
+            ))),
+            "reason" => Ok(Value::String(response.reason())),
+            "headers" => Ok(headers_map_value(response.headers())),
+            "text" => match response.text() {
+                Ok(text) => Ok(result_ok(Value::String(text))),
+                Err(error) => Ok(result_err(io_error(error))),
+            },
+            "bytes" => Ok(bytes_vec_value(response.bytes())),
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR http response method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_websocket_listener_method(
+        &mut self,
+        listener: WebSocketListenerValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "accept" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[0].value), "accept(timeout=...)")?;
+                match listener.accept(timeout) {
+                    Ok(socket) => Ok(result_ok(Value::WebSocket(socket))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "local_addr" => match listener.local_addr() {
+                Ok(address) => Ok(result_ok(Value::String(address))),
+                Err(error) => Ok(result_err(io_error(error))),
+            },
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR websocket listener method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_websocket_method(
+        &mut self,
+        socket: WebSocketValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "send_text" => {
+                let bound =
+                    bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
+                let text = expect_string_value(&bound[0].value, "send_text(...)")?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[1].value), "send_text(timeout=...)")?;
+                match socket.send_text(&text, timeout) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "send_bytes" => {
+                let bound =
+                    bind_builtin_args(&["bytes", "timeout"], evaluate_named_args(args, env)?)?;
+                let bytes = expect_bytes_value(&bound[0].value, "send_bytes(...)")?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[1].value), "send_bytes(timeout=...)")?;
+                match socket.send_bytes(&bytes, timeout) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "recv_text" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[0].value), "recv_text(timeout=...)")?;
+                match socket.recv_text(timeout) {
+                    Ok(Some(text)) => Ok(result_ok(option_some(Value::String(text)))),
+                    Ok(None) => Ok(result_ok(option_none())),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "recv_bytes" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[0].value), "recv_bytes(timeout=...)")?;
+                match socket.recv_bytes(timeout) {
+                    Ok(Some(bytes)) => Ok(result_ok(option_some(bytes_vec_value(bytes)))),
+                    Ok(None) => Ok(result_ok(option_none())),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "close" => {
+                let _ = socket.close();
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR websocket method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_unix_listener_method(
+        &mut self,
+        listener: UnixListenerValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "accept" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[0].value), "accept(timeout=...)")?;
+                match listener.accept(timeout, Some(&self.cancellation)) {
+                    Ok(stream) => Ok(result_ok(Value::UnixStream(stream))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "close" => {
+                listener.close();
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR unix listener method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_unix_stream_method(
+        &mut self,
+        stream: UnixStreamValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "read_line" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[0].value), "read_line(timeout=...)")?;
+                match stream.read_line(timeout, Some(&self.cancellation)) {
+                    Ok(Some(text)) => Ok(result_ok(option_some(Value::String(text)))),
+                    Ok(None) => Ok(result_ok(option_none())),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "read_exact" => {
+                let bound =
+                    bind_builtin_args(&["count", "timeout"], evaluate_named_args(args, env)?)?;
+                let count = usize::try_from(expect_i32_value(&bound[0].value, "read_exact(...)")?)
+                    .map_err(|_| {
+                        Diagnostic::new("`read_exact(...)` requires a non-negative count")
+                    })?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[1].value), "read_exact(timeout=...)")?;
+                match stream.read_exact(count, timeout, Some(&self.cancellation)) {
+                    Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "write_all" => {
+                let bound =
+                    bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
+                let text = expect_string_value(&bound[0].value, "write_all(...)")?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[1].value), "write_all(timeout=...)")?;
+                match stream.write_all(&text, timeout, Some(&self.cancellation)) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "close" => {
+                stream.close();
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR unix stream method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_tls_listener_method(
+        &mut self,
+        listener: TlsListenerValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "accept" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[0].value), "accept(timeout=...)")?;
+                match listener.accept(timeout, Some(&self.cancellation)) {
+                    Ok(stream) => Ok(result_ok(Value::TlsStream(stream))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "local_addr" => match listener.local_addr() {
+                Ok(address) => Ok(result_ok(Value::String(address))),
+                Err(error) => Ok(result_err(io_error(error))),
+            },
+            "close" => {
+                listener.close();
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR tls listener method `{}`",
+                field
+            ))),
+        }
+    }
+
+    fn evaluate_tls_stream_method(
+        &mut self,
+        stream: TlsStreamValue,
+        field: &str,
+        args: &[MirArg],
+        env: &Env,
+    ) -> Result<Value> {
+        match field {
+            "read_line" => {
+                let bound = bind_builtin_args(&["timeout"], evaluate_named_args(args, env)?)?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[0].value), "read_line(timeout=...)")?;
+                match stream.read_line(timeout, Some(&self.cancellation)) {
+                    Ok(Some(text)) => Ok(result_ok(option_some(Value::String(text)))),
+                    Ok(None) => Ok(result_ok(option_none())),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "read_exact" => {
+                let bound =
+                    bind_builtin_args(&["count", "timeout"], evaluate_named_args(args, env)?)?;
+                let count = usize::try_from(expect_i32_value(&bound[0].value, "read_exact(...)")?)
+                    .map_err(|_| {
+                        Diagnostic::new("`read_exact(...)` requires a non-negative count")
+                    })?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[1].value), "read_exact(timeout=...)")?;
+                match stream.read_exact(count, timeout, Some(&self.cancellation)) {
+                    Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "write_all" => {
+                let bound =
+                    bind_builtin_args(&["text", "timeout"], evaluate_named_args(args, env)?)?;
+                let text = expect_string_value(&bound[0].value, "write_all(...)")?;
+                let timeout =
+                    expect_optional_timeout(Some(&bound[1].value), "write_all(timeout=...)")?;
+                match stream.write_all(&text, timeout, Some(&self.cancellation)) {
+                    Ok(()) => Ok(result_ok(Value::Unit)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "close" => {
+                stream.close();
+                Ok(Value::Unit)
+            }
+            _ => Err(Diagnostic::new(format!(
+                "unsupported MIR tls stream method `{}`",
+                field
+            ))),
         }
     }
 
@@ -3041,8 +4380,141 @@ fn bind_builtin_args(
 
     values
         .into_iter()
-        .map(|value| value.ok_or_else(|| Diagnostic::new("missing MIR argument")))
+        .enumerate()
+        .map(|(index, value)| {
+            value
+                .or_else(|| {
+                    (expected_names.get(index) == Some(&"timeout")).then(|| EvaluatedMirArg {
+                        name: Some("timeout".to_string()),
+                        value: Value::Unit,
+                        writeback_place: None,
+                    })
+                })
+                .ok_or_else(|| Diagnostic::new("missing MIR argument"))
+        })
         .collect()
+}
+
+fn expect_string_value(value: &Value, label: &str) -> Result<String> {
+    match value {
+        Value::String(text) => Ok(text.clone()),
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `String`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
+fn expect_bytes_value(value: &Value, label: &str) -> Result<Vec<u8>> {
+    match value {
+        Value::Vec(vector)
+            if vector.element_type == Type::named("uint8")
+                && vector
+                    .elements
+                    .iter()
+                    .all(|element| matches!(element, Value::Int(_))) =>
+        {
+            let mut bytes = Vec::with_capacity(vector.elements.len());
+            for element in &vector.elements {
+                let Value::Int(value) = element else {
+                    unreachable!()
+                };
+                let byte = value
+                    .as_i128()
+                    .ok_or_else(|| Diagnostic::new(format!("`{}` expects `Vec[uint8]`", label)))?;
+                let byte = u8::try_from(byte)
+                    .map_err(|_| Diagnostic::new(format!("`{}` expects `Vec[uint8]`", label)))?;
+                bytes.push(byte);
+            }
+            Ok(bytes)
+        }
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `Vec[uint8]`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
+fn expect_i32_value(value: &Value, label: &str) -> Result<i32> {
+    match value {
+        Value::Int(number) => {
+            let value = number
+                .as_i128()
+                .ok_or_else(|| Diagnostic::new(format!("`{}` expects `int32`", label)))?;
+            i32::try_from(value)
+                .map_err(|_| Diagnostic::new(format!("`{}` expects `int32`", label)))
+        }
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `int32`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
+fn expect_optional_timeout(value: Option<&Value>, label: &str) -> Result<Option<StdDuration>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value {
+        Value::Unit => Ok(None),
+        Value::Duration(duration) => {
+            let millis = u64::try_from(*duration).map_err(|_| {
+                Diagnostic::new(format!("`{}` duration must be non-negative", label))
+            })?;
+            Ok(Some(StdDuration::from_millis(millis)))
+        }
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `Duration`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
+fn expect_headers_map(value: &Value, label: &str) -> Result<Vec<(String, String)>> {
+    match value {
+        Value::Map(map)
+            if map.key_type == Type::named("String") && map.value_type == Type::named("String") =>
+        {
+            let mut headers = Vec::with_capacity(map.entries.len());
+            for (key, value) in &map.entries {
+                headers.push((
+                    expect_string_value(key, label)?,
+                    expect_string_value(value, label)?,
+                ));
+            }
+            Ok(headers)
+        }
+        other => Err(Diagnostic::new(format!(
+            "`{}` expects `Map[String, String]`, found `{}`",
+            label,
+            other.render()
+        ))),
+    }
+}
+
+fn headers_map_value(headers: Vec<(String, String)>) -> Value {
+    Value::Map(MapValue {
+        key_type: Type::named("String"),
+        value_type: Type::named("String"),
+        entries: headers
+            .into_iter()
+            .map(|(key, value)| (Value::String(key), Value::String(value)))
+            .collect(),
+    })
+}
+
+fn bytes_vec_value(bytes: Vec<u8>) -> Value {
+    Value::Vec(VecValue {
+        element_type: Type::named("uint8"),
+        elements: bytes
+            .into_iter()
+            .map(|byte| Value::Int(IntegerValue::from_signed(byte as i128)))
+            .collect(),
+    })
 }
 
 fn collect_runtime_type_substitutions(

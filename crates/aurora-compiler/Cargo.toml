@@ -13,8 +13,19 @@ cranelift-frontend = "0.118"
 cranelift-module = "0.118"
 cranelift-native = "0.118"
 cranelift-object = "0.118"
+httparse = "1"
 libc = "0.2"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+tiny_http = "0.12"
 toml = "0.8"
+tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+ureq = { version = "2", features = ["tls"] }
+url = "2"
+webpki-roots = "0.26"
+
+[dev-dependencies]
+rcgen = "0.13"

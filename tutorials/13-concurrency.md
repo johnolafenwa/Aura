@@ -220,9 +220,9 @@ See:
 
 ## Current Limits
 
-The bootstrap concurrency runtime does not yet provide:
+The bootstrap concurrency runtime is still intentionally simple:
 
-- network or socket integration
-- general async I/O APIs
-- detached-task ownership restrictions from the full proposal
-- borrowed spawn parameters
+- blocking queue and socket waits are not evented
+- cancellation is still cooperative rather than preemptive
+- detached-task ownership restrictions from the full proposal are not implemented yet
+- borrowed spawn parameters are still rejected

@@ -1,0 +1,24 @@
+# 2026-04-18 IO And Network Surface
+
+- Session start: 2026-04-18 08:02:02 BST
+- Goal: implement maintained actual I/O and network I/O capabilities across Aurora, including any syntax or builtin-module support needed, plus full compiler/runtime/tooling/docs coverage.
+- Session completed: 2026-04-18 09:31:54 BST
+- Total elapsed: 1h 29m 52s
+- Work completed:
+  - added maintained builtin `io`, `fs`, and `net` modules plus compiler-side builtin module registration
+  - added checker, MIR lowering, MIR runtime, direct native codegen, and direct runtime support for blocking file and TCP I/O
+  - added builtin resource types `io.Error`, `fs.File`, `net.TcpListener`, and `net.TcpStream`, including `with` cleanup support and maintained member-method surfaces
+  - added compiler fixtures and public API regression coverage for builtin module checking plus end-to-end file/network runtime execution
+  - added CLI product coverage for `run` and direct/default `build` over maintained file and TCP examples
+  - added language-server fallback and compiler-bridge coverage for builtin module imports and resource-member completions
+  - added maintained examples `examples/io/read_text_file.au` and `examples/io/tcp_echo.au`
+  - added the new tutorial chapter `tutorials/19-io-and-networking.md` and aligned README/tutorial surface docs with the implemented I/O/network model
+  - tightened the MIR recursion-depth runtime limit to 256 to keep host-stack behavior deterministic under the full-suite coverage matrix, with maintained regression coverage for that limit
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p aurora-compiler`
+  - `cargo test -p aura`
+  - `npm run test:lsp`
+  - `npm run check:extension`
+- Follow-up:
+  - the maintained I/O/network model is intentionally blocking and thread-based; richer evented I/O, bounded queues/backpressure, and cancellation-aware blocking operations remain future runtime work rather than gaps in the now-implemented builtin surface

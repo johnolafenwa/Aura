@@ -281,6 +281,200 @@ test("member completion exposes builtin MapEntry fields", () => {
   assert.ok(names.has("value"));
 });
 
+test("fallback analysis understands builtin io/fs/net module imports", () => {
+  const source = [
+    "import io",
+    "import fs",
+    "import net",
+    "",
+    "def main() -> int32:",
+    "    write_result = io.write(\"hello\")",
+    "    file_result = fs.open(\"demo.txt\")",
+    "    listener_result = net.listen(\"127.0.0.1:0\")",
+    "    return 0"
+  ].join("\n");
+
+  const diagnostics = diagnosticsForDocument(source);
+  assert.ok(!diagnostics.some((diagnostic) => /unknown name `io`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /unknown name `fs`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /unknown name `net`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /type `io` has no member `write`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /type `fs` has no member `open`/.test(diagnostic.message)));
+  assert.ok(!diagnostics.some((diagnostic) => /type `net` has no member `listen`/.test(diagnostic.message)));
+});
+
+test("fallback member completion exposes builtin module namespaces", () => {
+  const source = ["import fs", "", "def main() -> int32:", "    fs.", "    return 0"].join("\n");
+  const lineIndex = source.split("\n").findIndex((line) => line.includes("fs."));
+  const lineText = source.split("\n")[lineIndex];
+  const character = lineText.indexOf(".") + 1;
+  const items = completionsForDocument(source, lineIndex, character, ".");
+  const names = new Set(items.map((item) => item.name));
+
+  assert.ok(names.has("exists"));
+  assert.ok(names.has("read_to_string"));
+  assert.ok(names.has("read_bytes"));
+  assert.ok(names.has("write_string"));
+  assert.ok(names.has("write_bytes"));
+  assert.ok(names.has("append_string"));
+  assert.ok(names.has("append_bytes"));
+  assert.ok(names.has("create_dir"));
+  assert.ok(names.has("read_dir"));
+  assert.ok(names.has("remove_file"));
+  assert.ok(names.has("open"));
+  assert.ok(names.has("create"));
+  assert.ok(names.has("append"));
+  assert.ok(names.has("File"));
+});
+
+test("fallback member completion exposes builtin file and socket resource methods", () => {
+  const source = [
+    "def inspect(file: fs.File, listener: net.TcpListener, stream: net.TcpStream) -> int32:",
+    "    file.read_all()",
+    "    listener.local_addr()",
+    "    stream.peer_addr()",
+    "    stream.",
+    "    return 0"
+  ].join("\n");
+  const lineIndex = source.split("\n").findIndex((line) => line.includes("stream."));
+  const lineText = source.split("\n")[lineIndex];
+  const character = lineText.indexOf(".") + 1;
+  const items = completionsForDocument(source, lineIndex, character, ".");
+  const names = new Set(items.map((item) => item.name));
+
+  assert.ok(names.has("read_all"));
+  assert.ok(names.has("read_line"));
+  assert.ok(names.has("read_bytes"));
+  assert.ok(names.has("read_exact"));
+  assert.ok(names.has("write_all"));
+  assert.ok(names.has("write_bytes"));
+  assert.ok(names.has("flush"));
+  assert.ok(names.has("local_addr"));
+  assert.ok(names.has("peer_addr"));
+  assert.ok(names.has("shutdown_read"));
+  assert.ok(names.has("shutdown_write"));
+  assert.ok(names.has("shutdown_both"));
+  assert.ok(names.has("close"));
+});
+
+test("fallback completion exposes advanced fs/net modules and resource methods", () => {
+  const source = [
+    "import net",
+    "",
+    "def inspect(file: fs.File, udp: net.UdpSocket, packet: net.UdpDatagram, http_listener: net.HttpListener, exchange: net.HttpExchange, response: net.HttpResponse, ws_listener: net.WebSocketListener, socket: net.WebSocket, unix_listener: net.UnixListener, unix_stream: net.UnixStream, tls_listener: net.TlsListener, tls_stream: net.TlsStream) -> int32:",
+    "    net.",
+    "    file.",
+    "    udp.",
+    "    packet.",
+    "    http_listener.",
+    "    exchange.",
+    "    response.",
+    "    ws_listener.",
+    "    socket.",
+    "    unix_listener.",
+    "    unix_stream.",
+    "    tls_listener.",
+    "    tls_stream.",
+    "    return 0"
+  ].join("\n");
+
+  const lines = source.split("\n");
+  const completeNames = (lineMarker) => {
+    const lineIndex = lines.findIndex((line) => line === lineMarker);
+    const lineText = lines[lineIndex];
+    const character = lineText.indexOf(".") + 1;
+    return new Set(
+      completionsForDocument(source, lineIndex, character, ".").map((item) => item.name)
+    );
+  };
+
+  const netNames = completeNames("    net.");
+  assert.ok(netNames.has("connect_timeout"));
+  assert.ok(netNames.has("udp_bind"));
+  assert.ok(netNames.has("http_listen"));
+  assert.ok(netNames.has("http_request_text"));
+  assert.ok(netNames.has("http_request_text_timeout"));
+  assert.ok(netNames.has("http_request_bytes"));
+  assert.ok(netNames.has("http_request_bytes_timeout"));
+  assert.ok(netNames.has("websocket_listen"));
+  assert.ok(netNames.has("websocket_connect"));
+  assert.ok(netNames.has("websocket_connect_timeout"));
+  assert.ok(netNames.has("unix_listen"));
+  assert.ok(netNames.has("unix_connect"));
+  assert.ok(netNames.has("unix_connect_timeout"));
+  assert.ok(netNames.has("tls_listen"));
+  assert.ok(netNames.has("tls_connect"));
+  assert.ok(netNames.has("tls_connect_timeout"));
+  assert.ok(netNames.has("UdpSocket"));
+  assert.ok(netNames.has("HttpResponse"));
+  assert.ok(netNames.has("TlsStream"));
+
+  const fileNames = completeNames("    file.");
+  assert.ok(fileNames.has("read_bytes"));
+  assert.ok(fileNames.has("write_bytes"));
+
+  const udpNames = completeNames("    udp.");
+  assert.ok(udpNames.has("send_text"));
+  assert.ok(udpNames.has("send_bytes"));
+  assert.ok(udpNames.has("recv"));
+  assert.ok(udpNames.has("recv_from"));
+  assert.ok(udpNames.has("local_addr"));
+  assert.ok(udpNames.has("peer_addr"));
+
+  const packetNames = completeNames("    packet.");
+  assert.ok(packetNames.has("address"));
+  assert.ok(packetNames.has("bytes"));
+  assert.ok(packetNames.has("text"));
+
+  const httpListenerNames = completeNames("    http_listener.");
+  assert.ok(httpListenerNames.has("accept"));
+  assert.ok(httpListenerNames.has("local_addr"));
+  assert.ok(httpListenerNames.has("close"));
+
+  const exchangeNames = completeNames("    exchange.");
+  assert.ok(exchangeNames.has("method"));
+  assert.ok(exchangeNames.has("path"));
+  assert.ok(exchangeNames.has("headers"));
+  assert.ok(exchangeNames.has("body_text"));
+  assert.ok(exchangeNames.has("body_bytes"));
+  assert.ok(exchangeNames.has("respond_text"));
+  assert.ok(exchangeNames.has("respond_bytes"));
+
+  const responseNames = completeNames("    response.");
+  assert.ok(responseNames.has("status"));
+  assert.ok(responseNames.has("reason"));
+  assert.ok(responseNames.has("headers"));
+  assert.ok(responseNames.has("text"));
+  assert.ok(responseNames.has("bytes"));
+
+  const wsListenerNames = completeNames("    ws_listener.");
+  assert.ok(wsListenerNames.has("accept"));
+  assert.ok(wsListenerNames.has("local_addr"));
+
+  const socketNames = completeNames("    socket.");
+  assert.ok(socketNames.has("send_text"));
+  assert.ok(socketNames.has("send_bytes"));
+  assert.ok(socketNames.has("recv_text"));
+  assert.ok(socketNames.has("recv_bytes"));
+
+  const unixListenerNames = completeNames("    unix_listener.");
+  assert.ok(unixListenerNames.has("accept"));
+
+  const unixStreamNames = completeNames("    unix_stream.");
+  assert.ok(unixStreamNames.has("read_line"));
+  assert.ok(unixStreamNames.has("read_exact"));
+  assert.ok(unixStreamNames.has("write_all"));
+
+  const tlsListenerNames = completeNames("    tls_listener.");
+  assert.ok(tlsListenerNames.has("accept"));
+  assert.ok(tlsListenerNames.has("local_addr"));
+
+  const tlsStreamNames = completeNames("    tls_stream.");
+  assert.ok(tlsStreamNames.has("read_line"));
+  assert.ok(tlsStreamNames.has("read_exact"));
+  assert.ok(tlsStreamNames.has("write_all"));
+});
+
 test("top-level completion includes keywords and declarations", () => {
   const items = completionsForDocument(pointSource, 0, 0, null);
   const names = new Set(items.map((item) => item.name));
@@ -970,6 +1164,12 @@ test("fallback analysis helper specializes builtin member return types and unres
   const queueMembers = byName("Queue");
   const mapMembers = byName("Map");
   const vecMembers = byName("Vec");
+  const fileMembers = byName("fs.File");
+  const tcpStreamMembers = byName("net.TcpStream");
+  const udpMembers = byName("net.UdpSocket");
+  const datagramMembers = byName("net.UdpDatagram");
+  const httpResponseMembers = byName("net.HttpResponse");
+  const wsMembers = byName("net.WebSocket");
   assert.equal(
     _testing.specializeMemberReturnType("Vec[String]", vecMembers.get("clone")),
     "Vec[String]"
@@ -1111,6 +1311,34 @@ test("fallback analysis helper specializes builtin member return types and unres
     "Task[T]"
   );
   assert.equal(
+    _testing.specializeMemberReturnType("fs.File", fileMembers.get("read_bytes")),
+    "Result[Vec[uint8], io.Error]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("net.TcpStream", tcpStreamMembers.get("read_bytes")),
+    "Result[Option[Vec[uint8]], io.Error]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("net.UdpSocket", udpMembers.get("recv_from")),
+    "Result[Option[net.UdpDatagram], io.Error]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("net.UdpDatagram", datagramMembers.get("bytes")),
+    "Vec[uint8]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("net.HttpResponse", httpResponseMembers.get("status")),
+    "int32"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("net.HttpResponse", httpResponseMembers.get("headers")),
+    "Map[String, String]"
+  );
+  assert.equal(
+    _testing.specializeMemberReturnType("net.WebSocket", wsMembers.get("recv_bytes")),
+    "Result[Option[Vec[uint8]], io.Error]"
+  );
+  assert.equal(
     _testing.specializeMemberReturnType("UnknownType", { name: "value", detail: "value() -> Result[int32, String]" }),
     "Result[int32, String]"
   );
@@ -1128,7 +1356,31 @@ test("fallback analysis helper specializes builtin member return types and unres
 });
 
 test("fallback analysis testing helpers expose builtin metadata and utility helpers", () => {
-  const builtinMemberGroups = ["float64", "String", "Vec", "Map", "Set", "MapEntry", "Queue", "Task", "TaskGroup"];
+  const builtinMemberGroups = [
+    "float64",
+    "String",
+    "Vec",
+    "Map",
+    "Set",
+    "MapEntry",
+    "fs.File",
+    "net.TcpListener",
+    "net.TcpStream",
+    "net.UdpSocket",
+    "net.UdpDatagram",
+    "net.HttpListener",
+    "net.HttpExchange",
+    "net.HttpResponse",
+    "net.WebSocketListener",
+    "net.WebSocket",
+    "net.UnixListener",
+    "net.UnixStream",
+    "net.TlsListener",
+    "net.TlsStream",
+    "Queue",
+    "Task",
+    "TaskGroup"
+  ];
   for (const group of builtinMemberGroups) {
     const items = _testing.builtinMembersFor(group);
     assert.ok(items.length > 0, `expected builtin members for ${group}`);

@@ -1,0 +1,14 @@
+import io
+
+def main() -> int32:
+    match io.write("hello"):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            return 1
+    match io.flush():
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            return 1
+    return 0

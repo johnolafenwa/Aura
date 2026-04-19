@@ -7,19 +7,12 @@ If you are coming from Python, this works like Python's `with` statement and con
 ## `with` Binds A Scoped Resource
 
 ```python
-class FileHandle:
-    name: String
+import fs
+import io
 
-    def read(borrow self) -> String:
-        return self.name
-
-    def close(borrow mut self):
-        print("closed " + self.name)
-
-def use_resource() -> Result[String, String]:
-    with file = FileHandle(name="demo"):
-        print(file.read())
-        return Result.Ok("done")
+def load_text(path: String) -> Result[String, io.Error]:
+    with file = try fs.open(path):
+        return file.read_all()
     # file.close() is called automatically here, even on early return
 ```
 
@@ -33,13 +26,20 @@ See [examples/resources/with_resource.au](../examples/resources/with_resource.au
 
 ## The Resource Protocol
 
-In the current compiler, a `with` resource must be a class that defines:
+In the current compiler, a `with` resource may be:
+
+- a user-defined class with:
 
 ```python
 def close(borrow mut self):
 ```
 
-The method must take `borrow mut self`, no extra parameters, and return `None`. Any class that defines this method can be used with `with`.
+- a builtin `fs.File`
+- a builtin `net.TcpStream`
+- a builtin `net.TcpListener`
+- a `TaskGroup` from `tasks()`
+
+For user-defined classes, `close(...)` must take `borrow mut self`, no extra parameters, and return `None`.
 
 ## `with ... as ...` For Task Groups
 
@@ -58,6 +58,6 @@ See [examples/concurrency/task_group_select.au](../examples/concurrency/task_gro
 
 ## Current Limits
 
-- only class types with a `close(borrow mut self)` method and `TaskGroup` can be used with `with`
-- no arbitrary enter or exit protocols
+- builtin resources use the fixed file/TCP/task-group surface; there is no broader enter/exit protocol yet
+- user-defined resources still require `close(borrow mut self)` with no extra parameters
 - no borrowed resource bindings

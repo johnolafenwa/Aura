@@ -13,12 +13,20 @@ use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const POINT_SOURCE: &str = include_str!("../../../examples/point.au");
 const BASIC_ADDITION_SOURCE: &str = include_str!("../../../examples/basic_addition.au");
 const TOP_LEVEL_ADDITION_SOURCE: &str = include_str!("../../../examples/top_level_addition.au");
 const CONTROL_FLOW_SOURCE: &str = include_str!("../../../examples/control_flow.au");
+static IO_EXAMPLE_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_io_example() -> std::sync::MutexGuard<'static, ()> {
+    IO_EXAMPLE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 const EXAMPLE_CASES: &[(&str, &str)] = &[
     (
         "examples/basics/top_level_script.au",
@@ -307,6 +315,36 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "examples/generics/generic_constructor_specialization.au",
         include_str!("../../../examples/generics/generic_constructor_specialization.au"),
         "42\n",
+    ),
+    (
+        "examples/io/tcp_echo.au",
+        include_str!("../../../examples/io/tcp_echo.au"),
+        "echo:ping\n",
+    ),
+    (
+        "examples/io/bytes_file_io.au",
+        include_str!("../../../examples/io/bytes_file_io.au"),
+        "4\n65\n67\n5\n68\n",
+    ),
+    (
+        "examples/io/tcp_bytes.au",
+        include_str!("../../../examples/io/tcp_bytes.au"),
+        "4\n116\n",
+    ),
+    (
+        "examples/io/udp_echo.au",
+        include_str!("../../../examples/io/udp_echo.au"),
+        "udp:ping\nping\n",
+    ),
+    (
+        "examples/io/http_roundtrip.au",
+        include_str!("../../../examples/io/http_roundtrip.au"),
+        "200\nPOST:/hello:body:ok\n",
+    ),
+    (
+        "examples/io/websocket_roundtrip.au",
+        include_str!("../../../examples/io/websocket_roundtrip.au"),
+        "ws:hi\n",
     ),
     (
         "examples/numbers/uint128_values.au",
@@ -851,6 +889,15 @@ fn control_flow_example_runs() {
 }
 
 #[test]
+fn mir_runtime_reports_recursion_limit_before_overflowing_the_host_stack() {
+    let source = include_str!("../../../test_edge/test_recursive_medium.au");
+    let error =
+        run_source(source).expect_err("medium recursion should diagnose before stack overflow");
+    assert!(error.message.contains("maximum call depth of"));
+    assert!(error.message.contains("count_down"));
+}
+
+#[test]
 fn mir_runtime_runs_class_methods_example() {
     let source = include_str!("../../../examples/classes/methods.au");
     let mir = lower_source_to_mir(source).expect("methods example should lower to MIR");
@@ -1274,6 +1321,27 @@ fn public_run_path_runs_queues_example_natively() {
 }
 
 #[test]
+fn public_run_path_executes_file_io_example_with_path_context() {
+    let fixture = repo_root().join("examples/io/read_text_file.au");
+    let _guard = lock_io_example();
+    let output =
+        run_path(&fixture).expect("file io example should run through the public run path");
+    assert_eq!(output.stdout, "true\ntrue\n");
+    assert_eq!(output.value, zero_exit_value());
+}
+
+#[cfg(unix)]
+#[test]
+fn public_run_path_executes_unix_and_tls_example_with_path_context() {
+    let fixture = repo_root().join("examples/io/unix_tls_roundtrip.au");
+    let _guard = lock_io_example();
+    let output =
+        run_path(&fixture).expect("unix/tls example should run through the public run path");
+    assert_eq!(output.stdout, "unix:ping\n9\n");
+    assert_eq!(output.value, zero_exit_value());
+}
+
+#[test]
 fn mir_lowering_creates_blocks_for_control_flow() {
     let mir = lower_source_to_mir(CONTROL_FLOW_SOURCE).expect("control flow MIR should lower");
     let script = mir
@@ -1544,6 +1612,7 @@ fn additional_categorized_examples_type_check() {
 
 #[test]
 fn additional_categorized_examples_run_with_expected_output() {
+    let _guard = lock_io_example();
     for (path, source, expected_stdout) in ADDITIONAL_EXAMPLE_CASES {
         let output = run_source(source).unwrap_or_else(|error| {
             panic!("{} should run: {}", path, error);

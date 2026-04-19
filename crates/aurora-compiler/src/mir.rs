@@ -1162,6 +1162,11 @@ impl<'a> Lowerer<'a> {
                 true
             }
             Stmt::With(with_stmt) => {
+                if let Some(inferred) = self.infer_expr_type(&with_stmt.value) {
+                    self.local_types
+                        .entry(with_stmt.binding.clone())
+                        .or_insert(inferred);
+                }
                 let value = self.lower_expr(&with_stmt.value);
                 self.emit(Instruction::Assign {
                     target: with_stmt.binding.clone(),
@@ -3774,6 +3779,8 @@ impl<'a> Lowerer<'a> {
         let Type::Named(name, args) = receiver_type else {
             return None;
         };
+        let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+        let io_error_ty = Type::Named("io.Error".to_string(), Vec::new());
         if args.is_empty()
             && field == "to_string"
             && matches!(
@@ -3905,6 +3912,194 @@ impl<'a> Lowerer<'a> {
                 "Task".to_string(),
                 vec![Type::named("Unknown")],
             )),
+            ("fs.File", "read_all") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("String"), io_error_ty.clone()],
+            )),
+            ("fs.File", "read_bytes") => Some(Type::Named(
+                "Result".to_string(),
+                vec![bytes_ty.clone(), io_error_ty.clone()],
+            )),
+            ("fs.File", "write_all") | ("fs.File", "write_bytes") | ("fs.File", "flush") => Some(
+                Type::Named("Result".to_string(), vec![Type::Unit, io_error_ty.clone()]),
+            ),
+            ("fs.File", "close") => Some(Type::Unit),
+            ("net.TcpListener", "accept") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("net.TcpStream"), io_error_ty.clone()],
+            )),
+            ("net.TcpListener", "local_addr") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("String"), io_error_ty.clone()],
+            )),
+            ("net.TcpListener", "close") => Some(Type::Unit),
+            ("net.TcpStream", "read_all")
+            | ("net.TcpStream", "local_addr")
+            | ("net.TcpStream", "peer_addr") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("String"), io_error_ty.clone()],
+            )),
+            ("net.TcpStream", "read_line") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    io_error_ty.clone(),
+                ],
+            )),
+            ("net.TcpStream", "read_bytes") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Option".to_string(), vec![bytes_ty.clone()]),
+                    io_error_ty.clone(),
+                ],
+            )),
+            ("net.TcpStream", "read_exact") => Some(Type::Named(
+                "Result".to_string(),
+                vec![bytes_ty.clone(), io_error_ty.clone()],
+            )),
+            ("net.TcpStream", "write_all")
+            | ("net.TcpStream", "write_bytes")
+            | ("net.TcpStream", "flush")
+            | ("net.TcpStream", "shutdown_read")
+            | ("net.TcpStream", "shutdown_write")
+            | ("net.TcpStream", "shutdown_both") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::Unit, io_error_ty.clone()],
+            )),
+            ("net.TcpStream", "close") => Some(Type::Unit),
+            ("net.UdpSocket", "send_text") | ("net.UdpSocket", "send_bytes") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::Unit, io_error_ty.clone()],
+            )),
+            ("net.UdpSocket", "recv") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Option".to_string(), vec![bytes_ty.clone()]),
+                    io_error_ty.clone(),
+                ],
+            )),
+            ("net.UdpSocket", "recv_from") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Option".to_string(), vec![Type::named("net.UdpDatagram")]),
+                    io_error_ty.clone(),
+                ],
+            )),
+            ("net.UdpSocket", "local_addr") | ("net.UdpSocket", "peer_addr") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("String"), io_error_ty.clone()],
+            )),
+            ("net.UdpSocket", "close") => Some(Type::Unit),
+            ("net.UdpDatagram", "address") => Some(Type::named("String")),
+            ("net.UdpDatagram", "bytes") => Some(bytes_ty.clone()),
+            ("net.UdpDatagram", "text") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("String"), io_error_ty.clone()],
+            )),
+            ("net.HttpListener", "accept") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("net.HttpExchange"), io_error_ty.clone()],
+            )),
+            ("net.HttpListener", "local_addr") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("String"), io_error_ty.clone()],
+            )),
+            ("net.HttpListener", "close") => Some(Type::Unit),
+            ("net.HttpExchange", "method") | ("net.HttpExchange", "path") => {
+                Some(Type::named("String"))
+            }
+            ("net.HttpExchange", "headers") | ("net.HttpResponse", "headers") => Some(Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("String")],
+            )),
+            ("net.HttpExchange", "body_text") | ("net.HttpResponse", "text") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("String"), io_error_ty.clone()],
+            )),
+            ("net.HttpExchange", "body_bytes") | ("net.HttpResponse", "bytes") => {
+                Some(bytes_ty.clone())
+            }
+            ("net.HttpExchange", "respond_text") | ("net.HttpExchange", "respond_bytes") => Some(
+                Type::Named("Result".to_string(), vec![Type::Unit, io_error_ty.clone()]),
+            ),
+            ("net.HttpExchange", "close") => Some(Type::Unit),
+            ("net.HttpResponse", "status") => Some(Type::named("int32")),
+            ("net.HttpResponse", "reason") => Some(Type::named("String")),
+            ("net.HttpResponse", "close") => Some(Type::Unit),
+            ("net.WebSocketListener", "accept") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("net.WebSocket"), io_error_ty.clone()],
+            )),
+            ("net.WebSocketListener", "local_addr") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("String"), io_error_ty.clone()],
+            )),
+            ("net.WebSocketListener", "close") => Some(Type::Unit),
+            ("net.WebSocket", "send_text") | ("net.WebSocket", "send_bytes") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::Unit, io_error_ty.clone()],
+            )),
+            ("net.WebSocket", "recv_text") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    io_error_ty.clone(),
+                ],
+            )),
+            ("net.WebSocket", "recv_bytes") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Option".to_string(), vec![bytes_ty.clone()]),
+                    io_error_ty.clone(),
+                ],
+            )),
+            ("net.WebSocket", "close") => Some(Type::Unit),
+            ("net.UnixListener", "accept") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("net.UnixStream"), io_error_ty.clone()],
+            )),
+            ("net.UnixListener", "close") => Some(Type::Unit),
+            ("net.UnixStream", "read_line") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    io_error_ty.clone(),
+                ],
+            )),
+            ("net.UnixStream", "read_exact") => Some(Type::Named(
+                "Result".to_string(),
+                vec![bytes_ty.clone(), io_error_ty.clone()],
+            )),
+            ("net.UnixStream", "write_all") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::Unit, io_error_ty.clone()],
+            )),
+            ("net.UnixStream", "close") => Some(Type::Unit),
+            ("net.TlsListener", "accept") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("net.TlsStream"), io_error_ty.clone()],
+            )),
+            ("net.TlsListener", "local_addr") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::named("String"), io_error_ty.clone()],
+            )),
+            ("net.TlsListener", "close") => Some(Type::Unit),
+            ("net.TlsStream", "read_line") => Some(Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("Option".to_string(), vec![Type::named("String")]),
+                    io_error_ty.clone(),
+                ],
+            )),
+            ("net.TlsStream", "read_exact") => Some(Type::Named(
+                "Result".to_string(),
+                vec![bytes_ty, io_error_ty.clone()],
+            )),
+            ("net.TlsStream", "write_all") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::Unit, io_error_ty],
+            )),
+            ("net.TlsStream", "close") => Some(Type::Unit),
             _ => None,
         }
     }

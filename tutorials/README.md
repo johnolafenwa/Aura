@@ -34,6 +34,7 @@ When the implemented language surface changes, update these in the same pass:
 17. [16-traits.md](16-traits.md)
 18. [17-modules-and-visibility.md](17-modules-and-visibility.md)
 19. [18-packages-and-workspaces.md](18-packages-and-workspaces.md)
+20. [19-io-and-networking.md](19-io-and-networking.md)
 
 ## Scope Today
 
@@ -53,6 +54,7 @@ The current tutorial set covers:
 - built-in `Result[T, E]`, `Option[T]`, `SendError[T]`, and bare `None`
 - `try expr`
 - `with` using `close(borrow mut self)` and `with tasks() as group:`
+- builtin `io`, `fs`, and `net` modules with file and TCP resource types
 - `Queue[T]`, `queue()`, `spawn`, `spawn detached`, `Task[T].result()`, `tasks()`, `select`, send-result errors, and cooperative cancellation
 - arithmetic, strings, string parsing/formatting, booleans, comparisons, and duration literals
 - `if`, `elif`, `else`, `for`, `while`, `match`, `break`, and `continue`
@@ -62,4 +64,4 @@ The current tutorial set covers:
 
 Use `14-current-language-surface.md` as the compact truth source for the currently implemented subset. The earlier chapters should explain that surface progressively, but that reference chapter should stay exhaustive for the bootstrap compiler.
 
-It does not yet attempt to teach features that are still only in the proposal, such as detached-task ownership restrictions or the fuller network/runtime model beyond the current bootstrap runtime.
+It does not yet attempt to teach features that are still only in the proposal, such as detached-task ownership restrictions or a richer evented runtime beyond the current blocking task-and-queue model.

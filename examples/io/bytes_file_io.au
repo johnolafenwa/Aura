@@ -1,0 +1,32 @@
+import fs
+import io
+
+def run() -> Result[None, io.Error]:
+    path = "/tmp/aurora-bytes-file-io-example.bin"
+    seed: Vec[uint8] = [65 as uint8, 66 as uint8]
+    try fs.write_bytes(path.clone(), seed)
+    try fs.append_bytes(path.clone(), [67 as uint8, 10 as uint8])
+
+    read_back = try fs.read_bytes(path.clone())
+    print(read_back.len())
+    print(read_back[0])
+    print(read_back[2])
+
+    with file = try fs.append(path.clone()):
+        try file.write_bytes([68 as uint8])
+        try file.flush()
+
+    with file = try fs.open(path):
+        final = try file.read_bytes()
+        print(final.len())
+        print(final[4])
+
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

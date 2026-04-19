@@ -1471,11 +1471,29 @@ fn lower_type_with_self(
     }
 
     if is_builtin_type(type_name) || type_names.contains_key(type_name) {
-        let canonical_name = type_name
-            .rsplit_once('.')
-            .map(|(_, leaf)| leaf)
-            .unwrap_or(type_name);
-        Ok(Type::Named(canonical_name.to_string(), args))
+        let canonical_name = match type_name {
+            "fs.File"
+            | "net.TcpStream"
+            | "net.TcpListener"
+            | "net.UdpSocket"
+            | "net.UdpDatagram"
+            | "net.HttpListener"
+            | "net.HttpExchange"
+            | "net.HttpResponse"
+            | "net.WebSocketListener"
+            | "net.WebSocket"
+            | "net.UnixListener"
+            | "net.UnixStream"
+            | "net.TlsListener"
+            | "net.TlsStream"
+            | "io.Error" => type_name.to_string(),
+            _ => type_name
+                .rsplit_once('.')
+                .map(|(_, leaf)| leaf)
+                .unwrap_or(type_name)
+                .to_string(),
+        };
+        Ok(Type::Named(canonical_name, args))
     } else {
         Err(Diagnostic::at(
             type_ref.span,
@@ -2073,6 +2091,28 @@ fn map_key_value_types(ty: &Type) -> Option<(&Type, &Type)> {
     }
 }
 
+fn is_builtin_io_resource_type(name: &str, args: &[Type]) -> bool {
+    args.is_empty()
+        && matches!(
+            name,
+            "TaskGroup"
+                | "fs.File"
+                | "net.TcpStream"
+                | "net.TcpListener"
+                | "net.UdpSocket"
+                | "net.UdpDatagram"
+                | "net.HttpListener"
+                | "net.HttpExchange"
+                | "net.HttpResponse"
+                | "net.WebSocketListener"
+                | "net.WebSocket"
+                | "net.UnixListener"
+                | "net.UnixStream"
+                | "net.TlsListener"
+                | "net.TlsStream"
+        )
+}
+
 fn borrow_places_overlap(left: &str, right: &str) -> bool {
     let left_segments = left.split('.').collect::<Vec<_>>();
     let right_segments = right.split('.').collect::<Vec<_>>();
@@ -2169,6 +2209,37 @@ impl<'a> FunctionChecker<'a> {
 
     fn is_copy_type(&self, ty: &Type) -> bool {
         type_is_copy_in_context(ty, self.classes, self.enums)
+    }
+
+    fn check_builtin_argument_type(
+        &self,
+        argument: &Argument,
+        expected: &Type,
+        locals: &mut HashMap<String, LocalBinding>,
+        label: &str,
+    ) -> Result<()> {
+        let actual = self.type_of_expr_hint(&argument.value, locals, Some(expected))?;
+        if actual != *expected {
+            return Err(Diagnostic::at(
+                argument.span,
+                format!("`{}` expects `{}`, found `{}`", label, expected, actual),
+            ));
+        }
+        self.consume_value_expr(&argument.value, locals)?;
+        Ok(())
+    }
+
+    fn check_optional_builtin_timeout_argument(
+        &self,
+        ordered_args: &[Option<&Argument>],
+        index: usize,
+        locals: &mut HashMap<String, LocalBinding>,
+        label: &str,
+    ) -> Result<()> {
+        if let Some(argument) = ordered_args.get(index).copied().flatten() {
+            self.check_builtin_argument_type(argument, &Type::named("Duration"), locals, label)?;
+        }
+        Ok(())
     }
 
     fn seed_imported_modules(&self, locals: &mut HashMap<String, LocalBinding>) {
@@ -5699,6 +5770,31 @@ impl<'a> FunctionChecker<'a> {
                         );
                     }
                     if let Some(class) = namespace.classes.get(field) {
+                        if matches!(
+                            (namespace.path.as_str(), class.decl.name.as_str()),
+                            ("fs", "File")
+                                | ("net", "TcpStream")
+                                | ("net", "TcpListener")
+                                | ("net", "UdpSocket")
+                                | ("net", "UdpDatagram")
+                                | ("net", "HttpListener")
+                                | ("net", "HttpExchange")
+                                | ("net", "HttpResponse")
+                                | ("net", "WebSocketListener")
+                                | ("net", "WebSocket")
+                                | ("net", "UnixListener")
+                                | ("net", "UnixStream")
+                                | ("net", "TlsListener")
+                                | ("net", "TlsStream")
+                        ) {
+                            return Err(Diagnostic::at(
+                                span,
+                                format!(
+                                    "builtin resource `{}` must be created through its module functions",
+                                    format!("{}.{}", namespace.path, class.decl.name)
+                                ),
+                            ));
+                        }
                         let mut provided = HashMap::new();
                         let mut next_positional_field = 0usize;
                         let mut saw_named = false;
@@ -6731,6 +6827,980 @@ impl<'a> FunctionChecker<'a> {
                                 return Ok(Type::Unit);
                             }
                             _ => {}
+                        }
+                    }
+
+                    if receiver_name == "fs.File" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let bytes_ty =
+                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::FileReadAll => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![
+                                        Type::named("String"),
+                                        crate::builtin_modules::io_error_type(),
+                                    ],
+                                )),
+                                BuiltinMember::FileReadBytes => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![bytes_ty.clone(), crate::builtin_modules::io_error_type()],
+                                )),
+                                BuiltinMember::FileWriteAll => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    let text_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`write_all` requires a `text` argument",
+                                    )?;
+                                    let actual = self.type_of_expr_hint(
+                                        &text_arg.value,
+                                        locals,
+                                        Some(&Type::named("String")),
+                                    )?;
+                                    if actual != Type::named("String") {
+                                        return Err(Diagnostic::at(
+                                            text_arg.span,
+                                            format!(
+                                                "`write_all` expects `String`, found `{}`",
+                                                actual
+                                            ),
+                                        ));
+                                    }
+                                    self.consume_value_expr(&text_arg.value, locals)?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::FileWriteBytes => {
+                                    if !self.is_mutable_place(object, locals)? {
+                                        return Err(Diagnostic::at(
+                                            span,
+                                            format!(
+                                                "method `{}` requires a mutable receiver",
+                                                field
+                                            ),
+                                        ));
+                                    }
+                                    let bytes_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`write_bytes` requires a `bytes` argument",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        bytes_arg,
+                                        &bytes_ty,
+                                        locals,
+                                        "write_bytes",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::FileFlush => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                )),
+                                BuiltinMember::FileClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected file builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "net.TcpListener" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::TcpListenerAccept => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "accept(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::named("net.TcpStream"),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::TcpListenerLocalAddr => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![
+                                        Type::named("String"),
+                                        crate::builtin_modules::io_error_type(),
+                                    ],
+                                )),
+                                BuiltinMember::TcpListenerClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected tcp listener builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "net.TcpStream" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let bytes_ty =
+                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::TcpStreamReadAll => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "read_all(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::named("String"),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::TcpStreamReadLine => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "read_line(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Named(
+                                                "Option".to_string(),
+                                                vec![Type::named("String")],
+                                            ),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::TcpStreamReadBytes => {
+                                    let count_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`read_bytes` requires a `max_bytes` argument",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        count_arg,
+                                        &Type::named("int32"),
+                                        locals,
+                                        "read_bytes",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "read_bytes(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Named(
+                                                "Option".to_string(),
+                                                vec![bytes_ty.clone()],
+                                            ),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::TcpStreamReadExact => {
+                                    let count_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`read_exact` requires a `count` argument",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        count_arg,
+                                        &Type::named("int32"),
+                                        locals,
+                                        "read_exact",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "read_exact(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            bytes_ty.clone(),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::TcpStreamWriteAll => {
+                                    let text_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`write_all` requires a `text` argument",
+                                    )?;
+                                    let actual = self.type_of_expr_hint(
+                                        &text_arg.value,
+                                        locals,
+                                        Some(&Type::named("String")),
+                                    )?;
+                                    if actual != Type::named("String") {
+                                        return Err(Diagnostic::at(
+                                            text_arg.span,
+                                            format!(
+                                                "`write_all` expects `String`, found `{}`",
+                                                actual
+                                            ),
+                                        ));
+                                    }
+                                    self.consume_value_expr(&text_arg.value, locals)?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::TcpStreamWriteBytes => {
+                                    let bytes_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "`write_bytes` requires a `bytes` argument",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        bytes_arg,
+                                        &bytes_ty,
+                                        locals,
+                                        "write_bytes",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "write_bytes(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::TcpStreamFlush
+                                | BuiltinMember::TcpStreamLocalAddr
+                                | BuiltinMember::TcpStreamPeerAddr
+                                | BuiltinMember::TcpStreamShutdownRead
+                                | BuiltinMember::TcpStreamShutdownWrite
+                                | BuiltinMember::TcpStreamShutdownBoth => {
+                                    let value_ty = if matches!(
+                                        builtin_member,
+                                        BuiltinMember::TcpStreamFlush
+                                            | BuiltinMember::TcpStreamShutdownRead
+                                            | BuiltinMember::TcpStreamShutdownWrite
+                                            | BuiltinMember::TcpStreamShutdownBoth
+                                    ) {
+                                        Type::Unit
+                                    } else {
+                                        Type::named("String")
+                                    };
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![value_ty, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::TcpStreamClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected tcp stream builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "net.UdpSocket" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let bytes_ty =
+                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::UdpSocketSendText => {
+                                    let address_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        address_arg,
+                                        &Type::named("String"),
+                                        locals,
+                                        "send_text",
+                                    )?;
+                                    let text_arg = self.bound_argument(
+                                        &ordered_args,
+                                        1,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        text_arg,
+                                        &Type::named("String"),
+                                        locals,
+                                        "send_text",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        2,
+                                        locals,
+                                        "send_text(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::UdpSocketSendBytes => {
+                                    let address_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        address_arg,
+                                        &Type::named("String"),
+                                        locals,
+                                        "send_bytes",
+                                    )?;
+                                    let bytes_arg = self.bound_argument(
+                                        &ordered_args,
+                                        1,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        bytes_arg,
+                                        &bytes_ty,
+                                        locals,
+                                        "send_bytes",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        2,
+                                        locals,
+                                        "send_bytes(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::UdpSocketRecv => {
+                                    let count_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        count_arg,
+                                        &Type::named("int32"),
+                                        locals,
+                                        "recv",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "recv(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Named(
+                                                "Option".to_string(),
+                                                vec![bytes_ty.clone()],
+                                            ),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::UdpSocketRecvFrom => {
+                                    let count_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        count_arg,
+                                        &Type::named("int32"),
+                                        locals,
+                                        "recv_from",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "recv_from(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Named(
+                                                "Option".to_string(),
+                                                vec![Type::named("net.UdpDatagram")],
+                                            ),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::UdpSocketLocalAddr
+                                | BuiltinMember::UdpSocketPeerAddr => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![
+                                        Type::named("String"),
+                                        crate::builtin_modules::io_error_type(),
+                                    ],
+                                )),
+                                BuiltinMember::UdpSocketClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected udp socket builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "net.UdpDatagram" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            builtin_member.bind_args(args, span)?;
+                            let bytes_ty =
+                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                            return match builtin_member {
+                                BuiltinMember::UdpDatagramAddress => Ok(Type::named("String")),
+                                BuiltinMember::UdpDatagramBytes => Ok(bytes_ty),
+                                BuiltinMember::UdpDatagramText => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![
+                                        Type::named("String"),
+                                        crate::builtin_modules::io_error_type(),
+                                    ],
+                                )),
+                                _ => unreachable!("unexpected udp datagram builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "net.HttpListener" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::HttpListenerAccept => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "accept(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::named("net.HttpExchange"),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::HttpListenerLocalAddr => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![
+                                        Type::named("String"),
+                                        crate::builtin_modules::io_error_type(),
+                                    ],
+                                )),
+                                BuiltinMember::HttpListenerClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected http listener builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "net.HttpExchange" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let bytes_ty =
+                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                            let headers_ty = Type::Named(
+                                "Map".to_string(),
+                                vec![Type::named("String"), Type::named("String")],
+                            );
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::HttpExchangeMethod
+                                | BuiltinMember::HttpExchangePath => Ok(Type::named("String")),
+                                BuiltinMember::HttpExchangeHeaders => Ok(headers_ty),
+                                BuiltinMember::HttpExchangeBodyText => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![
+                                        Type::named("String"),
+                                        crate::builtin_modules::io_error_type(),
+                                    ],
+                                )),
+                                BuiltinMember::HttpExchangeBodyBytes => Ok(bytes_ty),
+                                BuiltinMember::HttpExchangeRespondText => {
+                                    let status_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        status_arg,
+                                        &Type::named("int32"),
+                                        locals,
+                                        "respond_text",
+                                    )?;
+                                    let text_arg = self.bound_argument(
+                                        &ordered_args,
+                                        1,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        text_arg,
+                                        &Type::named("String"),
+                                        locals,
+                                        "respond_text",
+                                    )?;
+                                    let headers_arg = self.bound_argument(
+                                        &ordered_args,
+                                        2,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        headers_arg,
+                                        &headers_ty,
+                                        locals,
+                                        "respond_text",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::HttpExchangeRespondBytes => {
+                                    let status_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        status_arg,
+                                        &Type::named("int32"),
+                                        locals,
+                                        "respond_bytes",
+                                    )?;
+                                    let bytes_arg = self.bound_argument(
+                                        &ordered_args,
+                                        1,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        bytes_arg,
+                                        &bytes_ty,
+                                        locals,
+                                        "respond_bytes",
+                                    )?;
+                                    let headers_arg = self.bound_argument(
+                                        &ordered_args,
+                                        2,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        headers_arg,
+                                        &headers_ty,
+                                        locals,
+                                        "respond_bytes",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                _ => unreachable!("unexpected http exchange builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "net.HttpResponse" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            builtin_member.bind_args(args, span)?;
+                            let bytes_ty =
+                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                            let headers_ty = Type::Named(
+                                "Map".to_string(),
+                                vec![Type::named("String"), Type::named("String")],
+                            );
+                            return match builtin_member {
+                                BuiltinMember::HttpResponseStatus => Ok(Type::named("int32")),
+                                BuiltinMember::HttpResponseReason => Ok(Type::named("String")),
+                                BuiltinMember::HttpResponseHeaders => Ok(headers_ty),
+                                BuiltinMember::HttpResponseText => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![
+                                        Type::named("String"),
+                                        crate::builtin_modules::io_error_type(),
+                                    ],
+                                )),
+                                BuiltinMember::HttpResponseBytes => Ok(bytes_ty),
+                                _ => unreachable!("unexpected http response builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "net.WebSocketListener" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::WebSocketListenerAccept => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "accept(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::named("net.WebSocket"),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::WebSocketListenerLocalAddr => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![
+                                        Type::named("String"),
+                                        crate::builtin_modules::io_error_type(),
+                                    ],
+                                )),
+                                _ => unreachable!("unexpected websocket listener builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "net.WebSocket" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let bytes_ty =
+                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::WebSocketSendText => {
+                                    let text_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        text_arg,
+                                        &Type::named("String"),
+                                        locals,
+                                        "send_text",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "send_text(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::WebSocketSendBytes => {
+                                    let bytes_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        bytes_arg,
+                                        &bytes_ty,
+                                        locals,
+                                        "send_bytes",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "send_bytes(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::WebSocketRecvText => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "recv_text(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Named(
+                                                "Option".to_string(),
+                                                vec![Type::named("String")],
+                                            ),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::WebSocketRecvBytes => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "recv_bytes(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Named("Option".to_string(), vec![bytes_ty]),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::WebSocketClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected websocket builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "net.UnixListener" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::UnixListenerAccept => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "accept(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::named("net.UnixStream"),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::UnixListenerClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected unix listener builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "net.UnixStream" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let bytes_ty =
+                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::UnixStreamReadLine => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "read_line(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Named(
+                                                "Option".to_string(),
+                                                vec![Type::named("String")],
+                                            ),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::UnixStreamReadExact => {
+                                    let count_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        count_arg,
+                                        &Type::named("int32"),
+                                        locals,
+                                        "read_exact",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "read_exact(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![bytes_ty, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::UnixStreamWriteAll => {
+                                    let text_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        text_arg,
+                                        &Type::named("String"),
+                                        locals,
+                                        "write_all",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "write_all(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::UnixStreamClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected unix stream builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "net.TlsListener" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::TlsListenerAccept => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "accept(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::named("net.TlsStream"),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::TlsListenerLocalAddr => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![
+                                        Type::named("String"),
+                                        crate::builtin_modules::io_error_type(),
+                                    ],
+                                )),
+                                BuiltinMember::TlsListenerClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected tls listener builtin member"),
+                            };
+                        }
+                    }
+
+                    if receiver_name == "net.TlsStream" && receiver_args.is_empty() {
+                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                            let bytes_ty =
+                                Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+                            let ordered_args = builtin_member.bind_args(args, span)?;
+                            return match builtin_member {
+                                BuiltinMember::TlsStreamReadLine => {
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        0,
+                                        locals,
+                                        "read_line(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![
+                                            Type::Named(
+                                                "Option".to_string(),
+                                                vec![Type::named("String")],
+                                            ),
+                                            crate::builtin_modules::io_error_type(),
+                                        ],
+                                    ))
+                                }
+                                BuiltinMember::TlsStreamReadExact => {
+                                    let count_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        count_arg,
+                                        &Type::named("int32"),
+                                        locals,
+                                        "read_exact",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "read_exact(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![bytes_ty, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::TlsStreamWriteAll => {
+                                    let text_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        "internal error",
+                                    )?;
+                                    self.check_builtin_argument_type(
+                                        text_arg,
+                                        &Type::named("String"),
+                                        locals,
+                                        "write_all",
+                                    )?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "write_all(timeout=...)",
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![Type::Unit, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
+                                BuiltinMember::TlsStreamClose => Ok(Type::Unit),
+                                _ => unreachable!("unexpected tls stream builtin member"),
+                            };
                         }
                     }
                 }
@@ -9206,7 +10276,7 @@ impl<'a> FunctionChecker<'a> {
                 format!("`with` requires a class resource, found `{}`", value_ty),
             ));
         };
-        if name == "TaskGroup" && args.is_empty() {
+        if is_builtin_io_resource_type(name, args) {
             return Ok(());
         }
         if !args.is_empty() {

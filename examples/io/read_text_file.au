@@ -1,0 +1,10 @@
+import fs
+
+def main() -> int32:
+    print(fs.exists("Cargo.toml"))
+    match fs.read_to_string("Cargo.toml"):
+        case Result.Ok(text):
+            print(text.contains("version"))
+            return 0
+        case Result.Err(_):
+            return 1

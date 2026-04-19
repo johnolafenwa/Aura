@@ -1,0 +1,115 @@
+import fs
+import io
+import net
+
+def tls_cert_pem() -> String:
+    mut pem = "-----BEGIN CERTIFICATE-----\n"
+    pem += "MIIBXjCCAQSgAwIBAgIUHOWpZBAhE8jU0OF6Xr60iZ9T9SgwCgYIKoZIzj0EAwIw\n"
+    pem += "ITEfMB0GA1UEAwwWcmNnZW4gc2VsZiBzaWduZWQgY2VydDAgFw03NTAxMDEwMDAw\n"
+    pem += "MDBaGA80MDk2MDEwMTAwMDAwMFowITEfMB0GA1UEAwwWcmNnZW4gc2VsZiBzaWdu\n"
+    pem += "ZWQgY2VydDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABP09dtxGNyYZYeH3M6EZ\n"
+    pem += "3Ai5cZSelI2HlPh4aDwXggJGrEK3TNP8vJJJr4k4QxRK6nYBJ5jdyfQudrn8MR8v\n"
+    pem += "OtujGDAWMBQGA1UdEQQNMAuCCWxvY2FsaG9zdDAKBggqhkjOPQQDAgNIADBFAiEA\n"
+    pem += "quf5Fl6mN+SIm04nTzMxcddv31HwKIqdaS5emFF/JQACIC5eeC542PThYulo9O3A\n"
+    pem += "q6hgcbtuioN5R2Gq3PpBZf3n\n"
+    pem += "-----END CERTIFICATE-----\n"
+    return pem
+
+def tls_key_pem() -> String:
+    mut pem = "-----BEGIN PRIVATE KEY-----\n"
+    pem += "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg+8hjtR4ZkxE/ihgN\n"
+    pem += "uGWCL+RPfTlu2/qKI50VJNL+Q1qhRANCAAT9PXbcRjcmGWHh9zOhGdwIuXGUnpSN\n"
+    pem += "h5T4eGg8F4ICRqxCt0zT/LySSa+JOEMUSup2ASeY3cn0Lna5/DEfLzrb\n"
+    pem += "-----END PRIVATE KEY-----\n"
+    return pem
+
+def serve_unix(listener: net.UnixListener) -> Result[None, io.Error]:
+    with server_listener = listener:
+        stream = try server_listener.accept(timeout=5s)
+        with server_stream = stream:
+            match try server_stream.read_line(timeout=5s):
+                case Option.Some(text):
+                    try server_stream.write_all("unix:" + text, timeout=5s)
+                    return Result.Ok(None)
+                case Option.None:
+                    return Result.Ok(None)
+
+def serve_tls(listener: net.TlsListener) -> Result[None, io.Error]:
+    with server_listener = listener:
+        stream = try server_listener.accept(timeout=5s)
+        with server_stream = stream:
+            _payload = try server_stream.read_exact(5, timeout=5s)
+            try server_stream.write_all("tls:ping!", timeout=5s)
+            return Result.Ok(None)
+
+def run() -> Result[None, io.Error]:
+    socket_path = "/tmp/aurora-unix-tls-roundtrip.sock"
+    cert_path = "/tmp/aurora-unix-tls-roundtrip-cert.pem"
+    key_path = "/tmp/aurora-unix-tls-roundtrip-key.pem"
+
+    match fs.remove_file(socket_path.clone()):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+    match fs.remove_file(cert_path.clone()):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+    match fs.remove_file(key_path.clone()):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+
+    try fs.write_string(cert_path.clone(), tls_cert_pem())
+    try fs.write_string(key_path.clone(), tls_key_pem())
+
+    with tasks() as group:
+        unix_listener = try net.unix_listen(socket_path.clone())
+        unix_task = group.start(serve_unix, unix_listener)
+        client = try net.unix_connect_timeout(socket_path.clone(), 5s)
+        with unix_client = client:
+            try unix_client.write_all("ping\n", timeout=5s)
+            match try unix_client.read_line(timeout=5s):
+                case Option.Some(text):
+                    print(text)
+                case Option.None:
+                    return Result.Ok(None)
+        try unix_task.result()
+
+        tls_listener = try net.tls_listen("127.0.0.1:0", cert_path.clone(), key_path.clone())
+        tls_addr = try tls_listener.local_addr()
+        tls_task = group.start(serve_tls, tls_listener)
+        stream = try net.tls_connect_timeout(tls_addr, "localhost", cert_path.clone(), 5s)
+        with tls_client = stream:
+            try tls_client.write_all("ping!", timeout=5s)
+            reply = try tls_client.read_exact(9, timeout=5s)
+            print(reply.len())
+        try tls_task.result()
+
+    match fs.remove_file(socket_path):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+    match fs.remove_file(cert_path):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+    match fs.remove_file(key_path):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

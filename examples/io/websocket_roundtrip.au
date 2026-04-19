@@ -1,0 +1,39 @@
+import io
+import net
+
+def serve_ws(listener: net.WebSocketListener) -> Result[None, io.Error]:
+    with server_listener = listener:
+        socket = try server_listener.accept(timeout=5s)
+        with server_socket = socket:
+            match try server_socket.recv_text(timeout=5s):
+                case Option.Some(text):
+                    try server_socket.send_text("ws:" + text, timeout=5s)
+                    return Result.Ok(None)
+                case Option.None:
+                    return Result.Ok(None)
+
+def run() -> Result[None, io.Error]:
+    with tasks() as group:
+        listener = try net.websocket_listen("127.0.0.1:0")
+        address = try listener.local_addr()
+        server = group.start(serve_ws, listener)
+
+        socket = try net.websocket_connect_timeout("ws://" + address + "/", 5s)
+        with client_socket = socket:
+            try client_socket.send_text("hi", timeout=5s)
+            match try client_socket.recv_text(timeout=5s):
+                case Option.Some(text):
+                    print(text)
+                case Option.None:
+                    return Result.Ok(None)
+
+        try server.result()
+        return Result.Ok(None)
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

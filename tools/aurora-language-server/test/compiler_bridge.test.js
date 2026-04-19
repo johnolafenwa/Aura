@@ -1034,6 +1034,140 @@ test("compiler bridge includes Set collection members and MapEntry fields", asyn
   }
 });
 
+test("compiler bridge includes builtin io/fs/net module and resource members", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-io-net-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const prelude = [
+      "import io",
+      "import fs",
+      "import net",
+      "",
+      "def inspect(file: fs.File, listener: net.TcpListener, stream: net.TcpStream, udp: net.UdpSocket, packet: net.UdpDatagram, http_listener: net.HttpListener, exchange: net.HttpExchange, response: net.HttpResponse, ws_listener: net.WebSocketListener, socket: net.WebSocket, unix_listener: net.UnixListener, unix_stream: net.UnixStream, tls_listener: net.TlsListener, tls_stream: net.TlsStream) -> int32:"
+    ];
+    const sourceForLine = (line) => [...prelude, line, "    return 0"].join("\n");
+    const completionsForLine = async (line) => {
+      const source = sourceForLine(line);
+      const lines = source.split("\n");
+      const lineIndex = lines.findIndex((candidate) => candidate === line);
+      const character = lines[lineIndex].indexOf(".") + 1;
+      const items = await completeWithCompiler(mainUri, source, lineIndex, character, ".");
+      assert.ok(items);
+      return new Set(items.map((item) => item.name));
+    };
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, sourceForLine("    return 0"));
+    assert.ok(analysis);
+    assert.ok(Array.isArray(analysis.diagnostics));
+    assert.equal(analysis.diagnostics.length, 0);
+
+    const ioNames = await completionsForLine("    io.");
+    assert.ok(ioNames.has("write"));
+    assert.ok(ioNames.has("flush"));
+    assert.ok(ioNames.has("read_line"));
+    assert.ok(ioNames.has("Error"));
+
+    const fsNames = await completionsForLine("    fs.");
+    assert.ok(fsNames.has("open"));
+    assert.ok(fsNames.has("create"));
+    assert.ok(fsNames.has("append"));
+    assert.ok(fsNames.has("read_to_string"));
+    assert.ok(fsNames.has("read_bytes"));
+    assert.ok(fsNames.has("write_string"));
+    assert.ok(fsNames.has("write_bytes"));
+    assert.ok(fsNames.has("append_bytes"));
+    assert.ok(fsNames.has("File"));
+
+    const fileNames = await completionsForLine("    file.");
+    assert.ok(fileNames.has("read_all"));
+    assert.ok(fileNames.has("read_bytes"));
+    assert.ok(fileNames.has("write_all"));
+    assert.ok(fileNames.has("write_bytes"));
+    assert.ok(fileNames.has("flush"));
+    assert.ok(fileNames.has("close"));
+
+    const netNames = await completionsForLine("    net.");
+    assert.ok(netNames.has("connect_timeout"));
+    assert.ok(netNames.has("udp_bind"));
+    assert.ok(netNames.has("http_listen"));
+    assert.ok(netNames.has("http_request_text"));
+    assert.ok(netNames.has("http_request_text_timeout"));
+    assert.ok(netNames.has("http_request_bytes"));
+    assert.ok(netNames.has("http_request_bytes_timeout"));
+    assert.ok(netNames.has("websocket_listen"));
+    assert.ok(netNames.has("websocket_connect"));
+    assert.ok(netNames.has("websocket_connect_timeout"));
+    assert.ok(netNames.has("unix_listen"));
+    assert.ok(netNames.has("unix_connect"));
+    assert.ok(netNames.has("unix_connect_timeout"));
+    assert.ok(netNames.has("tls_listen"));
+    assert.ok(netNames.has("tls_connect"));
+    assert.ok(netNames.has("tls_connect_timeout"));
+    assert.ok(netNames.has("UdpSocket"));
+    assert.ok(netNames.has("HttpResponse"));
+    assert.ok(netNames.has("TlsStream"));
+
+    const streamNames = await completionsForLine("    stream.");
+    assert.ok(streamNames.has("read_all"));
+    assert.ok(streamNames.has("read_line"));
+    assert.ok(streamNames.has("read_bytes"));
+    assert.ok(streamNames.has("read_exact"));
+    assert.ok(streamNames.has("write_all"));
+    assert.ok(streamNames.has("write_bytes"));
+    assert.ok(streamNames.has("flush"));
+    assert.ok(streamNames.has("local_addr"));
+    assert.ok(streamNames.has("peer_addr"));
+    assert.ok(streamNames.has("shutdown_read"));
+    assert.ok(streamNames.has("shutdown_write"));
+    assert.ok(streamNames.has("shutdown_both"));
+    assert.ok(streamNames.has("close"));
+
+    const udpNames = await completionsForLine("    udp.");
+    assert.ok(udpNames.has("send_text"));
+    assert.ok(udpNames.has("send_bytes"));
+    assert.ok(udpNames.has("recv"));
+    assert.ok(udpNames.has("recv_from"));
+    assert.ok(udpNames.has("local_addr"));
+    assert.ok(udpNames.has("peer_addr"));
+
+    const exchangeNames = await completionsForLine("    exchange.");
+    assert.ok(exchangeNames.has("method"));
+    assert.ok(exchangeNames.has("path"));
+    assert.ok(exchangeNames.has("headers"));
+    assert.ok(exchangeNames.has("body_text"));
+    assert.ok(exchangeNames.has("body_bytes"));
+    assert.ok(exchangeNames.has("respond_text"));
+    assert.ok(exchangeNames.has("respond_bytes"));
+
+    const responseNames = await completionsForLine("    response.");
+    assert.ok(responseNames.has("status"));
+    assert.ok(responseNames.has("reason"));
+    assert.ok(responseNames.has("headers"));
+    assert.ok(responseNames.has("text"));
+    assert.ok(responseNames.has("bytes"));
+
+    const socketNames = await completionsForLine("    socket.");
+    assert.ok(socketNames.has("send_text"));
+    assert.ok(socketNames.has("send_bytes"));
+    assert.ok(socketNames.has("recv_text"));
+    assert.ok(socketNames.has("recv_bytes"));
+
+    const unixStreamNames = await completionsForLine("    unix_stream.");
+    assert.ok(unixStreamNames.has("read_line"));
+    assert.ok(unixStreamNames.has("read_exact"));
+    assert.ok(unixStreamNames.has("write_all"));
+
+    const tlsStreamNames = await completionsForLine("    tls_stream.");
+    assert.ok(tlsStreamNames.has("read_line"));
+    assert.ok(tlsStreamNames.has("read_exact"));
+    assert.ok(tlsStreamNames.has("write_all"));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge analyzes indexed member chains and f-string indexed lookups", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-index-chain-"));
   try {

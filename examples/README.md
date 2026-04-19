@@ -350,6 +350,48 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `closed demo`
     - `done`
 
+### `io/`
+
+- `read_text_file.au`
+  - builtin `fs.exists(...)` and `fs.read_to_string(...)` through the maintained file I/O surface
+  - prints:
+    - `true`
+    - `true`
+- `bytes_file_io.au`
+  - binary file helpers plus `fs.File.read_bytes()` / `write_bytes(...)`
+  - prints:
+    - `4`
+    - `65`
+    - `67`
+    - `5`
+    - `68`
+- `tcp_echo.au`
+  - builtin `net.listen(...)`, `net.connect(...)`, `TcpListener.accept()`, `TcpStream.read_line()`, `TcpStream.write_all(...)`, and `with` cleanup on network resources
+  - prints `echo:ping`
+- `tcp_bytes.au`
+  - timeout-aware TCP byte reads and writes through `connect_timeout(...)`, `read_exact(...)`, `read_bytes(...)`, and `write_bytes(...)`
+  - prints:
+    - `4`
+    - `116`
+- `udp_echo.au`
+  - UDP binding, datagram receive/send, and `net.UdpDatagram`
+  - prints:
+    - `udp:ping`
+    - `ping`
+- `http_roundtrip.au`
+  - blocking HTTP listener/request helpers plus `HttpExchange` and `HttpResponse`
+  - prints:
+    - `200`
+    - `POST:/hello:body:ok`
+- `websocket_roundtrip.au`
+  - blocking WebSocket listener/connect helpers with text frames
+  - prints `ws:hi`
+- `unix_tls_roundtrip.au`
+  - Unix-only Unix-socket and TLS roundtrip example with an embedded self-signed certificate
+  - prints:
+    - `unix:ping`
+    - `9`
+
 ### `concurrency/`
 
 - `queues_spawn.au`
@@ -536,6 +578,14 @@ cargo run -p aura -- run examples/traits/marker_trait.au
 cargo run -p aura -- run examples/traits/specialized_generic_impl.au
 cargo run -p aura -- run examples/error_handling/try_result.au
 cargo run -p aura -- run examples/resources/with_resource.au
+cargo run -p aura -- run examples/io/read_text_file.au
+cargo run -p aura -- run examples/io/bytes_file_io.au
+cargo run -p aura -- run examples/io/tcp_echo.au
+cargo run -p aura -- run examples/io/tcp_bytes.au
+cargo run -p aura -- run examples/io/udp_echo.au
+cargo run -p aura -- run examples/io/http_roundtrip.au
+cargo run -p aura -- run examples/io/websocket_roundtrip.au
+cargo run -p aura -- run examples/io/unix_tls_roundtrip.au
 cargo run -p aura -- run examples/concurrency/queues_spawn.au
 cargo run -p aura -- run examples/concurrency/send_result.au
 cargo run -p aura -- run examples/concurrency/spawn_detached.au
