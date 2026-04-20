@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
+use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
 
@@ -89,6 +91,7 @@ pub struct MethodInfo {
 pub struct TraitInfo {
     pub module_name: String,
     pub decl: TraitDecl,
+    pub supertraits: Vec<TraitBound>,
     pub methods: BTreeMap<String, TraitMethodInfo>,
 }
 
@@ -339,50 +342,70 @@ fn type_is_copy_in_context(
     classes: &BTreeMap<String, ClassInfo>,
     enums: &BTreeMap<String, EnumInfo>,
 ) -> bool {
+    type_is_copy_in_context_inner(ty, classes, enums, &mut BTreeSet::new())
+}
+
+fn type_is_copy_in_context_inner(
+    ty: &Type,
+    classes: &BTreeMap<String, ClassInfo>,
+    enums: &BTreeMap<String, EnumInfo>,
+    visiting: &mut BTreeSet<String>,
+) -> bool {
     match ty {
         Type::Unit => true,
         Type::Module(_) => false,
         Type::TypeParam(_) => false,
         Type::Named(name, args) if is_builtin_copy_named_type(name, args) => true,
         Type::Named(name, args) if name == "Option" && args.len() == 1 => {
-            type_is_copy_in_context(&args[0], classes, enums)
+            type_is_copy_in_context_inner(&args[0], classes, enums, visiting)
         }
         Type::Named(name, args) if name == "Result" && args.len() == 2 => args
             .iter()
-            .all(|arg| type_is_copy_in_context(arg, classes, enums)),
+            .all(|arg| type_is_copy_in_context_inner(arg, classes, enums, visiting)),
         Type::Named(name, args) if name == "SendError" && args.len() == 1 => {
-            type_is_copy_in_context(&args[0], classes, enums)
+            type_is_copy_in_context_inner(&args[0], classes, enums, visiting)
         }
         Type::Named(name, args) if name == "QueueReceive" && args.len() == 1 => {
-            type_is_copy_in_context(&args[0], classes, enums)
+            type_is_copy_in_context_inner(&args[0], classes, enums, visiting)
         }
         Type::Named(name, args) if name == "TaskResult" && args.len() == 1 => {
-            type_is_copy_in_context(&args[0], classes, enums)
+            type_is_copy_in_context_inner(&args[0], classes, enums, visiting)
         }
         Type::Named(name, args) if name == "WaitAny" && args.len() == 1 => {
-            type_is_copy_in_context(&Type::named("int32"), classes, enums)
-                && type_is_copy_in_context(&args[0], classes, enums)
+            type_is_copy_in_context_inner(&Type::named("int32"), classes, enums, visiting)
+                && type_is_copy_in_context_inner(&args[0], classes, enums, visiting)
         }
-        Type::Named(name, args) if name == "WaitAll" && args.len() == 1 => type_is_copy_in_context(
-            &Type::Named("Vec".to_string(), vec![args[0].clone()]),
-            classes,
-            enums,
-        ),
+        Type::Named(name, args) if name == "WaitAll" && args.len() == 1 => {
+            type_is_copy_in_context_inner(
+                &Type::Named("Vec".to_string(), vec![args[0].clone()]),
+                classes,
+                enums,
+                visiting,
+            )
+        }
         Type::Named(name, args) => {
+            let key = ty.to_string();
+            if !visiting.insert(key.clone()) {
+                return false;
+            }
             if let Some(class_info) = classes.get(name) {
-                return class_info.decl.copy
+                let result = class_info.decl.copy
                     && args
                         .iter()
-                        .all(|arg| type_is_copy_in_context(arg, classes, enums));
+                        .all(|arg| type_is_copy_in_context_inner(arg, classes, enums, visiting));
+                visiting.remove(&key);
+                return result;
             }
             if let Some(enum_info) = enums.get(name) {
-                return enum_info.variants.values().all(|variant| {
-                    variant
-                        .payloads
-                        .iter()
-                        .all(|payload| type_is_copy_in_context(&payload.ty, classes, enums))
+                let result = enum_info.variants.values().all(|variant| {
+                    variant.payloads.iter().all(|payload| {
+                        type_is_copy_in_context_inner(&payload.ty, classes, enums, visiting)
+                    })
                 });
+                visiting.remove(&key);
+                return result;
             }
+            visiting.remove(&key);
             false
         }
     }
@@ -555,6 +578,14 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         validate_type_params(&trait_decl.type_params, trait_decl.span, "trait")?;
         let trait_type_param_scope = type_param_scope(&trait_decl.type_params);
         let self_placeholder = Type::TypeParam("Self".to_string());
+        let supertraits = lower_supertraits(
+            &trait_decl.supertraits,
+            &traits,
+            &type_names,
+            &type_arities,
+            &trait_type_param_scope,
+            Some(&self_placeholder),
+        )?;
         let mut methods = BTreeMap::new();
         for method in &trait_decl.methods {
             validate_type_params(&method.type_params, method.span, "trait method")?;
@@ -625,6 +656,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             TraitInfo {
                 module_name: module_name.clone(),
                 decl: trait_decl.clone(),
+                supertraits,
                 methods,
             },
         );
@@ -1326,13 +1358,22 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
     }
 
     for trait_impl in &program.trait_impls {
+        checker
+            .with_module_name(&trait_impl.module_name)
+            .with_type_params(
+                type_param_scope(&trait_impl.type_params),
+                trait_impl.type_param_bounds.clone(),
+            )
+            .check_trait_impl_supertraits(trait_impl)?;
         for method in trait_impl.methods.values() {
-            checker.check_trait_impl_method(
-                &trait_impl.for_type,
-                &trait_impl.type_params,
-                &trait_impl.type_param_bounds,
-                &method.decl,
-            )?;
+            checker
+                .with_module_name(&trait_impl.module_name)
+                .check_trait_impl_method(
+                    &trait_impl.for_type,
+                    &trait_impl.type_params,
+                    &trait_impl.type_param_bounds,
+                    &method.decl,
+                )?;
         }
     }
 
@@ -1745,6 +1786,48 @@ fn lower_trait_bounds(
         type_param_scope,
         None,
     )
+}
+
+fn lower_supertraits(
+    supertraits: &[TypeRef],
+    traits: &BTreeMap<String, TraitInfo>,
+    type_names: &BTreeMap<String, crate::diag::Span>,
+    type_arities: &BTreeMap<String, usize>,
+    type_param_scope: &BTreeMap<String, ()>,
+    self_type: Option<&Type>,
+) -> Result<Vec<TraitBound>> {
+    let mut lowered = Vec::new();
+    for supertrait in supertraits {
+        let Some(trait_info) = traits.get(&supertrait.name) else {
+            return Err(Diagnostic::at(
+                supertrait.span,
+                format!("unknown trait `{}`", supertrait.name),
+            ));
+        };
+        if supertrait.args.len() != trait_info.decl.type_params.len() {
+            return Err(Diagnostic::at(
+                supertrait.span,
+                format!(
+                    "trait `{}` expects {} type arguments, found {}",
+                    supertrait.name,
+                    trait_info.decl.type_params.len(),
+                    supertrait.args.len()
+                ),
+            ));
+        }
+        let trait_args = supertrait
+            .args
+            .iter()
+            .map(|arg| {
+                lower_type_with_self(arg, type_names, type_arities, type_param_scope, self_type)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        lowered.push(TraitBound {
+            trait_name: supertrait.name.clone(),
+            trait_args,
+        });
+    }
+    Ok(lowered)
 }
 
 fn lower_trait_bounds_with_self(
@@ -2198,6 +2281,7 @@ struct LocalBinding {
     ty: Type,
     assignable: bool,
     mutable_place: bool,
+    managed_resource: bool,
     passing: ReceiverKind,
     borrow_origin: Option<String>,
     borrow_label: Option<String>,
@@ -2236,6 +2320,7 @@ struct FunctionChecker<'a> {
     current_return_borrow_source: Option<String>,
     type_params: BTreeMap<String, ()>,
     type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
+    active_match_borrow_mut_places: Rc<RefCell<Vec<String>>>,
 }
 
 #[derive(Clone)]
@@ -2321,6 +2406,7 @@ impl<'a> FunctionChecker<'a> {
                     ty: Type::Module(namespace.path.clone()),
                     assignable: false,
                     mutable_place: false,
+                    managed_resource: false,
                     passing: ReceiverKind::Value,
                     borrow_origin: None,
                     borrow_label: None,
@@ -2360,6 +2446,7 @@ impl<'a> FunctionChecker<'a> {
             current_return_borrow_source: None,
             type_params: BTreeMap::new(),
             type_param_bounds: BTreeMap::new(),
+            active_match_borrow_mut_places: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -2385,6 +2472,7 @@ impl<'a> FunctionChecker<'a> {
             current_return_borrow_source: return_borrow_source,
             type_params: self.type_params.clone(),
             type_param_bounds: self.type_param_bounds.clone(),
+            active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
         }
     }
 
@@ -2409,6 +2497,7 @@ impl<'a> FunctionChecker<'a> {
             current_return_borrow_source: self.current_return_borrow_source.clone(),
             type_params,
             type_param_bounds,
+            active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
         }
     }
 
@@ -2429,6 +2518,7 @@ impl<'a> FunctionChecker<'a> {
             current_return_borrow_source: self.current_return_borrow_source.clone(),
             type_params: self.type_params.clone(),
             type_param_bounds: self.type_param_bounds.clone(),
+            active_match_borrow_mut_places: self.active_match_borrow_mut_places.clone(),
         }
     }
 
@@ -2545,6 +2635,12 @@ impl<'a> FunctionChecker<'a> {
                 format!("cannot move borrowed value `{}`", name),
             ));
         }
+        if binding.managed_resource {
+            return Err(Diagnostic::at(
+                span,
+                format!("cannot move managed `with` resource `{}`", name),
+            ));
+        }
         if binding.moved {
             return Err(Diagnostic::at(
                 span,
@@ -2603,6 +2699,15 @@ impl<'a> FunctionChecker<'a> {
                     }
                     if let Some((binding_name, path)) = self.member_access_path(expr) {
                         if let Some(binding) = locals.get_mut(&binding_name) {
+                            if binding.managed_resource {
+                                return Err(Diagnostic::at(
+                                    expr.span,
+                                    format!(
+                                        "cannot move non-copy field `{}` out of managed `with` resource `{}`",
+                                        field, binding_name
+                                    ),
+                                ));
+                            }
                             binding.moved_fields.insert(path);
                         }
                     }
@@ -2798,6 +2903,7 @@ impl<'a> FunctionChecker<'a> {
                     ty,
                     assignable: false,
                     mutable_place: param.passing == ReceiverKind::BorrowMut,
+                    managed_resource: false,
                     passing: param.passing,
                     borrow_origin: (param.passing != ReceiverKind::Value)
                         .then(|| param.name.clone()),
@@ -2888,6 +2994,7 @@ impl<'a> FunctionChecker<'a> {
                     ),
                     assignable: false,
                     mutable_place: receiver_kind == ReceiverKind::BorrowMut,
+                    managed_resource: false,
                     passing: receiver_kind,
                     borrow_origin: (receiver_kind != ReceiverKind::Value)
                         .then(|| "self".to_string()),
@@ -2912,6 +3019,7 @@ impl<'a> FunctionChecker<'a> {
                     ty,
                     assignable: false,
                     mutable_place: param.passing == ReceiverKind::BorrowMut,
+                    managed_resource: false,
                     passing: param.passing,
                     borrow_origin: (param.passing != ReceiverKind::Value)
                         .then(|| param.name.clone()),
@@ -2931,6 +3039,52 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
 
+        Ok(())
+    }
+
+    fn check_trait_impl_supertraits(&self, trait_impl: &TraitImplInfo) -> Result<()> {
+        let Some(trait_info) = self.traits.get(&trait_impl.trait_name) else {
+            return Ok(());
+        };
+        let substitutions = self_type_substitutions(
+            &trait_info.decl,
+            &trait_impl.trait_args,
+            trait_impl.for_type.clone(),
+        );
+        for supertrait in trait_info
+            .supertraits
+            .iter()
+            .map(|supertrait| substitute_trait_bound(supertrait, &substitutions))
+        {
+            let implemented_elsewhere = self
+                .trait_impls_in_scope()
+                .filter(|candidate| {
+                    !(candidate.trait_name == trait_impl.trait_name
+                        && candidate.trait_args == trait_impl.trait_args
+                        && candidate.for_type == trait_impl.for_type
+                        && candidate.module_name == trait_impl.module_name)
+                })
+                .any(|candidate| {
+                    let Some(substitutions) =
+                        self.trait_impl_substitutions(candidate, &trait_impl.for_type)
+                    else {
+                        return false;
+                    };
+                    let implemented = self.resolved_trait_bound_for_impl(candidate, &substitutions);
+                    self.trait_bound_closure(&implemented, &trait_impl.for_type)
+                        .into_iter()
+                        .any(|candidate| candidate == supertrait)
+                });
+            if !implemented_elsewhere {
+                return Err(Diagnostic::at(
+                    trait_impl.decl.span,
+                    format!(
+                        "impl of `{}` for `{}` requires supertrait `{}`",
+                        trait_impl.trait_name, trait_impl.for_type, supertrait
+                    ),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -2985,6 +3139,7 @@ impl<'a> FunctionChecker<'a> {
                     ty: for_type.clone(),
                     assignable: false,
                     mutable_place: receiver_kind == ReceiverKind::BorrowMut,
+                    managed_resource: false,
                     passing: receiver_kind,
                     borrow_origin: (receiver_kind != ReceiverKind::Value)
                         .then(|| "self".to_string()),
@@ -3009,6 +3164,7 @@ impl<'a> FunctionChecker<'a> {
                     ty,
                     assignable: false,
                     mutable_place: param.passing == ReceiverKind::BorrowMut,
+                    managed_resource: false,
                     passing: param.passing,
                     borrow_origin: (param.passing != ReceiverKind::Value)
                         .then(|| param.name.clone()),
@@ -3316,6 +3472,7 @@ impl<'a> FunctionChecker<'a> {
                             ty: binding_ty,
                             assignable: false,
                             mutable_place: binding_mutable_place,
+                            managed_resource: false,
                             passing: binding_passing,
                             borrow_origin: None,
                             borrow_label: None,
@@ -3415,6 +3572,7 @@ impl<'a> FunctionChecker<'a> {
                 ty: value_ty,
                 assignable: true,
                 mutable_place: true,
+                managed_resource: true,
                 passing: ReceiverKind::Value,
                 borrow_origin: None,
                 borrow_label: None,
@@ -3712,6 +3870,7 @@ impl<'a> FunctionChecker<'a> {
                         ty: final_ty,
                         assignable: assign.mutable,
                         mutable_place: assign.mutable,
+                        managed_resource: false,
                         passing: ReceiverKind::Value,
                         borrow_origin: None,
                         borrow_label: None,
@@ -3734,6 +3893,7 @@ impl<'a> FunctionChecker<'a> {
                     ty: final_ty,
                     assignable: assign.mutable,
                     mutable_place: borrowed.passing == ReceiverKind::BorrowMut,
+                    managed_resource: false,
                     passing: borrowed.passing,
                     borrow_origin: Some(borrowed.origin),
                     borrow_label: borrowed.borrow_label,
@@ -3752,6 +3912,7 @@ impl<'a> FunctionChecker<'a> {
                 ty: final_ty,
                 assignable: assign.mutable,
                 mutable_place: assign.mutable,
+                managed_resource: false,
                 passing: ReceiverKind::Value,
                 borrow_origin: None,
                 borrow_label: None,
@@ -4199,8 +4360,13 @@ impl<'a> FunctionChecker<'a> {
                     let right_ty = self.type_of_expr(right, locals)?;
                     let borrow_locals = locals_before.clone();
                     let mut left_borrowed_places = Vec::new();
-                    self.collect_expr_borrowed_places(left, &borrow_locals, &mut left_borrowed_places)?;
-                    let left_moved_places = self.newly_moved_places(&locals_before, &locals_after_left);
+                    self.collect_expr_borrowed_places(
+                        left,
+                        &borrow_locals,
+                        &mut left_borrowed_places,
+                    )?;
+                    let left_moved_places =
+                        self.newly_moved_places(&locals_before, &locals_after_left);
                     let mut right_borrowed_places = Vec::new();
                     self.collect_expr_borrowed_places(
                         right,
@@ -4245,7 +4411,11 @@ impl<'a> FunctionChecker<'a> {
                 let mut left_borrowed_places = Vec::new();
                 self.collect_expr_borrowed_places(left, &borrow_locals, &mut left_borrowed_places)?;
                 let mut right_borrowed_places = Vec::new();
-                self.collect_expr_borrowed_places(right, &borrow_locals, &mut right_borrowed_places)?;
+                self.collect_expr_borrowed_places(
+                    right,
+                    &borrow_locals,
+                    &mut right_borrowed_places,
+                )?;
                 let left_moved_places = self.newly_moved_places(&locals_before, &locals_after_left);
                 let right_moved_places = self.newly_moved_places(&locals_after_left, locals);
                 self.reject_expr_borrow_move_overlap(
@@ -4355,6 +4525,12 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 if let ExprKind::Name(enum_name) = &object.kind {
+                    if expected.is_none() && enum_name == "Option" && field == "None" {
+                        return Err(Diagnostic::at(
+                            expr.span,
+                            "cannot infer type parameter `T` for enum variant `Option.None`",
+                        ));
+                    }
                     if let Some(expected_ty) = expected {
                         if let Some(payload_tys) =
                             self.builtin_enum_variant_payload(expected_ty, enum_name, field)
@@ -4615,44 +4791,47 @@ impl<'a> FunctionChecker<'a> {
             )));
         };
         let mut matches = Vec::new();
+        let self_ty = Type::TypeParam(type_param_name.to_string());
         for bound in self
             .type_param_bounds
             .get(type_param_name)
             .into_iter()
             .flatten()
-            .filter(|bound| bound.trait_name == trait_name)
         {
-            match rhs {
-                Some(rhs_ty) if !bound.trait_args.is_empty() && &bound.trait_args[0] == rhs_ty => {}
-                None if bound.trait_args.len() == 1 => {}
-                _ => continue,
-            }
-            let trait_substitutions = self_type_substitutions(
-                &trait_info.decl,
-                &bound.trait_args,
-                Type::TypeParam(type_param_name.to_string()),
-            );
-            matches.push(ResolvedTraitMethodInfo {
-                decl: method.decl.clone(),
-                signature: FunctionSignature {
-                    params: method
-                        .signature
-                        .params
-                        .iter()
-                        .map(|param| substitute_type(param, &trait_substitutions))
-                        .collect(),
-                    return_type: substitute_type(
-                        &method.signature.return_type,
+            for bound in self.trait_bound_closure(bound, &self_ty) {
+                if bound.trait_name != trait_name {
+                    continue;
+                }
+                match rhs {
+                    Some(rhs_ty)
+                        if !bound.trait_args.is_empty() && &bound.trait_args[0] == rhs_ty => {}
+                    None if bound.trait_args.len() == 1 => {}
+                    _ => continue,
+                }
+                let trait_substitutions =
+                    self_type_substitutions(&trait_info.decl, &bound.trait_args, self_ty.clone());
+                matches.push(ResolvedTraitMethodInfo {
+                    decl: method.decl.clone(),
+                    signature: FunctionSignature {
+                        params: method
+                            .signature
+                            .params
+                            .iter()
+                            .map(|param| substitute_type(param, &trait_substitutions))
+                            .collect(),
+                        return_type: substitute_type(
+                            &method.signature.return_type,
+                            &trait_substitutions,
+                        ),
+                        return_passing: method.signature.return_passing,
+                        return_borrow_source: method.signature.return_borrow_source.clone(),
+                    },
+                    type_param_bounds: substitute_trait_bounds(
+                        &method.type_param_bounds,
                         &trait_substitutions,
                     ),
-                    return_passing: method.signature.return_passing,
-                    return_borrow_source: method.signature.return_borrow_source.clone(),
-                },
-                type_param_bounds: substitute_trait_bounds(
-                    &method.type_param_bounds,
-                    &trait_substitutions,
-                ),
-            });
+                });
+            }
         }
         match matches.len() {
             0 => Ok(None),
@@ -5564,6 +5743,35 @@ impl<'a> FunctionChecker<'a> {
                                 span,
                                 locals,
                             );
+                        }
+                    }
+                    if object_type_args.is_none() && expected.is_none() && enum_name == "Option" {
+                        match field.as_str() {
+                            "Some" => {
+                                if args.len() != 1 {
+                                    return Err(Diagnostic::at(
+                                        span,
+                                        format!(
+                                            "variant `{}` of enum `{}` expects 1 payload argument, found {}",
+                                            field,
+                                            enum_name,
+                                            args.len()
+                                        ),
+                                    ));
+                                }
+                                let actual = self.type_of_expr(&args[0].value, locals)?;
+                                if !self.is_copy_type(&actual) {
+                                    self.consume_value_expr(&args[0].value, locals)?;
+                                }
+                                return Ok(Type::Named("Option".to_string(), vec![actual]));
+                            }
+                            "None" => {
+                                return Err(Diagnostic::at(
+                                    span,
+                                    "cannot infer type parameter `T` for enum variant `Option.None`",
+                                ));
+                            }
+                            _ => {}
                         }
                     }
                     if let Some(expected_ty) = expected {
@@ -8380,28 +8588,263 @@ impl<'a> FunctionChecker<'a> {
         loop_depth: usize,
         allow_return: bool,
     ) -> Result<BlockFlow> {
-        let scrutinee_ty = self.type_of_expr(&match_stmt.scrutinee, locals)?;
-        if match_stmt.borrow_mode.is_none() && !self.is_copy_type(&scrutinee_ty) {
-            self.consume_value_expr(&match_stmt.scrutinee, locals)?;
-        }
+        let active_match_borrow = if match_stmt.borrow_mode == Some(ReceiverKind::BorrowMut) {
+            self.begin_match_borrow_mut(&match_stmt.scrutinee, match_stmt.span, locals)?
+        } else {
+            None
+        };
+        let result = (|| {
+            let scrutinee_ty = self.type_of_expr(&match_stmt.scrutinee, locals)?;
+            if match_stmt.borrow_mode.is_none() && !self.is_copy_type(&scrutinee_ty) {
+                self.consume_value_expr(&match_stmt.scrutinee, locals)?;
+            }
 
-        if match_stmt.arms.is_empty() {
-            return Err(Diagnostic::at(
+            if match_stmt.arms.is_empty() {
+                return Err(Diagnostic::at(
+                    match_stmt.span,
+                    "`match` requires at least one `case` arm",
+                ));
+            }
+
+            if let Some(variants) = self.enum_variants_for_type(&scrutinee_ty) {
+                let Type::Named(enum_name, _type_args) = &scrutinee_ty else {
+                    unreachable!("enum scrutinee types should be named");
+                };
+                let scrutinee_enum_name = self.canonical_enum_name(enum_name);
+                let mut covered = BTreeMap::<String, crate::diag::Span>::new();
+                let mut patterns_by_variant =
+                    BTreeMap::<String, Vec<crate::ast::VariantPattern>>::new();
+                let mut wildcard_span = None;
+                let mut all_return = true;
+                let mut arm_states = Vec::new();
+
+                for (index, arm) in match_stmt.arms.iter().enumerate() {
+                    let mut arm_locals = locals.clone();
+                    match &arm.pattern {
+                        Pattern::Wildcard(span) => {
+                            if wildcard_span.is_some() {
+                                return Err(Diagnostic::at(*span, "duplicate wildcard match arm"));
+                            }
+                            if index + 1 != match_stmt.arms.len() {
+                                return Err(Diagnostic::at(
+                                    *span,
+                                    "wildcard match arm must be the final `case`",
+                                ));
+                            }
+                            wildcard_span = Some(*span);
+                        }
+                        Pattern::Literal(pattern) => {
+                            return Err(Diagnostic::at(
+                                pattern.span,
+                                format!(
+                                "match over `{}` expects enum variant patterns, not literal `{}`",
+                                enum_name,
+                                self.render_literal_pattern(pattern)
+                            ),
+                            ));
+                        }
+                        Pattern::Binding(binding) => {
+                            return Err(Diagnostic::at(
+                            binding.span,
+                            "top-level binding patterns are not yet supported; use `_` or an explicit enum variant pattern",
+                        ));
+                        }
+                        Pattern::Variant(pattern) => {
+                            let pattern_enum_name =
+                                if let Some(pattern_enum_name) = &pattern.enum_name {
+                                    if pattern_enum_name == enum_name {
+                                        pattern_enum_name.clone()
+                                    } else if let Some(pattern_enum_info) =
+                                        self.resolve_enum_info(pattern_enum_name)
+                                    {
+                                        pattern_enum_info.decl.name.clone()
+                                    } else {
+                                        return Err(Diagnostic::at(
+                                            pattern.span,
+                                            format!(
+                                                "unknown enum `{}` in match pattern",
+                                                pattern_enum_name
+                                            ),
+                                        ));
+                                    }
+                                } else {
+                                    scrutinee_enum_name.clone()
+                                };
+                            if pattern_enum_name != scrutinee_enum_name {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "match arm expects enum `{}`, found pattern for `{}`",
+                                        scrutinee_enum_name, pattern_enum_name
+                                    ),
+                                ));
+                            }
+
+                            let Some(variant_payload) = variants
+                                .iter()
+                                .find(|(name, _)| name == &pattern.variant_name)
+                                .map(|(_, payload)| payload.clone())
+                            else {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "enum `{}` has no variant `{}`",
+                                        scrutinee_enum_name, pattern.variant_name
+                                    ),
+                                ));
+                            };
+
+                            let covers_entire_variant =
+                                self.variant_pattern_covers_payloads(pattern, &variant_payload);
+                            if covers_entire_variant {
+                                if let Some(previous) =
+                                    covered.insert(pattern.variant_name.clone(), pattern.span)
+                                {
+                                    return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "duplicate match arm for `{}.{}` (previously matched at {})",
+                                        scrutinee_enum_name, pattern.variant_name, previous
+                                    ),
+                                ));
+                                }
+                            }
+                            patterns_by_variant
+                                .entry(pattern.variant_name.clone())
+                                .or_default()
+                                .push(pattern.clone());
+
+                            if pattern.subpatterns.is_empty() && !variant_payload.is_empty() {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "variant `{}.{}` carries a payload and must bind it",
+                                        scrutinee_enum_name, pattern.variant_name
+                                    ),
+                                ));
+                            }
+                            if variant_payload.is_empty() && !pattern.subpatterns.is_empty() {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "variant `{}.{}` does not carry a payload",
+                                        scrutinee_enum_name, pattern.variant_name
+                                    ),
+                                ));
+                            }
+                            if pattern.subpatterns.len() != variant_payload.len() {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "variant `{}.{}` expects {} pattern payload{}, found {}",
+                                        scrutinee_enum_name,
+                                        pattern.variant_name,
+                                        variant_payload.len(),
+                                        if variant_payload.len() == 1 { "" } else { "s" },
+                                        pattern.subpatterns.len()
+                                    ),
+                                ));
+                            }
+                            self.bind_pattern_locals(
+                                &arm.pattern,
+                                &scrutinee_ty,
+                                &mut arm_locals,
+                                match_stmt.borrow_mode,
+                            )?;
+                        }
+                    }
+
+                    let prior_patterns = match_stmt.arms[..index]
+                        .iter()
+                        .map(|previous_arm| &previous_arm.pattern)
+                        .collect::<Vec<_>>();
+                    if self.patterns_cover_pattern(&prior_patterns, &arm.pattern, &scrutinee_ty) {
+                        return Err(Diagnostic::at(
+                            self.pattern_span(&arm.pattern),
+                            "unreachable match arm",
+                        ));
+                    }
+
+                    let arm_flow = self.check_block(
+                        &arm.body,
+                        &mut arm_locals,
+                        return_type,
+                        loop_depth,
+                        allow_return,
+                    )?;
+                    if arm_flow != BlockFlow::AlwaysReturns {
+                        all_return = false;
+                    }
+                    arm_states.push(arm_locals);
+                }
+
+                for (variant_name, payloads) in &variants {
+                    if covered.contains_key(variant_name) {
+                        continue;
+                    }
+                    let Some(patterns) = patterns_by_variant.get(variant_name) else {
+                        continue;
+                    };
+                    let pattern_refs = patterns.iter().collect::<Vec<_>>();
+                    if self.variant_patterns_cover_payloads_union(&pattern_refs, payloads) {
+                        let span = patterns
+                            .first()
+                            .map(|pattern| pattern.span)
+                            .unwrap_or(match_stmt.span);
+                        covered.insert(variant_name.clone(), span);
+                    }
+                }
+
+                let branch_states = arm_states.iter().collect::<Vec<_>>();
+                self.merge_control_flow_moves(locals, &branch_states);
+
+                let pattern_refs = match_stmt
+                    .arms
+                    .iter()
+                    .map(|arm| &arm.pattern)
+                    .collect::<Vec<_>>();
+                let missing = self.missing_patterns_for_type(&pattern_refs, &scrutinee_ty);
+                if wildcard_span.is_none() && !missing.is_empty() {
+                    let rendered = missing
+                        .iter()
+                        .map(|name| format!("`{}`", name))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(Diagnostic::at(
+                        match_stmt.span,
+                        format!(
+                            "non-exhaustive match over `{}`: missing {}",
+                            enum_name, rendered
+                        ),
+                    ));
+                }
+
+                return if all_return {
+                    Ok(BlockFlow::AlwaysReturns)
+                } else {
+                    Ok(BlockFlow::FallsThrough)
+                };
+            }
+
+            if !matches!(scrutinee_ty, Type::Named(_, _))
+                || !(is_integer_type(&scrutinee_ty)
+                    || is_float_type(&scrutinee_ty)
+                    || matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
+                    || is_string_type(&scrutinee_ty))
+            {
+                return Err(Diagnostic::at(
                 match_stmt.span,
-                "`match` requires at least one `case` arm",
+                format!(
+                    "`match` currently requires an enum, bool, integer, float, or String scrutinee, found `{}`",
+                    scrutinee_ty
+                ),
             ));
-        }
+            }
 
-        if let Some(variants) = self.enum_variants_for_type(&scrutinee_ty) {
-            let Type::Named(enum_name, _type_args) = &scrutinee_ty else {
-                unreachable!("enum scrutinee types should be named");
-            };
-            let scrutinee_enum_name = self.canonical_enum_name(enum_name);
-            let mut covered = BTreeMap::<String, crate::diag::Span>::new();
-            let mut patterns_by_variant = BTreeMap::<String, Vec<crate::ast::VariantPattern>>::new();
             let mut wildcard_span = None;
             let mut all_return = true;
-            let mut arm_states = Vec::new();
+            let mut covered_literals = BTreeMap::<LiteralPatternKey, crate::diag::Span>::new();
+            let mut covered_bools = BTreeSet::<bool>::new();
 
             for (index, arm) in match_stmt.arms.iter().enumerate() {
                 let mut arm_locals = locals.clone();
@@ -8419,124 +8862,47 @@ impl<'a> FunctionChecker<'a> {
                         wildcard_span = Some(*span);
                     }
                     Pattern::Literal(pattern) => {
+                        let key = self.literal_pattern_key(pattern, &scrutinee_ty)?;
+                        if let Some(previous) = covered_literals.insert(key.clone(), pattern.span) {
+                            return Err(Diagnostic::at(
+                                pattern.span,
+                                format!(
+                                "duplicate match arm for literal `{}` (previously matched at {})",
+                                render_literal_pattern_key(&key),
+                                previous
+                            ),
+                            ));
+                        }
+                        if let LiteralPatternKey::Bool(value) = key {
+                            covered_bools.insert(value);
+                        }
+                    }
+                    Pattern::Variant(pattern) => {
                         return Err(Diagnostic::at(
                             pattern.span,
                             format!(
-                                "match over `{}` expects enum variant patterns, not literal `{}`",
-                                enum_name,
-                                self.render_literal_pattern(pattern)
+                                "match over `{}` only supports literal patterns and `_`",
+                                scrutinee_ty
                             ),
                         ));
                     }
                     Pattern::Binding(binding) => {
                         return Err(Diagnostic::at(
-                            binding.span,
-                            "top-level binding patterns are not yet supported; use `_` or an explicit enum variant pattern",
-                        ));
+                        binding.span,
+                        "top-level binding patterns are not yet supported; use `_` or a literal pattern",
+                    ));
                     }
-                    Pattern::Variant(pattern) => {
-                        let pattern_enum_name = if let Some(pattern_enum_name) = &pattern.enum_name
-                        {
-                            if pattern_enum_name == enum_name {
-                                pattern_enum_name.clone()
-                            } else if let Some(pattern_enum_info) =
-                                self.resolve_enum_info(pattern_enum_name)
-                            {
-                                pattern_enum_info.decl.name.clone()
-                            } else {
-                                return Err(Diagnostic::at(
-                                    pattern.span,
-                                    format!(
-                                        "unknown enum `{}` in match pattern",
-                                        pattern_enum_name
-                                    ),
-                                ));
-                            }
-                        } else {
-                            scrutinee_enum_name.clone()
-                        };
-                        if pattern_enum_name != scrutinee_enum_name {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "match arm expects enum `{}`, found pattern for `{}`",
-                                    scrutinee_enum_name, pattern_enum_name
-                                ),
-                            ));
-                        }
+                }
 
-                        let Some(variant_payload) = variants
-                            .iter()
-                            .find(|(name, _)| name == &pattern.variant_name)
-                            .map(|(_, payload)| payload.clone())
-                        else {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "enum `{}` has no variant `{}`",
-                                    scrutinee_enum_name, pattern.variant_name
-                                ),
-                            ));
-                        };
-
-                        let covers_entire_variant =
-                            self.variant_pattern_covers_payloads(pattern, &variant_payload);
-                        if covers_entire_variant {
-                            if let Some(previous) =
-                                covered.insert(pattern.variant_name.clone(), pattern.span)
-                            {
-                                return Err(Diagnostic::at(
-                                    pattern.span,
-                                    format!(
-                                        "duplicate match arm for `{}.{}` (previously matched at {})",
-                                        scrutinee_enum_name, pattern.variant_name, previous
-                                    ),
-                                ));
-                            }
-                        }
-                        patterns_by_variant
-                            .entry(pattern.variant_name.clone())
-                            .or_default()
-                            .push(pattern.clone());
-
-                        if pattern.subpatterns.is_empty() && !variant_payload.is_empty() {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "variant `{}.{}` carries a payload and must bind it",
-                                    scrutinee_enum_name, pattern.variant_name
-                                ),
-                            ));
-                        }
-                        if variant_payload.is_empty() && !pattern.subpatterns.is_empty() {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "variant `{}.{}` does not carry a payload",
-                                    scrutinee_enum_name, pattern.variant_name
-                                ),
-                            ));
-                        }
-                        if pattern.subpatterns.len() != variant_payload.len() {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "variant `{}.{}` expects {} pattern payload{}, found {}",
-                                    scrutinee_enum_name,
-                                    pattern.variant_name,
-                                    variant_payload.len(),
-                                    if variant_payload.len() == 1 { "" } else { "s" },
-                                    pattern.subpatterns.len()
-                                ),
-                            ));
-                        }
-                        self.bind_pattern_locals(
-                            &arm.pattern,
-                            &scrutinee_ty,
-                            &mut arm_locals,
-                            match_stmt.borrow_mode,
-                        )?;
-                    }
+                let prior_patterns = match_stmt.arms[..index]
+                    .iter()
+                    .map(|previous_arm| &previous_arm.pattern)
+                    .collect::<Vec<_>>();
+                if self.patterns_cover_pattern(&prior_patterns, &arm.pattern, &scrutinee_ty) {
+                    return Err(Diagnostic::at(
+                        self.pattern_span(&arm.pattern),
+                        "unreachable match arm",
+                    ));
                 }
 
                 let arm_flow = self.check_block(
@@ -8549,169 +8915,44 @@ impl<'a> FunctionChecker<'a> {
                 if arm_flow != BlockFlow::AlwaysReturns {
                     all_return = false;
                 }
-                arm_states.push(arm_locals);
             }
 
-            for (variant_name, payloads) in &variants {
-                if covered.contains_key(variant_name) {
-                    continue;
-                }
-                let Some(patterns) = patterns_by_variant.get(variant_name) else {
-                    continue;
-                };
-                let pattern_refs = patterns.iter().collect::<Vec<_>>();
-                if self.variant_patterns_cover_payloads_union(&pattern_refs, payloads) {
-                    let span = patterns
-                        .first()
-                        .map(|pattern| pattern.span)
-                        .unwrap_or(match_stmt.span);
-                    covered.insert(variant_name.clone(), span);
-                }
-            }
-
-            let branch_states = arm_states.iter().collect::<Vec<_>>();
-            self.merge_control_flow_moves(locals, &branch_states);
-
-            let missing = variants
-                .iter()
-                .filter(|(name, _)| !covered.contains_key(name))
-                .map(|(name, _)| name.clone())
-                .collect::<Vec<_>>();
-            if wildcard_span.is_none() && !missing.is_empty() {
-                let rendered = missing
-                    .iter()
-                    .map(|name| format!("`{}`", name))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(Diagnostic::at(
-                    match_stmt.span,
-                    format!(
-                        "non-exhaustive match over `{}`: missing {}",
-                        enum_name, rendered
-                    ),
-                ));
-            }
-
-            return if all_return {
-                Ok(BlockFlow::AlwaysReturns)
-            } else {
-                Ok(BlockFlow::FallsThrough)
-            };
-        }
-
-        if !matches!(scrutinee_ty, Type::Named(_, _))
-            || !(is_integer_type(&scrutinee_ty)
-                || is_float_type(&scrutinee_ty)
-                || matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
-                || is_string_type(&scrutinee_ty))
-        {
-            return Err(Diagnostic::at(
-                match_stmt.span,
-                format!(
-                    "`match` currently requires an enum, bool, integer, float, or String scrutinee, found `{}`",
-                    scrutinee_ty
-                ),
-            ));
-        }
-
-        let mut wildcard_span = None;
-        let mut all_return = true;
-        let mut covered_literals = BTreeMap::<LiteralPatternKey, crate::diag::Span>::new();
-        let mut covered_bools = BTreeSet::<bool>::new();
-
-        for (index, arm) in match_stmt.arms.iter().enumerate() {
-            let mut arm_locals = locals.clone();
-            match &arm.pattern {
-                Pattern::Wildcard(span) => {
-                    if wildcard_span.is_some() {
-                        return Err(Diagnostic::at(*span, "duplicate wildcard match arm"));
-                    }
-                    if index + 1 != match_stmt.arms.len() {
+            if wildcard_span.is_none() {
+                if matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
+                {
+                    let missing = [true, false]
+                        .into_iter()
+                        .filter(|value| !covered_bools.contains(value))
+                        .map(|value| format!("`{}`", value))
+                        .collect::<Vec<_>>();
+                    if !missing.is_empty() {
                         return Err(Diagnostic::at(
-                            *span,
-                            "wildcard match arm must be the final `case`",
-                        ));
-                    }
-                    wildcard_span = Some(*span);
-                }
-                Pattern::Literal(pattern) => {
-                    let key = self.literal_pattern_key(pattern, &scrutinee_ty)?;
-                    if let Some(previous) = covered_literals.insert(key.clone(), pattern.span) {
-                        return Err(Diagnostic::at(
-                            pattern.span,
+                            match_stmt.span,
                             format!(
-                                "duplicate match arm for literal `{}` (previously matched at {})",
-                                render_literal_pattern_key(&key),
-                                previous
+                                "non-exhaustive match over `bool`: missing {}",
+                                missing.join(", ")
                             ),
                         ));
                     }
-                    if let LiteralPatternKey::Bool(value) = key {
-                        covered_bools.insert(value);
-                    }
-                }
-                Pattern::Variant(pattern) => {
-                    return Err(Diagnostic::at(
-                        pattern.span,
-                        format!(
-                            "match over `{}` only supports literal patterns and `_`",
-                            scrutinee_ty
-                        ),
-                    ));
-                }
-                Pattern::Binding(binding) => {
-                    return Err(Diagnostic::at(
-                        binding.span,
-                        "top-level binding patterns are not yet supported; use `_` or a literal pattern",
-                    ));
-                }
-            }
-
-            let arm_flow = self.check_block(
-                &arm.body,
-                &mut arm_locals,
-                return_type,
-                loop_depth,
-                allow_return,
-            )?;
-            if arm_flow != BlockFlow::AlwaysReturns {
-                all_return = false;
-            }
-        }
-
-        if wildcard_span.is_none() {
-            if matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
-            {
-                let missing = [true, false]
-                    .into_iter()
-                    .filter(|value| !covered_bools.contains(value))
-                    .map(|value| format!("`{}`", value))
-                    .collect::<Vec<_>>();
-                if !missing.is_empty() {
+                } else {
                     return Err(Diagnostic::at(
                         match_stmt.span,
                         format!(
-                            "non-exhaustive match over `bool`: missing {}",
-                            missing.join(", ")
-                        ),
-                    ));
-                }
-            } else {
-                return Err(Diagnostic::at(
-                    match_stmt.span,
-                    format!(
                         "`match` over `{}` with literal patterns requires a final `case _:` arm",
                         scrutinee_ty
                     ),
-                ));
+                    ));
+                }
             }
-        }
 
-        if all_return {
-            Ok(BlockFlow::AlwaysReturns)
-        } else {
-            Ok(BlockFlow::FallsThrough)
-        }
+            if all_return {
+                Ok(BlockFlow::AlwaysReturns)
+            } else {
+                Ok(BlockFlow::FallsThrough)
+            }
+        })();
+        self.end_match_borrow_mut(active_match_borrow);
+        result
     }
 
     fn bind_pattern_locals(
@@ -8743,6 +8984,7 @@ impl<'a> FunctionChecker<'a> {
                         ty: expected_ty.clone(),
                         assignable: borrow_mode == Some(ReceiverKind::BorrowMut),
                         mutable_place: borrow_mode == Some(ReceiverKind::BorrowMut),
+                        managed_resource: false,
                         passing: borrow_mode.unwrap_or(ReceiverKind::Value),
                         borrow_origin: None,
                         borrow_label: None,
@@ -8843,28 +9085,248 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
-        let scrutinee_ty = self.type_of_expr(scrutinee, locals)?;
-        if borrow_mode.is_none() && !self.is_copy_type(&scrutinee_ty) {
-            self.consume_value_expr(scrutinee, locals)?;
-        }
-        if arms.is_empty() {
-            return Err(Diagnostic::at(
+        let active_match_borrow = if borrow_mode == Some(ReceiverKind::BorrowMut) {
+            self.begin_match_borrow_mut(scrutinee, span, locals)?
+        } else {
+            None
+        };
+        let result = (|| {
+            let scrutinee_ty = self.type_of_expr(scrutinee, locals)?;
+            if borrow_mode.is_none() && !self.is_copy_type(&scrutinee_ty) {
+                self.consume_value_expr(scrutinee, locals)?;
+            }
+            if arms.is_empty() {
+                return Err(Diagnostic::at(
+                    span,
+                    "`match` requires at least one `case` arm",
+                ));
+            }
+
+            let mut result_ty = expected.cloned();
+
+            if let Some(variants) = self.enum_variants_for_type(&scrutinee_ty) {
+                let Type::Named(enum_name, _) = &scrutinee_ty else {
+                    unreachable!("enum scrutinee types should be named");
+                };
+                let scrutinee_enum_name = self.canonical_enum_name(enum_name);
+                let mut covered = BTreeSet::<String>::new();
+                let mut patterns_by_variant =
+                    BTreeMap::<String, Vec<crate::ast::VariantPattern>>::new();
+                let mut wildcard_seen = false;
+                let mut arm_states = Vec::new();
+
+                for (index, arm) in arms.iter().enumerate() {
+                    let mut arm_locals = locals.clone();
+                    match &arm.pattern {
+                        Pattern::Wildcard(wildcard_span) => {
+                            if wildcard_seen {
+                                return Err(Diagnostic::at(
+                                    *wildcard_span,
+                                    "duplicate wildcard match arm",
+                                ));
+                            }
+                            if index + 1 != arms.len() {
+                                return Err(Diagnostic::at(
+                                    *wildcard_span,
+                                    "wildcard match arm must be the final `case`",
+                                ));
+                            }
+                            wildcard_seen = true;
+                        }
+                        Pattern::Literal(pattern) => {
+                            return Err(Diagnostic::at(
+                                pattern.span,
+                                format!(
+                                "match over `{}` expects enum variant patterns, not literal `{}`",
+                                enum_name,
+                                self.render_literal_pattern(pattern)
+                            ),
+                            ));
+                        }
+                        Pattern::Binding(binding) => {
+                            return Err(Diagnostic::at(
+                            binding.span,
+                            "top-level binding patterns are not yet supported; use `_` or an explicit enum variant pattern",
+                        ));
+                        }
+                        Pattern::Variant(pattern) => {
+                            let pattern_enum_name =
+                                if let Some(pattern_enum_name) = &pattern.enum_name {
+                                    if pattern_enum_name == enum_name {
+                                        pattern_enum_name.clone()
+                                    } else if let Some(pattern_enum_info) =
+                                        self.resolve_enum_info(pattern_enum_name)
+                                    {
+                                        pattern_enum_info.decl.name.clone()
+                                    } else {
+                                        return Err(Diagnostic::at(
+                                            pattern.span,
+                                            format!(
+                                                "unknown enum `{}` in match pattern",
+                                                pattern_enum_name
+                                            ),
+                                        ));
+                                    }
+                                } else {
+                                    scrutinee_enum_name.clone()
+                                };
+                            if pattern_enum_name != scrutinee_enum_name {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "match arm expects enum `{}`, found pattern for `{}`",
+                                        scrutinee_enum_name, pattern_enum_name
+                                    ),
+                                ));
+                            }
+
+                            let Some(variant_payload) = variants
+                                .iter()
+                                .find(|(name, _)| name == &pattern.variant_name)
+                                .map(|(_, payload)| payload.clone())
+                            else {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "enum `{}` has no variant `{}`",
+                                        scrutinee_enum_name, pattern.variant_name
+                                    ),
+                                ));
+                            };
+                            if self.variant_pattern_covers_payloads(pattern, &variant_payload) {
+                                covered.insert(pattern.variant_name.clone());
+                            }
+                            patterns_by_variant
+                                .entry(pattern.variant_name.clone())
+                                .or_default()
+                                .push(pattern.clone());
+
+                            if pattern.subpatterns.is_empty() && !variant_payload.is_empty() {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "variant `{}.{}` carries a payload and must bind it",
+                                        scrutinee_enum_name, pattern.variant_name
+                                    ),
+                                ));
+                            }
+                            if variant_payload.is_empty() && !pattern.subpatterns.is_empty() {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "variant `{}.{}` does not carry a payload",
+                                        scrutinee_enum_name, pattern.variant_name
+                                    ),
+                                ));
+                            }
+                            if pattern.subpatterns.len() != variant_payload.len() {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "variant `{}.{}` expects {} pattern payload{}, found {}",
+                                        scrutinee_enum_name,
+                                        pattern.variant_name,
+                                        variant_payload.len(),
+                                        if variant_payload.len() == 1 { "" } else { "s" },
+                                        pattern.subpatterns.len()
+                                    ),
+                                ));
+                            }
+                            self.bind_pattern_locals(
+                                &arm.pattern,
+                                &scrutinee_ty,
+                                &mut arm_locals,
+                                borrow_mode,
+                            )?;
+                        }
+                    }
+
+                    let prior_patterns = arms[..index]
+                        .iter()
+                        .map(|previous_arm| &previous_arm.pattern)
+                        .collect::<Vec<_>>();
+                    if self.patterns_cover_pattern(&prior_patterns, &arm.pattern, &scrutinee_ty) {
+                        return Err(Diagnostic::at(
+                            self.pattern_span(&arm.pattern),
+                            "unreachable match arm",
+                        ));
+                    }
+
+                    let arm_ty = if let Some(expected_ty) = result_ty.as_ref() {
+                        self.type_of_expr_hint(&arm.value, &mut arm_locals, Some(expected_ty))?
+                    } else {
+                        self.type_of_expr(&arm.value, &mut arm_locals)?
+                    };
+                    if let Some(expected_ty) = result_ty.as_ref() {
+                        if arm_ty != *expected_ty {
+                            return Err(Diagnostic::at(
+                                arm.value.span,
+                                format!(
+                                    "match arm expression expects `{}`, found `{}`",
+                                    expected_ty, arm_ty
+                                ),
+                            ));
+                        }
+                    } else {
+                        result_ty = Some(arm_ty);
+                    }
+                    arm_states.push(arm_locals);
+                }
+
+                for (variant_name, payloads) in &variants {
+                    if covered.contains(variant_name) {
+                        continue;
+                    }
+                    let Some(patterns) = patterns_by_variant.get(variant_name) else {
+                        continue;
+                    };
+                    let pattern_refs = patterns.iter().collect::<Vec<_>>();
+                    if self.variant_patterns_cover_payloads_union(&pattern_refs, payloads) {
+                        covered.insert(variant_name.clone());
+                    }
+                }
+
+                let branch_states = arm_states.iter().collect::<Vec<_>>();
+                self.merge_control_flow_moves(locals, &branch_states);
+
+                let pattern_refs = arms.iter().map(|arm| &arm.pattern).collect::<Vec<_>>();
+                let missing = self.missing_patterns_for_type(&pattern_refs, &scrutinee_ty);
+                if !wildcard_seen && !missing.is_empty() {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "non-exhaustive match over `{}`: missing {}",
+                            enum_name,
+                            missing
+                                .iter()
+                                .map(|name| format!("`{}`", name))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    ));
+                }
+
+                return Ok(result_ty.unwrap_or(Type::Unit));
+            }
+
+            if !matches!(scrutinee_ty, Type::Named(_, _))
+                || !(is_integer_type(&scrutinee_ty)
+                    || is_float_type(&scrutinee_ty)
+                    || matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
+                    || is_string_type(&scrutinee_ty))
+            {
+                return Err(Diagnostic::at(
                 span,
-                "`match` requires at least one `case` arm",
+                format!(
+                    "`match` currently requires an enum, bool, integer, float, or String scrutinee, found `{}`",
+                    scrutinee_ty
+                ),
             ));
-        }
+            }
 
-        let mut result_ty = expected.cloned();
-
-        if let Some(variants) = self.enum_variants_for_type(&scrutinee_ty) {
-            let Type::Named(enum_name, _) = &scrutinee_ty else {
-                unreachable!("enum scrutinee types should be named");
-            };
-            let scrutinee_enum_name = self.canonical_enum_name(enum_name);
-            let mut covered = BTreeSet::<String>::new();
-            let mut patterns_by_variant = BTreeMap::<String, Vec<crate::ast::VariantPattern>>::new();
             let mut wildcard_seen = false;
-            let mut arm_states = Vec::new();
+            let mut covered_literals = BTreeSet::<LiteralPatternKey>::new();
+            let mut covered_bools = BTreeSet::<bool>::new();
 
             for (index, arm) in arms.iter().enumerate() {
                 let mut arm_locals = locals.clone();
@@ -8885,111 +9347,38 @@ impl<'a> FunctionChecker<'a> {
                         wildcard_seen = true;
                     }
                     Pattern::Literal(pattern) => {
+                        let key = self.literal_pattern_key(pattern, &scrutinee_ty)?;
+                        covered_literals.insert(key.clone());
+                        if let LiteralPatternKey::Bool(value) = key {
+                            covered_bools.insert(value);
+                        }
+                    }
+                    Pattern::Variant(pattern) => {
                         return Err(Diagnostic::at(
                             pattern.span,
                             format!(
-                                "match over `{}` expects enum variant patterns, not literal `{}`",
-                                enum_name,
-                                self.render_literal_pattern(pattern)
+                                "match over `{}` only supports literal patterns and `_`",
+                                scrutinee_ty
                             ),
                         ));
                     }
                     Pattern::Binding(binding) => {
                         return Err(Diagnostic::at(
-                            binding.span,
-                            "top-level binding patterns are not yet supported; use `_` or an explicit enum variant pattern",
-                        ));
+                        binding.span,
+                        "top-level binding patterns are not yet supported; use `_` or a literal pattern",
+                    ));
                     }
-                    Pattern::Variant(pattern) => {
-                        let pattern_enum_name = if let Some(pattern_enum_name) = &pattern.enum_name
-                        {
-                            if pattern_enum_name == enum_name {
-                                pattern_enum_name.clone()
-                            } else if let Some(pattern_enum_info) =
-                                self.resolve_enum_info(pattern_enum_name)
-                            {
-                                pattern_enum_info.decl.name.clone()
-                            } else {
-                                return Err(Diagnostic::at(
-                                    pattern.span,
-                                    format!(
-                                        "unknown enum `{}` in match pattern",
-                                        pattern_enum_name
-                                    ),
-                                ));
-                            }
-                        } else {
-                            scrutinee_enum_name.clone()
-                        };
-                        if pattern_enum_name != scrutinee_enum_name {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "match arm expects enum `{}`, found pattern for `{}`",
-                                    scrutinee_enum_name, pattern_enum_name
-                                ),
-                            ));
-                        }
+                }
 
-                        let Some(variant_payload) = variants
-                            .iter()
-                            .find(|(name, _)| name == &pattern.variant_name)
-                            .map(|(_, payload)| payload.clone())
-                        else {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "enum `{}` has no variant `{}`",
-                                    scrutinee_enum_name, pattern.variant_name
-                                ),
-                            ));
-                        };
-                        if self.variant_pattern_covers_payloads(pattern, &variant_payload) {
-                            covered.insert(pattern.variant_name.clone());
-                        }
-                        patterns_by_variant
-                            .entry(pattern.variant_name.clone())
-                            .or_default()
-                            .push(pattern.clone());
-
-                        if pattern.subpatterns.is_empty() && !variant_payload.is_empty() {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "variant `{}.{}` carries a payload and must bind it",
-                                    scrutinee_enum_name, pattern.variant_name
-                                ),
-                            ));
-                        }
-                        if variant_payload.is_empty() && !pattern.subpatterns.is_empty() {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "variant `{}.{}` does not carry a payload",
-                                    scrutinee_enum_name, pattern.variant_name
-                                ),
-                            ));
-                        }
-                        if pattern.subpatterns.len() != variant_payload.len() {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "variant `{}.{}` expects {} pattern payload{}, found {}",
-                                    scrutinee_enum_name,
-                                    pattern.variant_name,
-                                    variant_payload.len(),
-                                    if variant_payload.len() == 1 { "" } else { "s" },
-                                    pattern.subpatterns.len()
-                                ),
-                            ));
-                        }
-                        self.bind_pattern_locals(
-                            &arm.pattern,
-                            &scrutinee_ty,
-                            &mut arm_locals,
-                            borrow_mode,
-                        )?;
-                    }
+                let prior_patterns = arms[..index]
+                    .iter()
+                    .map(|previous_arm| &previous_arm.pattern)
+                    .collect::<Vec<_>>();
+                if self.patterns_cover_pattern(&prior_patterns, &arm.pattern, &scrutinee_ty) {
+                    return Err(Diagnostic::at(
+                        self.pattern_span(&arm.pattern),
+                        "unreachable match arm",
+                    ));
                 }
 
                 let arm_ty = if let Some(expected_ty) = result_ty.as_ref() {
@@ -9010,154 +9399,40 @@ impl<'a> FunctionChecker<'a> {
                 } else {
                     result_ty = Some(arm_ty);
                 }
-                arm_states.push(arm_locals);
             }
 
-            for (variant_name, payloads) in &variants {
-                if covered.contains(variant_name) {
-                    continue;
-                }
-                let Some(patterns) = patterns_by_variant.get(variant_name) else {
-                    continue;
-                };
-                let pattern_refs = patterns.iter().collect::<Vec<_>>();
-                if self.variant_patterns_cover_payloads_union(&pattern_refs, payloads) {
-                    covered.insert(variant_name.clone());
-                }
-            }
-
-            let branch_states = arm_states.iter().collect::<Vec<_>>();
-            self.merge_control_flow_moves(locals, &branch_states);
-
-            let missing = variants
-                .iter()
-                .filter(|(name, _)| !covered.contains(name))
-                .map(|(name, _)| format!("`{}`", name))
-                .collect::<Vec<_>>();
-            if !wildcard_seen && !missing.is_empty() {
+            if matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
+                && !wildcard_seen
+                && covered_bools.len() < 2
+            {
+                let missing = [false, true]
+                    .into_iter()
+                    .filter(|value| !covered_bools.contains(value))
+                    .map(|value| format!("`{}`", value))
+                    .collect::<Vec<_>>();
                 return Err(Diagnostic::at(
                     span,
-                    format!(
-                        "non-exhaustive match over `{}`: missing {}",
-                        enum_name,
-                        missing.join(", ")
-                    ),
+                    format!("non-exhaustive bool match: missing {}", missing.join(", ")),
                 ));
             }
-
-            return Ok(result_ty.unwrap_or(Type::Unit));
-        }
-
-        if !matches!(scrutinee_ty, Type::Named(_, _))
-            || !(is_integer_type(&scrutinee_ty)
-                || is_float_type(&scrutinee_ty)
-                || matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
-                || is_string_type(&scrutinee_ty))
-        {
-            return Err(Diagnostic::at(
-                span,
-                format!(
-                    "`match` currently requires an enum, bool, integer, float, or String scrutinee, found `{}`",
-                    scrutinee_ty
-                ),
-            ));
-        }
-
-        let mut wildcard_seen = false;
-        let mut covered_literals = BTreeSet::<LiteralPatternKey>::new();
-        let mut covered_bools = BTreeSet::<bool>::new();
-
-        for (index, arm) in arms.iter().enumerate() {
-            let mut arm_locals = locals.clone();
-            match &arm.pattern {
-                Pattern::Wildcard(wildcard_span) => {
-                    if wildcard_seen {
-                        return Err(Diagnostic::at(
-                            *wildcard_span,
-                            "duplicate wildcard match arm",
-                        ));
-                    }
-                    if index + 1 != arms.len() {
-                        return Err(Diagnostic::at(
-                            *wildcard_span,
-                            "wildcard match arm must be the final `case`",
-                        ));
-                    }
-                    wildcard_seen = true;
-                }
-                Pattern::Literal(pattern) => {
-                    let key = self.literal_pattern_key(pattern, &scrutinee_ty)?;
-                    covered_literals.insert(key.clone());
-                    if let LiteralPatternKey::Bool(value) = key {
-                        covered_bools.insert(value);
-                    }
-                }
-                Pattern::Variant(pattern) => {
-                    return Err(Diagnostic::at(
-                        pattern.span,
-                        format!(
-                            "match over `{}` only supports literal patterns and `_`",
-                            scrutinee_ty
-                        ),
-                    ));
-                }
-                Pattern::Binding(binding) => {
-                    return Err(Diagnostic::at(
-                        binding.span,
-                        "top-level binding patterns are not yet supported; use `_` or a literal pattern",
-                    ));
-                }
-            }
-
-            let arm_ty = if let Some(expected_ty) = result_ty.as_ref() {
-                self.type_of_expr_hint(&arm.value, &mut arm_locals, Some(expected_ty))?
-            } else {
-                self.type_of_expr(&arm.value, &mut arm_locals)?
-            };
-            if let Some(expected_ty) = result_ty.as_ref() {
-                if arm_ty != *expected_ty {
-                    return Err(Diagnostic::at(
-                        arm.value.span,
-                        format!(
-                            "match arm expression expects `{}`, found `{}`",
-                            expected_ty, arm_ty
-                        ),
-                    ));
-                }
-            } else {
-                result_ty = Some(arm_ty);
-            }
-        }
-
-        if matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
-            && !wildcard_seen
-            && covered_bools.len() < 2
-        {
-            let missing = [false, true]
-                .into_iter()
-                .filter(|value| !covered_bools.contains(value))
-                .map(|value| format!("`{}`", value))
-                .collect::<Vec<_>>();
-            return Err(Diagnostic::at(
-                span,
-                format!("non-exhaustive bool match: missing {}", missing.join(", ")),
-            ));
-        }
-        if !wildcard_seen
-            && (is_integer_type(&scrutinee_ty)
-                || is_float_type(&scrutinee_ty)
-                || is_string_type(&scrutinee_ty))
-        {
-            return Err(Diagnostic::at(
+            if !wildcard_seen
+                && (is_integer_type(&scrutinee_ty)
+                    || is_float_type(&scrutinee_ty)
+                    || is_string_type(&scrutinee_ty))
+            {
+                return Err(Diagnostic::at(
                 span,
                 format!(
                     "match over `{}` requires a final wildcard arm because the domain is open-ended",
                     scrutinee_ty
                 ),
             ));
-        }
+            }
 
-        Ok(result_ty.unwrap_or(Type::Unit))
+            Ok(result_ty.unwrap_or(Type::Unit))
+        })();
+        self.end_match_borrow_mut(active_match_borrow);
+        result
     }
 
     fn render_literal_pattern(&self, pattern: &LiteralPattern) -> String {
@@ -9562,12 +9837,16 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(())
             }
-            ExprKind::Member { object, .. } => self.collect_expr_borrowed_places(object, locals, places),
+            ExprKind::Member { object, .. } => {
+                self.collect_expr_borrowed_places(object, locals, places)
+            }
             ExprKind::Index { object, index } => {
                 self.collect_expr_borrowed_places(object, locals, places)?;
                 self.collect_expr_borrowed_places(index, locals, places)
             }
-            ExprKind::Match { scrutinee, arms, .. } => {
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
                 self.collect_expr_borrowed_places(scrutinee, locals, places)?;
                 for arm in arms {
                     self.collect_expr_borrowed_places(&arm.value, locals, places)?;
@@ -9603,7 +9882,10 @@ impl<'a> FunctionChecker<'a> {
                     let Some(argument) = argument else {
                         continue;
                     };
-                    if !matches!(param.passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
+                    if !matches!(
+                        param.passing,
+                        ReceiverKind::Borrow | ReceiverKind::BorrowMut
+                    ) {
                         continue;
                     }
                     if let Some(path) = self.borrow_call_place(&argument.value) {
@@ -9666,7 +9948,10 @@ impl<'a> FunctionChecker<'a> {
         receiver: Option<ReceiverKind>,
         places: &mut Vec<BorrowedCallPlace>,
     ) -> Result<()> {
-        if matches!(receiver, Some(ReceiverKind::Borrow | ReceiverKind::BorrowMut)) {
+        if matches!(
+            receiver,
+            Some(ReceiverKind::Borrow | ReceiverKind::BorrowMut)
+        ) {
             if let Some(path) = self.borrow_call_place(object) {
                 places.push(BorrowedCallPlace {
                     path,
@@ -9686,7 +9971,10 @@ impl<'a> FunctionChecker<'a> {
             let Some(argument) = argument else {
                 continue;
             };
-            if !matches!(param.passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
+            if !matches!(
+                param.passing,
+                ReceiverKind::Borrow | ReceiverKind::BorrowMut
+            ) {
                 continue;
             }
             if let Some(path) = self.borrow_call_place(&argument.value) {
@@ -10082,6 +10370,248 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
         Ok(())
+    }
+
+    fn begin_match_borrow_mut(
+        &self,
+        scrutinee: &Expr,
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Option<String>> {
+        let Some(place) = self.borrow_call_place(scrutinee) else {
+            return Err(Diagnostic::at(
+                span,
+                "`match borrow mut` requires a mutable place scrutinee",
+            ));
+        };
+        if !self.is_mutable_place(scrutinee, locals)? {
+            return Err(Diagnostic::at(
+                span,
+                "`match borrow mut` requires a mutable place scrutinee",
+            ));
+        }
+        if let Some(active) = self
+            .active_match_borrow_mut_places
+            .borrow()
+            .iter()
+            .find(|active| borrow_places_overlap(active, &place))
+            .cloned()
+        {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "cannot start `match borrow mut` on `{}` while `{}` is already mutably borrowed by an enclosing match",
+                    place, active
+                ),
+            ));
+        }
+        self.active_match_borrow_mut_places
+            .borrow_mut()
+            .push(place.clone());
+        Ok(Some(place))
+    }
+
+    fn end_match_borrow_mut(&self, active_place: Option<String>) {
+        if active_place.is_none() {
+            return;
+        }
+        self.active_match_borrow_mut_places.borrow_mut().pop();
+    }
+
+    fn render_variant_pattern_shape(&self, variant_name: &str, payload_tys: &[Type]) -> String {
+        if payload_tys.is_empty() {
+            return variant_name.to_string();
+        }
+        let payload = std::iter::repeat_n("_", payload_tys.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{variant_name}({payload})")
+    }
+
+    fn missing_patterns_for_type(&self, patterns: &[&Pattern], expected_ty: &Type) -> Vec<String> {
+        if patterns
+            .iter()
+            .any(|pattern| self.pattern_covers_entire_type(pattern, expected_ty))
+        {
+            return Vec::new();
+        }
+        let Some(variants) = self.enum_variants_for_type(expected_ty) else {
+            return vec!["_".to_string()];
+        };
+        let mut grouped = BTreeMap::<String, Vec<&VariantPattern>>::new();
+        for pattern in patterns {
+            if let Pattern::Variant(variant_pattern) = pattern {
+                grouped
+                    .entry(variant_pattern.variant_name.clone())
+                    .or_default()
+                    .push(variant_pattern);
+            }
+        }
+        let mut missing = Vec::new();
+        for (variant_name, payload_tys) in variants {
+            let variant_patterns = grouped.get(&variant_name).cloned().unwrap_or_default();
+            if variant_patterns.is_empty() {
+                missing.push(self.render_variant_pattern_shape(&variant_name, &payload_tys));
+                continue;
+            }
+            if self.variant_patterns_cover_payloads_union(&variant_patterns, &payload_tys) {
+                continue;
+            }
+            if payload_tys.len() == 1 {
+                let nested_patterns = variant_patterns
+                    .iter()
+                    .filter_map(|pattern| pattern.subpatterns.first())
+                    .collect::<Vec<_>>();
+                let nested_missing =
+                    self.missing_patterns_for_type(&nested_patterns, &payload_tys[0]);
+                if !nested_missing.is_empty() {
+                    missing.extend(
+                        nested_missing
+                            .into_iter()
+                            .map(|nested| format!("{variant_name}({nested})")),
+                    );
+                    continue;
+                }
+            }
+            missing.push(self.render_variant_pattern_shape(&variant_name, &payload_tys));
+        }
+        missing
+    }
+
+    fn pattern_span(&self, pattern: &Pattern) -> crate::diag::Span {
+        match pattern {
+            Pattern::Wildcard(span) => *span,
+            Pattern::Literal(pattern) => pattern.span,
+            Pattern::Binding(binding) => binding.span,
+            Pattern::Variant(variant) => variant.span,
+        }
+    }
+
+    fn patterns_cover_pattern(
+        &self,
+        patterns: &[&Pattern],
+        pattern: &Pattern,
+        expected_ty: &Type,
+    ) -> bool {
+        match pattern {
+            Pattern::Wildcard(_) | Pattern::Binding(_) => {
+                if self.patterns_cover_type_union(patterns, expected_ty) {
+                    return true;
+                }
+                if matches!(expected_ty, Type::Named(name, args) if name == "bool" && args.is_empty())
+                {
+                    let mut covered = BTreeSet::new();
+                    for previous in patterns {
+                        match previous {
+                            Pattern::Wildcard(_) | Pattern::Binding(_) => return true,
+                            Pattern::Literal(literal) => {
+                                if let Ok(LiteralPatternKey::Bool(value)) =
+                                    self.literal_pattern_key(literal, expected_ty)
+                                {
+                                    covered.insert(value);
+                                }
+                            }
+                            Pattern::Variant(_) => {}
+                        }
+                    }
+                    return covered.len() == 2;
+                }
+                patterns
+                    .iter()
+                    .any(|previous| self.pattern_covers_entire_type(previous, expected_ty))
+            }
+            Pattern::Variant(current_variant) => {
+                if patterns.iter().any(|previous| {
+                    self.pattern_is_covered_by_pattern(previous, pattern, expected_ty)
+                }) {
+                    return true;
+                }
+                let Some(variants) = self.enum_variants_for_type(expected_ty) else {
+                    return false;
+                };
+                let Some((_, payload_tys)) = variants
+                    .iter()
+                    .find(|(variant_name, _)| variant_name == &current_variant.variant_name)
+                else {
+                    return false;
+                };
+                let variant_patterns = patterns
+                    .iter()
+                    .filter_map(|previous| match previous {
+                        Pattern::Variant(variant)
+                            if variant.variant_name == current_variant.variant_name =>
+                        {
+                            Some(variant)
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                if current_variant.subpatterns.len() != payload_tys.len() {
+                    return false;
+                }
+                if payload_tys.len() == 1 {
+                    let nested_patterns = variant_patterns
+                        .iter()
+                        .filter_map(|variant| variant.subpatterns.first())
+                        .collect::<Vec<_>>();
+                    return self.patterns_cover_pattern(
+                        &nested_patterns,
+                        &current_variant.subpatterns[0],
+                        &payload_tys[0],
+                    );
+                }
+                self.variant_pattern_covers_payloads(current_variant, payload_tys)
+                    && self.variant_patterns_cover_payloads_union(&variant_patterns, payload_tys)
+            }
+            Pattern::Literal(_) => patterns
+                .iter()
+                .any(|previous| self.pattern_is_covered_by_pattern(previous, pattern, expected_ty)),
+        }
+    }
+
+    fn pattern_is_covered_by_pattern(
+        &self,
+        previous: &Pattern,
+        current: &Pattern,
+        expected_ty: &Type,
+    ) -> bool {
+        if self.pattern_covers_entire_type(previous, expected_ty) {
+            return true;
+        }
+        match (previous, current) {
+            (Pattern::Literal(previous), Pattern::Literal(current)) => {
+                self.literal_pattern_key(previous, expected_ty).ok()
+                    == self.literal_pattern_key(current, expected_ty).ok()
+            }
+            (Pattern::Variant(previous), Pattern::Variant(current)) => {
+                if previous.variant_name != current.variant_name {
+                    return false;
+                }
+                let Some(variants) = self.enum_variants_for_type(expected_ty) else {
+                    return false;
+                };
+                let Some((_, payload_tys)) = variants
+                    .iter()
+                    .find(|(variant_name, _)| variant_name == &current.variant_name)
+                else {
+                    return false;
+                };
+                if previous.subpatterns.len() != payload_tys.len()
+                    || current.subpatterns.len() != payload_tys.len()
+                {
+                    return false;
+                }
+                previous
+                    .subpatterns
+                    .iter()
+                    .zip(current.subpatterns.iter())
+                    .zip(payload_tys.iter())
+                    .all(|((previous, current), payload_ty)| {
+                        self.pattern_is_covered_by_pattern(previous, current, payload_ty)
+                    })
+            }
+            _ => false,
+        }
     }
 
     fn pattern_covers_entire_type(&self, pattern: &Pattern, expected_ty: &Type) -> bool {
@@ -10504,59 +11034,60 @@ impl<'a> FunctionChecker<'a> {
         Some(substitutions)
     }
 
-    fn trait_impl_substitutions_for_bound(
+    fn collect_trait_bound_closure(
+        &self,
+        bound: &TraitBound,
+        self_ty: &Type,
+        seen: &mut BTreeSet<String>,
+        closure: &mut Vec<TraitBound>,
+    ) {
+        let key = format!("{} for {}", bound, self_ty);
+        if !seen.insert(key) {
+            return;
+        }
+        closure.push(bound.clone());
+        let Some(trait_info) = self.traits.get(&bound.trait_name) else {
+            return;
+        };
+        let substitutions =
+            self_type_substitutions(&trait_info.decl, &bound.trait_args, self_ty.clone());
+        for supertrait in &trait_info.supertraits {
+            let resolved = substitute_trait_bound(supertrait, &substitutions);
+            self.collect_trait_bound_closure(&resolved, self_ty, seen, closure);
+        }
+    }
+
+    fn trait_bound_closure(&self, bound: &TraitBound, self_ty: &Type) -> Vec<TraitBound> {
+        let mut closure = Vec::new();
+        let mut seen = BTreeSet::new();
+        self.collect_trait_bound_closure(bound, self_ty, &mut seen, &mut closure);
+        closure
+    }
+
+    fn resolved_trait_bound_for_impl(
         &self,
         trait_impl: &TraitImplInfo,
-        actual: &Type,
-        bound: &TraitBound,
-    ) -> Option<HashMap<String, Type>> {
-        if trait_impl.trait_name != bound.trait_name
-            || trait_impl.trait_args.len() != bound.trait_args.len()
-        {
-            return None;
+        substitutions: &HashMap<String, Type>,
+    ) -> TraitBound {
+        TraitBound {
+            trait_name: trait_impl.trait_name.clone(),
+            trait_args: trait_impl
+                .trait_args
+                .iter()
+                .map(|arg| substitute_type(arg, substitutions))
+                .collect(),
         }
-        let mut type_params = BTreeSet::new();
-        collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
-        for trait_arg in &trait_impl.trait_args {
-            collect_type_params_from_type(trait_arg, &mut type_params);
-        }
-        let mut substitutions = HashMap::new();
-        if !type_pattern_matches(
-            &trait_impl.for_type,
-            actual,
-            &type_params,
-            &mut substitutions,
-        ) {
-            return None;
-        }
-        for (pattern, actual_arg) in trait_impl.trait_args.iter().zip(&bound.trait_args) {
-            if !type_pattern_matches(pattern, actual_arg, &type_params, &mut substitutions) {
-                return None;
-            }
-        }
-        for (type_param, bounds) in &trait_impl.type_param_bounds {
-            let actual_ty = substitutions.get(type_param)?;
-            for impl_bound in bounds {
-                let resolved_bound = substitute_trait_bound(impl_bound, &substitutions);
-                if !self.type_implements_trait_bound(actual_ty, &resolved_bound) {
-                    return None;
-                }
-            }
-        }
-        Some(substitutions)
     }
 
     fn type_implements_trait_bound(&self, ty: &Type, bound: &TraitBound) -> bool {
         self.trait_impls_in_scope().any(|trait_impl| {
-            self.trait_impl_substitutions_for_bound(trait_impl, ty, bound)
-                .or_else(|| {
-                    if bound.trait_args.is_empty() && trait_impl.trait_name == bound.trait_name {
-                        self.trait_impl_substitutions(trait_impl, ty)
-                    } else {
-                        None
-                    }
-                })
-                .is_some()
+            let Some(substitutions) = self.trait_impl_substitutions(trait_impl, ty) else {
+                return false;
+            };
+            let implemented = self.resolved_trait_bound_for_impl(trait_impl, &substitutions);
+            self.trait_bound_closure(&implemented, ty)
+                .into_iter()
+                .any(|candidate| candidate == *bound)
         })
     }
 
@@ -10574,7 +11105,13 @@ impl<'a> FunctionChecker<'a> {
                         .get(name)
                         .cloned()
                         .unwrap_or_default();
-                    if !current_bounds.iter().any(|current| current == bound) {
+                    let self_ty = Type::TypeParam(name.clone());
+                    let satisfies = current_bounds.into_iter().any(|current| {
+                        self.trait_bound_closure(&current, &self_ty)
+                            .into_iter()
+                            .any(|candidate| candidate == *bound)
+                    });
+                    if !satisfies {
                         return Err(Diagnostic::at(
                             span,
                             format!(
@@ -10603,40 +11140,43 @@ impl<'a> FunctionChecker<'a> {
         method_name: &str,
     ) -> Result<ResolvedTraitMethodInfo> {
         let mut matches = Vec::new();
+        let self_ty = Type::TypeParam(type_param_name.to_string());
         for bound in self
             .type_param_bounds
             .get(type_param_name)
             .into_iter()
             .flatten()
         {
-            if let Some(trait_info) = self.traits.get(&bound.trait_name) {
-                if let Some(method) = trait_info.methods.get(method_name) {
-                    let trait_substitutions = self_type_substitutions(
-                        &trait_info.decl,
-                        &bound.trait_args,
-                        Type::TypeParam(type_param_name.to_string()),
-                    );
-                    matches.push(ResolvedTraitMethodInfo {
-                        decl: method.decl.clone(),
-                        signature: FunctionSignature {
-                            params: method
-                                .signature
-                                .params
-                                .iter()
-                                .map(|param| substitute_type(param, &trait_substitutions))
-                                .collect(),
-                            return_type: substitute_type(
-                                &method.signature.return_type,
+            for bound in self.trait_bound_closure(bound, &self_ty) {
+                if let Some(trait_info) = self.traits.get(&bound.trait_name) {
+                    if let Some(method) = trait_info.methods.get(method_name) {
+                        let trait_substitutions = self_type_substitutions(
+                            &trait_info.decl,
+                            &bound.trait_args,
+                            self_ty.clone(),
+                        );
+                        matches.push(ResolvedTraitMethodInfo {
+                            decl: method.decl.clone(),
+                            signature: FunctionSignature {
+                                params: method
+                                    .signature
+                                    .params
+                                    .iter()
+                                    .map(|param| substitute_type(param, &trait_substitutions))
+                                    .collect(),
+                                return_type: substitute_type(
+                                    &method.signature.return_type,
+                                    &trait_substitutions,
+                                ),
+                                return_passing: method.signature.return_passing,
+                                return_borrow_source: method.signature.return_borrow_source.clone(),
+                            },
+                            type_param_bounds: substitute_trait_bounds(
+                                &method.type_param_bounds,
                                 &trait_substitutions,
                             ),
-                            return_passing: method.signature.return_passing,
-                            return_borrow_source: method.signature.return_borrow_source.clone(),
-                        },
-                        type_param_bounds: substitute_trait_bounds(
-                            &method.type_param_bounds,
-                            &trait_substitutions,
-                        ),
-                    });
+                        });
+                    }
                 }
             }
         }

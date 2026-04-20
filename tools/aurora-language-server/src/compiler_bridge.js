@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { spawn } = require("node:child_process");
+const { uriToPath } = require("./uri");
 
 let workspaceRoots = [];
 
@@ -188,18 +189,6 @@ function resolveCompilerCommand() {
 
 function binaryName(platform = process.platform) {
   return platform === "win32" ? "aura.exe" : "aura";
-}
-
-function uriToPath(uri, platform = process.platform) {
-  if (typeof uri !== "string" || !uri.startsWith("file://")) {
-    return null;
-  }
-
-  let value = decodeURIComponent(uri.replace("file://", ""));
-  if (platform === "win32" && value.startsWith("/")) {
-    value = value.slice(1);
-  }
-  return value;
 }
 
 function runCommand(cmd, args, input, cwd) {

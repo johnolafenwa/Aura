@@ -1,0 +1,5 @@
+error: unreachable match arm
+ --> crates/aurora-compiler/tests/fixtures/check-fail/unreachable_enum_match_arm.au:14:14
+   |
+14 |         case Outer.Wrapped(Inner.Pair(left, right)):
+   |              ^

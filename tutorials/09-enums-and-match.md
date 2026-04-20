@@ -174,6 +174,23 @@ def describe(value: Outer) -> int32:
 
 See [examples/enums/rich_match.au](../examples/enums/rich_match.au).
 
+Expression-form `match` is not limited to `return`. It also works in binding and argument positions, and an arm value may itself be a nested block-form expression:
+
+```python
+value = match outer:
+    case Outer.A: 10
+    case Outer.B: 20
+
+emit(match outer:
+    case Outer.A:
+        match inner:
+            case Inner.X: 1
+            case Inner.Y: 2
+    case Outer.B: 3)
+```
+
+See [examples/enums/match_expression_positions.au](../examples/enums/match_expression_positions.au).
+
 Built-in generic enums `Result[T, E]`, `Option[T]`, and `SendError[T]` are covered in the next chapter.
 
 See [examples/enums/result_match.au](../examples/enums/result_match.au) and [examples/enums/wildcard_match.au](../examples/enums/wildcard_match.au).

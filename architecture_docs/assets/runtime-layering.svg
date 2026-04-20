@@ -24,7 +24,7 @@
   <rect class="box accentC" x="50" y="86" width="260" height="104" />
   <text class="label" x="122" y="122">MIR Runtime</text>
   <text class="text" x="78" y="146">Executes `MirModule` directly, block by block.</text>
-  <text class="text" x="78" y="168">Handles cleanups, task spawning, `select`, and builtins.</text>
+  <text class="text" x="78" y="168">Handles cleanups, task-group starts, wait helpers, and builtins.</text>
 
   <rect class="box accentB" x="50" y="228" width="260" height="104" />
   <text class="label" x="90" y="264">Native Runtime ABI</text>

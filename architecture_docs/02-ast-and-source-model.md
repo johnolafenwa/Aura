@@ -38,8 +38,8 @@ Aurora's most important AST types are:
 | --- | --- |
 | `Module` | One source file: imports, items, top-level statements |
 | `Item` | A top-level declaration such as `Class`, `Enum`, `Function`, `Trait`, or `Impl` |
-| `Stmt` | A statement such as assignment, `if`, `match`, `for`, `with`, `select`, `while`, `return` |
-| `Expr` | An expression such as a name, literal, call, member access, `match`, `spawn`, or `try` |
+| `Stmt` | A statement such as assignment, `if`, `match`, `for`, `with`, `while`, `return`, or `break` |
+| `Expr` | An expression such as a name, literal, call, member access, `match`, or `try` |
 | `Pattern` | A `match` pattern such as a binding, wildcard, literal, or enum variant pattern |
 | `TypeRef` | A syntactic type reference before semantic lowering |
 
@@ -106,9 +106,9 @@ Examples:
 - `Item`
   This distinguishes class declarations from enum declarations and function declarations.
 - `Stmt`
-  This distinguishes `Return`, `If`, `For`, `While`, `Match`, `With`, `Select`, and plain expression statements.
+  This distinguishes `Return`, `If`, `For`, `While`, `Match`, `With`, and plain expression statements.
 - `ExprKind`
-  This distinguishes literals, names, unary operators, binary operators, calls, member access, indexing, casts, `spawn`, `try`, and expression-form `match`.
+  This distinguishes literals, names, unary operators, binary operators, calls, member access, indexing, casts, `try`, and expression-form `match`.
 
 This is a common Rust compiler pattern: use algebraic data types to mirror language structure.
 
@@ -200,7 +200,7 @@ Aurora's real AST adds:
 - spans for diagnostics
 - imports and module structure
 - classes, enums, traits, impls
-- `match`, `with`, `select`, and `spawn`
+- `match`, `with`, and borrowed control-flow forms
 - generics and trait bounds
 - f-strings and map/set/list literals
 - borrowed parameters and borrowed returns

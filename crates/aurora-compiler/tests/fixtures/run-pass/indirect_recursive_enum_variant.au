@@ -1,0 +1,12 @@
+enum List:
+    Nil
+    Cons(tail: indirect List)
+
+def main() -> int32:
+    list = List.Cons(tail=List.Nil)
+    match list:
+        case List.Nil:
+            print(0)
+        case List.Cons(_):
+            print(1)
+    return 0

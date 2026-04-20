@@ -1,0 +1,18 @@
+enum Opt:
+    Some(int32)
+    None
+
+def main() -> int32:
+    mut x: Opt = Opt.Some(42)
+    match borrow mut x:
+        case Some(y):
+            x = Opt.None
+        case None:
+            print("none")
+    match borrow x:
+        case Some(v):
+            print("still some")
+            print(v)
+        case None:
+            print("became none")
+    return 0

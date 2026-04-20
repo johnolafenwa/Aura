@@ -1,0 +1,5 @@
+error: impl of `Derived` for `Counter` requires supertrait `Base`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/supertrait_impl_requires_supertrait_impl.au:10:1
+   |
+10 | impl Derived for Counter:
+   | ^

@@ -1,0 +1,8 @@
+def main() -> int32:
+    x = Option.Some(5)
+    match x:
+        case Some(v):
+            print(v)
+        case None:
+            print(-1)
+    return 0

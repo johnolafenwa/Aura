@@ -1,0 +1,9 @@
+def print_text(text: String) -> None:
+    print(text)
+
+def main() -> int32:
+    value: int32 = 1
+    print_text(match value:
+        case 1: "a"
+        case _: "b")
+    return 0

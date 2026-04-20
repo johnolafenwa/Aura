@@ -141,8 +141,25 @@ fn parse_structural_items_tolerate_blank_lines_and_pass() {
     .expect("trait should parse");
     match &trait_item {
         Item::Trait(trait_decl) => {
+            assert!(trait_decl.supertraits.is_empty());
             assert_eq!(trait_decl.methods.len(), 1);
             assert_eq!(trait_decl.methods[0].return_type.name, "None");
+        }
+        other => panic!("expected trait item, got {other:?}"),
+    }
+
+    let supertrait_item = parse_item_from(
+        ["trait Child: Parent, Debug[T]:", "    def render(self)"]
+            .join("\n")
+            .as_str(),
+    )
+    .expect("trait with supertraits should parse");
+    match &supertrait_item {
+        Item::Trait(trait_decl) => {
+            assert_eq!(trait_decl.supertraits.len(), 2);
+            assert_eq!(trait_decl.supertraits[0].name, "Parent");
+            assert_eq!(trait_decl.supertraits[1].name, "Debug");
+            assert_eq!(trait_decl.supertraits[1].args.len(), 1);
         }
         other => panic!("expected trait item, got {other:?}"),
     }
@@ -860,6 +877,50 @@ fn parser_covers_blank_lines_empty_literals_and_specialization_offsets() {
     };
     assert_eq!(inner.span.line, 9);
     assert_eq!(type_args[0].span.line, 9);
+}
+
+#[test]
+fn parse_match_expressions_in_argument_and_nested_block_positions() {
+    let call_expr = parse_expression(
+        [
+            "print_text(match value:",
+            "    case 1: \"a\"",
+            "    case _: \"b\")",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("match expression argument should parse");
+    let ExprKind::Call { args, .. } = &call_expr.kind else {
+        panic!("expected call expression");
+    };
+    assert_eq!(args.len(), 1);
+    assert!(matches!(args[0].value.kind, ExprKind::Match { .. }));
+
+    let nested_match_return = parse_stmt_from(
+        [
+            "return match outer:",
+            "    case Outer.A:",
+            "        match inner:",
+            "            case Inner.X: 1",
+            "            case Inner.Y: 2",
+            "    case Outer.B: 3",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("nested block-form match expression should parse");
+    let Stmt::Return(ReturnStmt {
+        value: Some(expr), ..
+    }) = nested_match_return
+    else {
+        panic!("expected return statement with value");
+    };
+    let ExprKind::Match { arms, .. } = &expr.kind else {
+        panic!("expected outer match expression");
+    };
+    assert_eq!(arms.len(), 2);
+    assert!(matches!(arms[0].value.kind, ExprKind::Match { .. }));
 }
 
 #[test]

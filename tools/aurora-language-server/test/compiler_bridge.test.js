@@ -318,7 +318,11 @@ test("compiler bridge resolves compiler commands across env, cargo, binaries, an
 test("compiler bridge uri and command helpers handle direct utility cases", async () => {
   const encodedPath = path.join(repoRoot, "examples/modules/simple_import.au").replace(/ /g, "%20");
   assert.equal(uriToPath(`file://${encodedPath}`), path.join(repoRoot, "examples/modules/simple_import.au"));
-  assert.equal(uriToPath("file:///C:/aurora/examples/main.au", "win32"), "C:/aurora/examples/main.au");
+  assert.equal(uriToPath("file:///C:/aurora/examples/main.au", "win32"), "C:\\aurora\\examples\\main.au");
+  assert.equal(
+    uriToPath("file://server/share/project/main.au", "win32"),
+    "\\\\server\\share\\project\\main.au"
+  );
   assert.equal(uriToPath("not-a-file-uri"), null);
   assert.equal(binaryName("win32"), "aura.exe");
   assert.equal(binaryName("linux"), "aura");

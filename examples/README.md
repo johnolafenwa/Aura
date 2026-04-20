@@ -216,6 +216,13 @@ The examples are organized by topic so they can serve both as quick references a
     - `7`
     - `30`
     - `0`
+- `match_expression_positions.au`
+  - expression-form `match` in binding and argument positions, including nested block-form arm values
+  - prints:
+    - `1`
+    - `10`
+    - `3`
+    - `20`
 - `wildcard_match.au`
   - wildcard `case _:` arms in statement-form `match`
   - prints `2`
@@ -257,6 +264,11 @@ The examples are organized by topic so they can serve both as quick references a
 - `multiple_bounds.au`
   - bounded generic calls with `T: A + B`
   - prints `9`
+- `supertraits.au`
+  - supertrait declarations, inherited bounds, and default methods that call through a parent trait
+  - prints:
+    - `name=aurora`
+    - `aurora`
 - `marker_trait.au`
   - empty marker traits declared with `pass`
   - prints `1`

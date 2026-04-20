@@ -1,0 +1,29 @@
+enum Outer:
+    A
+    B
+
+enum Inner:
+    X
+    Y
+
+def emit(value: int32) -> None:
+    print(value)
+
+def describe(outer: Outer, inner: Inner) -> int32:
+    label = match outer:
+        case Outer.A: 10
+        case Outer.B: 20
+
+    emit(match outer:
+        case Outer.A:
+            match inner:
+                case Inner.X: 1
+                case Inner.Y: 2
+        case Outer.B: 3)
+
+    return label
+
+def main() -> int32:
+    print(describe(Outer.A, Inner.X))
+    print(describe(Outer.B, Inner.Y))
+    return 0

@@ -8848,7 +8848,8 @@ impl<'a> FunctionCompiler<'a> {
                 receiver_place,
                 args,
             )?;
-            self.store_result_vars(&result_vars, &call_result)?;
+            let coerced_result = self.coerce_value(call_result, &result_ty)?;
+            self.store_result_vars(&result_vars, &coerced_result)?;
             self.release_all_temporary_owned();
             self.builder.ins().jump(join_block, &[]);
             self.builder.seal_block(then_block);
@@ -9117,7 +9118,11 @@ impl<'a> FunctionCompiler<'a> {
             if name != class_name {
                 continue;
             }
-            let Some(method) = trait_impl.methods.iter().find(|method| method.name == field) else {
+            let Some(method) = trait_impl
+                .methods
+                .iter()
+                .find(|method| method.name == field)
+            else {
                 continue;
             };
             let specificity = crate::sema::trait_impl_specificity_parts(

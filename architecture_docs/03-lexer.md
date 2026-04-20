@@ -64,7 +64,7 @@ Aurora's `TokenKind` includes:
 - operators
   `=`, `==`, `!=`, `<`, `<=`, `+`, `+=`, and so on
 - keywords
-  `class`, `def`, `match`, `with`, `select`, `spawn`, `detached`, and others
+  `class`, `def`, `match`, `with`, `for`, `return`, and others
 - literals
   integers, floats, durations, booleans, strings, f-strings
 

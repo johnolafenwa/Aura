@@ -1,12 +1,6 @@
 version = 1
 
 [[package]]
-name = "app"
-version = "0.1.0"
-source = "path"
-path = "app"
-
-[[package]]
 name = "util"
 version = "0.1.0"
 source = "path"

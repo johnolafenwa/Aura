@@ -36,6 +36,7 @@ struct Parser {
     tokens: Vec<Token>,
     index: usize,
     recursion_depth: usize,
+    pending_delimited_match_expr_dedents: usize,
 }
 
 impl Parser {
@@ -48,6 +49,7 @@ impl Parser {
             tokens,
             index: 0,
             recursion_depth,
+            pending_delimited_match_expr_dedents: 0,
         }
     }
 
@@ -351,6 +353,16 @@ impl Parser {
         let name = self.expect_identifier()?;
         let (type_params, _) = self.parse_optional_type_params(false)?;
         self.expect_simple(TokenKind::Colon)?;
+        let mut supertraits = Vec::new();
+        if !self.at_simple(&TokenKind::Newline) {
+            loop {
+                supertraits.push(self.parse_type()?);
+                if self.eat_simple(&TokenKind::Comma).is_none() {
+                    break;
+                }
+            }
+            self.expect_simple(TokenKind::Colon)?;
+        }
         self.expect_newline()?;
         self.expect_simple(TokenKind::Indent)?;
 
@@ -372,6 +384,7 @@ impl Parser {
             public,
             name,
             type_params,
+            supertraits,
             methods,
             span,
         })
@@ -829,13 +842,18 @@ impl Parser {
         let span = self.expect_keyword(TokenKind::KwCase)?.span;
         let pattern = self.parse_pattern()?;
         self.expect_simple(TokenKind::Colon)?;
-        let value = self.parse_expr()?;
-        if self.eat_simple(&TokenKind::Newline).is_none()
-            && !self.at_simple(&TokenKind::Dedent)
-            && !self.at_eof()
-        {
-            return Err(self.error_here("expected Newline"));
-        }
+        let value = if self.at_simple(&TokenKind::Newline) {
+            self.expect_newline()?;
+            self.expect_simple(TokenKind::Indent)?;
+            let value = self.parse_expr()?;
+            self.expect_statement_terminator()?;
+            self.expect_simple(TokenKind::Dedent)?;
+            value
+        } else {
+            let value = self.parse_expr()?;
+            self.expect_match_expr_arm_terminator()?;
+            value
+        };
         Ok(MatchExprArm {
             pattern,
             value,
@@ -1297,10 +1315,20 @@ impl Parser {
             self.expect_newline()?;
             self.expect_simple(TokenKind::Indent)?;
             let mut arms = Vec::new();
-            while !self.at_simple(&TokenKind::Dedent) {
+            while !self.at_match_expr_end() && !self.at_eof() {
+                if self.at_simple(&TokenKind::Newline) {
+                    self.bump();
+                    continue;
+                }
                 arms.push(self.parse_match_expr_arm()?);
             }
-            self.expect_simple(TokenKind::Dedent)?;
+            if self.at_simple(&TokenKind::Dedent) {
+                self.expect_simple(TokenKind::Dedent)?;
+            } else if self.at_delimited_match_expr_end() {
+                self.pending_delimited_match_expr_dedents += 1;
+            } else {
+                return Err(self.error_here("expected end of match expression"));
+            }
             return Ok(Expr {
                 kind: ExprKind::Match {
                     scrutinee: Box::new(scrutinee),
@@ -1947,6 +1975,32 @@ impl Parser {
     fn expect_statement_terminator(&mut self) -> Result<()> {
         if self.eat_simple(&TokenKind::Newline).is_some()
             || self.at_simple(&TokenKind::Dedent)
+            || matches!(
+                self.tokens
+                    .get(self.index.saturating_sub(1))
+                    .map(|token| &token.kind),
+                Some(TokenKind::Dedent)
+            )
+            || self.at_eof()
+        {
+            Ok(())
+        } else {
+            Err(self.error_here("expected Newline"))
+        }
+    }
+
+    fn expect_match_expr_arm_terminator(&mut self) -> Result<()> {
+        if self.eat_simple(&TokenKind::Newline).is_some()
+            || self.at_simple(&TokenKind::Dedent)
+            || self.at_simple(&TokenKind::RParen)
+            || self.at_simple(&TokenKind::RBracket)
+            || self.at_simple(&TokenKind::RBrace)
+            || matches!(
+                self.tokens
+                    .get(self.index.saturating_sub(1))
+                    .map(|token| &token.kind),
+                Some(TokenKind::Dedent)
+            )
             || self.at_eof()
         {
             Ok(())
@@ -2041,7 +2095,40 @@ impl Parser {
     fn bump(&mut self) -> Token {
         let token = self.tokens[self.index].clone();
         self.index += 1;
+        self.consume_pending_delimited_match_expr_dedent(&token.kind);
         token
+    }
+
+    fn at_match_expr_end(&self) -> bool {
+        self.at_simple(&TokenKind::Dedent) || self.at_delimited_match_expr_end()
+    }
+
+    fn at_delimited_match_expr_end(&self) -> bool {
+        matches!(
+            self.current_kind(),
+            TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace
+        ) && matches!(self.peek_kind(1), Some(TokenKind::Newline))
+            && matches!(self.peek_kind(2), Some(TokenKind::Dedent))
+    }
+
+    fn consume_pending_delimited_match_expr_dedent(&mut self, consumed_kind: &TokenKind) {
+        if self.pending_delimited_match_expr_dedents == 0 {
+            return;
+        }
+        if !matches!(
+            consumed_kind,
+            TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace
+        ) {
+            return;
+        }
+        if self.at_simple(&TokenKind::Newline) {
+            self.index += 1;
+        }
+        if self.at_simple(&TokenKind::Dedent) {
+            self.index += 1;
+        }
+        self.pending_delimited_match_expr_dedents =
+            self.pending_delimited_match_expr_dedents.saturating_sub(1);
     }
 
     fn error_here(&self, message: impl Into<String>) -> Diagnostic {

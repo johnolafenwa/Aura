@@ -229,12 +229,19 @@ Top-level declarations may also be generic:
 - `enum Wrapper[T]: ...`
 - `enum Wrapper[T: Trait]: ...`
 - `def identity[T](value: T) -> T: ...`
+- `trait Child: Parent: ...`
+- `trait Child[T]: Parent[T]: ...`
 
 Generic functions and methods may use inline trait bounds:
 
 - `def speak[T: Greeter](value: T): ...`
 - `def use_both[T: A + B](value: T) -> int32: ...`
 - `def apply[T: Mapper[int32]](mapper: T, value: int32) -> int32: ...`
+
+Built-in enum constructor notes:
+
+- `Option.Some(...)` can infer `T` from its payload without a separate annotation
+- `Option.None` still requires an expected `Option[T]` type
 
 ## Builtins
 
@@ -291,6 +298,7 @@ Current builtin I/O, networking, and process surface:
 - `fs.File.write_bytes(...)`
 - `fs.File.flush()`
 - `fs.File.close()`
+- one-shot `fs.read_to_string(...)` and `fs.read_bytes(...)` reads are capped at 1 MiB in both `aura run` and direct-built binaries; use file handles for larger streaming workflows
 - `net.connect(...)`
 - `net.connect_timeout(...)`
 - `net.listen(...)`
@@ -483,10 +491,10 @@ The current compiler supports:
 - `match borrow mut value:`
 - `case _:`
 - exhaustive statement-form `match`
-- expression-form `match`
+- expression-form `match` in return, binding, and argument positions
 - nested enum patterns
 
-Boolean literal matches are exhaustive when they cover both `true` and `false`. Integer and `String` literal matches still require a final wildcard arm.
+Boolean literal matches are exhaustive when they cover both `true` and `false`. Integer and `String` literal matches still require a final wildcard arm. Expression-form arms may also evaluate nested block-form expressions.
 
 ## Concurrency
 
@@ -544,6 +552,8 @@ Current backend/tooling notes:
 - `build` accepts `--backend auto|direct`
 - `auto` is the default
 - `direct` now covers the full currently implemented Aurora language surface
+- compiler-backed editor state is invalidated across open documents when imported files change
+- `file://` URI handling now preserves both Windows drive-letter paths and UNC workspaces
 
 The current VS Code tooling is compiler-backed for:
 

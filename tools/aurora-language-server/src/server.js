@@ -28,10 +28,17 @@ const {
   compilerSymbolsToLsp,
   setWorkspaceRoots
 } = require("./compiler_bridge");
+const {
+  createDocumentStateCache,
+  validateOpenDocuments
+} = require("./document_state");
+const { uriToPath } = require("./uri");
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
-const documentStates = new Map();
+const documentStateCache = createDocumentStateCache((document) =>
+  analyzeWithCompiler(document.uri, document.getText())
+);
 
 connection.onInitialize((params) => {
   setWorkspaceRoots(extractWorkspaceRoots(params));
@@ -184,16 +191,20 @@ connection.onDefinition(async (params) => {
 });
 
 documents.onDidOpen((event) => {
-  void validateDocument(event.document);
+  documentStateCache.invalidateAll();
+  void validateAllDocuments();
 });
 
 documents.onDidChangeContent((event) => {
-  void validateDocument(event.document);
+  documentStateCache.invalidateAll();
+  void validateAllDocuments();
 });
 
 documents.onDidClose((event) => {
-  documentStates.delete(event.document.uri);
+  documentStateCache.invalidateAll();
+  documentStateCache.deleteDocument(event.document.uri);
   connection.sendDiagnostics({ uri: event.document.uri, diagnostics: [] });
+  void validateAllDocuments();
 });
 
 documents.listen(connection);
@@ -261,18 +272,11 @@ function validateDocument(document) {
 }
 
 async function getDocumentState(document) {
-  const existing = documentStates.get(document.uri);
-  if (existing && existing.version === document.version) {
-    return existing;
-  }
+  return documentStateCache.get(document);
+}
 
-  const compilerAnalysis = await analyzeWithCompiler(document.uri, document.getText());
-  const next = {
-    version: document.version,
-    compilerAnalysis
-  };
-  documentStates.set(document.uri, next);
-  return next;
+async function validateAllDocuments() {
+  await validateOpenDocuments(documents, validateDocument);
 }
 
 function extractWorkspaceRoots(params) {
@@ -286,18 +290,6 @@ function extractWorkspaceRoots(params) {
     return root ? [root] : [];
   }
   return [];
-}
-
-function uriToPath(uri) {
-  if (typeof uri !== "string" || !uri.startsWith("file://")) {
-    return null;
-  }
-
-  let value = decodeURIComponent(uri.replace("file://", ""));
-  if (process.platform === "win32" && value.startsWith("/")) {
-    value = value.slice(1);
-  }
-  return value;
 }
 
 function mapSeverity(severity) {

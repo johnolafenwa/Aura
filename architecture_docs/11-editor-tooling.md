@@ -36,6 +36,7 @@ Aurora deliberately keeps the VS Code extension thin and pushes semantic work do
 [`tools/aurora-language-server/src/server.js`](../tools/aurora-language-server/src/server.js):
 
 - manages documents and cached document state
+- invalidates and revalidates the open-document compiler cache when imported files change
 - handles LSP requests
 - requests compiler-backed analysis when possible
 - falls back when compiler analysis is unavailable
@@ -47,6 +48,7 @@ Aurora deliberately keeps the VS Code extension thin and pushes semantic work do
 - locates the best `aura` command for the workspace
 - runs `aura analyze --stdin ...`
 - runs `aura complete --stdin ...`
+- normalizes `file://` URIs through the shared helper in [`src/uri.js`](../tools/aurora-language-server/src/uri.js), including Windows UNC paths
 - converts compiler output into LSP-shaped data
 
 ### Fallback analysis
@@ -108,7 +110,6 @@ It detects block headers such as:
 - `match`
 - `case`
 - `with`
-- `select`
 - `impl`
 
 and inserts the correct next-line indent.

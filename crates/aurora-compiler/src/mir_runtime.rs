@@ -22,9 +22,9 @@ use crate::runtime_value::{
     process_stdio_pipe, process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, result_err, result_ok, run_blocking_io,
-    run_lightweight_root_task, send_error_cancelled, send_error_closed, send_error_full,
-    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
+    queue_receive_item, queue_receive_timed_out, read_file_limited, result_err, result_ok,
+    run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
+    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
     task_result_cancelled, task_result_ready, task_result_timed_out, wait_all_cancelled,
     wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_ready, wait_any_timed_out,
     wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
@@ -3345,7 +3345,11 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["path"], values)?;
                 let path = expect_string_value(&bound[0].value, "fs.read_to_string(...)")?;
                 match run_blocking_io(
-                    move || std::fs::read_to_string(path),
+                    move || {
+                        let bytes = read_file_limited(&path, "fs.read_to_string")?;
+                        String::from_utf8(bytes)
+                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+                    },
                     Some(&self.cancellation),
                 ) {
                     Ok(text) => Ok(result_ok(Value::String(text))),
@@ -3355,7 +3359,10 @@ impl MirRuntime {
             "fs::read_bytes" => {
                 let bound = bind_builtin_args(&["path"], values)?;
                 let path = expect_string_value(&bound[0].value, "fs.read_bytes(...)")?;
-                match run_blocking_io(move || std::fs::read(path), Some(&self.cancellation)) {
+                match run_blocking_io(
+                    move || read_file_limited(&path, "fs.read_bytes"),
+                    Some(&self.cancellation),
+                ) {
                     Ok(bytes) => Ok(result_ok(bytes_vec_value(bytes))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }

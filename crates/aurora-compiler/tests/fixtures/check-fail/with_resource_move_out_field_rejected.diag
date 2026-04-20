@@ -1,0 +1,5 @@
+error: cannot move non-copy field `name` out of managed `with` resource `h`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/with_resource_move_out_field_rejected.au:12:26
+   |
+12 |         value = mutate(h.name)
+   |                          ^

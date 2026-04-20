@@ -76,8 +76,8 @@ Aurora's parser covers a large surface:
 - imports
 - classes, enums, functions, traits, impl blocks
 - ordinary statements and top-level statements
-- `if`, `match`, `for`, `while`, `with`, `select`
-- expression-form `match`
+- `if`, `match`, `for`, `while`, `with`
+- expression-form `match`, including binding, argument, and nested block positions
 - calls, named arguments, member access, indexing, specialization, casts
 - borrowed parameters and borrowed returns
 - patterns for `match`

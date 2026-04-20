@@ -114,6 +114,7 @@ pub struct TraitDecl {
     pub public: bool,
     pub name: String,
     pub type_params: Vec<String>,
+    pub supertraits: Vec<TypeRef>,
     pub methods: Vec<FunctionDecl>,
     pub span: Span,
 }

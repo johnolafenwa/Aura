@@ -1664,6 +1664,35 @@ fn build_with_direct_backend_caps_fs_read_to_string_and_read_bytes() {
 }
 
 #[test]
+fn run_caps_fs_read_to_string_and_read_bytes() {
+    let temp = TempDir::new("aurora-run-file-read-cap");
+    let file_path = temp.path().join("huge.txt");
+    fs::write(&file_path, vec![b'x'; (1024 * 1024) + 1]).expect("write oversized file");
+    let source_path = temp.path().join("main.au");
+    let source = format!(
+        "import fs\n\ndef main() -> int32:\n    match fs.read_to_string(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-string\")\n        case Result.Err(error):\n            print(error)\n    match fs.read_bytes(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-bytes\")\n        case Result.Err(error):\n            print(error)\n    return 0\n",
+        path = file_path.display()
+    );
+    fs::write(&source_path, source).expect("write Aurora source");
+
+    let run = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run");
+
+    assert!(
+        run.status.success(),
+        "aura run should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "io.Error.InvalidData\nio.Error.InvalidData\n"
+    );
+}
+
+#[test]
 fn build_with_direct_backend_supports_tcp_echo_example() {
     assert_direct_backend_example_runs("examples/io/tcp_echo.au", "tcp-echo-direct", "echo:ping\n");
 }
@@ -3558,6 +3587,63 @@ def main() -> int32:
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "7\nhi\n");
+}
+
+#[test]
+fn build_executes_nested_generic_trait_bound_dispatch() {
+    let source = r#"trait Add2[Rhs, Out]:
+    def add2(borrow self, rhs: Rhs) -> Out
+
+class Box[T]:
+    value: T
+
+impl Add2[int32, int32] for int32:
+    def add2(borrow self, rhs: int32) -> int32:
+        return self + rhs
+
+impl[T: Add2[T, T]] Add2[Box[T], Box[T]] for Box[T]:
+    def add2(borrow self, rhs: Box[T]) -> Box[T]:
+        return Box(value=self.value.add2(rhs=rhs.value))
+
+def main() -> int32:
+    left: Box[int32] = Box(value=3)
+    right: Box[int32] = Box(value=4)
+    result: Box[int32] = left.add2(rhs=right)
+    print(result.value)
+    return 0
+"#;
+    let (temp, source_path) = write_temp_source(
+        "aurora-cli-build-nested-generic-trait-bound-dispatch",
+        source,
+    );
+    let output_path = temp.path().join("nested-generic-trait-bound-dispatch");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build nested generic trait bound program");
+
+    assert!(
+        build.status.success(),
+        "direct backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run nested generic trait bound program");
+
+    assert!(
+        run.status.success(),
+        "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
 }
 
 #[test]

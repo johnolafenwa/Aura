@@ -13,6 +13,7 @@ use crate::integer::IntegerValue;
 use crate::sema::Type;
 use rcgen::generate_simple_self_signed;
 use std::fs;
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
@@ -1012,6 +1013,56 @@ fn http_request_rejects_invalid_header_names_and_non_ascii_values() {
     assert_eq!(bad_value.kind(), std::io::ErrorKind::InvalidInput);
 }
 
+#[test]
+fn http_listener_replies_with_413_for_oversized_requests() {
+    let listener =
+        HttpListenerValue::bind("127.0.0.1:0").expect("http listener bind should succeed");
+    let address = listener
+        .local_addr()
+        .expect("http listener local addr should succeed");
+    let server = listener.clone();
+    let oversized_len = super::MAX_HTTP_MESSAGE_BYTES + 1;
+    let server_thread = thread::spawn(move || {
+        let error = server
+            .accept(
+                Some(StdDuration::from_secs(2)),
+                Some(&CancellationContext::default()),
+            )
+            .expect_err("oversized request should fail on the server");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    });
+
+    let mut client =
+        std::net::TcpStream::connect(&address).expect("http client should connect to listener");
+    client
+        .write_all(
+            format!(
+                "POST /upload HTTP/1.1\r\nHost: {address}\r\nContent-Length: {oversized_len}\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .expect("http request head should write");
+    client
+        .write_all(&vec![b'x'; oversized_len])
+        .expect("oversized request body should write");
+    client
+        .shutdown(std::net::Shutdown::Write)
+        .expect("client shutdown should succeed");
+
+    let mut response = String::new();
+    client
+        .read_to_string(&mut response)
+        .expect("client should receive an HTTP response");
+    assert!(
+        response.starts_with("HTTP/1.1 413 Payload Too Large\r\n"),
+        "expected a 413 response, got: {response:?}"
+    );
+
+    server_thread
+        .join()
+        .expect("oversized http server thread should join");
+}
+
 #[cfg(unix)]
 #[test]
 fn http_resources_use_nonblocking_descriptors_internally() {
@@ -1296,7 +1347,9 @@ fn tls_listener_accept_requires_a_completed_handshake() {
         key_path.to_str().expect("valid key path"),
     )
     .expect("tls listener bind should succeed");
-    let address = listener.local_addr().expect("tls listener addr should succeed");
+    let address = listener
+        .local_addr()
+        .expect("tls listener addr should succeed");
 
     let silent_client = thread::spawn(move || {
         let _client =
@@ -1316,6 +1369,33 @@ fn tls_listener_accept_requires_a_completed_handshake() {
         .join()
         .expect("silent tls client thread should join");
     listener.close();
+}
+
+#[test]
+fn tls_handshake_deadline_caps_requested_timeout_to_default_budget() {
+    let deadline = super::tls_handshake_deadline(Some(
+        Instant::now()
+            .checked_add(StdDuration::from_secs(60))
+            .expect("future deadline should exist"),
+    ))
+    .expect("handshake deadline should exist");
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    assert!(
+        remaining <= super::DEFAULT_TLS_HANDSHAKE_TIMEOUT + StdDuration::from_millis(250),
+        "handshake deadline should cap user timeouts to the default budget; remaining {remaining:?}"
+    );
+}
+
+#[test]
+fn websocket_error_mapping_preserves_io_error_kinds() {
+    let error = super::websocket_error_to_io(tungstenite::Error::Io(io::Error::new(
+        io::ErrorKind::BrokenPipe,
+        "broken pipe",
+    )));
+    assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+
+    let other = super::websocket_error_to_io(tungstenite::Error::ConnectionClosed);
+    assert_eq!(other.kind(), io::ErrorKind::Other);
 }
 
 #[cfg(unix)]

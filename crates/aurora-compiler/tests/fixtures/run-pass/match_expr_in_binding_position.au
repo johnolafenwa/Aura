@@ -1,0 +1,7 @@
+def main() -> int32:
+    value: int32 = 1
+    text: String = match value:
+        case 1: "a"
+        case _: "b"
+    print(text)
+    return 0

@@ -164,10 +164,6 @@ That example is much smaller than Aurora's real MIR, but it captures the idea:
 
 Aurora's real MIR goes well beyond the toy example. It includes:
 
-- `Spawn`
-  explicit task spawning
-- `Select`
-  concurrency selection as a terminator
 - `Try`
   `Result` propagation at the IR level
 - `Construct`
@@ -175,7 +171,9 @@ Aurora's real MIR goes well beyond the toy example. It includes:
 - `EnumVariant` and `VariantPayload`
   enum creation and payload extraction
 - `CallTarget::Member`
-  method and member-call lowering with receiver-place writeback support
+  method and member-call lowering with receiver-place writeback support, including `TaskGroup.start(...)` and `TaskGroup.start_soon(...)`
+- builtin call lowering for `wait_any(...)` and `wait_all(...)`
+  scheduler-backed task waiting through ordinary MIR call paths
 - `ForRange`
   a specialized loop terminator for range iteration
 - cleanup instructions

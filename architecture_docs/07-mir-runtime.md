@@ -129,7 +129,8 @@ Most interesting computation happens in `evaluate_rvalue`, which handles:
 - calls and method calls
 - casts
 - `try`
-- `spawn`
+- `TaskGroup.start(...)` and `TaskGroup.start_soon(...)`
+- `wait_any(...)` and `wait_all(...)`
 - vector/set/map literals
 - class construction
 - enum construction and payload extraction
@@ -163,15 +164,17 @@ Aurora's MIR runtime supports:
 - queues
 - tasks
 - task groups
-- `spawn`
-- `select`
+- `TaskGroup.start(...)`
+- `TaskGroup.start_soon(...)`
+- `wait_any(...)`
+- `wait_all(...)`
 - cancellation propagation
 
 Important details:
 
-- spawned tasks run in new host threads
+- task-group children run on scheduler-backed host threads with shared cancellation state
 - task groups provide child cancellation scopes
-- `select` polls arms in a loop and sleeps briefly between attempts
+- `wait_any(...)` and `wait_all(...)` reuse the shared runtime scheduler deadline helpers
 - `Queue.get(timeout=...)` and I/O methods use deadline-aware helpers
 
 ## Networking and I/O

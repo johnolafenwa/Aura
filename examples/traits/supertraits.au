@@ -1,0 +1,24 @@
+trait Named:
+    def name(borrow self) -> String
+
+trait Labelled: Named:
+    def label(borrow self) -> String:
+        return "name=" + self.name()
+
+class User:
+    name: String
+
+impl Named for User:
+    def name(borrow self) -> String:
+        return self.name
+
+impl Labelled for User:
+    pass
+
+def show[T: Labelled](value: T) -> None:
+    print(value.label())
+    print(value.name())
+
+def main() -> int32:
+    show(value=User(name="aurora"))
+    return 0

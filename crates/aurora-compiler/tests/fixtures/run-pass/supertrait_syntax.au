@@ -1,0 +1,22 @@
+trait A:
+    def a(borrow self) -> int32
+
+trait B: A:
+    def b(borrow self) -> int32
+
+class C:
+    x: int32
+
+impl A for C:
+    def a(borrow self) -> int32:
+        return self.x
+
+impl B for C:
+    def b(borrow self) -> int32:
+        return self.x + 1
+
+def main() -> int32:
+    c = C(x=10)
+    print(c.a())
+    print(c.b())
+    return 0

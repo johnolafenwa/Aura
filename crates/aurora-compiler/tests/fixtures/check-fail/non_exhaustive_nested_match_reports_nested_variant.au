@@ -1,0 +1,15 @@
+enum Inner:
+    Pair(int32, int32)
+    Solo(int32)
+
+enum Outer:
+    Wrapped(Inner)
+    Empty
+
+def describe(value: Outer) -> int32:
+    return match value:
+        case Outer.Wrapped(Inner.Pair(a, b)): a + b
+        case Outer.Empty: 0
+
+def main() -> int32:
+    return 0

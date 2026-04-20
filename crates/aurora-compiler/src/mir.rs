@@ -126,6 +126,39 @@ fn default_return_operand(ty: &Type) -> Operand {
     }
 }
 
+fn place_paths_overlap(left: &str, right: &str) -> bool {
+    let left_segments = left.split('.').collect::<Vec<_>>();
+    let right_segments = right.split('.').collect::<Vec<_>>();
+    if left_segments.first() != right_segments.first() {
+        return false;
+    }
+    let shared = left_segments
+        .iter()
+        .zip(right_segments.iter())
+        .take_while(|(lhs, rhs)| lhs == rhs)
+        .count();
+    shared == left_segments.len() || shared == right_segments.len()
+}
+
+fn rvalue_touches_place(value: &Rvalue, place: &str) -> bool {
+    match value {
+        Rvalue::Call { callee, args } => {
+            matches!(
+                callee,
+                CallTarget::Member {
+                    receiver_place: Some(receiver_place),
+                    ..
+                } if place_paths_overlap(receiver_place, place)
+            ) || args.iter().any(|arg| {
+                arg.writeback_place
+                    .as_ref()
+                    .is_some_and(|writeback_place| place_paths_overlap(writeback_place, place))
+            })
+        }
+        _ => false,
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirModule {
     pub functions: Vec<MirFunction>,
@@ -818,6 +851,7 @@ struct Lowerer<'a> {
     loop_stack: Vec<LoopLabels>,
     return_redirects: Vec<ReturnRedirect>,
     with_stack: Vec<String>,
+    match_writeback_stack: Vec<MatchWritebackState>,
     local_types: std::collections::BTreeMap<String, Type>,
     scoped_names: Vec<std::collections::HashMap<String, String>>,
 }
@@ -831,6 +865,11 @@ enum PatternWriteback {
         variant_name: String,
         payloads: Vec<PatternWriteback>,
     },
+}
+
+struct MatchWritebackState {
+    root: String,
+    dirty: bool,
 }
 
 struct LoopLabels {
@@ -904,6 +943,7 @@ impl<'a> Lowerer<'a> {
             loop_stack: Vec::new(),
             return_redirects: Vec::new(),
             with_stack: Vec::new(),
+            match_writeback_stack: Vec::new(),
             local_types: std::collections::BTreeMap::new(),
             scoped_names: Vec::new(),
         }
@@ -1520,20 +1560,35 @@ impl<'a> Lowerer<'a> {
                 writeback_root.is_some(),
             );
             self.switch_to(arm_block);
+            if let Some(writeback_place) = writeback_root.as_ref() {
+                self.match_writeback_stack.push(MatchWritebackState {
+                    root: writeback_place.clone(),
+                    dirty: false,
+                });
+            }
             self.lower_stmts(&arm.body);
+            let skip_writeback = self
+                .match_writeback_stack
+                .last()
+                .is_some_and(|state| state.dirty);
             if !self.current_terminated() {
                 if let (Some(writeback_place), Some(writeback)) =
                     (writeback_root.as_ref(), pattern_writeback.as_ref())
                 {
-                    let updated = self.materialize_pattern_writeback(writeback);
-                    self.emit(Instruction::Assign {
-                        target: writeback_place.clone(),
-                        value: Rvalue::Use(updated),
-                    });
+                    if !skip_writeback {
+                        let updated = self.materialize_pattern_writeback(writeback);
+                        self.emit(Instruction::Assign {
+                            target: writeback_place.clone(),
+                            value: Rvalue::Use(updated),
+                        });
+                    }
                 }
             }
             if !self.current_terminated() {
                 self.terminate(Terminator::Goto(self.label(after_block)));
+            }
+            if writeback_root.is_some() {
+                self.match_writeback_stack.pop();
             }
             self.scoped_names.pop();
             next_case_block = next_block;
@@ -2429,24 +2484,39 @@ impl<'a> Lowerer<'a> {
                 writeback_root.is_some(),
             );
             self.switch_to(arm_block);
+            if let Some(writeback_place) = writeback_root.as_ref() {
+                self.match_writeback_stack.push(MatchWritebackState {
+                    root: writeback_place.clone(),
+                    dirty: false,
+                });
+            }
             let value = self.lower_expr(&arm.value);
             self.emit(Instruction::Assign {
                 target: result.clone(),
                 value: Rvalue::Use(value),
             });
+            let skip_writeback = self
+                .match_writeback_stack
+                .last()
+                .is_some_and(|state| state.dirty);
             if !self.current_terminated() {
                 if let (Some(writeback_place), Some(writeback)) =
                     (writeback_root.as_ref(), pattern_writeback.as_ref())
                 {
-                    let updated = self.materialize_pattern_writeback(writeback);
-                    self.emit(Instruction::Assign {
-                        target: writeback_place.clone(),
-                        value: Rvalue::Use(updated),
-                    });
+                    if !skip_writeback {
+                        let updated = self.materialize_pattern_writeback(writeback);
+                        self.emit(Instruction::Assign {
+                            target: writeback_place.clone(),
+                            value: Rvalue::Use(updated),
+                        });
+                    }
                 }
             }
             if !self.current_terminated() {
                 self.terminate(Terminator::Goto(self.label(after_block)));
+            }
+            if writeback_root.is_some() {
+                self.match_writeback_stack.pop();
             }
             self.scoped_names.pop();
             next_case_block = next_block;
@@ -3486,6 +3556,13 @@ impl<'a> Lowerer<'a> {
                                 }
                             }
                         }
+                        if let ExprKind::Name(enum_name) = &object.kind {
+                            if enum_name == "Option" && field == "Some" && args.len() == 1 {
+                                return self
+                                    .infer_expr_type(&args[0].value)
+                                    .map(|inner| Type::Named("Option".to_string(), vec![inner]));
+                            }
+                        }
                         let receiver_type = receiver_type?;
                         if let Some(enum_ty) = self.builtin_enum_variant_type(&receiver_type, field)
                         {
@@ -4364,9 +4441,22 @@ impl<'a> Lowerer<'a> {
     }
 
     fn emit(&mut self, instruction: Instruction) {
+        self.mark_match_writeback_dirty(&instruction);
         self.blocks[self.current_block]
             .instructions
             .push(instruction);
+    }
+
+    fn mark_match_writeback_dirty(&mut self, instruction: &Instruction) {
+        let Some(state) = self.match_writeback_stack.last_mut() else {
+            return;
+        };
+        let Instruction::Assign { target, value } = instruction else {
+            return;
+        };
+        if place_paths_overlap(target, &state.root) || rvalue_touches_place(value, &state.root) {
+            state.dirty = true;
+        }
     }
 
     fn emit_cleanup_range(&mut self, depth: usize, cancel_before_cleanup: bool) {

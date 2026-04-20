@@ -1,0 +1,16 @@
+trait Base:
+    def base(borrow self) -> int32
+
+trait Derived: Base:
+    def derived(borrow self) -> int32
+
+class Counter:
+    value: int32
+
+impl Derived for Counter:
+    def derived(borrow self) -> int32:
+        return self.value
+
+def main() -> int32:
+    counter = Counter(value=7)
+    return counter.derived()

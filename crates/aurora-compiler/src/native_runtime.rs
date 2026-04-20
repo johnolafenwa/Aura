@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::process;
 use std::slice;
 use std::str;
@@ -20,44 +20,21 @@ use crate::runtime_value::{
     process_stdio_null, process_stdio_pipe, process_supervisor_wait_cancelled,
     process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
     process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
-    queue_receive_closed, queue_receive_item, queue_receive_timed_out, render_float, result_err,
-    result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
-    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
-    spawn_lightweight_task_with_cancellation, task_result_cancelled, task_result_ready,
-    task_result_timed_out, wait_all_cancelled, wait_all_ready, wait_all_timed_out,
-    wait_any_cancelled, wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
-    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpListenerValue,
-    HttpResponseValue, InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus,
-    ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue,
-    TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
-    UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue,
-    WebSocketValue,
+    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
+    render_float, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
+    send_error_cancelled, send_error_closed, send_error_full, send_error_timed_out,
+    sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation, task_result_cancelled,
+    task_result_ready, task_result_timed_out, wait_all_cancelled, wait_all_ready,
+    wait_all_timed_out, wait_any_cancelled, wait_any_ready, wait_any_timed_out,
+    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, ProcessChildValue,
+    ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
+    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RuntimeSchedulerWakeReason,
+    SendValueError, SetValue, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, UdpSocketValue, UnixListenerValue,
+    UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::Type;
-
-const DIRECT_MAX_READ_ALL_BYTES: usize = 1024 * 1024;
-
-fn direct_read_all_limit_error(label: &str) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidData,
-        format!(
-            "{} exceeded the supported read_all limit of {} bytes",
-            label, DIRECT_MAX_READ_ALL_BYTES
-        ),
-    )
-}
-
-fn direct_read_file_limited(path: &str, label: &str) -> io::Result<Vec<u8>> {
-    let mut file = std::fs::File::open(path)?;
-    let mut limited = (&mut file).take((DIRECT_MAX_READ_ALL_BYTES as u64) + 1);
-    let mut bytes = Vec::new();
-    limited.read_to_end(&mut bytes)?;
-    if bytes.len() > DIRECT_MAX_READ_ALL_BYTES {
-        return Err(direct_read_all_limit_error(label));
-    }
-    Ok(bytes)
-}
 
 fn write_stdout(text: &str) {
     let mut stdout = io::stdout().lock();
@@ -3180,8 +3157,9 @@ pub extern "C" fn aurora_direct_fs_read_to_string(path: *mut OpaqueValue) -> *mu
     match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
             move || {
-                let bytes = direct_read_file_limited(&path, "fs.read_to_string")?;
-                String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+                let bytes = read_file_limited(&path, "fs.read_to_string")?;
+                String::from_utf8(bytes)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
             },
             Some(&current_cancellation()),
         ) {
@@ -3199,7 +3177,7 @@ pub extern "C" fn aurora_direct_fs_read_to_string(path: *mut OpaqueValue) -> *mu
 pub extern "C" fn aurora_direct_fs_read_bytes(path: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
-            move || direct_read_file_limited(&path, "fs.read_bytes"),
+            move || read_file_limited(&path, "fs.read_bytes"),
             Some(&current_cancellation()),
         ) {
             Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),

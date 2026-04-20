@@ -68,6 +68,7 @@ fn trait_decl(name: &str, type_params: Vec<&str>) -> TraitDecl {
         public: true,
         name: name.to_string(),
         type_params: type_params.into_iter().map(str::to_string).collect(),
+        supertraits: Vec::new(),
         methods: Vec::new(),
         span: Span::new(1, 1),
     }
@@ -86,6 +87,7 @@ fn trait_info(name: &str, type_params: Vec<&str>) -> TraitInfo {
     TraitInfo {
         module_name: "<test>".to_string(),
         decl: trait_decl(name, type_params),
+        supertraits: Vec::new(),
         methods: BTreeMap::new(),
     }
 }
@@ -292,6 +294,7 @@ fn local_binding(
         ty,
         assignable,
         mutable_place,
+        managed_resource: false,
         passing,
         borrow_origin: None,
         borrow_label: None,
@@ -562,6 +565,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             TraitInfo {
                 module_name: program.module_name.clone(),
                 decl: trait_decl("Not", vec!["Out"]),
+                supertraits: Vec::new(),
                 methods: BTreeMap::from([(
                     "not".to_string(),
                     TraitMethodInfo {
@@ -580,6 +584,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             TraitInfo {
                 module_name: program.module_name.clone(),
                 decl: trait_decl("Neg", vec!["Out"]),
+                supertraits: Vec::new(),
                 methods: BTreeMap::from([(
                     "neg".to_string(),
                     TraitMethodInfo {
@@ -3949,6 +3954,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             ty: Type::named("int32"),
             assignable: true,
             mutable_place: true,
+            managed_resource: false,
             passing: ReceiverKind::Value,
             borrow_origin: None,
             borrow_label: None,
@@ -3973,6 +3979,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             ty: Type::named("String"),
             assignable: true,
             mutable_place: false,
+            managed_resource: false,
             passing: ReceiverKind::Borrow,
             borrow_origin: Some("borrowed".to_string()),
             borrow_label: None,
@@ -3994,6 +4001,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             ty: Type::named("String"),
             assignable: true,
             mutable_place: true,
+            managed_resource: false,
             passing: ReceiverKind::Value,
             borrow_origin: None,
             borrow_label: None,
@@ -6310,6 +6318,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 ty: Type::named("Counter"),
                 assignable: true,
                 mutable_place: true,
+                managed_resource: false,
                 passing: ReceiverKind::BorrowMut,
                 borrow_origin: Some("counter".to_string()),
                 borrow_label: None,
@@ -6324,6 +6333,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 ty: Type::named("Counter"),
                 assignable: false,
                 mutable_place: false,
+                managed_resource: false,
                 passing: ReceiverKind::Borrow,
                 borrow_origin: Some("borrowed".to_string()),
                 borrow_label: None,
@@ -6338,6 +6348,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 ty: Type::named("Counter"),
                 assignable: false,
                 mutable_place: false,
+                managed_resource: false,
                 passing: ReceiverKind::Borrow,
                 borrow_origin: Some("self".to_string()),
                 borrow_label: None,
@@ -6415,6 +6426,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             ty: Type::named("Counter"),
             assignable: true,
             mutable_place: false,
+            managed_resource: false,
             passing: ReceiverKind::Value,
             borrow_origin: None,
             borrow_label: None,

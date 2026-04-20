@@ -62,6 +62,18 @@ missing: Option[int32] = Option.None   # an empty optional
 
 In practice, the distinction is clear from context. When you see `Option.None` in a `match` arm, it always refers to the enum variant.
 
+`Option.Some(...)` can infer `T` from its payload even without an annotation:
+
+```python
+count = Option.Some(5)
+```
+
+`Option.None` still needs an expected `Option[T]` type because there is no payload to infer from:
+
+```python
+missing: Option[int32] = Option.None
+```
+
 ## `SendError[T]`
 
 `SendError[T]` is the error type returned when a queue send fails because the queue is closed or a waiting send is cancelled. It wraps the value that could not be sent, so you can recover it:

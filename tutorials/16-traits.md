@@ -32,6 +32,19 @@ trait Mapper[T]:
     def map(borrow self, value: T) -> T
 ```
 
+Traits may also inherit from other traits:
+
+```python
+trait Named:
+    def name(borrow self) -> String
+
+trait Labelled: Named:
+    def label(borrow self) -> String:
+        return "name=" + self.name()
+```
+
+When a type implements `Labelled`, it must also implement `Named`. Generic bounds such as `T: Labelled` inherit the methods and obligations of the supertraits.
+
 ## Implementing A Trait
 
 Use `impl Trait for Type:` to provide the trait's methods for a concrete type:
@@ -142,6 +155,8 @@ def show[T: Describe](animal: T) -> None:
 
 See [examples/traits/generic_dispatch_multiple_types.au](../examples/traits/generic_dispatch_multiple_types.au), [examples/traits/generic_trait_bounds.au](../examples/traits/generic_trait_bounds.au), and [examples/traits/specialized_trait_dispatch.au](../examples/traits/specialized_trait_dispatch.au).
 
+See [examples/traits/supertraits.au](../examples/traits/supertraits.au) for a runnable supertrait example.
+
 ## Associated Methods
 
 Traits can declare methods without a receiver. They are called through the implementing type name:
@@ -234,6 +249,7 @@ The implemented trait surface supports:
 - `impl Trait for Type:` blocks
 - specialized impls like `impl Trait for GenericType[ConcreteType]:`
 - generic trait declarations and generic impl headers
+- supertrait declarations such as `trait Child: Parent:`
 - bounded generic functions, methods, classes, and enums
 - specialized bounds like `T: Mapper[int32]`
 - multiple bounds with `T: A + B`

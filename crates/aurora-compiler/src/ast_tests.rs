@@ -60,6 +60,7 @@ fn item_name_matches_decl_name() {
         public: true,
         name: "Display".to_string(),
         type_params: vec![],
+        supertraits: vec![],
         methods: vec![dummy_function("show")],
         span: Span::new(1, 1),
     });

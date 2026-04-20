@@ -1,0 +1,17 @@
+enum Opt:
+    Some(Vec[int32])
+    None
+
+def main() -> int32:
+    mut x: Opt = Opt.Some([1, 2])
+    match borrow mut x:
+        case Some(y):
+            match borrow mut x:
+                case Some(z):
+                    z.push(500)
+                case None:
+                    print("none")
+            print(y.len())
+        case None:
+            print("none")
+    return 0

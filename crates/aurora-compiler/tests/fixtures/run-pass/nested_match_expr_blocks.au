@@ -1,0 +1,21 @@
+enum Outer:
+    A
+    B
+
+enum Inner:
+    X
+    Y
+
+def describe(o: Outer, i: Inner) -> int32:
+    return match o:
+        case Outer.A:
+            match i:
+                case Inner.X: 1
+                case Inner.Y: 2
+        case Outer.B: 3
+
+def main() -> int32:
+    print(describe(Outer.A, Inner.X))
+    print(describe(Outer.A, Inner.Y))
+    print(describe(Outer.B, Inner.X))
+    return 0
