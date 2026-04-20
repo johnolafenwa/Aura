@@ -1,0 +1,24 @@
+enum Inner:
+    Pair(int32, int32)
+    Solo(int32)
+
+enum Outer:
+    Wrapped(Inner)
+    Empty
+
+def render(value: Outer) -> int32:
+    mut score: int32 = -1
+    match value:
+        case Outer.Wrapped(Inner.Pair(a, b)):
+            score = a + b
+        case Outer.Wrapped(Inner.Solo(x)):
+            score = x
+        case Outer.Empty:
+            score = 0
+    return score
+
+def main() -> int32:
+    print(render(Outer.Wrapped(Inner.Pair(2, 3))))
+    print(render(Outer.Wrapped(Inner.Solo(9))))
+    print(render(Outer.Empty))
+    return 0

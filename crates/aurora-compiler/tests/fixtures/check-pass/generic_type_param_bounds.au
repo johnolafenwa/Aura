@@ -17,7 +17,7 @@ enum MaybeNamed[T: Named]:
 
 def main() -> int32:
     wrapped = Wrapper(value=User(label="aurora"))
-    value: MaybeNamed[User] = MaybeNamed.Empty
+    value: MaybeNamed[User] = MaybeNamed[User].Empty
     print(wrapped.value.name())
     match value:
         case MaybeNamed.Some(inner):

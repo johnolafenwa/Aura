@@ -300,6 +300,7 @@ fn local_binding(
             .iter()
             .map(|field| (*field).to_string())
             .collect(),
+        frozen_places: BTreeSet::new(),
     }
 }
 
@@ -3746,11 +3747,12 @@ fn sema_helper_edges_cover_copy_defaults_literal_patterns_and_module_members() {
         .expect_err("classes require construction")
         .message
         .contains("must be constructed"));
-    assert!(checker
-        .resolve_member_type(&Type::Module("pkg".to_string()), "Status", Span::new(1, 1))
-        .expect_err("enums require variants")
-        .message
-        .contains("used via one of its variants"));
+    assert_eq!(
+        checker
+            .resolve_member_type(&Type::Module("pkg".to_string()), "Status", Span::new(1, 1))
+            .expect("module enums should resolve to enum types for qualified variant access"),
+        Type::Named("Status".to_string(), Vec::new())
+    );
     assert!(checker
         .resolve_member_type(&Type::Module("pkg".to_string()), "missing", Span::new(1, 1))
         .expect_err("missing member should fail")
@@ -3952,6 +3954,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             borrow_label: None,
             moved: false,
             moved_fields: BTreeSet::new(),
+            frozen_places: BTreeSet::new(),
         },
     )]);
     checker
@@ -3975,6 +3978,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             borrow_label: None,
             moved: false,
             moved_fields: BTreeSet::new(),
+            frozen_places: BTreeSet::new(),
         },
     )]);
     let borrowed_error = checker
@@ -3995,6 +3999,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             borrow_label: None,
             moved: true,
             moved_fields: BTreeSet::new(),
+            frozen_places: BTreeSet::new(),
         },
     )]);
     let moved_error = checker
@@ -5895,12 +5900,12 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         .message
         .contains("must be constructed with `(...)`"));
 
-    let enum_error = checker
-        .resolve_member_type(&Type::Module("pkg.tools".to_string()), "Status", span)
-        .expect_err("module enums should require variant syntax");
-    assert!(enum_error
-        .message
-        .contains("must be used via one of its variants"));
+    assert_eq!(
+        checker
+            .resolve_member_type(&Type::Module("pkg.tools".to_string()), "Status", span)
+            .expect("module enums should resolve to enum types for qualified variant access"),
+        Type::Named("Status".to_string(), Vec::new())
+    );
 
     let missing_error = checker
         .resolve_member_type(&Type::Module("pkg.tools".to_string()), "missing", span)
@@ -6310,6 +6315,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 borrow_label: None,
                 moved: false,
                 moved_fields: BTreeSet::from(["value.inner".to_string()]),
+                frozen_places: BTreeSet::new(),
             },
         ),
         (
@@ -6323,6 +6329,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 borrow_label: None,
                 moved: false,
                 moved_fields: BTreeSet::new(),
+                frozen_places: BTreeSet::new(),
             },
         ),
         (
@@ -6336,6 +6343,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 borrow_label: None,
                 moved: false,
                 moved_fields: BTreeSet::new(),
+                frozen_places: BTreeSet::new(),
             },
         ),
     ]);
@@ -6412,6 +6420,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             borrow_label: None,
             moved: false,
             moved_fields: BTreeSet::new(),
+            frozen_places: BTreeSet::new(),
         },
     )]);
     let receiver_error = match checker.prepare_method_receiver_borrows(
@@ -7644,7 +7653,7 @@ def main():
     )
     .expect_err("top-level statements and main should not mix");
     assert!(mixed_top_level.message.contains(
-        "files cannot mix top-level executable statements with an explicit `main` function"
+        "files cannot mix top-level statements, including declarations, with an explicit `main` function"
     ));
 
     let main_params = crate::check_source(

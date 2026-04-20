@@ -1,0 +1,11 @@
+class Holder:
+    name: String
+
+def read_ref_take(href: borrow Holder, h: Holder):
+    print(href.name)
+    print(h.name)
+
+def main() -> int32:
+    h = Holder(name="aurora")
+    read_ref_take(h, h)
+    return 0

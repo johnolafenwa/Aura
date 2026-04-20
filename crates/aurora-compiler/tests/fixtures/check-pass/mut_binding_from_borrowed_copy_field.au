@@ -1,0 +1,8 @@
+class Counter:
+    value: int32
+
+def update(counter: borrow Counter) -> int32:
+    mut current: int32 = counter.value
+    current = current + 1
+    widened: int64 = (counter.value) as int64
+    return current + (widened as int32)

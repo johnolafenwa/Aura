@@ -1,12 +1,9 @@
 def main() -> int32:
-    mut infinite: float64 = 0.0
     match parse_float64("inf"):
         case Result.Ok(value):
-            infinite = value
+            print(value)
         case Result.Err(message):
             print(message)
-            return 1
     nan_value: float64 = sqrt(-1.0)
-    print(infinite)
     print(nan_value)
     return 0

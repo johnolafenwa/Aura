@@ -25,6 +25,8 @@ impl fmt::Display for Span {
 pub struct Diagnostic {
     pub message: String,
     pub span: Option<Span>,
+    pub render_path: Option<String>,
+    pub render_source: Option<String>,
 }
 
 impl Diagnostic {
@@ -32,6 +34,8 @@ impl Diagnostic {
         Self {
             message: message.into(),
             span: None,
+            render_path: None,
+            render_source: None,
         }
     }
 
@@ -39,10 +43,28 @@ impl Diagnostic {
         Self {
             message: message.into(),
             span: Some(span),
+            render_path: None,
+            render_source: None,
         }
     }
 
+    pub fn with_render_context(
+        mut self,
+        path: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Self {
+        self.render_path = Some(path.into());
+        self.render_source = Some(source.into());
+        self
+    }
+
     pub fn render_with_source(&self, path: &str, source: &str) -> String {
+        let (path, source) = match (&self.render_path, &self.render_source) {
+            (Some(render_path), Some(render_source)) => {
+                (render_path.as_str(), render_source.as_str())
+            }
+            _ => (path, source),
+        };
         match self.span {
             Some(span) => render_annotated(path, source, span, &self.message),
             None => format!("error: {}\n --> {}", self.message, path),

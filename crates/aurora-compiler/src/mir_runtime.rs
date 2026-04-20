@@ -4,6 +4,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::slice;
 use std::str;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::UnaryOp;
@@ -14,11 +15,11 @@ use crate::mir::{
     MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::runtime_value::{
-    cast_numeric_value, decode_process_restart_policy, decode_process_stdio, io_error,
-    io_read_line, option_none, option_some, process_error_cancelled, process_error_io,
-    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
-    process_stdio_inherit, process_stdio_null, process_stdio_pipe,
-    process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    cancel_current_lightweight_task, cast_numeric_value, decode_process_restart_policy,
+    decode_process_stdio, io_error, io_read_line, option_none, option_some,
+    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
+    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
+    process_stdio_pipe, process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, result_err, result_ok, run_blocking_io,
@@ -39,25 +40,72 @@ use crate::sema::{substitute_type, Type};
 
 pub fn run(module: &MirModule) -> Result<RunOutput> {
     let module = module.clone();
-    let result = panic::catch_unwind(AssertUnwindSafe(move || {
-        let stdout = Arc::new(Mutex::new(String::new()));
-        let task_stdout = stdout.clone();
-        let value = run_lightweight_root_task(move || {
-            let mut runtime = MirRuntime::new(module, task_stdout, CancellationContext::default());
-            runtime.run_main()
-        })?;
-        let rendered_stdout = lock_stdout(&stdout).clone();
-        Ok(RunOutput {
-            value,
-            stdout: rendered_stdout,
+    thread::Builder::new()
+        .stack_size(MIR_RUNTIME_STACK_SIZE)
+        .spawn(move || {
+            let result = panic::catch_unwind(AssertUnwindSafe(move || {
+                let stdout = Arc::new(Mutex::new(String::new()));
+                let task_stdout = stdout.clone();
+                let value = if module_uses_lightweight_tasks(&module) {
+                    run_lightweight_root_task(move || {
+                        let mut runtime =
+                            MirRuntime::new(module, task_stdout, CancellationContext::default());
+                        runtime.run_main()
+                    })?
+                } else {
+                    let mut runtime =
+                        MirRuntime::new(module, task_stdout, CancellationContext::default());
+                    runtime.run_main()?
+                };
+                let rendered_stdout = lock_stdout(&stdout).clone();
+                Ok(RunOutput {
+                    value,
+                    stdout: rendered_stdout,
+                })
+            }));
+            match result {
+                Ok(result) => result,
+                Err(_) => Err(Diagnostic::new(
+                    "Aurora MIR runtime panicked while executing the program",
+                )),
+            }
         })
-    }));
-    match result {
-        Ok(result) => result,
-        Err(_) => Err(Diagnostic::new(
-            "Aurora MIR runtime panicked while executing the program",
-        )),
-    }
+        .map_err(|error| Diagnostic::new(format!("failed to start MIR runtime thread: {}", error)))?
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+}
+
+fn module_uses_lightweight_tasks(module: &MirModule) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.top_level.iter())
+        .any(function_uses_lightweight_tasks)
+}
+
+fn function_uses_lightweight_tasks(function: &MirFunction) -> bool {
+    function.blocks.iter().any(|block| {
+        block
+            .instructions
+            .iter()
+            .any(|instruction| match instruction {
+                Instruction::Assign { value, .. } => rvalue_uses_lightweight_tasks(value),
+                Instruction::Eval { .. }
+                | Instruction::PushCleanup { .. }
+                | Instruction::PopCleanup { .. } => false,
+            })
+    })
+}
+
+fn rvalue_uses_lightweight_tasks(value: &Rvalue) -> bool {
+    matches!(value, Rvalue::StartTask { .. })
+        || matches!(
+            value,
+            Rvalue::Call {
+                callee: CallTarget::Name(name),
+                ..
+            } if name == "process::run"
+        )
 }
 
 fn lock_stdout(stdout: &Arc<Mutex<String>>) -> std::sync::MutexGuard<'_, String> {
@@ -86,6 +134,7 @@ pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> R
 // stack ceiling. Recursive Aurora programs should fail with a diagnostic before
 // the runtime thread can overflow its Rust stack.
 const MAX_CALL_DEPTH: usize = 256;
+const MIR_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
 const MAX_EMBEDDED_RUNTIME_BYTES: usize = 1 << 30;
 const MAX_RUNTIME_BLOCKS: usize = 1_000_000;
 const MAX_RUNTIME_INSTRUCTIONS: usize = 1_000_000;
@@ -296,16 +345,58 @@ impl Env {
         self.values.insert(name, value);
     }
 
+    fn read_member(&self, place: &str, field: &str) -> Result<Value> {
+        let segments = split_place_segments(place)?;
+        let Some((root, rest)) = segments.split_first() else {
+            return Err(Diagnostic::new("empty MIR place"));
+        };
+        let mut current = self
+            .values
+            .get(root)
+            .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?;
+        let mut index = 0usize;
+        while index < rest.len() {
+            let segment = &rest[index];
+            let Value::Instance(instance) = current else {
+                return Err(Diagnostic::new(format!(
+                    "cannot access field `{}` on non-instance MIR place `{}`",
+                    segment, place
+                )));
+            };
+            current = instance.fields.get(segment).ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "class `{}` has no field `{}` in MIR place `{}`",
+                    instance.class_name, segment, place
+                ))
+            })?;
+            index += 1;
+        }
+        let Value::Instance(instance) = current else {
+            return Err(Diagnostic::new(format!(
+                "cannot access field `{}` on non-instance MIR place `{}`",
+                field, place
+            )));
+        };
+        instance.fields.get(field).cloned().ok_or_else(|| {
+            Diagnostic::new(format!(
+                "class `{}` has no field `{}` in MIR place `{}`",
+                instance.class_name, field, place
+            ))
+        })
+    }
+
     fn read_place(&self, place: &str) -> Result<Value> {
-        let mut segments = place.split('.');
-        let Some(root) = segments.next() else {
+        let segments = split_place_segments(place)?;
+        let Some((root, rest)) = segments.split_first() else {
             return Err(Diagnostic::new("empty MIR place"));
         };
         let mut value = match self.values.get(root).cloned() {
             Some(value) => value,
             None => return Err(Diagnostic::new(format!("unknown MIR place `{}`", place))),
         };
-        for segment in segments {
+        let mut index = 0usize;
+        while index < rest.len() {
+            let segment = &rest[index];
             let Value::Instance(instance) = value else {
                 return Err(Diagnostic::new(format!(
                     "cannot access field `{}` on non-instance MIR place `{}`",
@@ -321,12 +412,13 @@ impl Env {
                     )))
                 }
             };
+            index += 1;
         }
         Ok(value)
     }
 
     fn write_place(&mut self, place: &str, value: Value) -> Result<()> {
-        let segments = place.split('.').collect::<Vec<_>>();
+        let segments = split_place_segments(place)?;
         let Some((root, rest)) = segments.split_first() else {
             return Err(Diagnostic::new("empty MIR place"));
         };
@@ -336,11 +428,15 @@ impl Env {
             return Ok(());
         }
 
-        let mut root_value = match self.values.get(*root).cloned() {
+        let mut root_value = match self.values.get(root).cloned() {
             Some(value) => value,
             None => return Err(Diagnostic::new(format!("unknown MIR place `{}`", place))),
         };
-        write_nested_place(&mut root_value, rest, value, place)?;
+        let rest_refs = rest
+            .iter()
+            .map(|segment| segment.as_str())
+            .collect::<Vec<_>>();
+        write_nested_place(&mut root_value, &rest_refs, value, place)?;
         self.values.insert((*root).to_string(), root_value);
         Ok(())
     }
@@ -352,6 +448,34 @@ impl Env {
     fn set_place_type(&mut self, place: &str, ty: Type) {
         self.types.insert(place.to_string(), ty);
     }
+}
+
+fn split_place_segments(place: &str) -> Result<Vec<String>> {
+    if place.is_empty() {
+        return Err(Diagnostic::new("empty MIR place"));
+    }
+
+    let bytes = place.as_bytes();
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'.' {
+            if current.is_empty() {
+                return Err(Diagnostic::new(format!("invalid MIR place `{}`", place)));
+            }
+            segments.push(current);
+            current = String::new();
+        } else {
+            current.push(bytes[index] as char);
+        }
+        index += 1;
+    }
+    if current.is_empty() {
+        return Err(Diagnostic::new(format!("invalid MIR place `{}`", place)));
+    }
+    segments.push(current);
+    Ok(segments)
 }
 
 fn write_nested_place(
@@ -412,6 +536,8 @@ impl MirRuntime {
     }
 
     fn find_trait_impl_method(&self, receiver_ty: &Type, field: &str) -> Option<&MirMethod> {
+        let mut best = None;
+        let mut best_specificity = 0usize;
         for trait_impl in &self.trait_impls {
             let mut type_params = std::collections::BTreeSet::new();
             collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
@@ -426,11 +552,18 @@ impl MirRuntime {
             }
             for method in &trait_impl.methods {
                 if method.name == field {
-                    return Some(method);
+                    let specificity = crate::sema::trait_impl_specificity_parts(
+                        &trait_impl.for_type,
+                        &trait_impl.trait_args,
+                    );
+                    if best.is_none() || specificity > best_specificity {
+                        best = Some(method);
+                        best_specificity = specificity;
+                    }
                 }
             }
         }
-        None
+        best
     }
 
     fn find_from_trait_impl_method(
@@ -438,6 +571,8 @@ impl MirRuntime {
         source_ty: &Type,
         target_ty: &Type,
     ) -> Option<MirFunction> {
+        let mut best = None;
+        let mut best_specificity = 0usize;
         for trait_impl in &self.trait_impls {
             if trait_impl.trait_name != "From" || trait_impl.trait_args.len() != 1 {
                 continue;
@@ -463,12 +598,19 @@ impl MirRuntime {
             for method in &trait_impl.methods {
                 if method.name == "from" {
                     if let Some(function) = self.functions.get(&method.function_name) {
-                        return Some(function.clone());
+                        let specificity = crate::sema::trait_impl_specificity_parts(
+                            &trait_impl.for_type,
+                            &trait_impl.trait_args,
+                        );
+                        if best.is_none() || specificity > best_specificity {
+                            best = Some(function.clone());
+                            best_specificity = specificity;
+                        }
                     }
                 }
             }
         }
-        None
+        best
     }
 
     fn current_return_type(&self) -> Option<&Type> {
@@ -513,16 +655,25 @@ impl MirRuntime {
         class_name: &str,
         field: &str,
     ) -> Option<&MirMethod> {
-        let mut first = None;
+        let mut best = None;
+        let mut best_specificity = 0usize;
+        let mut ambiguous = false;
         for trait_impl in &self.trait_impls {
             match &trait_impl.for_type {
                 Type::Named(name, _) if name == class_name => {
                     for method in &trait_impl.methods {
                         if method.name == field {
-                            if first.is_some() {
-                                return None;
+                            let specificity = crate::sema::trait_impl_specificity_parts(
+                                &trait_impl.for_type,
+                                &trait_impl.trait_args,
+                            );
+                            if best.is_none() || specificity > best_specificity {
+                                best = Some(method);
+                                best_specificity = specificity;
+                                ambiguous = false;
+                            } else if specificity == best_specificity {
+                                ambiguous = true;
                             }
-                            first = Some(method);
                             break;
                         }
                     }
@@ -530,7 +681,11 @@ impl MirRuntime {
                 _ => {}
             }
         }
-        first
+        if ambiguous {
+            None
+        } else {
+            best
+        }
     }
 
     fn run_main(&mut self) -> Result<Value> {
@@ -730,15 +885,17 @@ impl MirRuntime {
     }
 
     fn resolve_place_type(&self, place: &str, env: &Env) -> Option<Type> {
-        let mut segments = place.split('.');
-        let root = segments.next()?;
+        let segments = split_place_segments(place).ok()?;
+        let (root, rest) = segments.split_first()?;
         let mut current = env.place_type(root).cloned().or_else(|| {
             env.read_place(root)
                 .ok()
                 .and_then(|value| self.infer_runtime_value_type(&value))
         })?;
 
-        for segment in segments {
+        let mut index = 0usize;
+        while index < rest.len() {
+            let segment = &rest[index];
             let Type::Named(class_name, args) = current else {
                 return None;
             };
@@ -746,8 +903,9 @@ impl MirRuntime {
                 return None;
             }
             let class = self.classes.get(&class_name)?;
-            let field = class.fields.iter().find(|field| field.name == segment)?;
+            let field = class.fields.iter().find(|field| field.name == *segment)?;
             current = field.ty.clone();
+            index += 1;
         }
 
         Some(current)
@@ -1361,23 +1519,26 @@ impl MirRuntime {
                 })?;
                 Ok(RvalueOutcome::Value(payload))
             }
-            Rvalue::Member { object, field } => {
-                let object = self.evaluate_operand(object, env)?;
-                let Value::Instance(instance) = object else {
-                    return Err(Diagnostic::new(format!(
-                        "cannot access field `{}` on non-instance value `{}`",
-                        field,
-                        object.render()
-                    )));
-                };
-                let value = instance.fields.get(field).cloned().ok_or_else(|| {
-                    Diagnostic::new(format!(
-                        "class `{}` has no field `{}`",
-                        instance.class_name, field
-                    ))
-                })?;
-                Ok(RvalueOutcome::Value(value))
-            }
+            Rvalue::Member { object, field } => match object {
+                Operand::Place(place) => Ok(RvalueOutcome::Value(env.read_member(place, field)?)),
+                _ => {
+                    let object = self.evaluate_operand(object, env)?;
+                    let Value::Instance(instance) = object else {
+                        return Err(Diagnostic::new(format!(
+                            "cannot access field `{}` on non-instance value `{}`",
+                            field,
+                            object.render()
+                        )));
+                    };
+                    let value = instance.fields.get(field).cloned().ok_or_else(|| {
+                        Diagnostic::new(format!(
+                            "class `{}` has no field `{}`",
+                            instance.class_name, field
+                        ))
+                    })?;
+                    Ok(RvalueOutcome::Value(value))
+                }
+            },
         }
     }
 
@@ -1499,10 +1660,15 @@ impl MirRuntime {
                             duration
                         ))
                     })?;
-                    sleep_with_runtime_scheduler(
-                        std::time::Duration::from_millis(duration),
-                        Some(&self.cancellation),
-                    );
+                    if matches!(
+                        sleep_with_runtime_scheduler(
+                            std::time::Duration::from_millis(duration),
+                            Some(&self.cancellation),
+                        ),
+                        RuntimeSchedulerWakeReason::Cancelled
+                    ) {
+                        cancel_current_lightweight_task();
+                    }
                     return Ok(Value::Unit);
                 }
 
@@ -1621,7 +1787,10 @@ impl MirRuntime {
                     let bound = bind_builtin_args(&["text"], values)?;
                     return match &bound[0].value {
                         Value::String(text) => match text.parse::<f64>() {
-                            Ok(value) => Ok(result_ok(Value::Float(value))),
+                            Ok(value) if value.is_finite() => Ok(result_ok(Value::Float(value))),
+                            Ok(_) => Ok(result_err(Value::String(
+                                "float must be finite".to_string(),
+                            ))),
                             Err(error) => Ok(result_err(Value::String(error.to_string()))),
                         },
                         other => Err(Diagnostic::new(format!(
@@ -3261,7 +3430,7 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["path"], values)?;
                 let path = expect_string_value(&bound[0].value, "fs.create_dir(...)")?;
                 match run_blocking_io(
-                    move || std::fs::create_dir_all(path),
+                    move || crate::runtime_value::create_dir_once(path),
                     Some(&self.cancellation),
                 ) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
@@ -3292,8 +3461,10 @@ impl MirRuntime {
             "fs::remove_file" => {
                 let bound = bind_builtin_args(&["path"], values)?;
                 let path = expect_string_value(&bound[0].value, "fs.remove_file(...)")?;
-                match run_blocking_io(move || std::fs::remove_file(path), Some(&self.cancellation))
-                {
+                match run_blocking_io(
+                    move || crate::runtime_value::remove_file_checked(path),
+                    Some(&self.cancellation),
+                ) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
@@ -4689,7 +4860,14 @@ impl MirRuntime {
                     let index = i32::try_from(index).map_err(|_| {
                         Diagnostic::new("wait_any result index exceeds int32 range")
                     })?;
-                    return Ok(wait_any_ready(index, result?));
+                    return match result {
+                        crate::runtime_value::TaskExecutionResult::Ready(result) => {
+                            Ok(wait_any_ready(index, result?))
+                        }
+                        crate::runtime_value::TaskExecutionResult::Cancelled => {
+                            Ok(wait_any_cancelled())
+                        }
+                    };
                 }
             }
 
@@ -4729,11 +4907,9 @@ impl MirRuntime {
     fn close_task_group(
         &mut self,
         group: TaskGroupValue,
-        cancel_before_cleanup: bool,
+        _cancel_before_cleanup: bool,
     ) -> Result<()> {
-        if cancel_before_cleanup {
-            group.cancel();
-        }
+        group.cancel();
 
         let mut first_error = None;
         for task in group.drain_tasks() {
@@ -4746,13 +4922,7 @@ impl MirRuntime {
                         }
                     }
                 }
-                TaskWaitStatus::TimedOut => {}
-                TaskWaitStatus::Cancelled => {
-                    group.cancel();
-                    if first_error.is_none() {
-                        first_error = Some(Diagnostic::new("task group cleanup was cancelled"));
-                    }
-                }
+                TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => {}
             }
         }
 

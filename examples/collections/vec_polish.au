@@ -7,8 +7,17 @@ def print_bool(value: bool):
 
 def main() -> int32:
     mut names: Vec[String] = ["Ada", "Grace"]
-    print(names[0])
-    print(names[1])
+    match names.get(0):
+        case Option.Some(value):
+            print(value)
+        case Option.None:
+            pass
+
+    match names.get(1):
+        case Option.Some(value):
+            print(value)
+        case Option.None:
+            pass
 
     mut values = [1, 3]
     print_bool(values.insert(index=1, value=2))

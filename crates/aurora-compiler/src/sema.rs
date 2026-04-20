@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, EnumDecl, Expr, ExprKind,
     FunctionDecl, ImplDecl, Item, LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt,
-    Module, Param, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp, WithStmt,
+    Module, Param, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp, VariantPattern,
+    WithStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, BuiltinFunction, BuiltinMember, CallConvention,
@@ -507,6 +508,15 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 type_arities.insert(enum_decl.name.clone(), enum_decl.type_params.len());
             }
             Item::Function(function_decl) => {
+                if BuiltinFunction::from_name(&function_decl.name).is_some() {
+                    return Err(Diagnostic::at(
+                        function_decl.span,
+                        format!(
+                            "`{}` is a builtin function name and cannot be redefined",
+                            function_decl.name
+                        ),
+                    ));
+                }
                 if let Some((kind, existing)) =
                     item_names.insert(function_decl.name.clone(), ("function", function_decl.span))
                 {
@@ -1263,7 +1273,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         })?;
         return Err(Diagnostic::at(
             main.decl.span,
-            "files cannot mix top-level executable statements with an explicit `main` function",
+            "files cannot mix top-level statements, including declarations, with an explicit `main` function",
         ));
     }
 
@@ -1911,6 +1921,26 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
     }
 }
 
+pub(crate) fn type_pattern_specificity(ty: &Type) -> usize {
+    match ty {
+        Type::TypeParam(_) => 0,
+        Type::Named(_, args) => 1 + args.iter().map(type_pattern_specificity).sum::<usize>(),
+        Type::Module(_) | Type::Unit => 1,
+    }
+}
+
+pub(crate) fn trait_impl_specificity_parts(for_type: &Type, trait_args: &[Type]) -> usize {
+    type_pattern_specificity(for_type)
+        + trait_args
+            .iter()
+            .map(type_pattern_specificity)
+            .sum::<usize>()
+}
+
+pub(crate) fn trait_impl_specificity(trait_impl: &TraitImplInfo) -> usize {
+    trait_impl_specificity_parts(&trait_impl.for_type, &trait_impl.trait_args)
+}
+
 pub(crate) fn type_pattern_matches(
     pattern: &Type,
     actual: &Type,
@@ -2173,6 +2203,7 @@ struct LocalBinding {
     borrow_label: Option<String>,
     moved: bool,
     moved_fields: BTreeSet<String>,
+    frozen_places: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2295,6 +2326,7 @@ impl<'a> FunctionChecker<'a> {
                     borrow_label: None,
                     moved: false,
                     moved_fields: BTreeSet::new(),
+                    frozen_places: BTreeSet::new(),
                 },
             );
         }
@@ -2554,35 +2586,8 @@ impl<'a> FunctionChecker<'a> {
                 Ok(())
             }
             ExprKind::Member { object, field } => {
-                let base_object = match &object.kind {
-                    ExprKind::Specialize { expr, .. } => &**expr,
-                    _ => object,
-                };
-                if let ExprKind::Name(enum_name) = &base_object.kind {
-                    if enum_name == "Option" && field == "None" {
-                        return Ok(());
-                    }
-                    if let Some(enum_info) = self.resolve_enum_info(enum_name) {
-                        if enum_info
-                            .variants
-                            .get(field)
-                            .is_some_and(|variant| variant.payloads.is_empty())
-                        {
-                            return Ok(());
-                        }
-                    }
-                }
-                if let Some((module_path, enum_name)) = self.qualified_module_item(object) {
-                    if let Some(namespace) = self.module_namespace(&module_path) {
-                        if namespace
-                            .enums
-                            .get(&enum_name)
-                            .and_then(|enum_info| enum_info.variants.get(field))
-                            .is_some_and(|variant| variant.payloads.is_empty())
-                        {
-                            return Ok(());
-                        }
-                    }
+                if self.is_payload_free_variant_expr(expr) {
+                    return Ok(());
                 }
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
                 let member_ty = self.resolve_member_type(&object_ty, field, expr.span)?;
@@ -2799,6 +2804,7 @@ impl<'a> FunctionChecker<'a> {
                     borrow_label: param.borrow_label.clone(),
                     moved: false,
                     moved_fields: BTreeSet::new(),
+                    frozen_places: BTreeSet::new(),
                 },
             );
         }
@@ -2888,6 +2894,7 @@ impl<'a> FunctionChecker<'a> {
                     borrow_label: None,
                     moved: false,
                     moved_fields: BTreeSet::new(),
+                    frozen_places: BTreeSet::new(),
                 },
             );
         }
@@ -2911,6 +2918,7 @@ impl<'a> FunctionChecker<'a> {
                     borrow_label: param.borrow_label.clone(),
                     moved: false,
                     moved_fields: BTreeSet::new(),
+                    frozen_places: BTreeSet::new(),
                 },
             );
         }
@@ -2983,6 +2991,7 @@ impl<'a> FunctionChecker<'a> {
                     borrow_label: None,
                     moved: false,
                     moved_fields: BTreeSet::new(),
+                    frozen_places: BTreeSet::new(),
                 },
             );
         }
@@ -3006,6 +3015,7 @@ impl<'a> FunctionChecker<'a> {
                     borrow_label: param.borrow_label.clone(),
                     moved: false,
                     moved_fields: BTreeSet::new(),
+                    frozen_places: BTreeSet::new(),
                 },
             );
         }
@@ -3281,6 +3291,25 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     let mut body_locals = locals.clone();
+                    if let Some(borrow_mode) = for_stmt.borrow_mode {
+                        if let Some(place) = self.borrow_call_place(&for_stmt.iterable) {
+                            let root = place.split('.').next().map(str::to_string);
+                            if let Some(root) = root {
+                                if let Some(binding) = body_locals.get_mut(&root) {
+                                    if place == root {
+                                        binding.assignable = false;
+                                    }
+                                    binding.mutable_place = false;
+                                    binding.frozen_places.insert(place.clone());
+                                    if binding.passing == ReceiverKind::Value {
+                                        binding.passing = borrow_mode;
+                                        binding.borrow_origin = Some(root.clone());
+                                        binding.borrow_label = None;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     body_locals.insert(
                         for_stmt.binding.clone(),
                         LocalBinding {
@@ -3292,6 +3321,7 @@ impl<'a> FunctionChecker<'a> {
                             borrow_label: None,
                             moved: false,
                             moved_fields: BTreeSet::new(),
+                            frozen_places: BTreeSet::new(),
                         },
                     );
                     self.check_block(
@@ -3390,6 +3420,7 @@ impl<'a> FunctionChecker<'a> {
                 borrow_label: None,
                 moved: false,
                 moved_fields: BTreeSet::new(),
+                frozen_places: BTreeSet::new(),
             },
         );
         self.check_block(
@@ -3422,6 +3453,9 @@ impl<'a> FunctionChecker<'a> {
             }
 
             if !self.is_mutable_place(object, locals)? {
+                if let Some(place) = self.borrow_call_place(object) {
+                    self.ensure_place_not_frozen(&place, assign.span, locals)?;
+                }
                 return Err(Diagnostic::at(
                     assign.span,
                     format!(
@@ -3494,6 +3528,9 @@ impl<'a> FunctionChecker<'a> {
             }
 
             if !self.is_mutable_place(object, locals)? {
+                if let Some((_binding_name, path)) = self.member_target_path(object, field) {
+                    self.ensure_place_not_frozen(&path, assign.span, locals)?;
+                }
                 return Err(Diagnostic::at(
                     assign.span,
                     format!(
@@ -3592,6 +3629,7 @@ impl<'a> FunctionChecker<'a> {
             }
 
             if !existing.assignable && !existing.mutable_place {
+                self.ensure_place_not_frozen(binding_name, assign.span, locals)?;
                 return Err(Diagnostic::at(
                     assign.span,
                     format!("cannot assign to immutable binding `{}`", binding_name),
@@ -3666,6 +3704,24 @@ impl<'a> FunctionChecker<'a> {
         }
 
         if let Some(borrowed) = self.expr_borrow_info(&assign.value, locals)? {
+            if self.is_copy_type(&final_ty) {
+                self.consume_value_expr(&assign.value, locals)?;
+                locals.insert(
+                    binding_name.clone(),
+                    LocalBinding {
+                        ty: final_ty,
+                        assignable: assign.mutable,
+                        mutable_place: assign.mutable,
+                        passing: ReceiverKind::Value,
+                        borrow_origin: None,
+                        borrow_label: None,
+                        moved: false,
+                        moved_fields: BTreeSet::new(),
+                        frozen_places: BTreeSet::new(),
+                    },
+                );
+                return Ok(());
+            }
             if borrowed.passing == ReceiverKind::Borrow && assign.mutable {
                 return Err(Diagnostic::at(
                     assign.value.span,
@@ -3683,6 +3739,7 @@ impl<'a> FunctionChecker<'a> {
                     borrow_label: borrowed.borrow_label,
                     moved: false,
                     moved_fields: BTreeSet::new(),
+                    frozen_places: BTreeSet::new(),
                 },
             );
             return Ok(());
@@ -3700,6 +3757,7 @@ impl<'a> FunctionChecker<'a> {
                 borrow_label: None,
                 moved: false,
                 moved_fields: BTreeSet::new(),
+                frozen_places: BTreeSet::new(),
             },
         );
         Ok(())
@@ -4134,9 +4192,32 @@ impl<'a> FunctionChecker<'a> {
                 Ok(inner_args[0].clone())
             }
             ExprKind::Binary { op, left, right } => {
+                let locals_before = locals.clone();
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
                     let left_ty = self.type_of_expr(left, locals)?;
+                    let locals_after_left = locals.clone();
                     let right_ty = self.type_of_expr(right, locals)?;
+                    let borrow_locals = locals_before.clone();
+                    let mut left_borrowed_places = Vec::new();
+                    self.collect_expr_borrowed_places(left, &borrow_locals, &mut left_borrowed_places)?;
+                    let left_moved_places = self.newly_moved_places(&locals_before, &locals_after_left);
+                    let mut right_borrowed_places = Vec::new();
+                    self.collect_expr_borrowed_places(
+                        right,
+                        &borrow_locals,
+                        &mut right_borrowed_places,
+                    )?;
+                    let right_moved_places = self.newly_moved_places(&locals_after_left, locals);
+                    self.reject_expr_borrow_move_overlap(
+                        &left_borrowed_places,
+                        &right_moved_places,
+                        expr.span,
+                    )?;
+                    self.reject_expr_borrow_move_overlap(
+                        &right_borrowed_places,
+                        &left_moved_places,
+                        expr.span,
+                    )?;
                     return self.type_of_binary(expr.span, *op, left_ty, right_ty);
                 }
                 let operand_expected = match op {
@@ -4149,6 +4230,7 @@ impl<'a> FunctionChecker<'a> {
                     _ => expected,
                 };
                 let mut left_ty = self.type_of_expr_hint(left, locals, operand_expected)?;
+                let locals_after_left = locals.clone();
                 let mut right_ty = self.type_of_expr_hint(right, locals, Some(&left_ty))?;
                 if left_ty != right_ty && matches!(left.kind, ExprKind::Int(_) | ExprKind::Float(_))
                 {
@@ -4159,6 +4241,23 @@ impl<'a> FunctionChecker<'a> {
                 {
                     right_ty = self.type_of_expr_hint(right, locals, Some(&left_ty))?;
                 }
+                let borrow_locals = locals_before.clone();
+                let mut left_borrowed_places = Vec::new();
+                self.collect_expr_borrowed_places(left, &borrow_locals, &mut left_borrowed_places)?;
+                let mut right_borrowed_places = Vec::new();
+                self.collect_expr_borrowed_places(right, &borrow_locals, &mut right_borrowed_places)?;
+                let left_moved_places = self.newly_moved_places(&locals_before, &locals_after_left);
+                let right_moved_places = self.newly_moved_places(&locals_after_left, locals);
+                self.reject_expr_borrow_move_overlap(
+                    &left_borrowed_places,
+                    &right_moved_places,
+                    expr.span,
+                )?;
+                self.reject_expr_borrow_move_overlap(
+                    &right_borrowed_places,
+                    &left_moved_places,
+                    expr.span,
+                )?;
                 self.type_of_binary(expr.span, *op, left_ty, right_ty)
             }
             ExprKind::Member { object, field } => {
@@ -4289,9 +4388,14 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         if let Some(expected_ty) = expected {
-                            if let Type::Named(expected_name, _) = expected_ty {
-                                if expected_name == enum_name {
-                                    return Ok(expected_ty.clone());
+                            if let Type::Named(expected_name, expected_args) = expected_ty {
+                                if self.canonical_enum_name(expected_name)
+                                    == self.canonical_enum_name(enum_name)
+                                {
+                                    return Ok(Type::Named(
+                                        enum_info.decl.name.clone(),
+                                        expected_args.clone(),
+                                    ));
                                 }
                             }
                         }
@@ -4325,6 +4429,15 @@ impl<'a> FunctionChecker<'a> {
                         return Err(Diagnostic::at(
                             index.span,
                             format!("vector indices must be integers, found `{}`", index_ty),
+                        ));
+                    }
+                    if !self.is_copy_type(&element_ty) {
+                        return Err(Diagnostic::at(
+                            expr.span,
+                            format!(
+                                "cannot implicitly copy `{}` out of a vector index; use `get(index)` for an explicit cloned read instead",
+                                element_ty
+                            ),
                         ));
                     }
                     return Ok(element_ty);
@@ -4616,6 +4729,7 @@ impl<'a> FunctionChecker<'a> {
                 continue;
             }
             matches.push((
+                trait_impl_specificity(trait_impl),
                 ResolvedTraitMethodInfo {
                     decl: method.decl.clone(),
                     signature: FunctionSignature {
@@ -4637,9 +4751,22 @@ impl<'a> FunctionChecker<'a> {
                 substitutions,
             ));
         }
-        match matches.len() {
-            0 => Ok(None),
-            1 => Ok(matches.pop()),
+        if matches.is_empty() {
+            return Ok(None);
+        }
+        matches.sort_by(|left, right| right.0.cmp(&left.0));
+        let best_score = matches[0].0;
+        let mut best_matches = matches
+            .into_iter()
+            .filter(|(score, _, _)| *score == best_score)
+            .collect::<Vec<_>>();
+        match best_matches.len() {
+            1 => {
+                let (_, method, substitutions) = best_matches
+                    .pop()
+                    .expect("best operator trait impl should exist");
+                Ok(Some((method, substitutions)))
+            }
             _ => Err(Diagnostic::at(
                 span,
                 format!(
@@ -5496,9 +5623,14 @@ impl<'a> FunctionChecker<'a> {
                         })?;
                         if variant.payloads.is_empty() && args.is_empty() {
                             if let Some(expected_ty) = expected {
-                                if let Type::Named(expected_name, _) = expected_ty {
-                                    if expected_name == enum_name {
-                                        return Ok(expected_ty.clone());
+                                if let Type::Named(expected_name, expected_args) = expected_ty {
+                                    if self.canonical_enum_name(expected_name)
+                                        == self.canonical_enum_name(enum_name)
+                                    {
+                                        return Ok(Type::Named(
+                                            enum_info.decl.name.clone(),
+                                            expected_args.clone(),
+                                        ));
                                     }
                                 }
                             }
@@ -5782,15 +5914,7 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::VecIsEmpty => Ok(Type::named("bool")),
                                 BuiltinMember::VecClone => Ok(receiver_ty.clone()),
                                 BuiltinMember::VecPush => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let push_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -5817,15 +5941,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Unit)
                                 }
                                 BuiltinMember::VecPop => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     Ok(Type::Named(
                                         "Option".to_string(),
                                         vec![receiver_args[0].clone()],
@@ -5858,15 +5974,7 @@ impl<'a> FunctionChecker<'a> {
                                     ))
                                 }
                                 BuiltinMember::VecSet => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let index_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -5916,15 +6024,7 @@ impl<'a> FunctionChecker<'a> {
                                     ))
                                 }
                                 BuiltinMember::VecRemove => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let index_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -5951,15 +6051,7 @@ impl<'a> FunctionChecker<'a> {
                                     ))
                                 }
                                 BuiltinMember::VecSwap => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let first_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -6026,15 +6118,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::named("bool"))
                                 }
                                 BuiltinMember::VecExtend => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let other_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -6059,15 +6143,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::Unit)
                                 }
                                 BuiltinMember::VecInsert => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let index_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -6114,15 +6190,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::named("bool"))
                                 }
                                 BuiltinMember::VecClear | BuiltinMember::VecReverse => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     Ok(Type::Unit)
                                 }
                                 _ => unreachable!("unexpected vector builtin member"),
@@ -6318,15 +6386,7 @@ impl<'a> FunctionChecker<'a> {
                                     ))
                                 }
                                 BuiltinMember::MapSet => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let key_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -6379,15 +6439,7 @@ impl<'a> FunctionChecker<'a> {
                                     ))
                                 }
                                 BuiltinMember::MapRemove => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let key_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -6460,27 +6512,11 @@ impl<'a> FunctionChecker<'a> {
                                     ))
                                 }
                                 BuiltinMember::MapClear => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     Ok(Type::Unit)
                                 }
                                 BuiltinMember::MapExtend => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let other_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -6540,15 +6576,7 @@ impl<'a> FunctionChecker<'a> {
                                     Ok(Type::named("bool"))
                                 }
                                 BuiltinMember::SetInsert | BuiltinMember::SetRemove => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let value_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -6868,15 +6896,7 @@ impl<'a> FunctionChecker<'a> {
                                     vec![bytes_ty.clone(), crate::builtin_modules::io_error_type()],
                                 )),
                                 BuiltinMember::FileWriteAll => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let text_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -6904,15 +6924,7 @@ impl<'a> FunctionChecker<'a> {
                                     ))
                                 }
                                 BuiltinMember::FileWriteBytes => {
-                                    if !self.is_mutable_place(object, locals)? {
-                                        return Err(Diagnostic::at(
-                                            span,
-                                            format!(
-                                                "method `{}` requires a mutable receiver",
-                                                field
-                                            ),
-                                        ));
-                                    }
+                                    self.require_mutable_receiver(object, field, span, locals)?;
                                     let bytes_arg = self.bound_argument(
                                         &ordered_args,
                                         0,
@@ -8278,7 +8290,7 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 if let Some((_trait_impl, method, impl_substitutions)) =
-                    self.trait_method_for_concrete_type(&receiver_ty, field)
+                    self.trait_method_for_concrete_type(&receiver_ty, field, span)?
                 {
                     let substituted_params = method
                         .signature
@@ -8386,8 +8398,10 @@ impl<'a> FunctionChecker<'a> {
             };
             let scrutinee_enum_name = self.canonical_enum_name(enum_name);
             let mut covered = BTreeMap::<String, crate::diag::Span>::new();
+            let mut patterns_by_variant = BTreeMap::<String, Vec<crate::ast::VariantPattern>>::new();
             let mut wildcard_span = None;
             let mut all_return = true;
+            let mut arm_states = Vec::new();
 
             for (index, arm) in match_stmt.arms.iter().enumerate() {
                 let mut arm_locals = locals.clone();
@@ -8465,17 +8479,25 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         };
 
-                        if let Some(previous) =
-                            covered.insert(pattern.variant_name.clone(), pattern.span)
-                        {
-                            return Err(Diagnostic::at(
-                                pattern.span,
-                                format!(
-                                    "duplicate match arm for `{}.{}` (previously matched at {})",
-                                    scrutinee_enum_name, pattern.variant_name, previous
-                                ),
-                            ));
+                        let covers_entire_variant =
+                            self.variant_pattern_covers_payloads(pattern, &variant_payload);
+                        if covers_entire_variant {
+                            if let Some(previous) =
+                                covered.insert(pattern.variant_name.clone(), pattern.span)
+                            {
+                                return Err(Diagnostic::at(
+                                    pattern.span,
+                                    format!(
+                                        "duplicate match arm for `{}.{}` (previously matched at {})",
+                                        scrutinee_enum_name, pattern.variant_name, previous
+                                    ),
+                                ));
+                            }
                         }
+                        patterns_by_variant
+                            .entry(pattern.variant_name.clone())
+                            .or_default()
+                            .push(pattern.clone());
 
                         if pattern.subpatterns.is_empty() && !variant_payload.is_empty() {
                             return Err(Diagnostic::at(
@@ -8527,7 +8549,28 @@ impl<'a> FunctionChecker<'a> {
                 if arm_flow != BlockFlow::AlwaysReturns {
                     all_return = false;
                 }
+                arm_states.push(arm_locals);
             }
+
+            for (variant_name, payloads) in &variants {
+                if covered.contains_key(variant_name) {
+                    continue;
+                }
+                let Some(patterns) = patterns_by_variant.get(variant_name) else {
+                    continue;
+                };
+                let pattern_refs = patterns.iter().collect::<Vec<_>>();
+                if self.variant_patterns_cover_payloads_union(&pattern_refs, payloads) {
+                    let span = patterns
+                        .first()
+                        .map(|pattern| pattern.span)
+                        .unwrap_or(match_stmt.span);
+                    covered.insert(variant_name.clone(), span);
+                }
+            }
+
+            let branch_states = arm_states.iter().collect::<Vec<_>>();
+            self.merge_control_flow_moves(locals, &branch_states);
 
             let missing = variants
                 .iter()
@@ -8698,21 +8741,14 @@ impl<'a> FunctionChecker<'a> {
                     binding.name.clone(),
                     LocalBinding {
                         ty: expected_ty.clone(),
-                        assignable: false,
-                        mutable_place: false,
-                        passing: if let Some(borrow_mode) = borrow_mode {
-                            if self.is_copy_type(expected_ty) {
-                                ReceiverKind::Value
-                            } else {
-                                borrow_mode
-                            }
-                        } else {
-                            ReceiverKind::Value
-                        },
+                        assignable: borrow_mode == Some(ReceiverKind::BorrowMut),
+                        mutable_place: borrow_mode == Some(ReceiverKind::BorrowMut),
+                        passing: borrow_mode.unwrap_or(ReceiverKind::Value),
                         borrow_origin: None,
                         borrow_label: None,
                         moved: false,
                         moved_fields: BTreeSet::new(),
+                        frozen_places: BTreeSet::new(),
                     },
                 );
                 Ok(())
@@ -8826,7 +8862,9 @@ impl<'a> FunctionChecker<'a> {
             };
             let scrutinee_enum_name = self.canonical_enum_name(enum_name);
             let mut covered = BTreeSet::<String>::new();
+            let mut patterns_by_variant = BTreeMap::<String, Vec<crate::ast::VariantPattern>>::new();
             let mut wildcard_seen = false;
+            let mut arm_states = Vec::new();
 
             for (index, arm) in arms.iter().enumerate() {
                 let mut arm_locals = locals.clone();
@@ -8906,7 +8944,13 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         };
-                        covered.insert(pattern.variant_name.clone());
+                        if self.variant_pattern_covers_payloads(pattern, &variant_payload) {
+                            covered.insert(pattern.variant_name.clone());
+                        }
+                        patterns_by_variant
+                            .entry(pattern.variant_name.clone())
+                            .or_default()
+                            .push(pattern.clone());
 
                         if pattern.subpatterns.is_empty() && !variant_payload.is_empty() {
                             return Err(Diagnostic::at(
@@ -8966,7 +9010,24 @@ impl<'a> FunctionChecker<'a> {
                 } else {
                     result_ty = Some(arm_ty);
                 }
+                arm_states.push(arm_locals);
             }
+
+            for (variant_name, payloads) in &variants {
+                if covered.contains(variant_name) {
+                    continue;
+                }
+                let Some(patterns) = patterns_by_variant.get(variant_name) else {
+                    continue;
+                };
+                let pattern_refs = patterns.iter().collect::<Vec<_>>();
+                if self.variant_patterns_cover_payloads_union(&pattern_refs, payloads) {
+                    covered.insert(variant_name.clone());
+                }
+            }
+
+            let branch_states = arm_states.iter().collect::<Vec<_>>();
+            self.merge_control_flow_moves(locals, &branch_states);
 
             let missing = variants
                 .iter()
@@ -9207,14 +9268,8 @@ impl<'a> FunctionChecker<'a> {
                         ),
                     ));
                 }
-                if namespace.enums.contains_key(field) {
-                    return Err(Diagnostic::at(
-                        span,
-                        format!(
-                            "enum `{}` from module `{}` must be used via one of its variants",
-                            field, path
-                        ),
-                    ));
+                if let Some(enum_info) = namespace.enums.get(field) {
+                    return Ok(Type::Named(enum_info.decl.name.clone(), Vec::new()));
                 }
                 return Err(Diagnostic::at(
                     span,
@@ -9301,7 +9356,7 @@ impl<'a> FunctionChecker<'a> {
             }
         }
         if let Some((_trait_impl, method, substitutions)) =
-            self.trait_method_for_concrete_type(object_ty, field)
+            self.trait_method_for_concrete_type(object_ty, field, span)?
         {
             return Ok(substitute_type(
                 &method.signature.return_type,
@@ -9356,6 +9411,53 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn builtin_payload_free_variant(enum_name: &str, variant_name: &str) -> bool {
+        matches!(
+            (enum_name, variant_name),
+            ("Option", "None")
+                | ("QueueReceive", "Closed" | "TimedOut" | "Cancelled")
+                | ("TaskResult", "TimedOut" | "Cancelled")
+                | ("WaitAny", "TimedOut" | "Cancelled")
+                | ("WaitAll", "TimedOut" | "Cancelled")
+        )
+    }
+
+    fn is_payload_free_variant_expr(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Group(inner) | ExprKind::Specialize { expr: inner, .. } => {
+                self.is_payload_free_variant_expr(inner)
+            }
+            ExprKind::Member { object, field } => {
+                let base_object = match &object.kind {
+                    ExprKind::Specialize { expr, .. } => &**expr,
+                    _ => &**object,
+                };
+                if let ExprKind::Name(enum_name) = &base_object.kind {
+                    if Self::builtin_payload_free_variant(enum_name, field) {
+                        return true;
+                    }
+                    if let Some(enum_info) = self.resolve_enum_info(enum_name) {
+                        return enum_info
+                            .variants
+                            .get(field)
+                            .is_some_and(|variant| variant.payloads.is_empty());
+                    }
+                }
+                if let Some((module_path, enum_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        return namespace
+                            .enums
+                            .get(&enum_name)
+                            .and_then(|enum_info| enum_info.variants.get(field))
+                            .is_some_and(|variant| variant.payloads.is_empty());
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     fn borrow_info_for_place(
         &self,
         expr: &Expr,
@@ -9394,7 +9496,15 @@ impl<'a> FunctionChecker<'a> {
             | ExprKind::Cast { expr: inner, .. }
             | ExprKind::Specialize { expr: inner, .. } => self.expr_borrow_info(inner, locals),
             ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
-                self.expr_borrow_info(object, locals)
+                if self.is_payload_free_variant_expr(expr) {
+                    return Ok(None);
+                }
+                let value_ty = self.type_of_expr(expr, locals)?;
+                if self.is_copy_type(&value_ty) {
+                    Ok(None)
+                } else {
+                    self.expr_borrow_info(object, locals)
+                }
             }
             ExprKind::Call { callee, args } => self.call_expr_borrow_info(callee, args, locals),
             ExprKind::Match { arms, .. } => {
@@ -9412,6 +9522,204 @@ impl<'a> FunctionChecker<'a> {
             }
             _ => Ok(None),
         }
+    }
+
+    fn collect_expr_borrowed_places(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+        places: &mut Vec<BorrowedCallPlace>,
+    ) -> Result<()> {
+        match &expr.kind {
+            ExprKind::Group(inner)
+            | ExprKind::Cast { expr: inner, .. }
+            | ExprKind::Specialize { expr: inner, .. }
+            | ExprKind::Try(inner) => self.collect_expr_borrowed_places(inner, locals, places),
+            ExprKind::Unary { expr: inner, .. } => {
+                self.collect_expr_borrowed_places(inner, locals, places)
+            }
+            ExprKind::Binary { left, right, .. } => {
+                self.collect_expr_borrowed_places(left, locals, places)?;
+                self.collect_expr_borrowed_places(right, locals, places)
+            }
+            ExprKind::Call { callee, args } => {
+                self.collect_expr_borrowed_places(callee, locals, places)?;
+                for argument in args {
+                    self.collect_expr_borrowed_places(&argument.value, locals, places)?;
+                }
+                self.collect_call_borrowed_places(callee, args, locals, places)
+            }
+            ExprKind::List(elements) | ExprKind::Set(elements) => {
+                for element in elements {
+                    self.collect_expr_borrowed_places(element, locals, places)?;
+                }
+                Ok(())
+            }
+            ExprKind::Map(entries) => {
+                for entry in entries {
+                    self.collect_expr_borrowed_places(&entry.key, locals, places)?;
+                    self.collect_expr_borrowed_places(&entry.value, locals, places)?;
+                }
+                Ok(())
+            }
+            ExprKind::Member { object, .. } => self.collect_expr_borrowed_places(object, locals, places),
+            ExprKind::Index { object, index } => {
+                self.collect_expr_borrowed_places(object, locals, places)?;
+                self.collect_expr_borrowed_places(index, locals, places)
+            }
+            ExprKind::Match { scrutinee, arms, .. } => {
+                self.collect_expr_borrowed_places(scrutinee, locals, places)?;
+                for arm in arms {
+                    self.collect_expr_borrowed_places(&arm.value, locals, places)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn collect_call_borrowed_places(
+        &self,
+        callee: &Expr,
+        args: &[Argument],
+        locals: &HashMap<String, LocalBinding>,
+        places: &mut Vec<BorrowedCallPlace>,
+    ) -> Result<()> {
+        let mut locals_for_resolution = locals.clone();
+        let (base_callee, _) = self.peel_specialization(callee);
+        match &base_callee.kind {
+            ExprKind::Name(name) => {
+                let Some(function) = self.resolve_function_info(name) else {
+                    return Ok(());
+                };
+                let ordered_args = bind_call_arguments(
+                    &format!("function `{}`", function.decl.name),
+                    &callable_params_from_decl(&function.decl.params),
+                    args,
+                    callee.span,
+                    CallConvention::PositionalOrNamed,
+                )?;
+                for (argument, param) in ordered_args.into_iter().zip(function.decl.params.iter()) {
+                    let Some(argument) = argument else {
+                        continue;
+                    };
+                    if !matches!(param.passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
+                        continue;
+                    }
+                    if let Some(path) = self.borrow_call_place(&argument.value) {
+                        places.push(BorrowedCallPlace {
+                            path,
+                            passing: param.passing,
+                            param_name: param.name.clone(),
+                        });
+                    }
+                }
+                Ok(())
+            }
+            ExprKind::Member { object, field } => {
+                if let Some((module_path, item_name)) = self.qualified_module_item(object) {
+                    if let Some(namespace) = self.module_namespace(&module_path) {
+                        if let Some(class_info) = namespace.classes.get(&item_name) {
+                            if let Some(method) = class_info.methods.get(field) {
+                                self.collect_method_borrowed_places(
+                                    object,
+                                    callee,
+                                    args,
+                                    &method.decl.params,
+                                    method.decl.receiver,
+                                    places,
+                                )?;
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+                let receiver_ty = self.type_of_expr(object, &mut locals_for_resolution)?;
+                let Type::Named(receiver_name, _) = receiver_ty else {
+                    return Ok(());
+                };
+                let Some(class_info) = self.resolve_class_info(&receiver_name) else {
+                    return Ok(());
+                };
+                let Some(method) = class_info.methods.get(field) else {
+                    return Ok(());
+                };
+                self.collect_method_borrowed_places(
+                    object,
+                    callee,
+                    args,
+                    &method.decl.params,
+                    method.decl.receiver,
+                    places,
+                )
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn collect_method_borrowed_places(
+        &self,
+        object: &Expr,
+        callee: &Expr,
+        args: &[Argument],
+        params: &[Param],
+        receiver: Option<ReceiverKind>,
+        places: &mut Vec<BorrowedCallPlace>,
+    ) -> Result<()> {
+        if matches!(receiver, Some(ReceiverKind::Borrow | ReceiverKind::BorrowMut)) {
+            if let Some(path) = self.borrow_call_place(object) {
+                places.push(BorrowedCallPlace {
+                    path,
+                    passing: receiver.expect("receiver kind should exist"),
+                    param_name: "self".to_string(),
+                });
+            }
+        }
+        let ordered_args = bind_call_arguments(
+            "method call",
+            &callable_params_from_decl(params),
+            args,
+            callee.span,
+            CallConvention::PositionalOrNamed,
+        )?;
+        for (argument, param) in ordered_args.into_iter().zip(params.iter()) {
+            let Some(argument) = argument else {
+                continue;
+            };
+            if !matches!(param.passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
+                continue;
+            }
+            if let Some(path) = self.borrow_call_place(&argument.value) {
+                places.push(BorrowedCallPlace {
+                    path,
+                    passing: param.passing,
+                    param_name: param.name.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn reject_expr_borrow_move_overlap(
+        &self,
+        borrowed_places: &[BorrowedCallPlace],
+        moved_places: &[String],
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        for moved in moved_places {
+            for borrowed in borrowed_places {
+                if borrow_places_overlap(&borrowed.path, moved) {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "cannot mix a move of `{}` with a borrow of `{}` in the same expression",
+                            moved, borrowed.path
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn call_expr_borrow_info(
@@ -9609,11 +9917,8 @@ impl<'a> FunctionChecker<'a> {
             return Ok(Vec::new());
         };
 
-        if receiver_kind == ReceiverKind::BorrowMut && !self.is_mutable_place(object, locals)? {
-            return Err(Diagnostic::at(
-                span,
-                format!("method `{}` requires a mutable receiver", method_name),
-            ));
+        if receiver_kind == ReceiverKind::BorrowMut {
+            self.require_mutable_receiver(object, method_name, span, locals)?;
         }
 
         if receiver_kind == ReceiverKind::Value {
@@ -9632,6 +9937,25 @@ impl<'a> FunctionChecker<'a> {
         Ok(borrowed_places)
     }
 
+    fn require_mutable_receiver(
+        &self,
+        object: &Expr,
+        method_name: &str,
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        if self.is_mutable_place(object, locals)? {
+            return Ok(());
+        }
+        if let Some(place) = self.borrow_call_place(object) {
+            self.ensure_place_not_frozen(&place, span, locals)?;
+        }
+        Err(Diagnostic::at(
+            span,
+            format!("method `{}` requires a mutable receiver", method_name),
+        ))
+    }
+
     fn reject_overlapping_borrow(
         &self,
         borrowed_places: &[BorrowedCallPlace],
@@ -9645,27 +9969,53 @@ impl<'a> FunctionChecker<'a> {
             if !borrow_places_overlap(&prior.path, current_path) {
                 continue;
             }
-            match (prior.passing, current_passing) {
-                (ReceiverKind::Borrow, ReceiverKind::Borrow) => continue,
-                (ReceiverKind::BorrowMut, ReceiverKind::BorrowMut) => {
-                    return Err(Diagnostic::at(
-                        span,
-                        format!(
-                            "argument for parameter `{}` in {} overlaps mutable borrow for parameter `{}`",
-                            current_param_name, callee_name, prior.param_name
-                        ),
-                    ));
-                }
-                (ReceiverKind::Borrow, ReceiverKind::BorrowMut) => {
-                    return Err(Diagnostic::at(
-                        span,
+            let shared =
+                prior.passing == ReceiverKind::Borrow && current_passing == ReceiverKind::Borrow;
+            if shared {
+                continue;
+            }
+            if current_passing == ReceiverKind::Value {
+                let detail = match prior.passing {
+                    ReceiverKind::Borrow => format!(
+                        "argument for parameter `{}` in {} overlaps borrow for parameter `{}`; consumed values must be exclusive",
+                        current_param_name, callee_name, prior.param_name
+                    ),
+                    ReceiverKind::BorrowMut => format!(
+                        "argument for parameter `{}` in {} overlaps mutable borrow for parameter `{}`; consumed values must be exclusive",
+                        current_param_name, callee_name, prior.param_name
+                    ),
+                    ReceiverKind::Value => format!(
+                        "argument for parameter `{}` in {} overlaps consumed argument for parameter `{}`; consumed values must be exclusive",
+                        current_param_name, callee_name, prior.param_name
+                    ),
+                };
+                return Err(Diagnostic::at(span, detail));
+            }
+            if prior.passing == ReceiverKind::Value {
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "argument for parameter `{}` in {} overlaps consumed argument for parameter `{}`; consumed values must be exclusive",
+                        current_param_name, callee_name, prior.param_name
+                    ),
+                ));
+            }
+            match current_passing {
+                ReceiverKind::BorrowMut => {
+                    let detail = if prior.passing == ReceiverKind::Borrow {
                         format!(
                             "argument for parameter `{}` in {} overlaps borrow for parameter `{}`; mutable borrows must be exclusive",
                             current_param_name, callee_name, prior.param_name
-                        ),
-                    ));
+                        )
+                    } else {
+                        format!(
+                            "argument for parameter `{}` in {} overlaps mutable borrow for parameter `{}`",
+                            current_param_name, callee_name, prior.param_name
+                        )
+                    };
+                    return Err(Diagnostic::at(span, detail));
                 }
-                (ReceiverKind::BorrowMut, ReceiverKind::Borrow) => {
+                ReceiverKind::Borrow => {
                     return Err(Diagnostic::at(
                         span,
                         format!(
@@ -9674,10 +10024,153 @@ impl<'a> FunctionChecker<'a> {
                         ),
                     ));
                 }
-                _ => {}
+                ReceiverKind::Value => unreachable!("value receivers are handled above"),
             }
         }
         Ok(())
+    }
+
+    fn newly_moved_places(
+        &self,
+        before: &HashMap<String, LocalBinding>,
+        after: &HashMap<String, LocalBinding>,
+    ) -> Vec<String> {
+        let mut moved = Vec::new();
+        for (name, current) in after {
+            let previous = before.get(name);
+            let previously_moved = previous.map(|binding| binding.moved).unwrap_or(false);
+            if current.moved && !previously_moved {
+                moved.push(name.clone());
+            }
+            let previous_fields = previous
+                .map(|binding| binding.moved_fields.clone())
+                .unwrap_or_default();
+            for field in current.moved_fields.difference(&previous_fields) {
+                moved.push(format!("{}.{}", name, field));
+            }
+        }
+        moved
+    }
+
+    fn find_frozen_place_conflict(
+        &self,
+        place: &str,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Option<String> {
+        let root = place.split('.').next()?;
+        let binding = locals.get(root)?;
+        binding
+            .frozen_places
+            .iter()
+            .find(|frozen| borrow_places_overlap(frozen, place))
+            .cloned()
+    }
+
+    fn ensure_place_not_frozen(
+        &self,
+        place: &str,
+        span: crate::diag::Span,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        if let Some(frozen) = self.find_frozen_place_conflict(place, locals) {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "cannot mutate `{}` while `{}` is borrowed for iteration",
+                    place, frozen
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn pattern_covers_entire_type(&self, pattern: &Pattern, expected_ty: &Type) -> bool {
+        match pattern {
+            Pattern::Wildcard(_) | Pattern::Binding(_) => true,
+            Pattern::Literal(_) => false,
+            Pattern::Variant(variant_pattern) => {
+                let Some(variants) = self.enum_variants_for_type(expected_ty) else {
+                    return false;
+                };
+                let Some((_, payloads)) = variants
+                    .iter()
+                    .find(|(name, _)| name == &variant_pattern.variant_name)
+                else {
+                    return false;
+                };
+                if variants.len() != 1 || payloads.len() != variant_pattern.subpatterns.len() {
+                    return false;
+                }
+                variant_pattern.subpatterns.iter().zip(payloads.iter()).all(
+                    |(subpattern, payload_ty)| {
+                        self.pattern_covers_entire_type(subpattern, payload_ty)
+                    },
+                )
+            }
+        }
+    }
+
+    fn variant_pattern_covers_payloads(
+        &self,
+        variant_pattern: &VariantPattern,
+        payload_tys: &[Type],
+    ) -> bool {
+        variant_pattern.subpatterns.len() == payload_tys.len()
+            && variant_pattern
+                .subpatterns
+                .iter()
+                .zip(payload_tys.iter())
+                .all(|(subpattern, payload_ty)| {
+                    self.pattern_covers_entire_type(subpattern, payload_ty)
+                })
+    }
+
+    fn patterns_cover_type_union(&self, patterns: &[&Pattern], expected_ty: &Type) -> bool {
+        if patterns
+            .iter()
+            .any(|pattern| self.pattern_covers_entire_type(pattern, expected_ty))
+        {
+            return true;
+        }
+        let Some(variants) = self.enum_variants_for_type(expected_ty) else {
+            return false;
+        };
+        let mut grouped = BTreeMap::<String, Vec<&VariantPattern>>::new();
+        for pattern in patterns {
+            if let Pattern::Variant(variant_pattern) = pattern {
+                grouped
+                    .entry(variant_pattern.variant_name.clone())
+                    .or_default()
+                    .push(variant_pattern);
+            }
+        }
+        variants.into_iter().all(|(variant_name, payloads)| {
+            let Some(variant_patterns) = grouped.get(&variant_name) else {
+                return false;
+            };
+            self.variant_patterns_cover_payloads_union(variant_patterns, &payloads)
+        })
+    }
+
+    fn variant_patterns_cover_payloads_union(
+        &self,
+        patterns: &[&VariantPattern],
+        payload_tys: &[Type],
+    ) -> bool {
+        if patterns
+            .iter()
+            .any(|pattern| self.variant_pattern_covers_payloads(pattern, payload_tys))
+        {
+            return true;
+        }
+        if payload_tys.len() != 1 {
+            return false;
+        }
+        let nested_patterns = patterns
+            .iter()
+            .filter_map(|pattern| pattern.subpatterns.first())
+            .collect::<Vec<_>>();
+        self.patterns_cover_type_union(&nested_patterns, &payload_tys[0])
     }
 
     fn render_member_target(&self, object: &Expr, field: &str) -> String {
@@ -10164,18 +10657,49 @@ impl<'a> FunctionChecker<'a> {
         &self,
         ty: &Type,
         method_name: &str,
-    ) -> Option<(&TraitImplInfo, &TraitImplMethodInfo, HashMap<String, Type>)> {
-        self.trait_impls_in_scope()
-            .filter_map(|trait_impl| {
-                self.trait_impl_substitutions(trait_impl, ty)
-                    .map(|substitutions| (trait_impl, substitutions))
-            })
-            .find_map(|(trait_impl, substitutions)| {
-                trait_impl
-                    .methods
-                    .get(method_name)
-                    .map(|method| (trait_impl, method, substitutions))
-            })
+        span: crate::diag::Span,
+    ) -> Result<Option<(&TraitImplInfo, &TraitImplMethodInfo, HashMap<String, Type>)>> {
+        let mut matches = Vec::new();
+        for trait_impl in self.trait_impls_in_scope() {
+            let Some(substitutions) = self.trait_impl_substitutions(trait_impl, ty) else {
+                continue;
+            };
+            let Some(method) = trait_impl.methods.get(method_name) else {
+                continue;
+            };
+            matches.push((
+                trait_impl_specificity(trait_impl),
+                trait_impl,
+                method,
+                substitutions,
+            ));
+        }
+
+        if matches.is_empty() {
+            return Ok(None);
+        }
+
+        matches.sort_by(|left, right| right.0.cmp(&left.0));
+        let best_score = matches[0].0;
+        let mut best_matches = matches
+            .into_iter()
+            .filter(|(score, _, _, _)| *score == best_score)
+            .collect::<Vec<_>>();
+        match best_matches.len() {
+            1 => {
+                let (_, trait_impl, method, substitutions) = best_matches
+                    .pop()
+                    .expect("best trait impl match should exist");
+                Ok(Some((trait_impl, method, substitutions)))
+            }
+            _ => Err(Diagnostic::at(
+                span,
+                format!(
+                    "method `{}` is ambiguous for type `{}` because multiple trait impls match with the same specificity",
+                    method_name, ty
+                ),
+            )),
+        }
     }
 
     fn has_from_conversion(&self, source_ty: &Type, target_ty: &Type) -> bool {
@@ -10343,6 +10867,7 @@ impl<'a> FunctionChecker<'a> {
             .zip(param_types.iter())
             .zip(param_decls.iter())
         {
+            let locals_before = locals.clone();
             let hinted_expected = substitute_type(expected, &substitutions);
             let actual = if let Some(argument) = argument {
                 match self.type_of_expr_hint(&argument.value, locals, Some(&hinted_expected)) {
@@ -10373,6 +10898,7 @@ impl<'a> FunctionChecker<'a> {
                     Err(error) => return Err(error),
                 }
             };
+            let nested_moved_places = self.newly_moved_places(&locals_before, locals);
             if let Err(error) = unify_type_pattern(expected, &actual, &mut substitutions) {
                 let span = argument
                     .map(|argument| argument.span)
@@ -10385,7 +10911,7 @@ impl<'a> FunctionChecker<'a> {
                     ),
                 ));
             }
-            resolved_args.push((argument, actual));
+            resolved_args.push((argument, actual, nested_moved_places));
         }
 
         if let Some(expected_return) = expected_return {
@@ -10438,8 +10964,11 @@ impl<'a> FunctionChecker<'a> {
         }
 
         let mut borrowed_places = seeded_borrowed_places;
-        for (((argument, actual), expected), param_decl) in resolved_args
+        for ((((argument, actual), nested_moved_places), expected), param_decl) in resolved_args
             .into_iter()
+            .map(|(argument, actual, nested_moved_places)| {
+                ((argument, actual), nested_moved_places)
+            })
             .zip(param_types.iter())
             .zip(param_decls.iter())
         {
@@ -10460,6 +10989,36 @@ impl<'a> FunctionChecker<'a> {
                 match param_decl.passing {
                     ReceiverKind::Value => {
                         if !self.is_copy_type(&expected) {
+                            if let Some(place) = self.borrow_call_place(&argument.value) {
+                                self.reject_overlapping_borrow(
+                                    &borrowed_places,
+                                    &place,
+                                    ReceiverKind::Value,
+                                    &param_decl.name,
+                                    callee_name,
+                                    argument.span,
+                                )?;
+                                borrowed_places.push(BorrowedCallPlace {
+                                    path: place,
+                                    passing: ReceiverKind::Value,
+                                    param_name: param_decl.name.clone(),
+                                });
+                            }
+                            for place in nested_moved_places {
+                                self.reject_overlapping_borrow(
+                                    &borrowed_places,
+                                    &place,
+                                    ReceiverKind::Value,
+                                    &param_decl.name,
+                                    callee_name,
+                                    argument.span,
+                                )?;
+                                borrowed_places.push(BorrowedCallPlace {
+                                    path: place,
+                                    passing: ReceiverKind::Value,
+                                    param_name: param_decl.name.clone(),
+                                });
+                            }
                             self.consume_value_expr(&argument.value, locals)?;
                         }
                     }

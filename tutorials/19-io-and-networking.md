@@ -176,6 +176,7 @@ Related process-supervisor enums:
 - `process.SupervisorWait`
 
 Supervisor children default to `group=true` so `stop()` and `close()` shut down full child trees instead of only the leader process.
+When `restart` is `process.RestartPolicy.OnFailure` or `process.RestartPolicy.Always`, `backoff` must be at least `10ms` to prevent zero-delay restart loops.
 
 `process.Child.close()` is cleanup-oriented: it sends a graceful terminate signal first, waits briefly, and escalates to kill if the child does not exit promptly. For grouped children it waits for the full child process group to disappear before returning.
 

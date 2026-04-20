@@ -83,7 +83,7 @@ fn lexes_keywords_operators_and_delimiters() {
 #[test]
 fn lexes_strings_fstrings_numbers_and_durations() {
     let tokens = kinds(
-            "value = \"line\\ntext\\t\\\"quote\\\"\\\\\"\nmessage = f\"hello {user}\"\nnums = 7 1.5 5ms 2s 1m\n",
+            "value = \"line\\ntext\\t\\\"quote\\\"\\\\\"\nmessage = f\"hello {user}\"\nnums = 7 1.5 1e3 2.5e-1 5ms 2s 1m\n",
         );
 
     assert!(tokens.contains(&TokenKind::StringLiteral(
@@ -92,6 +92,8 @@ fn lexes_strings_fstrings_numbers_and_durations() {
     assert!(tokens.contains(&TokenKind::FStringLiteral("hello {user}".to_string())));
     assert!(tokens.contains(&TokenKind::IntLiteral(7)));
     assert!(tokens.contains(&TokenKind::FloatLiteral(1.5)));
+    assert!(tokens.contains(&TokenKind::FloatLiteral(1000.0)));
+    assert!(tokens.contains(&TokenKind::FloatLiteral(0.25)));
     assert!(tokens.contains(&TokenKind::DurationLiteral(5)));
     assert!(tokens.contains(&TokenKind::DurationLiteral(2_000)));
     assert!(tokens.contains(&TokenKind::DurationLiteral(60_000)));
@@ -209,8 +211,17 @@ fn lexes_nested_interpolations_and_reports_duration_overflow() {
     let overflow = lex(&format!("value = {}m\n", u128::MAX)).unwrap_err();
     assert!(overflow.message.contains("invalid duration literal"));
 
+    let float_overflow = lex("value = 1e1000\n").unwrap_err();
+    assert!(float_overflow.message.contains("out of range"));
+
     let invalid = lex("value = @\n").unwrap_err();
     assert!(invalid.message.contains("unexpected character `@`"));
+}
+
+#[test]
+fn lexer_ignores_a_utf8_bom_at_the_start_of_the_source() {
+    let tokens = kinds("\u{feff}def main() -> int32:\n    return 0\n");
+    assert_eq!(tokens[0], TokenKind::KwDef);
 }
 
 #[test]
@@ -218,10 +229,10 @@ fn lexer_reports_fstring_interpolation_depth_limit() {
     let depth = crate::limits::RECURSION_LIMIT + 8;
     let mut source = "text = f\"".to_string();
     source.push('{');
+    source.push('0');
     source.push_str(&"{".repeat(depth));
     source.push('1');
-    source.push_str(&"}".repeat(depth));
-    source.push('}');
+    source.push_str(&"}".repeat(depth + 1));
     source.push_str("\"\n");
 
     let error = lex(&source).expect_err("deep f-string interpolation should fail");
@@ -292,4 +303,20 @@ fn lexer_reports_precise_spans_for_dedents_eof_and_errors() {
     assert!(unterminated_fescape
         .message
         .contains("unterminated f-string literal"));
+}
+
+#[test]
+fn lexer_decodes_extended_string_escape_sequences() {
+    let tokens = kinds("text = \"\\0\\x41\\u{1F600}\"\nmessage = f\"\\x42\\u{43}\"\n");
+    assert!(tokens.contains(&TokenKind::StringLiteral("\0A😀".to_string())));
+    assert!(tokens.contains(&TokenKind::FStringLiteral("BC".to_string())));
+
+    let bad_hex = lex("text = \"\\x4g\"\n").expect_err("invalid hex escape should fail");
+    assert!(bad_hex
+        .message
+        .contains("invalid hexadecimal escape sequence"));
+
+    let bad_unicode =
+        lex("text = \"\\u{110000}\"\n").expect_err("out-of-range unicode escape should fail");
+    assert!(bad_unicode.message.contains("out of range"));
 }

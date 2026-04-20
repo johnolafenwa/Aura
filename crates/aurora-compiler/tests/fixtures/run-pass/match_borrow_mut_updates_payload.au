@@ -1,0 +1,18 @@
+enum Boxed:
+    Filled(int32)
+    Empty
+
+def main() -> int32:
+    mut value = Boxed.Filled(1)
+    match borrow mut value:
+        case Filled(v):
+            v = v + 1
+        case Empty:
+            pass
+
+    match value:
+        case Filled(v):
+            print(v)
+        case Empty:
+            print(0)
+    return 0

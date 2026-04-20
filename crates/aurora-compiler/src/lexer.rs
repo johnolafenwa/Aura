@@ -79,7 +79,120 @@ pub enum TokenKind {
     KwAs,
 }
 
+fn decode_hex_digit(ch: char) -> Option<u32> {
+    match ch {
+        '0'..='9' => Some((ch as u32) - ('0' as u32)),
+        'a'..='f' => Some((ch as u32) - ('a' as u32) + 10),
+        'A'..='F' => Some((ch as u32) - ('A' as u32) + 10),
+        _ => None,
+    }
+}
+
+fn decode_escape(
+    chars: &[(usize, char)],
+    escape_start: usize,
+    line_no: usize,
+    column: usize,
+    literal_kind: &str,
+) -> Result<(char, usize)> {
+    let Some((_, escaped)) = chars.get(escape_start) else {
+        return Err(Diagnostic::at(
+            Span::new(line_no, column),
+            format!("unterminated {} literal", literal_kind),
+        ));
+    };
+    match escaped {
+        'n' => Ok(('\n', escape_start + 1)),
+        't' => Ok(('\t', escape_start + 1)),
+        '"' => Ok(('"', escape_start + 1)),
+        '\\' => Ok(('\\', escape_start + 1)),
+        '0' => Ok(('\0', escape_start + 1)),
+        'x' => {
+            let Some((_, high)) = chars.get(escape_start + 1) else {
+                return Err(Diagnostic::at(
+                    Span::new(line_no, column),
+                    format!("unsupported escape sequence `\\{}`", escaped),
+                ));
+            };
+            let Some((_, low)) = chars.get(escape_start + 2) else {
+                return Err(Diagnostic::at(
+                    Span::new(line_no, column),
+                    format!("unsupported escape sequence `\\{}`", escaped),
+                ));
+            };
+            let Some(high) = decode_hex_digit(*high) else {
+                return Err(Diagnostic::at(
+                    Span::new(line_no, column),
+                    "invalid hexadecimal escape sequence",
+                ));
+            };
+            let Some(low) = decode_hex_digit(*low) else {
+                return Err(Diagnostic::at(
+                    Span::new(line_no, column),
+                    "invalid hexadecimal escape sequence",
+                ));
+            };
+            let value = ((high << 4) | low) as u8;
+            Ok((char::from(value), escape_start + 3))
+        }
+        'u' => {
+            if !matches!(chars.get(escape_start + 1), Some((_, '{'))) {
+                return Err(Diagnostic::at(
+                    Span::new(line_no, column),
+                    "unicode escape sequences must use the form `\\u{...}`",
+                ));
+            }
+            let mut scalar = 0u32;
+            let mut saw_digit = false;
+            let mut index = escape_start + 2;
+            while let Some((_, candidate)) = chars.get(index) {
+                if *candidate == '}' {
+                    if !saw_digit {
+                        return Err(Diagnostic::at(
+                            Span::new(line_no, column),
+                            "unicode escape sequences must include at least one hexadecimal digit",
+                        ));
+                    }
+                    let Some(decoded) = char::from_u32(scalar) else {
+                        return Err(Diagnostic::at(
+                            Span::new(line_no, column),
+                            "unicode escape sequence is out of range",
+                        ));
+                    };
+                    return Ok((decoded, index + 1));
+                }
+                let Some(digit) = decode_hex_digit(*candidate) else {
+                    return Err(Diagnostic::at(
+                        Span::new(line_no, column),
+                        "invalid unicode escape sequence",
+                    ));
+                };
+                scalar = scalar
+                    .checked_mul(16)
+                    .and_then(|value| value.checked_add(digit))
+                    .ok_or_else(|| {
+                        Diagnostic::at(
+                            Span::new(line_no, column),
+                            "unicode escape sequence is out of range",
+                        )
+                    })?;
+                saw_digit = true;
+                index += 1;
+            }
+            Err(Diagnostic::at(
+                Span::new(line_no, column),
+                format!("unterminated {} literal", literal_kind),
+            ))
+        }
+        other => Err(Diagnostic::at(
+            Span::new(line_no, column),
+            format!("unsupported escape sequence `\\{}`", other),
+        )),
+    }
+}
+
 pub fn lex(source: &str) -> Result<Vec<Token>> {
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut tokens = Vec::new();
     let mut indent_stack = vec![0usize];
 
@@ -304,28 +417,29 @@ fn tokenize_line(
                     if interpolation_depth == 0 && current == '"' {
                         break;
                     }
+                    if interpolation_depth == 0
+                        && current == '{'
+                        && matches!(chars.get(index + 1), Some((_, '{')))
+                    {
+                        value.push('{');
+                        value.push('{');
+                        index += 2;
+                        continue;
+                    }
+                    if interpolation_depth == 0
+                        && current == '}'
+                        && matches!(chars.get(index + 1), Some((_, '}')))
+                    {
+                        value.push('}');
+                        value.push('}');
+                        index += 2;
+                        continue;
+                    }
                     if interpolation_depth == 0 && current == '\\' {
-                        index += 1;
-                        let Some((_, escaped)) = chars.get(index) else {
-                            return Err(Diagnostic::at(
-                                Span::new(line_no, column),
-                                "unterminated f-string literal",
-                            ));
-                        };
-                        let decoded = match escaped {
-                            'n' => '\n',
-                            't' => '\t',
-                            '"' => '"',
-                            '\\' => '\\',
-                            other => {
-                                return Err(Diagnostic::at(
-                                    Span::new(line_no, column),
-                                    format!("unsupported escape sequence `\\{}`", other),
-                                ));
-                            }
-                        };
+                        let (decoded, next_index) =
+                            decode_escape(&chars, index + 1, line_no, column, "f-string")?;
                         value.push(decoded);
-                        index += 1;
+                        index = next_index;
                         continue;
                     }
                     value.push(current);
@@ -386,27 +500,10 @@ fn tokenize_line(
                         break;
                     }
                     if current == '\\' {
-                        index += 1;
-                        let Some((_, escaped)) = chars.get(index) else {
-                            return Err(Diagnostic::at(
-                                Span::new(line_no, column),
-                                "unterminated string literal",
-                            ));
-                        };
-                        let decoded = match escaped {
-                            'n' => '\n',
-                            't' => '\t',
-                            '"' => '"',
-                            '\\' => '\\',
-                            other => {
-                                return Err(Diagnostic::at(
-                                    Span::new(line_no, column),
-                                    format!("unsupported escape sequence `\\{}`", other),
-                                ));
-                            }
-                        };
+                        let (decoded, next_index) =
+                            decode_escape(&chars, index + 1, line_no, column, "string")?;
                         value.push(decoded);
-                        index += 1;
+                        index = next_index;
                         continue;
                     }
                     value.push(current);
@@ -446,6 +543,25 @@ fn tokenize_line(
                     }
                 }
 
+                if matches!(chars.get(index), Some((_, 'e' | 'E'))) {
+                    let exponent_start = index;
+                    let mut exponent_index = index + 1;
+                    if matches!(chars.get(exponent_index), Some((_, '+' | '-'))) {
+                        exponent_index += 1;
+                    }
+                    if !matches!(chars.get(exponent_index), Some((_, '0'..='9'))) {
+                        return Err(Diagnostic::at(
+                            Span::new(line_no, base_column + chars[exponent_start].0),
+                            "invalid floating-point literal",
+                        ));
+                    }
+                    is_float = true;
+                    index = exponent_index + 1;
+                    while matches!(chars.get(index), Some((_, '0'..='9'))) {
+                        index += 1;
+                    }
+                }
+
                 let end_offset = match chars.get(index) {
                     Some((next_offset, _)) => *next_offset,
                     None => content.len(),
@@ -454,7 +570,13 @@ fn tokenize_line(
 
                 if is_float {
                     let value = match text.parse::<f64>() {
-                        Ok(value) => value,
+                        Ok(value) if value.is_finite() => value,
+                        Ok(_) => {
+                            return Err(Diagnostic::at(
+                                Span::new(line_no, column),
+                                "floating-point literal is out of range",
+                            ));
+                        }
                         Err(_) => {
                             return Err(Diagnostic::at(
                                 Span::new(line_no, column),

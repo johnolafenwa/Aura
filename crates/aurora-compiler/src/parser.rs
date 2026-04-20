@@ -66,6 +66,17 @@ impl Parser {
         self.recursion_depth = self.recursion_depth.saturating_sub(1);
     }
 
+    fn check_expression_chain_limit(&self, count: usize) -> Result<()> {
+        if count >= RECURSION_LIMIT {
+            Err(self.error_here(format!(
+                "expression chain exceeds the supported recursion limit of {}",
+                RECURSION_LIMIT
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
     fn parse_module(&mut self) -> Result<Module> {
         let mut imports = Vec::new();
         let mut items = Vec::new();
@@ -1076,8 +1087,11 @@ impl Parser {
 
     fn parse_or(&mut self) -> Result<Expr> {
         let mut expr = self.parse_and()?;
+        let mut chain_len = 0usize;
 
         while self.eat_simple(&TokenKind::KwOr).is_some() {
+            chain_len += 1;
+            self.check_expression_chain_limit(chain_len)?;
             let right = self.parse_and()?;
             let span = expr.span;
             expr = Expr {
@@ -1095,8 +1109,11 @@ impl Parser {
 
     fn parse_and(&mut self) -> Result<Expr> {
         let mut expr = self.parse_not()?;
+        let mut chain_len = 0usize;
 
         while self.eat_simple(&TokenKind::KwAnd).is_some() {
+            chain_len += 1;
+            self.check_expression_chain_limit(chain_len)?;
             let right = self.parse_not()?;
             let span = expr.span;
             expr = Expr {
@@ -1129,6 +1146,7 @@ impl Parser {
 
     fn parse_equality(&mut self) -> Result<Expr> {
         let mut expr = self.parse_comparison()?;
+        let mut chain_len = 0usize;
 
         loop {
             let op = if self.eat_simple(&TokenKind::EqEq).is_some() {
@@ -1140,6 +1158,8 @@ impl Parser {
             };
 
             let Some(op) = op else { break };
+            chain_len += 1;
+            self.check_expression_chain_limit(chain_len)?;
             let right = self.parse_comparison()?;
             let span = expr.span;
             expr = Expr {
@@ -1157,6 +1177,7 @@ impl Parser {
 
     fn parse_comparison(&mut self) -> Result<Expr> {
         let mut expr = self.parse_additive()?;
+        let mut chain_len = 0usize;
 
         loop {
             let op = if self.eat_simple(&TokenKind::Less).is_some() {
@@ -1172,6 +1193,8 @@ impl Parser {
             };
 
             let Some(op) = op else { break };
+            chain_len += 1;
+            self.check_expression_chain_limit(chain_len)?;
             let right = self.parse_additive()?;
             let span = expr.span;
             expr = Expr {
@@ -1189,6 +1212,7 @@ impl Parser {
 
     fn parse_additive(&mut self) -> Result<Expr> {
         let mut expr = self.parse_multiplicative()?;
+        let mut chain_len = 0usize;
 
         loop {
             let op = if self.eat_simple(&TokenKind::Plus).is_some() {
@@ -1200,6 +1224,8 @@ impl Parser {
             };
 
             let Some(op) = op else { break };
+            chain_len += 1;
+            self.check_expression_chain_limit(chain_len)?;
             let right = self.parse_multiplicative()?;
             let span = expr.span;
             expr = Expr {
@@ -1217,6 +1243,7 @@ impl Parser {
 
     fn parse_multiplicative(&mut self) -> Result<Expr> {
         let mut expr = self.parse_prefix()?;
+        let mut chain_len = 0usize;
 
         loop {
             let op = if self.eat_simple(&TokenKind::Star).is_some() {
@@ -1230,6 +1257,8 @@ impl Parser {
             };
 
             let Some(op) = op else { break };
+            chain_len += 1;
+            self.check_expression_chain_limit(chain_len)?;
             let right = self.parse_prefix()?;
             let span = expr.span;
             expr = Expr {
@@ -1306,9 +1335,12 @@ impl Parser {
 
     fn parse_postfix(&mut self) -> Result<Expr> {
         let mut expr = self.parse_primary()?;
+        let mut chain_len = 0usize;
 
         loop {
             if self.at_simple(&TokenKind::LBracket) && self.starts_specialization_suffix(&expr) {
+                chain_len += 1;
+                self.check_expression_chain_limit(chain_len)?;
                 self.bump();
                 let mut type_args = Vec::new();
                 loop {
@@ -1330,6 +1362,8 @@ impl Parser {
             }
 
             if self.eat_simple(&TokenKind::LBracket).is_some() {
+                chain_len += 1;
+                self.check_expression_chain_limit(chain_len)?;
                 let index = self.parse_expr()?;
                 self.expect_simple(TokenKind::RBracket)?;
                 let span = expr.span;
@@ -1344,6 +1378,8 @@ impl Parser {
             }
 
             if self.eat_simple(&TokenKind::Dot).is_some() {
+                chain_len += 1;
+                self.check_expression_chain_limit(chain_len)?;
                 let field_span = self.current_span();
                 let field = self.expect_member_name()?;
                 expr = Expr {
@@ -1357,6 +1393,8 @@ impl Parser {
             }
 
             if self.eat_simple(&TokenKind::LParen).is_some() {
+                chain_len += 1;
+                self.check_expression_chain_limit(chain_len)?;
                 let args = self.parse_args()?;
                 self.expect_simple(TokenKind::RParen)?;
                 let span = expr.span;
@@ -1371,6 +1409,8 @@ impl Parser {
             }
 
             if self.at_simple(&TokenKind::KwAs) && self.next_starts_numeric_cast_type() {
+                chain_len += 1;
+                self.check_expression_chain_limit(chain_len)?;
                 self.bump();
                 let ty = self.parse_type()?;
                 let span = expr.span;
@@ -1466,7 +1506,10 @@ impl Parser {
                 span: token.span,
             }),
             TokenKind::LParen => {
-                let inner = self.parse_expr()?;
+                self.enter_recursion("expression")?;
+                let inner = self.parse_expr();
+                self.exit_recursion();
+                let inner = inner?;
                 self.expect_simple(TokenKind::RParen)?;
                 Ok(Expr {
                     kind: ExprKind::Group(Box::new(inner)),
@@ -1785,21 +1828,30 @@ impl Parser {
 
     fn parse_format_parts(&mut self, value: &str, span: Span) -> Result<Vec<FormatPart>> {
         let mut parts = Vec::new();
-        let mut literal_start = 0usize;
         let chars = value.char_indices().collect::<Vec<_>>();
         let mut index = 0usize;
+        let mut literal = String::new();
 
         while index < chars.len() {
             let (offset, ch) = chars[index];
+            if ch == '{' && matches!(chars.get(index + 1), Some((_, '{'))) {
+                literal.push('{');
+                index += 2;
+                continue;
+            }
+            if ch == '}' && matches!(chars.get(index + 1), Some((_, '}'))) {
+                literal.push('}');
+                index += 2;
+                continue;
+            }
             if ch != '{' {
+                literal.push(ch);
                 index += 1;
                 continue;
             }
 
-            if literal_start < offset {
-                parts.push(FormatPart::Literal(
-                    value[literal_start..offset].to_string(),
-                ));
+            if !literal.is_empty() {
+                parts.push(FormatPart::Literal(std::mem::take(&mut literal)));
             }
 
             let expr_start = offset + ch.len_utf8();
@@ -1857,11 +1909,10 @@ impl Parser {
             offset_expr_span(&mut expr, span.line, column_offset);
             parts.push(FormatPart::Expr(expr));
             index += 1;
-            literal_start = expr_end + 1;
         }
 
-        if literal_start < value.len() {
-            parts.push(FormatPart::Literal(value[literal_start..].to_string()));
+        if !literal.is_empty() {
+            parts.push(FormatPart::Literal(literal));
         }
 
         Ok(parts)

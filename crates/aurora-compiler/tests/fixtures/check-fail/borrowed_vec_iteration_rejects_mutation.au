@@ -1,0 +1,6 @@
+def main() -> int32:
+    mut values = [1, 2, 3]
+    for value in borrow values:
+        values.clear()
+        print(value)
+    return 0

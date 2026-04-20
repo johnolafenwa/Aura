@@ -217,7 +217,9 @@ impl ModuleLoader {
                 Diagnostic::new(format!("failed to read `{}`: {}", path.display(), error))
             })?
         };
-        let module = parse_source(&source)?;
+        let display_path = path.display().to_string();
+        let module = parse_source(&source)
+            .map_err(|error| error.with_render_context(display_path.clone(), source.clone()))?;
         let module_name = self.module_name_for_path(&path);
         let imported_bindings = self.resolve_imports(&module, &path)?;
         let module_registry = self.build_module_registry();
@@ -228,7 +230,8 @@ impl ModuleLoader {
                 imported_bindings,
                 module_registry,
             },
-        )?;
+        )
+        .map_err(|error| error.with_render_context(display_path, source.clone()))?;
         let mut program = program;
         self.qualify_program_imported_modules(&path, &mut program);
         program.source_path = Some(path.display().to_string());

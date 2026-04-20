@@ -10,8 +10,16 @@ def main() -> int32:
     trimmed = text.trim()
     parts = trimmed.split(" ")
     print(parts.len())
-    print(parts[0])
-    print(parts[1])
+    match parts.get(0):
+        case Option.Some(value):
+            print(value)
+        case Option.None:
+            pass
+    match parts.get(1):
+        case Option.Some(value):
+            print(value)
+        case Option.None:
+            pass
     print(trimmed.replace("Repo", "Lang"))
     print(trimmed.to_lower())
     print(trimmed.to_upper())

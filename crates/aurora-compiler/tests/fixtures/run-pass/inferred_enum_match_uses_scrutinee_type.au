@@ -1,0 +1,11 @@
+enum Signal:
+    Ready
+    Busy
+
+def main() -> None:
+    signal = Signal.Ready
+    match signal:
+        case Ready:
+            print("ready")
+        case Busy:
+            print("busy")

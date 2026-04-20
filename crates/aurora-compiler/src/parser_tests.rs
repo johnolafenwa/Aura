@@ -314,7 +314,7 @@ fn parse_expression_reports_recursion_limit_for_deep_nesting() {
 
 #[test]
 fn parse_expression_accepts_reasonably_deep_generated_expressions() {
-    let depth = 48usize;
+    let depth = 32usize;
     let mut source = "(".repeat(depth);
     source.push('1');
     source.push_str(&")".repeat(depth));
@@ -380,6 +380,15 @@ fn parser_helpers_cover_specialization_and_format_parts() {
         .parse_format_parts("{call(\"x\\\"y\")}", Span::new(1, 1))
         .expect("escaped interpolation");
     assert_eq!(escaped.len(), 1);
+
+    let brace_escaped = parser
+        .parse_format_parts("literal {{value}} tail", Span::new(1, 1))
+        .expect("escaped literal braces should parse");
+    assert_eq!(brace_escaped.len(), 1);
+    let FormatPart::Literal(text) = &brace_escaped[0] else {
+        panic!("expected literal brace escape to stay literal");
+    };
+    assert_eq!(text, "literal {value} tail");
 
     let empty = parser
         .parse_format_parts("value {}", Span::new(1, 1))

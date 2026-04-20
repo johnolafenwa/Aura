@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::process;
 use std::slice;
 use std::str;
@@ -13,15 +13,15 @@ use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_value::{
-    cast_numeric_value, current_lightweight_task_cancellation, decode_process_restart_policy,
-    decode_process_stdio, io_error, io_read_line, option_none, option_some,
-    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
-    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
-    process_stdio_pipe, process_supervisor_wait_cancelled, process_supervisor_wait_event,
-    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
-    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, render_float, result_err, result_ok,
-    run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
+    cancel_current_lightweight_task, cast_numeric_value, current_lightweight_task_cancellation,
+    decode_process_restart_policy, decode_process_stdio, io_error, io_read_line, option_none,
+    option_some, process_error_cancelled, process_error_io, process_error_no_command,
+    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
+    process_stdio_null, process_stdio_pipe, process_supervisor_wait_cancelled,
+    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
+    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
+    queue_receive_closed, queue_receive_item, queue_receive_timed_out, render_float, result_err,
+    result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
     send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
     spawn_lightweight_task_with_cancellation, task_result_cancelled, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_ready, wait_all_timed_out,
@@ -35,6 +35,29 @@ use crate::runtime_value::{
     WebSocketValue,
 };
 use crate::sema::Type;
+
+const DIRECT_MAX_READ_ALL_BYTES: usize = 1024 * 1024;
+
+fn direct_read_all_limit_error(label: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "{} exceeded the supported read_all limit of {} bytes",
+            label, DIRECT_MAX_READ_ALL_BYTES
+        ),
+    )
+}
+
+fn direct_read_file_limited(path: &str, label: &str) -> io::Result<Vec<u8>> {
+    let mut file = std::fs::File::open(path)?;
+    let mut limited = (&mut file).take((DIRECT_MAX_READ_ALL_BYTES as u64) + 1);
+    let mut bytes = Vec::new();
+    limited.read_to_end(&mut bytes)?;
+    if bytes.len() > DIRECT_MAX_READ_ALL_BYTES {
+        return Err(direct_read_all_limit_error(label));
+    }
+    Ok(bytes)
+}
 
 fn write_stdout(text: &str) {
     let mut stdout = io::stdout().lock();
@@ -134,6 +157,8 @@ pub struct OpaqueValue {
 }
 
 type NativeThunk = unsafe extern "C" fn(*const i64, usize) -> *mut OpaqueValue;
+const DIRECT_MAX_CALL_DEPTH: usize = 256;
+const DIRECT_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
 
 struct ProgramSourceContext {
     path: String,
@@ -143,6 +168,7 @@ struct ProgramSourceContext {
 thread_local! {
     static DIRECT_CANCELLATION: RefCell<CancellationContext> =
         RefCell::new(CancellationContext::default());
+    static DIRECT_CALL_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 static DIRECT_PROGRAM_SOURCE: OnceLock<ProgramSourceContext> = OnceLock::new();
@@ -259,6 +285,19 @@ unsafe fn consume_value(ptr: *mut OpaqueValue) -> Value {
         aurora_direct_release_value(ptr);
     }
     value
+}
+
+unsafe fn consume_opaque_buffer(buffer: *mut i64, count: usize) -> Vec<Value> {
+    let handles = unsafe { Vec::from_raw_parts(buffer, count, count) };
+    handles
+        .into_iter()
+        .map(|handle| {
+            if handle == 0 {
+                runtime_error("direct runtime received a null enum payload handle");
+            }
+            unsafe { consume_value(handle as *mut OpaqueValue) }
+        })
+        .collect()
 }
 
 fn decode_bytes(ptr: *const u8, len: usize) -> String {
@@ -833,14 +872,26 @@ pub extern "C" fn aurora_direct_runtime_init(
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_run_root(thunk_ptr: i64) -> i32 {
+pub unsafe extern "C" fn aurora_direct_run_root(thunk_ptr: i64) -> i32 {
+    if thunk_ptr == 0 {
+        runtime_error("invalid direct root thunk pointer");
+    }
     let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
-    let result = run_lightweight_root_task(move || {
-        with_cancellation_scope(CancellationContext::default(), || {
-            let result_ptr = unsafe { thunk(std::ptr::null(), 0) };
-            Ok(unsafe { consume_value(result_ptr) })
+    let result = std::thread::Builder::new()
+        .stack_size(DIRECT_RUNTIME_STACK_SIZE)
+        .spawn(move || {
+            run_lightweight_root_task(move || {
+                with_cancellation_scope(CancellationContext::default(), || {
+                    let result_ptr = unsafe { thunk(std::ptr::null(), 0) };
+                    Ok(unsafe { consume_value(result_ptr) })
+                })
+            })
         })
-    });
+        .unwrap_or_else(|error| {
+            runtime_error(format!("failed to start direct runtime thread: {}", error))
+        })
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
     match result {
         Ok(Value::Int(value)) => value.as_i128().unwrap_or_default() as i32,
         Ok(Value::Unit) => 0,
@@ -850,6 +901,30 @@ pub extern "C" fn aurora_direct_run_root(thunk_ptr: i64) -> i32 {
         )),
         Err(error) => runtime_diagnostic_error(error),
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn aurora_direct_enter_call() {
+    DIRECT_CALL_DEPTH.with(|slot| {
+        let depth = slot.get();
+        if depth >= DIRECT_MAX_CALL_DEPTH {
+            runtime_error(format!(
+                "maximum call depth of {} exceeded in the direct backend",
+                DIRECT_MAX_CALL_DEPTH
+            ));
+        }
+        slot.set(depth + 1);
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn aurora_direct_exit_call() {
+    DIRECT_CALL_DEPTH.with(|slot| {
+        let depth = slot.get();
+        if depth > 0 {
+            slot.set(depth - 1);
+        }
+    });
 }
 
 #[no_mangle]
@@ -1290,7 +1365,10 @@ pub extern "C" fn aurora_direct_parse_float64(value: *mut OpaqueValue) -> *mut O
     let value = unsafe { take_value(value) };
     match value {
         Value::String(text) => match text.parse::<f64>() {
-            Ok(value) => boxed_value(result_ok(Value::Float(value))),
+            Ok(value) if value.is_finite() => boxed_value(result_ok(Value::Float(value))),
+            Ok(_) => boxed_value(result_err(Value::String(
+                "float must be finite".to_string(),
+            ))),
             Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
         },
         other => runtime_error(format!(
@@ -2267,15 +2345,18 @@ pub extern "C" fn aurora_direct_enum_variant(
     enum_len: usize,
     variant_ptr: *const u8,
     variant_len: usize,
-    payload: *mut OpaqueValue,
+    payloads_ptr: *mut i64,
+    payload_count: i64,
 ) -> *mut OpaqueValue {
+    let payload_count = usize::try_from(payload_count)
+        .unwrap_or_else(|_| runtime_error("invalid enum payload count"));
     boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: decode_bytes(enum_ptr, enum_len),
         variant_name: decode_bytes(variant_ptr, variant_len),
-        payloads: if payload.is_null() {
+        payloads: if payload_count == 0 {
             Vec::new()
         } else {
-            vec![unsafe { take_value(payload) }]
+            unsafe { consume_opaque_buffer(payloads_ptr, payload_count) }
         },
     }))
 }
@@ -2897,7 +2978,14 @@ fn wait_any_tasks(
             if let Some(result) = task.completed_result() {
                 let index = i32::try_from(index)
                     .map_err(|_| Diagnostic::new("wait_any result index exceeds int32 range"))?;
-                return Ok(wait_any_ready(index, result?));
+                return match result {
+                    crate::runtime_value::TaskExecutionResult::Ready(result) => {
+                        Ok(wait_any_ready(index, result?))
+                    }
+                    crate::runtime_value::TaskExecutionResult::Cancelled => {
+                        Ok(wait_any_cancelled())
+                    }
+                };
             }
         }
 
@@ -3015,20 +3103,22 @@ pub extern "C" fn aurora_direct_task_group_cancel(group: *mut OpaqueValue) -> *m
 #[no_mangle]
 pub extern "C" fn aurora_direct_task_group_close(
     group: *mut OpaqueValue,
-    cancel_before: i64,
+    _cancel_before: i64,
 ) -> *mut OpaqueValue {
     match unsafe { value_ref(group) } {
         Value::TaskGroup(group) => {
-            if cancel_before != 0 {
-                group.cancel();
-            }
+            group.cancel();
             let mut first_error = None;
             for task in group.drain_tasks() {
-                if let Err(error) = task.join_result() {
-                    group.cancel();
-                    if first_error.is_none() {
-                        first_error = Some(error);
+                match task.join_result() {
+                    crate::runtime_value::TaskExecutionResult::Ready(Err(error)) => {
+                        group.cancel();
+                        if first_error.is_none() {
+                            first_error = Some(error);
+                        }
                     }
+                    crate::runtime_value::TaskExecutionResult::Ready(Ok(_))
+                    | crate::runtime_value::TaskExecutionResult::Cancelled => {}
                 }
             }
             if let Some(error) = first_error {
@@ -3089,7 +3179,10 @@ pub extern "C" fn aurora_direct_fs_exists(path: *mut OpaqueValue) -> *mut Opaque
 pub extern "C" fn aurora_direct_fs_read_to_string(path: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
-            move || std::fs::read_to_string(path),
+            move || {
+                let bytes = direct_read_file_limited(&path, "fs.read_to_string")?;
+                String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+            },
             Some(&current_cancellation()),
         ) {
             Ok(text) => boxed_value(result_ok(Value::String(text))),
@@ -3105,12 +3198,13 @@ pub extern "C" fn aurora_direct_fs_read_to_string(path: *mut OpaqueValue) -> *mu
 #[no_mangle]
 pub extern "C" fn aurora_direct_fs_read_bytes(path: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(path) } {
-        Value::String(path) => {
-            match run_blocking_io(move || std::fs::read(path), Some(&current_cancellation())) {
-                Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
-                Err(error) => boxed_value(result_err(io_error(error))),
-            }
-        }
+        Value::String(path) => match run_blocking_io(
+            move || direct_read_file_limited(&path, "fs.read_bytes"),
+            Some(&current_cancellation()),
+        ) {
+            Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
         other => runtime_error(format!(
             "expected `String`, found `{}`",
             value_type_name(other)
@@ -3222,7 +3316,7 @@ pub extern "C" fn aurora_direct_fs_append_bytes(
 pub extern "C" fn aurora_direct_fs_create_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
-            move || std::fs::create_dir_all(path),
+            move || crate::runtime_value::create_dir_once(path),
             Some(&current_cancellation()),
         ) {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
@@ -3266,7 +3360,7 @@ pub extern "C" fn aurora_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut Opaq
 pub extern "C" fn aurora_direct_fs_remove_file(path: *mut OpaqueValue) -> *mut OpaqueValue {
     match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
-            move || std::fs::remove_file(path),
+            move || crate::runtime_value::remove_file_checked(path),
             Some(&current_cancellation()),
         ) {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
@@ -5508,10 +5602,15 @@ pub extern "C" fn aurora_direct_sleep_ms(duration: i64) {
         Ok(millis) => millis,
         Err(_) => runtime_error("invalid sleep duration"),
     };
-    sleep_with_runtime_scheduler(
-        StdDuration::from_millis(millis),
-        Some(&current_cancellation()),
-    );
+    if matches!(
+        sleep_with_runtime_scheduler(
+            StdDuration::from_millis(millis),
+            Some(&current_cancellation()),
+        ),
+        RuntimeSchedulerWakeReason::Cancelled
+    ) {
+        cancel_current_lightweight_task();
+    }
 }
 
 #[no_mangle]
@@ -5521,15 +5620,20 @@ pub extern "C" fn aurora_direct_sleep_value(duration: *mut OpaqueValue) -> *mut 
         Ok(millis) => millis,
         Err(_) => runtime_error("invalid sleep duration"),
     };
-    sleep_with_runtime_scheduler(
-        StdDuration::from_millis(millis),
-        Some(&current_cancellation()),
-    );
+    if matches!(
+        sleep_with_runtime_scheduler(
+            StdDuration::from_millis(millis),
+            Some(&current_cancellation()),
+        ),
+        RuntimeSchedulerWakeReason::Cancelled
+    ) {
+        cancel_current_lightweight_task();
+    }
     boxed_value(Value::Unit)
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_start_task_call(
+pub unsafe extern "C" fn aurora_direct_start_task_call(
     thunk_ptr: i64,
     args_ptr: *const i64,
     arg_count: i64,

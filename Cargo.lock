@@ -33,12 +33,14 @@ dependencies = [
 name = "aurora-compiler"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "corosensei",
  "cranelift-codegen",
  "cranelift-frontend",
  "cranelift-module",
  "cranelift-native",
  "cranelift-object",
+ "getrandom 0.2.17",
  "httparse",
  "libc",
  "rcgen",

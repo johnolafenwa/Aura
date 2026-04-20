@@ -3477,7 +3477,7 @@ fn mir_runtime_entrypoint_and_env_helpers_cover_write_stream_and_place_edges() {
     let empty_place = env
         .read_place("")
         .expect_err("empty places should be rejected");
-    assert!(empty_place.message.contains("unknown MIR place"));
+    assert!(empty_place.message.contains("empty MIR place"));
     let missing_place = env
         .read_place("missing")
         .expect_err("missing places should be rejected");
@@ -3507,13 +3507,10 @@ fn mir_runtime_entrypoint_and_env_helpers_cover_write_stream_and_place_edges() {
         .message
         .contains("class `Pair` has no field `value` in MIR place `pair.value`"));
 
-    env.write_place("", Value::Unit)
-        .expect("empty roots currently write through as plain locals");
-    assert_eq!(
-        env.read_place("")
-            .expect("empty-root write should be readable"),
-        Value::Unit
-    );
+    let empty_write = env
+        .write_place("", Value::Unit)
+        .expect_err("empty roots should be rejected");
+    assert!(empty_write.message.contains("empty MIR place"));
 }
 
 #[test]
@@ -3759,12 +3756,10 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
     assert!(missing_place
         .message
         .contains("unknown MIR place `missing.value`"));
-    env.write_place("", Value::Bool(true))
-        .expect("empty MIR roots are currently written as plain locals");
-    assert_eq!(
-        env.read_place("").expect("empty root should now exist"),
-        Value::Bool(true)
-    );
+    let empty_write = env
+        .write_place("", Value::Bool(true))
+        .expect_err("empty MIR roots should be rejected");
+    assert!(empty_write.message.contains("empty MIR place"));
 
     let runtime = test_runtime();
     assert_eq!(

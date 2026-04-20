@@ -15,8 +15,16 @@ def main() -> int32:
     print(trimmed)
     parts = trimmed.split(" ")
     print(parts.len())
-    print(parts[0])
-    print(parts[1])
+    match parts.get(0):
+        case Some(value):
+            print(value)
+        case None:
+            pass
+    match parts.get(1):
+        case Some(value):
+            print(value)
+        case None:
+            pass
     print(trimmed.replace("repo", "lang"))
     print(trimmed.to_lower())
     print(trimmed.to_upper())

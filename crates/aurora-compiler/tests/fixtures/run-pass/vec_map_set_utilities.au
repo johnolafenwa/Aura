@@ -19,8 +19,16 @@ def main() -> int32:
     other = {"b": 2, "c": 3}
     counts.extend(other)
     items = counts.items()
-    print(items[0].key)
-    print(items[2].value.to_string())
+    match items.get(0):
+        case Option.Some(entry):
+            print(entry.key)
+        case Option.None:
+            pass
+    match items.get(2):
+        case Option.Some(entry):
+            print(entry.value.to_string())
+        case Option.None:
+            pass
     print(counts.entries().len().to_string())
     counts.clear()
     print(counts.is_empty().to_string())

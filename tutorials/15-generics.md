@@ -103,7 +103,7 @@ The implemented generic surface supports:
 - explicit type arguments on constructors like `Box[int32](...)`
 - inference for generic function calls and constructors
 - method calls on generic instances inside generic functions
-- generic enum unit variants with instantiated types
+- generic enum unit variants with explicit type arguments such as `Maybe[int32].Nothing`
 - generic trait impl headers like `impl Mapper[T] for Box[T]:`
 
 See [examples/generics/box_and_wrapper.au](../examples/generics/box_and_wrapper.au), [examples/generics/generic_method_calls.au](../examples/generics/generic_method_calls.au), [examples/generics/generic_constructor_specialization.au](../examples/generics/generic_constructor_specialization.au), and [examples/generics/bounded_types.au](../examples/generics/bounded_types.au).

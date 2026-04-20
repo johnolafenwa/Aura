@@ -1,0 +1,5 @@
+def main() -> int32:
+    items: Vec[String] = ["left", "right"]
+    first: String = items[0]
+    print(first)
+    return 0

@@ -199,6 +199,26 @@ fn build_and_run_default_source(
     (build, run)
 }
 
+fn run_aura_source_with_timeout(
+    prefix: &str,
+    source: &str,
+    timeout: std::time::Duration,
+) -> (TempDir, PathBuf, std::process::Child) {
+    let (temp, source_path) = write_temp_source(prefix, source);
+    let child = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("failed to spawn aura run: {error}"));
+    assert!(
+        timeout > std::time::Duration::ZERO,
+        "timeout should be positive"
+    );
+    (temp, source_path, child)
+}
+
 #[test]
 fn ast_exits_cleanly_when_stdout_pipe_closes() {
     let fixture = repo_root().join("examples/point.au");
@@ -229,6 +249,260 @@ fn mir_exits_cleanly_when_stdout_pipe_closes() {
 
     let status = child.wait().expect("failed to wait for aura mir");
     assert!(status.success(), "mir should exit cleanly on broken pipe");
+}
+
+#[test]
+fn task_group_scope_exit_cancels_blocked_children() {
+    let source = r#"def wait_forever(q: Queue[int32]) -> None:
+    match q.get():
+        case QueueReceive.Item(value):
+            print(value)
+        case QueueReceive.Closed:
+            print("closed")
+        case QueueReceive.TimedOut:
+            print("timed out")
+        case QueueReceive.Cancelled:
+            print("cancelled")
+
+def main() -> int32:
+    q = Queue[int32]()
+    with TaskGroup() as group:
+        group.start_soon(wait_forever, q)
+    print("done")
+    return 0
+"#;
+
+    let (_temp, _source_path, mut child) = run_aura_source_with_timeout(
+        "aurora-task-group-close",
+        source,
+        std::time::Duration::from_secs(5),
+    );
+    let status = wait_with_timeout(&mut child, std::time::Duration::from_secs(5))
+        .expect("task-group scope exit should not hang indefinitely");
+    let output = child
+        .wait_with_output()
+        .expect("failed to collect aura run output");
+    assert!(
+        status.success(),
+        "task-group scope exit should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "cancelled\ndone\n");
+}
+
+#[test]
+fn queue_consumers_share_work_without_starvation() {
+    let source = r#"def consumer(q: Queue[int32]) -> int32:
+    mut got: int32 = 0
+    for value in q:
+        got += 1
+    return got
+
+def main() -> int32:
+    q = Queue[int32](capacity=16)
+    with TaskGroup() as group:
+        c1 = group.start(consumer, q)
+        c2 = group.start(consumer, q)
+        c3 = group.start(consumer, q)
+        c4 = group.start(consumer, q)
+
+        mut i: int32 = 0
+        while i < 1000:
+            match q.put(i):
+                case Result.Ok(_):
+                    pass
+                case Result.Err(_):
+                    return 1
+            i += 1
+        q.close()
+
+        print(c1.result_or(-1))
+        print(c2.result_or(-1))
+        print(c3.result_or(-1))
+        print(c4.result_or(-1))
+    return 0
+"#;
+
+    let (_temp, source_path) = write_temp_source("aurora-queue-fairness", source);
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run queue fairness source");
+
+    assert!(
+        output.status.success(),
+        "queue fairness source should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let counts = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| line.parse::<i32>().expect("counts should be integers"))
+        .collect::<Vec<_>>();
+    assert_eq!(counts.len(), 4, "expected four consumer counts");
+    assert_eq!(
+        counts.iter().sum::<i32>(),
+        1000,
+        "counts should sum to all items"
+    );
+    let min = *counts.iter().min().expect("counts should not be empty");
+    let max = *counts.iter().max().expect("counts should not be empty");
+    assert!(
+        max - min <= 1,
+        "queue consumers should share work fairly, got {:?}",
+        counts
+    );
+}
+
+#[test]
+fn cancelled_sleeping_children_stop_without_leaking_scheduler_panics() {
+    let source = r#"def long_sleeper() -> int32:
+    sleep(5s)
+    return 99
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(long_sleeper)
+        sleep(20ms)
+        group.cancel()
+        print(task.result_or(-99))
+    return 0
+"#;
+
+    let (_temp, source_path) = write_temp_source("aurora-sleep-cancel", source);
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run sleep cancellation source");
+
+    assert!(
+        output.status.success(),
+        "sleep cancellation source should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "-99\n");
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("panicked at"),
+        "sleep cancellation should not leak internal panic output, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn large_http_responses_complete_without_timing_out() {
+    let temp = TempDir::new("aurora-http-large-response");
+    let body_path = temp.path().join("body.txt");
+    fs::write(&body_path, "x".repeat(50_000)).expect("failed to write HTTP response body");
+    let source = format!(
+        r#"import fs
+import io
+import net
+
+def serve(listener: net.HttpListener, path: String) -> Result[None, io.Error]:
+    server = listener
+    req = try server.accept(timeout=2s)
+    body = try fs.read_to_string(path)
+    try req.respond_text(200, body, {{}})
+    return Result.Ok(None)
+
+def run() -> Result[None, io.Error]:
+    with TaskGroup() as group:
+        listener = try net.http_listen("127.0.0.1:0")
+        address = try listener.local_addr()
+        group.start_soon(serve, listener, "{body_path}")
+        resp = try net.http_request_text_timeout("GET", "http://" + address + "/big", "x", {{}}, 2s)
+        with r = resp:
+            print(r.status())
+            text = try r.text()
+            print(text.len())
+        return Result.Ok(None)
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(err):
+            print(err)
+            return 1
+"#,
+        body_path = body_path.display()
+    );
+    let source_path = temp.path().join("main.au");
+    fs::write(&source_path, source).expect("failed to write HTTP regression source");
+
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run large HTTP response source");
+
+    assert!(
+        output.status.success(),
+        "large HTTP response source should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "200\n50000\n");
+}
+
+#[test]
+fn check_rejects_huge_left_associative_expression_chains_without_crashing() {
+    let mut expr = String::from("1");
+    for _ in 0..5000 {
+        expr.push_str(" + 1");
+    }
+    let source = format!("def main() -> int32:\n    value = {expr}\n    return value\n");
+    let (_temp, source_path) = write_temp_source("aurora-huge-chain", &source);
+
+    let output = Command::new(aura_bin())
+        .arg("check")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura check");
+
+    assert!(
+        !output.status.success(),
+        "huge left-associative chains should fail gracefully"
+    );
+    assert_ne!(
+        output.status.code(),
+        None,
+        "aura check should not die by signal on huge expression chains"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("expression chain")
+            || String::from_utf8_lossy(&output.stderr).contains("expression nesting"),
+        "expected a structural diagnostic, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn direct_backend_reports_recursion_overflow_without_signalling() {
+    let source = r#"def recurse(n: int32) -> int32:
+    if n == 0:
+        return 0
+    return recurse(n - 1)
+
+def main() -> int32:
+    return recurse(10000000)
+"#;
+
+    let (_build, run) = build_and_run_direct_source("aurora-direct-recursion", source);
+    assert!(
+        !run.status.success(),
+        "deep recursion should fail cleanly in the direct backend"
+    );
+    assert_ne!(
+        run.status.code(),
+        None,
+        "direct backend recursion overflow should not terminate by signal"
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("maximum call depth"),
+        "expected a direct-backend recursion diagnostic, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
 }
 
 #[test]
@@ -1198,7 +1472,7 @@ fn build_with_auto_backend_falls_back_for_rich_match_example() {
 fn build_with_direct_backend_supports_indexed_member_chains_and_fstring_indexing() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-index-chain-fstring",
-        "def main() -> int32:\n    keys = [\"a\", \"b\"]\n    idx = 1\n    mut counts = {\"key\": 7}\n    print(keys[idx].clone())\n    print(f\"val: {counts[\"key\"]}\")\n    return 0\n",
+        "def main() -> int32:\n    keys = [\"a\", \"b\"]\n    idx = 1\n    mut counts = {\"key\": 7}\n    match keys.get(idx):\n        case Some(key):\n            print(key)\n        case None:\n            print(\"missing\")\n    print(f\"val: {counts[\"key\"]}\")\n    return 0\n",
     );
 
     assert!(
@@ -1207,6 +1481,90 @@ fn build_with_direct_backend_supports_indexed_member_chains_and_fstring_indexing
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "b\nval: 7\n");
+}
+
+#[test]
+fn build_with_direct_backend_supports_inferred_enum_match_variants() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-inferred-enum-match",
+        "enum Signal:\n    Ready\n    Busy\n\ndef main() -> int32:\n    signal = Signal.Ready\n    match signal:\n        case Ready:\n            print(\"ready\")\n        case Busy:\n            print(\"busy\")\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct backend inferred-enum match binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "ready\n");
+}
+
+#[test]
+fn build_with_direct_backend_supports_generic_class_field_arithmetic() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-generic-class-fields",
+        "class Pair[A]:\n    a: A\n    b: A\n\ndef main() -> int32:\n    pair = Pair[int32](a=3, b=4)\n    inferred = Pair(a=10, b=3)\n    print(pair.a + pair.b)\n    print(inferred.a + inferred.b)\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct backend generic-class field arithmetic should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n13\n");
+}
+
+#[test]
+fn build_with_direct_backend_supports_multi_payload_enum_variants() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-multi-payload-enum",
+        "enum Pairing:\n    Pair(int32, int32)\n\ndef main() -> int32:\n    value = Pairing.Pair(2, 3)\n    match value:\n        case Pairing.Pair(a, b):\n            print(a + b)\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct backend multi-payload enum binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n");
+}
+
+#[test]
+fn check_reports_imported_module_syntax_errors_at_the_imported_file() {
+    let temp = TempDir::new("aurora-imported-module-syntax");
+    let main_path = temp.path().join("main.au");
+    let broken_path = temp.path().join("broken.au");
+    fs::write(
+        &main_path,
+        "import broken\n\ndef main() -> int32:\n    return 0\n",
+    )
+    .expect("failed to write main module");
+    fs::write(
+        &broken_path,
+        "def broken() -> int32:\n    return @@@ syntax error\n",
+    )
+    .expect("failed to write broken module");
+
+    let output = Command::new(aura_bin())
+        .arg("check")
+        .arg(&main_path)
+        .output()
+        .expect("failed to run aura check");
+
+    assert!(
+        !output.status.success(),
+        "syntax errors in imported modules should fail checking"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&broken_path.display().to_string()),
+        "stderr should point at the imported module path, stderr was:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("unexpected character `@`"),
+        "stderr should preserve the imported parser error, stderr was:\n{}",
+        stderr
+    );
 }
 
 #[test]
@@ -1260,6 +1618,48 @@ fn build_with_direct_backend_supports_bytes_file_io_example() {
         "examples/io/bytes_file_io.au",
         "bytes-file-io-direct",
         "4\n65\n67\n5\n68\n",
+    );
+}
+
+#[test]
+fn build_with_direct_backend_caps_fs_read_to_string_and_read_bytes() {
+    let temp = TempDir::new("aurora-direct-file-read-cap");
+    let file_path = temp.path().join("huge.txt");
+    fs::write(&file_path, vec![b'x'; (1024 * 1024) + 1]).expect("write oversized file");
+    let source_path = temp.path().join("main.au");
+    let source = format!(
+        "import fs\n\ndef main() -> int32:\n    match fs.read_to_string(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-string\")\n        case Result.Err(error):\n            print(error)\n    match fs.read_bytes(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-bytes\")\n        case Result.Err(error):\n            print(error)\n    return 0\n",
+        path = file_path.display()
+    );
+    fs::write(&source_path, source).expect("write Aurora source");
+    let output_path = temp.path().join("out");
+
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build --backend direct");
+    assert!(
+        build.status.success(),
+        "direct backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(&output_path)
+        .output()
+        .expect("failed to run direct-backend binary");
+    assert!(
+        run.status.success(),
+        "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "io.Error.InvalidData\nio.Error.InvalidData\n"
     );
 }
 
@@ -1353,6 +1753,21 @@ fn build_with_direct_backend_supports_generic_trait_impl_example() {
         "generic-trait-impl-direct",
         "11\n",
     );
+}
+
+#[test]
+fn build_with_direct_backend_prefers_more_specific_trait_impls() {
+    let (_, run) = build_and_run_direct_source(
+        "aurora-build-direct-trait-specificity",
+        "trait Show:\n    def show(borrow self) -> String\n\nclass Box[T]:\n    value: T\n\nimpl[T] Show for Box[T]:\n    def show(borrow self) -> String:\n        return \"generic\"\n\nimpl Show for Box[int32]:\n    def show(borrow self) -> String:\n        return \"int32\"\n\ndef main() -> int32:\n    value = Box(value=7)\n    print(value.show())\n    return 0\n",
+    );
+
+    assert!(
+        run.status.success(),
+        "direct backend trait specialization should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "int32\n");
 }
 
 #[test]

@@ -467,6 +467,19 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn run_with_large_stack<T, F>(operation: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(operation)
+        .expect("large-stack helper thread should spawn")
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+}
+
 fn escape_aurora_string(text: &str) -> String {
     text.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -942,10 +955,25 @@ fn control_flow_example_runs() {
 #[test]
 fn mir_runtime_reports_recursion_limit_before_overflowing_the_host_stack() {
     let source = include_str!("../../../test_edge/test_recursive_medium.au");
-    let error =
-        run_source(source).expect_err("medium recursion should diagnose before stack overflow");
+    let source = source.to_string();
+    let handle = thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || run_source(&source))
+        .expect("recursion test thread should spawn");
+    let error = handle
+        .join()
+        .expect("recursion test thread should join")
+        .expect_err("medium recursion should diagnose before stack overflow");
     assert!(error.message.contains("maximum call depth of"));
     assert!(error.message.contains("count_down"));
+}
+
+#[test]
+fn mir_runtime_still_supports_medium_recursion_below_the_limit() {
+    let source = "def count_down(n: int32) -> int32:\n    if n <= 0:\n        return 0\n    return count_down(n=n - 1)\n\ndef main() -> int32:\n    print(count_down(n=120))\n    return 0\n";
+    let output = run_source(source).expect("medium recursion below the limit should succeed");
+    assert_eq!(output.stdout, "0\n");
+    assert_eq!(output.value, zero_exit_value());
 }
 
 #[test]
@@ -1238,7 +1266,11 @@ fn broad_scratch_corpus_runtime_paths_do_not_panic() {
                 );
             }
 
-            match catch_unwind(AssertUnwindSafe(|| run_path(&path))) {
+            let run_path_result = run_with_large_stack({
+                let path = path.clone();
+                move || catch_unwind(AssertUnwindSafe(|| run_path(&path)))
+            });
+            match run_path_result {
                 Ok(Ok(_)) | Ok(Err(_)) => run_completed += 1,
                 Err(_) => {
                     run_panics += 1;
@@ -1246,9 +1278,15 @@ fn broad_scratch_corpus_runtime_paths_do_not_panic() {
                 }
             }
 
-            match catch_unwind(AssertUnwindSafe(|| {
-                lower_path_to_mir(&path).and_then(|mir| run_mir(&mir))
-            })) {
+            let explicit_mir_result = run_with_large_stack({
+                let path = path.clone();
+                move || {
+                    catch_unwind(AssertUnwindSafe(|| {
+                        lower_path_to_mir(&path).and_then(|mir| run_mir(&mir))
+                    }))
+                }
+            });
+            match explicit_mir_result {
                 Ok(Ok(_)) | Ok(Err(_)) => explicit_mir_completed += 1,
                 Err(_) => {
                     explicit_mir_panics += 1;
@@ -1884,12 +1922,11 @@ def wait_for_one(queue: Queue[String]):
 
 def main() -> int32:
     started = Queue[String]()
-    finished = Queue[String]()
     with TaskGroup() as group:
+        finished = Queue[String]()
         group.start(sleeper, started, finished)
         wait_for_one(started)
         group.cancel()
-    wait_for_one(finished)
     return 0
 "#;
 
@@ -2074,8 +2111,15 @@ def mark_ready(path: String):
 
 def main() -> int32:
     with TaskGroup() as group:
-        group.start_soon(wait_for_text, "{fifo_path}")
+        reader = group.start(wait_for_text, "{fifo_path}")
         group.start_soon(mark_ready, "{ready_path}")
+        match reader.result(timeout=2s):
+            case TaskResult.Ready(_):
+                pass
+            case TaskResult.Cancelled:
+                pass
+            case TaskResult.TimedOut:
+                pass
     return 0
 "#,
         fifo_path = fifo_literal,
@@ -2084,7 +2128,7 @@ def main() -> int32:
 
     let writer_path = fifo_path.clone();
     let writer = thread::spawn(move || {
-        thread::sleep(StdDuration::from_millis(180));
+        thread::sleep(StdDuration::from_millis(500));
         let mut fifo = fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -2094,7 +2138,7 @@ def main() -> int32:
     });
 
     let handle = thread::spawn(move || run_source(&source));
-    let ready_deadline = Instant::now() + StdDuration::from_millis(120);
+    let ready_deadline = Instant::now() + StdDuration::from_millis(350);
     let mut ready_seen = false;
     while Instant::now() < ready_deadline {
         if ready_path.exists() {

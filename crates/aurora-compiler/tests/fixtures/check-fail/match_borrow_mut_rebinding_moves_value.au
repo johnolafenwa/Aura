@@ -1,0 +1,10 @@
+def main() -> None:
+    mut a: Option[Vec[int32]] = Option.Some([1])
+    mut b: Vec[int32] = [7, 8]
+    match borrow mut a:
+        case Some(v):
+            v = b
+            v.push(99)
+        case None:
+            pass
+    print(b.len())

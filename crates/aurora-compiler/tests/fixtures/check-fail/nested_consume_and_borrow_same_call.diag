@@ -1,0 +1,5 @@
+error: argument for parameter `owned` in function `use_both` overlaps borrow for parameter `text`; consumed values must be exclusive
+ --> crates/aurora-compiler/tests/fixtures/check-fail/nested_consume_and_borrow_same_call.au:10:21
+   |
+10 |     use_both(value, id_s(value))
+   |                     ^

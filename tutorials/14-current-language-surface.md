@@ -196,7 +196,7 @@ The current compiler supports these expression forms:
 - `try expr`
 - parenthesized expressions
 
-Indexed expressions remain ordinary values after parsing, so chains such as `keys[idx].clone()` and interpolations such as `f"{counts["key"]}"` are supported.
+Indexed expressions remain ordinary values after parsing. Copy-typed element reads like `values[idx]` still work directly, while non-copy vector elements such as `String` require `get(index)` for an explicit cloned read. Map indexing and interpolations such as `f"{counts["key"]}"` remain supported.
 
 ## Methods
 
@@ -508,7 +508,7 @@ Current collection notes:
 - `Vec.len()` returns `int32`, so `range(values.len())` works directly
 - `for value in vec:`, `for value in borrow vec:`, and `for value in borrow mut vec:` are supported for `Vec[T]`
 - `for value in borrow mut vec:` requires the iterable place itself to be mutable
-- indexed reads no longer consume `Vec[T]` values when the element type is non-copy
+- indexed reads from `Vec[T]` work directly only when `T` is copy; non-copy element reads use `get(index)` for an explicit cloned read
 - `Vec[T]` supports equality and inequality when both sides have the same `Vec[T]` type
 - empty map literals still need an expected `Map[K, V]` type, or you can use `Map[K, V]()` explicitly
 - `Map[K, V]` supports literal construction, indexed reads/writes, and the maintained method surface `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`

@@ -163,6 +163,8 @@ struct NativeCodegen<'a> {
     call_conv: CallConv,
     runtime_init: FuncId,
     run_root: FuncId,
+    enter_call: FuncId,
+    exit_call: FuncId,
     print_i64: FuncId,
     print_f64: FuncId,
     print_bool: FuncId,
@@ -563,6 +565,8 @@ impl<'a> NativeCodegen<'a> {
             &mut object,
             runtime_init => ("aurora_direct_runtime_init", [types::I64, types::I64, types::I64, types::I64], None),
             run_root => ("aurora_direct_run_root", [types::I64], Some(types::I32)),
+            enter_call => ("aurora_direct_enter_call", [], None),
+            exit_call => ("aurora_direct_exit_call", [], None),
             print_i64 => ("aurora_direct_print_i64", [types::I64], None),
             print_f64 => ("aurora_direct_print_f64", [types::F64], None),
             print_bool => ("aurora_direct_print_bool", [types::I64], None),
@@ -651,7 +655,7 @@ impl<'a> NativeCodegen<'a> {
             binary_value => ("aurora_direct_binary_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             cast_value => ("aurora_direct_cast_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             value_type_matches => ("aurora_direct_value_type_matches", [types::I64, types::I64, types::I64], Some(types::I64)),
-            enum_variant => ("aurora_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            enum_variant => ("aurora_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_matches => ("aurora_direct_variant_matches", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_payload => ("aurora_direct_variant_payload", [types::I64, types::I64], Some(types::I64)),
             instance_empty => ("aurora_direct_instance_empty", [types::I64, types::I64], Some(types::I64)),
@@ -895,6 +899,8 @@ impl<'a> NativeCodegen<'a> {
             call_conv,
             runtime_init,
             run_root,
+            enter_call,
+            exit_call,
             print_i64,
             print_f64,
             print_bool,
@@ -1211,6 +1217,13 @@ impl<'a> NativeCodegen<'a> {
         };
         builder.append_block_params_for_function_params(entry);
         builder.switch_to_block(entry);
+        let enter_call = self
+            .object
+            .declare_func_in_func(self.enter_call, builder.func);
+        let exit_call = self
+            .object
+            .declare_func_in_func(self.exit_call, builder.func);
+        builder.ins().call(enter_call, &[]);
 
         let mut variable_index = 0usize;
         let mut variables = HashMap::new();
@@ -2144,6 +2157,7 @@ impl<'a> NativeCodegen<'a> {
             string_data: &mut self.string_data,
             cleanup_places,
             cleanup_active_vars,
+            exit_call,
             print_i64,
             print_f64,
             print_bool,
@@ -2610,6 +2624,7 @@ struct FunctionCompiler<'a> {
     string_data: &'a mut HashMap<Vec<u8>, DataId>,
     cleanup_places: Vec<String>,
     cleanup_active_vars: HashMap<String, Variable>,
+    exit_call: cranelift_codegen::ir::FuncRef,
     print_i64: cranelift_codegen::ir::FuncRef,
     print_f64: cranelift_codegen::ir::FuncRef,
     print_bool: cranelift_codegen::ir::FuncRef,
@@ -3036,6 +3051,7 @@ impl<'a> FunctionCompiler<'a> {
                 let return_values = self.build_return_values(coerced)?;
                 self.release_all_temporary_owned();
                 self.release_all_opaque_roots()?;
+                self.builder.ins().call(self.exit_call, &[]);
                 self.builder.ins().return_(&return_values);
             }
             Terminator::Goto(label) => {
@@ -5116,23 +5132,34 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let (enum_ptr, enum_len) = self.string_constant(enum_name.as_bytes())?;
         let (variant_ptr, variant_len) = self.string_constant(variant_name.as_bytes())?;
-        if payloads.len() > 1 {
-            return Err(format!(
-                "direct backend does not yet support enum variants with more than one payload (`{}.{}` has {})",
-                enum_name,
-                variant_name,
-                payloads.len()
-            ));
-        }
-        let payload = if let Some(payload) = payloads.first() {
-            let loaded = self.load_operand(payload)?;
-            self.ensure_opaque(loaded)?.values[0]
-        } else {
+        let payload_buffer = if payloads.is_empty() {
             self.builder.ins().iconst(types::I64, 0)
+        } else {
+            let count = self.builder.ins().iconst(types::I64, payloads.len() as i64);
+            let buffer_inst = self.builder.ins().call(self.arg_buffer_new, &[count]);
+            let buffer = self.builder.inst_results(buffer_inst)[0];
+            for (index, payload) in payloads.iter().enumerate() {
+                let loaded = self.load_operand(payload)?;
+                let payload = self.ensure_opaque(loaded)?;
+                let transferred = self.transfer_opaque_arg(&payload);
+                let index_value = self.builder.ins().iconst(types::I64, index as i64);
+                self.builder
+                    .ins()
+                    .call(self.arg_buffer_store, &[buffer, index_value, transferred]);
+            }
+            buffer
         };
+        let payload_count = self.builder.ins().iconst(types::I64, payloads.len() as i64);
         let inst = self.builder.ins().call(
             self.enum_variant,
-            &[enum_ptr, enum_len, variant_ptr, variant_len, payload],
+            &[
+                enum_ptr,
+                enum_len,
+                variant_ptr,
+                variant_len,
+                payload_buffer,
+                payload_count,
+            ],
         );
         Ok(self.owned_opaque_result(
             self.builder.inst_results(inst).to_vec(),
@@ -9034,7 +9061,10 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn find_trait_method(&self, ty: &Type, field: &str) -> Option<&MirMethod> {
-        self.trait_impls.iter().find_map(|trait_impl| {
+        let mut best = None;
+        let mut best_specificity = 0usize;
+        let mut ambiguous = false;
+        for trait_impl in &self.trait_impls {
             let mut type_params = BTreeSet::new();
             collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
             let mut substitutions = HashMap::new();
@@ -9044,13 +9074,32 @@ impl<'a> FunctionCompiler<'a> {
                 &type_params,
                 &mut substitutions,
             ) {
-                return None;
+                continue;
             }
-            trait_impl
+            let Some(method) = trait_impl
                 .methods
                 .iter()
                 .find(|method| method.name == field)
-        })
+            else {
+                continue;
+            };
+            let specificity = crate::sema::trait_impl_specificity_parts(
+                &trait_impl.for_type,
+                &trait_impl.trait_args,
+            );
+            if best.is_none() || specificity > best_specificity {
+                best = Some(method);
+                best_specificity = specificity;
+                ambiguous = false;
+            } else if specificity == best_specificity {
+                ambiguous = true;
+            }
+        }
+        if ambiguous {
+            None
+        } else {
+            best
+        }
     }
 
     fn find_trait_method_for_class_name(
@@ -9058,21 +9107,36 @@ impl<'a> FunctionCompiler<'a> {
         class_name: &str,
         field: &str,
     ) -> Option<&MirMethod> {
-        let mut matches =
-            self.trait_impls
-                .iter()
-                .filter_map(|trait_impl| match &trait_impl.for_type {
-                    Type::Named(name, _) if name == class_name => trait_impl
-                        .methods
-                        .iter()
-                        .find(|method| method.name == field),
-                    _ => None,
-                });
-        let first = matches.next()?;
-        if matches.next().is_some() {
-            return None;
+        let mut best = None;
+        let mut best_specificity = 0usize;
+        let mut ambiguous = false;
+        for trait_impl in &self.trait_impls {
+            let Type::Named(name, _) = &trait_impl.for_type else {
+                continue;
+            };
+            if name != class_name {
+                continue;
+            }
+            let Some(method) = trait_impl.methods.iter().find(|method| method.name == field) else {
+                continue;
+            };
+            let specificity = crate::sema::trait_impl_specificity_parts(
+                &trait_impl.for_type,
+                &trait_impl.trait_args,
+            );
+            if best.is_none() || specificity > best_specificity {
+                best = Some(method);
+                best_specificity = specificity;
+                ambiguous = false;
+            } else if specificity == best_specificity {
+                ambiguous = true;
+            }
         }
-        Some(first)
+        if ambiguous {
+            None
+        } else {
+            best
+        }
     }
 
     fn declare_temporary_result_storage(

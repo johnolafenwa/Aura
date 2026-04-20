@@ -1,5 +1,9 @@
 def main() -> int32:
     keys = ["a", "b"]
     idx = 1
-    print(keys[idx].clone())
+    match keys.get(idx):
+        case Option.Some(value):
+            print(value.clone())
+        case Option.None:
+            pass
     return 0

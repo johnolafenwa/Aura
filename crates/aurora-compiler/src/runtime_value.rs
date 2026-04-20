@@ -1,12 +1,15 @@
+use std::any::Any;
 use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
-use std::fs::{self, File as StdFile, OpenOptions};
+use std::fs::{File as StdFile, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
 use std::net::{
     Shutdown, TcpListener as StdTcpListener, TcpStream as StdTcpStream, ToSocketAddrs,
     UdpSocket as StdUdpSocket,
 };
+use std::panic::{self, AssertUnwindSafe};
+use std::path::Path;
 use std::process::{
     Child as StdChild, ChildStderr as StdChildStderr, ChildStdin as StdChildStdin,
     ChildStdout as StdChildStdout, Command as StdCommand, ExitStatus as StdExitStatus,
@@ -17,6 +20,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
+use base64::Engine as _;
 use corosensei::stack::DefaultStack;
 use corosensei::{Coroutine, CoroutineResult, Yielder};
 use httparse::{
@@ -25,8 +29,11 @@ use httparse::{
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection};
 use rustls_pemfile::{certs, private_key};
+use tungstenite::protocol::WebSocketConfig;
 use tungstenite::stream::MaybeTlsStream;
-use tungstenite::{accept as websocket_accept, client_tls_with_config, Message, WebSocket};
+use tungstenite::{
+    accept_with_config as websocket_accept_with_config, client_tls_with_config, Message, WebSocket,
+};
 use url::Url;
 
 #[cfg(unix)]
@@ -420,7 +427,11 @@ struct TlsStreamState {
     stream: Mutex<Option<TlsStreamKind>>,
 }
 
-type TaskExecutionResult = std::result::Result<Value, Diagnostic>;
+#[derive(Clone, Debug)]
+pub(crate) enum TaskExecutionResult {
+    Ready(std::result::Result<Value, Diagnostic>),
+    Cancelled,
+}
 
 enum TaskHandle {
     Running { waiters: Vec<u64> },
@@ -435,6 +446,7 @@ pub(crate) struct CancellationContext {
 enum TaskYield {
     Wait(TaskWaitRegistration),
     Park,
+    YieldNow,
 }
 
 #[derive(Clone)]
@@ -474,7 +486,17 @@ struct LightweightTaskScheduler {
     tasks: BTreeMap<u64, LightweightTaskRecord>,
 }
 
-const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 64 * 1024 * 1024;
+// Network-heavy lightweight tasks can traverse substantial library stacks
+// (URL parsing, rustls handshakes, websocket framing). 256 KiB is too small
+// and was causing reproducible EXC_BAD_ACCESS faults on maintained examples.
+const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 1024 * 1024;
+const MAX_READ_ALL_BYTES: usize = 1024 * 1024;
+const MAX_UDP_DATAGRAM_BYTES: usize = 65_535;
+const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 64 << 20;
+const MAX_WEBSOCKET_FRAME_BYTES: usize = 16 << 20;
+const MAX_WEBSOCKET_WRITE_BUFFER_BYTES: usize = 16 << 20;
+const DEFAULT_TLS_HANDSHAKE_TIMEOUT: StdDuration = StdDuration::from_secs(10);
+const MIN_SUPERVISOR_RESTART_BACKOFF: StdDuration = StdDuration::from_millis(10);
 
 #[derive(Clone)]
 struct RuntimeSchedulerRegistration {
@@ -1213,16 +1235,16 @@ pub(crate) fn wait_for_runtime_scheduler(
 pub(crate) fn sleep_with_runtime_scheduler(
     duration: StdDuration,
     cancellation: Option<&CancellationContext>,
-) {
+) -> RuntimeSchedulerWakeReason {
     let deadline = Instant::now().checked_add(duration);
-    let _ = wait_for_runtime_scheduler(
+    wait_for_runtime_scheduler(
         Vec::new(),
         false,
         Vec::new(),
         Vec::new(),
         deadline,
         cancellation,
-    );
+    )
 }
 
 thread_local! {
@@ -1231,6 +1253,8 @@ thread_local! {
     static CURRENT_LIGHTWEIGHT_TASK_CANCELLATION: std::cell::RefCell<Option<CancellationContext>> =
         const { std::cell::RefCell::new(None) };
 }
+
+static LIGHTWEIGHT_TASK_PANIC_HOOK: Once = Once::new();
 
 struct LightweightTaskContextGuard {
     previous: *const LightweightTaskContext,
@@ -1263,19 +1287,64 @@ fn enter_lightweight_task_context(context: &LightweightTaskContext) -> Lightweig
     }
 }
 
-fn current_lightweight_task_context() -> Option<&'static LightweightTaskContext> {
+fn with_current_lightweight_task_context<T>(
+    f: impl FnOnce(&LightweightTaskContext) -> T,
+) -> Option<T> {
     CURRENT_LIGHTWEIGHT_TASK_CONTEXT.with(|slot| {
         let ptr = slot.get();
         if ptr.is_null() {
             None
         } else {
-            Some(unsafe { &*ptr })
+            Some(f(unsafe { &*ptr }))
         }
     })
 }
 
 pub(crate) fn current_lightweight_task_cancellation() -> Option<CancellationContext> {
     CURRENT_LIGHTWEIGHT_TASK_CANCELLATION.with(|slot| slot.borrow().clone())
+}
+
+#[derive(Debug)]
+struct TaskCancelledSignal;
+
+pub(crate) fn cancel_current_lightweight_task() -> ! {
+    panic::panic_any(TaskCancelledSignal);
+}
+
+fn task_panic_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else {
+        "task panicked with a non-string payload".to_string()
+    }
+}
+
+fn install_lightweight_task_panic_hook() {
+    LIGHTWEIGHT_TASK_PANIC_HOOK.call_once(|| {
+        let previous = panic::take_hook();
+        panic::set_hook(Box::new(move |info| {
+            if info.payload().is::<TaskCancelledSignal>() {
+                return;
+            }
+            previous(info);
+        }));
+    });
+}
+
+fn finalize_task_execution<F>(entry: F) -> TaskExecutionResult
+where
+    F: FnOnce() -> std::result::Result<Value, Diagnostic>,
+{
+    match panic::catch_unwind(AssertUnwindSafe(entry)) {
+        Ok(result) => TaskExecutionResult::Ready(result),
+        Err(payload) if payload.is::<TaskCancelledSignal>() => TaskExecutionResult::Cancelled,
+        Err(payload) => TaskExecutionResult::Ready(Err(Diagnostic::new(format!(
+            "internal error: Aurora task panicked: {}",
+            task_panic_message(&*payload)
+        )))),
+    }
 }
 
 pub(crate) fn run_blocking_io<T, F>(
@@ -1286,7 +1355,7 @@ where
     T: Send + 'static,
     F: FnOnce() -> io::Result<T> + Send + 'static,
 {
-    if current_lightweight_task_context().is_none() {
+    if with_current_lightweight_task_context(|_| ()).is_none() {
         return operation();
     }
     if cancellation.is_some_and(CancellationContext::is_cancelled) {
@@ -1322,13 +1391,16 @@ where
 }
 
 fn yield_current_lightweight_task(wait: TaskYield) -> Option<RuntimeSchedulerWakeReason> {
-    let context = current_lightweight_task_context()?;
-    let yielder_ptr = context.yielder.get();
-    if yielder_ptr.is_null() {
-        return None;
-    }
-    let yielder = unsafe { &*yielder_ptr };
-    Some(yielder.suspend(wait))
+    with_current_lightweight_task_context(|context| {
+        let yielder_ptr = context.yielder.get();
+        if yielder_ptr.is_null() {
+            None
+        } else {
+            let yielder = unsafe { &*yielder_ptr };
+            Some(yielder.suspend(wait))
+        }
+    })
+    .flatten()
 }
 
 fn yield_current_lightweight_wait(
@@ -1339,6 +1411,10 @@ fn yield_current_lightweight_wait(
 
 fn park_current_lightweight_task() -> Option<RuntimeSchedulerWakeReason> {
     yield_current_lightweight_task(TaskYield::Park)
+}
+
+fn yield_now_current_lightweight_task() -> Option<RuntimeSchedulerWakeReason> {
+    yield_current_lightweight_task(TaskYield::YieldNow)
 }
 
 impl TaskWaitRegistration {
@@ -1394,7 +1470,7 @@ impl LightweightTaskScheduler {
         entry: F,
     ) -> std::result::Result<TaskValue, Diagnostic>
     where
-        F: FnOnce() -> TaskExecutionResult + 'static,
+        F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
     {
         let task_id = self.next_task_id;
         self.next_task_id += 1;
@@ -1419,7 +1495,7 @@ impl LightweightTaskScheduler {
         let coroutine = Coroutine::with_stack(stack, move |yielder, _| {
             let context = unsafe { &*context_ptr };
             context.yielder.set(yielder as *const _);
-            entry()
+            finalize_task_execution(entry)
         });
 
         self.tasks.insert(
@@ -1474,6 +1550,11 @@ impl LightweightTaskScheduler {
             CoroutineResult::Yield(TaskYield::Park) => {
                 self.tasks.insert(task_id, record);
             }
+            CoroutineResult::Yield(TaskYield::YieldNow) => {
+                self.tasks.insert(task_id, record);
+                self.ready
+                    .push_back((task_id, RuntimeSchedulerWakeReason::Ready));
+            }
             CoroutineResult::Return(result) => {
                 self.complete_task(task_id, &record.state, result);
             }
@@ -1503,7 +1584,9 @@ impl LightweightTaskScheduler {
             return;
         }
 
+        let poll_slice = StdDuration::from_millis(1);
         let next_deadline = self.waiting.values().filter_map(|wait| wait.deadline).min();
+        let has_non_fd_waiters = self.waiting.values().any(|wait| wait.fd_wait.is_none());
         let mut task_ids = Vec::new();
         let mut descriptors = Vec::new();
         for (task_id, wait) in &self.waiting {
@@ -1518,17 +1601,17 @@ impl LightweightTaskScheduler {
         }
 
         if descriptors.is_empty() {
-            if let Some(deadline) = next_deadline {
-                let now = Instant::now();
-                if deadline > now {
-                    thread::sleep(deadline.saturating_duration_since(now));
-                }
-            } else {
-                // Only irrecoverable deadlocks end up here (for example, every task parked on
-                // queue waits with no remaining runnable producer). Avoid a hot spin while
-                // preserving the historical "wait forever" behavior for such programs.
-                thread::park_timeout(StdDuration::from_millis(1));
-            }
+            let wait_duration = next_deadline
+                .map(|deadline| {
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(poll_slice)
+                })
+                .unwrap_or(poll_slice);
+            // Channel readiness, task completion, and blocking-I/O completions can change without
+            // any fd becoming readable. Poll those states on a short slice instead of sleeping
+            // until the full deadline, otherwise completions remain invisible until timeout.
+            thread::park_timeout(wait_duration);
             self.promote_ready_waiters(None);
             return;
         }
@@ -1539,9 +1622,16 @@ impl LightweightTaskScheduler {
                 if deadline <= now {
                     0
                 } else {
-                    duration_to_poll_timeout(deadline.saturating_duration_since(now))
+                    let duration = deadline.saturating_duration_since(now);
+                    let duration = if has_non_fd_waiters {
+                        duration.min(poll_slice)
+                    } else {
+                        duration
+                    };
+                    duration_to_poll_timeout(duration)
                 }
             }
+            None if has_non_fd_waiters => duration_to_poll_timeout(poll_slice),
             None => -1,
         };
 
@@ -1565,10 +1655,15 @@ impl LightweightTaskScheduler {
         self.promote_ready_waiters(Some(&fd_ready));
     }
 
-    fn run_until_root(&mut self, root: &TaskValue) -> TaskExecutionResult {
+    fn run_until_root(&mut self, root: &TaskValue) -> std::result::Result<Value, Diagnostic> {
         loop {
             if let Some(result) = root.completed_result() {
-                return result;
+                return match result {
+                    TaskExecutionResult::Ready(result) => result,
+                    TaskExecutionResult::Cancelled => {
+                        Err(Diagnostic::new("root Aurora task was cancelled"))
+                    }
+                };
             }
 
             if let Some((task_id, reason)) = self.ready.pop_front() {
@@ -1583,14 +1678,14 @@ impl LightweightTaskScheduler {
 
 pub(crate) fn spawn_lightweight_task<F>(entry: F) -> std::result::Result<TaskValue, Diagnostic>
 where
-    F: FnOnce() -> TaskExecutionResult + 'static,
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
 {
-    let Some(context) = current_lightweight_task_context() else {
+    let Some(scheduler) = with_current_lightweight_task_context(|context| context.scheduler) else {
         return Err(Diagnostic::new(
             "lightweight Aurora task start requires an active task scheduler",
         ));
     };
-    let scheduler = unsafe { &mut *context.scheduler };
+    let scheduler = unsafe { &mut *scheduler };
     scheduler.spawn_task(None, entry)
 }
 
@@ -1599,21 +1694,22 @@ pub(crate) fn spawn_lightweight_task_with_cancellation<F>(
     entry: F,
 ) -> std::result::Result<TaskValue, Diagnostic>
 where
-    F: FnOnce() -> TaskExecutionResult + 'static,
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
 {
-    let Some(context) = current_lightweight_task_context() else {
+    let Some(scheduler) = with_current_lightweight_task_context(|context| context.scheduler) else {
         return Err(Diagnostic::new(
             "lightweight Aurora task start requires an active task scheduler",
         ));
     };
-    let scheduler = unsafe { &mut *context.scheduler };
+    let scheduler = unsafe { &mut *scheduler };
     scheduler.spawn_task(Some(cancellation), entry)
 }
 
-pub(crate) fn run_lightweight_root_task<F>(entry: F) -> TaskExecutionResult
+pub(crate) fn run_lightweight_root_task<F>(entry: F) -> std::result::Result<Value, Diagnostic>
 where
-    F: FnOnce() -> TaskExecutionResult + 'static,
+    F: FnOnce() -> std::result::Result<Value, Diagnostic> + 'static,
 {
+    install_lightweight_task_panic_hook();
     let mut scheduler = Box::new(LightweightTaskScheduler::new());
     let root = scheduler.spawn_task(None, entry)?;
     scheduler.run_until_root(&root)
@@ -1834,6 +1930,10 @@ pub(crate) fn render_float(value: f64) -> String {
 }
 
 impl ChannelValue {
+    fn has_pending_values(&self) -> bool {
+        !lock_mutex(&self.inner.state).queue.is_empty()
+    }
+
     pub(crate) fn new() -> Self {
         Self::with_optional_capacity(None)
     }
@@ -1887,7 +1987,7 @@ pub(crate) enum RecvValueResult {
 
 #[derive(Clone, Debug)]
 pub(crate) enum TaskWaitStatus {
-    Ready(TaskExecutionResult),
+    Ready(std::result::Result<Value, Diagnostic>),
     TimedOut,
     Cancelled,
 }
@@ -2028,7 +2128,12 @@ impl ChannelValue {
         let deadline = deadline_from_timeout(timeout);
         loop {
             match self.try_recv() {
-                TryRecvResult::Value(value) => return RecvValueResult::Value(value),
+                TryRecvResult::Value(value) => {
+                    if self.has_pending_values() {
+                        let _ = yield_now_current_lightweight_task();
+                    }
+                    return RecvValueResult::Value(value);
+                }
                 TryRecvResult::Closed => return RecvValueResult::Closed,
                 TryRecvResult::Empty => {}
             }
@@ -2066,6 +2171,49 @@ fn cancelled_resource_error() -> io::Error {
 
 fn timeout_resource_error() -> io::Error {
     io::Error::new(io::ErrorKind::TimedOut, "operation timed out")
+}
+
+fn validate_udp_datagram_limit(max_bytes: usize) -> io::Result<usize> {
+    if max_bytes > MAX_UDP_DATAGRAM_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "UDP reads are limited to {} bytes per datagram",
+                MAX_UDP_DATAGRAM_BYTES
+            ),
+        ));
+    }
+    Ok(max_bytes.max(1))
+}
+
+fn normalize_udp_send_error(error: io::Error) -> io::Error {
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(libc::EMSGSIZE) {
+        return io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "UDP datagram exceeds the platform send limit",
+        );
+    }
+    error
+}
+
+pub(crate) fn create_dir_once(path: impl AsRef<Path>) -> io::Result<()> {
+    std::fs::create_dir(path)
+}
+
+pub(crate) fn remove_file_checked(path: impl AsRef<Path>) -> io::Result<()> {
+    let path = path.as_ref();
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            return Err(io::Error::new(
+                io::ErrorKind::IsADirectory,
+                "path is a directory",
+            ));
+        }
+        Ok(_) => {}
+        Err(error) => return Err(error),
+    }
+    std::fs::remove_file(path)
 }
 
 fn deadline_from_timeout(timeout: Option<StdDuration>) -> Option<Instant> {
@@ -2245,6 +2393,73 @@ fn trim_line_endings(text: String) -> String {
     text.trim_end_matches('\n')
         .trim_end_matches('\r')
         .to_string()
+}
+
+fn read_all_limit_error(label: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "{} exceeded the supported read_all limit of {} bytes",
+            label, MAX_READ_ALL_BYTES
+        ),
+    )
+}
+
+fn push_limited_bytes(contents: &mut Vec<u8>, chunk: &[u8], label: &str) -> io::Result<()> {
+    if contents.len().saturating_add(chunk.len()) > MAX_READ_ALL_BYTES {
+        return Err(read_all_limit_error(label));
+    }
+    contents.extend_from_slice(chunk);
+    Ok(())
+}
+
+fn read_all_from_reader<R: Read>(reader: &mut R, label: &str) -> io::Result<Vec<u8>> {
+    let mut limited = reader.take((MAX_READ_ALL_BYTES as u64) + 1);
+    let mut contents = Vec::new();
+    limited.read_to_end(&mut contents)?;
+    if contents.len() > MAX_READ_ALL_BYTES {
+        return Err(read_all_limit_error(label));
+    }
+    Ok(contents)
+}
+
+fn validate_http_header_name(name: &str) -> io::Result<()> {
+    fn is_tchar(byte: u8) -> bool {
+        matches!(
+            byte,
+            b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_'
+                | b'`' | b'|' | b'~' | b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z'
+        )
+    }
+
+    if name.is_empty() || name.bytes().any(|byte| !is_tchar(byte)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid HTTP header name `{}`", name),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_http_header_value(value: &str) -> io::Result<()> {
+    if value.bytes().any(|byte| {
+        matches!(byte, b'\r' | b'\n') || (byte < 0x20 && byte != b'\t') || byte == 0x7f || byte >= 0x80
+    })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "HTTP header values may not contain control characters",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_http_headers(headers: &[(String, String)]) -> io::Result<()> {
+    for (name, value) in headers {
+        validate_http_header_name(name)?;
+        validate_http_header_value(value)?;
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -2498,7 +2713,7 @@ where
         let mut chunk = [0u8; 4096];
         match reader.read(&mut chunk) {
             Ok(0) => break,
-            Ok(bytes) => contents.extend_from_slice(&chunk[..bytes]),
+            Ok(bytes) => push_limited_bytes(&mut contents, &chunk[..bytes], "network read_all")?,
             Err(error) if is_retryable_network_error(&error) => {
                 wait_for_fd_event(fd, readiness_events, deadline, cancellation)?;
             }
@@ -2868,7 +3083,8 @@ fn build_http_request_bytes(
     url: &Url,
     body: &[u8],
     headers: Vec<(String, String)>,
-) -> Vec<u8> {
+) -> io::Result<Vec<u8>> {
+    validate_http_headers(&headers)?;
     let mut path = if url.path().is_empty() {
         "/".to_string()
     } else {
@@ -2928,7 +3144,7 @@ fn build_http_request_bytes(
     }
     rendered.extend_from_slice(b"\r\n");
     rendered.extend_from_slice(body);
-    rendered
+    Ok(rendered)
 }
 
 fn write_http_response_to_stream(
@@ -2939,6 +3155,7 @@ fn write_http_response_to_stream(
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<()> {
+    validate_http_headers(&headers)?;
     let mut rendered =
         format!("HTTP/1.1 {} {}\r\n", status, http_reason_phrase(status)).into_bytes();
     let mut saw_content_length = false;
@@ -3036,6 +3253,45 @@ where
 }
 
 #[cfg(unix)]
+fn accept_websocket_stream(
+    stream: StdTcpStream,
+    deadline: Option<Instant>,
+) -> io::Result<WebSocketStateKind> {
+    stream.set_nonblocking(true)?;
+    let socket = match websocket_accept_with_config(stream, Some(websocket_config())) {
+        Ok(socket) => socket,
+        Err(tungstenite::handshake::HandshakeError::Interrupted(mid)) => {
+            finish_websocket_handshake(mid, deadline)?
+        }
+        Err(tungstenite::handshake::HandshakeError::Failure(error)) => {
+            return Err(io::Error::other(error));
+        }
+    };
+    Ok(WebSocketStateKind::Plain(socket))
+}
+
+#[cfg(unix)]
+fn connect_websocket_stream(
+    stream: StdTcpStream,
+    request: tungstenite::http::Request<()>,
+    deadline: Option<Instant>,
+) -> io::Result<WebSocketStateKind> {
+    stream.set_nonblocking(true)?;
+    stream.set_nodelay(true)?;
+    let (socket, _) = match client_tls_with_config(request, stream, Some(websocket_config()), None)
+    {
+        Ok(result) => result,
+        Err(tungstenite::handshake::HandshakeError::Interrupted(mid)) => {
+            finish_websocket_handshake(mid, deadline)?
+        }
+        Err(tungstenite::handshake::HandshakeError::Failure(error)) => {
+            return Err(io::Error::other(error));
+        }
+    };
+    Ok(WebSocketStateKind::MaybeTls(socket))
+}
+
+#[cfg(unix)]
 fn websocket_set_nonblocking(socket: &mut WebSocketStateKind, enabled: bool) -> io::Result<()> {
     match socket {
         WebSocketStateKind::Plain(socket) => socket.get_mut().set_nonblocking(enabled),
@@ -3048,6 +3304,55 @@ fn websocket_set_nonblocking(socket: &mut WebSocketStateKind, enabled: bool) -> 
             )),
         },
     }
+}
+
+fn websocket_config() -> WebSocketConfig {
+    #[allow(deprecated)]
+    WebSocketConfig {
+        max_send_queue: None,
+        write_buffer_size: 128 * 1024,
+        max_write_buffer_size: MAX_WEBSOCKET_WRITE_BUFFER_BYTES,
+        max_message_size: Some(MAX_WEBSOCKET_MESSAGE_BYTES),
+        max_frame_size: Some(MAX_WEBSOCKET_FRAME_BYTES),
+        accept_unmasked_frames: false,
+    }
+}
+
+fn websocket_client_key() -> io::Result<String> {
+    let mut nonce = [0u8; 16];
+    getrandom::getrandom(&mut nonce).map_err(io::Error::other)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(nonce))
+}
+
+fn websocket_host_header(parsed: &Url) -> io::Result<String> {
+    let host = parsed.host_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "websocket URL is missing a host",
+        )
+    })?;
+    let host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    Ok(match parsed.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    })
+}
+
+fn websocket_client_request(parsed: &Url) -> io::Result<tungstenite::http::Request<()>> {
+    tungstenite::http::Request::builder()
+        .method("GET")
+        .uri(parsed.as_str())
+        .header("Host", websocket_host_header(parsed)?)
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", websocket_client_key()?)
+        .body(())
+        .map_err(io::Error::other)
 }
 
 fn websocket_read_message(
@@ -3135,9 +3440,7 @@ impl FileValue {
                 let Some(file) = file.as_mut() else {
                     return Err(closed_resource_error());
                 };
-                let mut contents = String::new();
-                file.read_to_string(&mut contents)?;
-                Ok(contents)
+                io_decode_utf8(&read_all_from_reader(file, "file read_all")?)
             },
             current_lightweight_task_cancellation().as_ref(),
         )
@@ -3151,9 +3454,7 @@ impl FileValue {
                 let Some(file) = file.as_mut() else {
                     return Err(closed_resource_error());
                 };
-                let mut contents = Vec::new();
-                file.read_to_end(&mut contents)?;
-                Ok(contents)
+                read_all_from_reader(file, "file read_bytes")
             },
             current_lightweight_task_cancellation().as_ref(),
         )
@@ -3278,14 +3579,10 @@ impl ProcessPipeValue {
         #[cfg(not(unix))]
         let bytes = match pipe {
             ProcessPipeKind::Stdout(stdout) => {
-                let mut bytes = Vec::new();
-                stdout.read_to_end(&mut bytes)?;
-                bytes
+                read_all_from_reader(stdout, "process pipe read_all")?
             }
             ProcessPipeKind::Stderr(stderr) => {
-                let mut bytes = Vec::new();
-                stderr.read_to_end(&mut bytes)?;
-                bytes
+                read_all_from_reader(stderr, "process pipe read_all")?
             }
             ProcessPipeKind::Stdin(_) => {
                 return Err(io::Error::new(
@@ -3505,6 +3802,17 @@ impl ProcessSupervisorValue {
     ) -> std::result::Result<(), Value> {
         if command.is_empty() {
             return Err(process_error_no_command());
+        }
+        if !matches!(restart, ProcessRestartPolicy::Never)
+            && backoff < MIN_SUPERVISOR_RESTART_BACKOFF
+        {
+            return Err(process_error_io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "supervisor restart backoff must be at least {:?} when restart is enabled",
+                    MIN_SUPERVISOR_RESTART_BACKOFF
+                ),
+            )));
         }
 
         let child = ProcessChildValue::spawn(
@@ -4058,20 +4366,18 @@ fn should_restart_process(
 }
 
 impl TcpListenerValue {
-    fn from_std(listener: StdTcpListener) -> Self {
+    fn from_std(listener: StdTcpListener) -> io::Result<Self> {
         #[cfg(unix)]
-        listener
-            .set_nonblocking(true)
-            .expect("tcp listeners should switch to nonblocking mode");
-        Self {
+        listener.set_nonblocking(true)?;
+        Ok(Self {
             inner: Arc::new(TcpListenerState {
                 listener: Mutex::new(Some(listener)),
             }),
-        }
+        })
     }
 
     pub(crate) fn bind(address: &str) -> io::Result<Self> {
-        Ok(Self::from_std(StdTcpListener::bind(address)?))
+        Self::from_std(StdTcpListener::bind(address)?)
     }
 
     pub(crate) fn accept(
@@ -4086,7 +4392,7 @@ impl TcpListenerValue {
         let deadline = deadline_from_timeout(timeout);
         loop {
             match listener.accept() {
-                Ok((stream, _)) => return Ok(TcpStreamValue::from_std(stream)),
+                Ok((stream, _)) => return TcpStreamValue::from_std(stream),
                 Err(error)
                     if matches!(
                         error.kind(),
@@ -4115,16 +4421,14 @@ impl TcpListenerValue {
 }
 
 impl TcpStreamValue {
-    fn from_std(stream: StdTcpStream) -> Self {
+    fn from_std(stream: StdTcpStream) -> io::Result<Self> {
         #[cfg(unix)]
-        stream
-            .set_nonblocking(true)
-            .expect("tcp streams should switch to nonblocking mode");
-        Self {
+        stream.set_nonblocking(true)?;
+        Ok(Self {
             inner: Arc::new(TcpStreamState {
                 stream: Mutex::new(Some(stream)),
             }),
-        }
+        })
     }
 
     pub(crate) fn connect(
@@ -4146,7 +4450,7 @@ impl TcpStreamValue {
             let mut last_error = None;
             for candidate in addresses {
                 match StdTcpStream::connect_timeout(&candidate, timeout) {
-                    Ok(stream) => return Ok(Self::from_std(stream)),
+                    Ok(stream) => return Self::from_std(stream),
                     Err(error) => last_error = Some(error),
                 }
             }
@@ -4155,7 +4459,7 @@ impl TcpStreamValue {
             let mut last_error = None;
             for candidate in addresses {
                 match StdTcpStream::connect(candidate) {
-                    Ok(stream) => return Ok(Self::from_std(stream)),
+                    Ok(stream) => return Self::from_std(stream),
                     Err(error) => last_error = Some(error),
                 }
             }
@@ -4201,7 +4505,9 @@ impl TcpStreamValue {
                 let mut chunk = [0u8; 4096];
                 match stream.read(&mut chunk) {
                     Ok(0) => break,
-                    Ok(bytes) => contents.extend_from_slice(&chunk[..bytes]),
+                    Ok(bytes) => {
+                        push_limited_bytes(&mut contents, &chunk[..bytes], "network read_all")?
+                    }
                     Err(error)
                         if matches!(
                             error.kind(),
@@ -4367,20 +4673,18 @@ impl UdpDatagramValue {
 }
 
 impl UdpSocketValue {
-    fn from_std(socket: StdUdpSocket) -> Self {
+    fn from_std(socket: StdUdpSocket) -> io::Result<Self> {
         #[cfg(unix)]
-        socket
-            .set_nonblocking(true)
-            .expect("udp sockets should switch to nonblocking mode");
-        Self {
+        socket.set_nonblocking(true)?;
+        Ok(Self {
             inner: Arc::new(UdpSocketState {
                 socket: Mutex::new(Some(socket)),
             }),
-        }
+        })
     }
 
     pub(crate) fn bind(address: &str) -> io::Result<Self> {
-        Ok(Self::from_std(StdUdpSocket::bind(address)?))
+        Self::from_std(StdUdpSocket::bind(address)?)
     }
 
     pub(crate) fn send_to_text(
@@ -4418,7 +4722,7 @@ impl UdpSocketValue {
                             cancellation,
                         )?;
                     }
-                    Err(error) => return Err(error),
+                    Err(error) => return Err(normalize_udp_send_error(error)),
                 }
             }
         }
@@ -4428,7 +4732,9 @@ impl UdpSocketValue {
                 deadline_from_timeout(timeout),
                 cancellation,
             )?)?;
-            socket.send_to(bytes, address)?;
+            socket
+                .send_to(bytes, address)
+                .map_err(normalize_udp_send_error)?;
             Ok(())
         }
     }
@@ -4446,7 +4752,7 @@ impl UdpSocketValue {
         #[cfg(unix)]
         {
             let deadline = deadline_from_timeout(timeout);
-            let mut buffer = vec![0u8; max_bytes.max(1)];
+            let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
             loop {
                 match socket.recv(&mut buffer) {
                     Ok(0) => return Ok(None),
@@ -4455,12 +4761,18 @@ impl UdpSocketValue {
                         return Ok(Some(buffer));
                     }
                     Err(error) if is_retryable_network_error(&error) => {
-                        wait_for_fd_event(
+                        match wait_for_fd_event(
                             socket.as_raw_fd(),
                             libc::POLLIN,
                             deadline,
                             cancellation,
-                        )?;
+                        ) {
+                            Ok(()) => {}
+                            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                                return Ok(None);
+                            }
+                            Err(error) => return Err(error),
+                        }
                     }
                     Err(error) => return Err(error),
                 }
@@ -4472,7 +4784,7 @@ impl UdpSocketValue {
                 deadline_from_timeout(timeout),
                 cancellation,
             )?)?;
-            let mut buffer = vec![0u8; max_bytes.max(1)];
+            let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
             match socket.recv(&mut buffer) {
                 Ok(0) => Ok(None),
                 Ok(bytes) => {
@@ -4505,7 +4817,7 @@ impl UdpSocketValue {
         #[cfg(unix)]
         {
             let deadline = deadline_from_timeout(timeout);
-            let mut buffer = vec![0u8; max_bytes.max(1)];
+            let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
             loop {
                 match socket.recv_from(&mut buffer) {
                     Ok((bytes, address)) => {
@@ -4516,12 +4828,18 @@ impl UdpSocketValue {
                         }));
                     }
                     Err(error) if is_retryable_network_error(&error) => {
-                        wait_for_fd_event(
+                        match wait_for_fd_event(
                             socket.as_raw_fd(),
                             libc::POLLIN,
                             deadline,
                             cancellation,
-                        )?;
+                        ) {
+                            Ok(()) => {}
+                            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                                return Ok(None);
+                            }
+                            Err(error) => return Err(error),
+                        }
                     }
                     Err(error) => return Err(error),
                 }
@@ -4533,7 +4851,7 @@ impl UdpSocketValue {
                 deadline_from_timeout(timeout),
                 cancellation,
             )?)?;
-            let mut buffer = vec![0u8; max_bytes.max(1)];
+            let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
             match socket.recv_from(&mut buffer) {
                 Ok((bytes, address)) => {
                     buffer.truncate(bytes);
@@ -4579,20 +4897,27 @@ impl UdpSocketValue {
 
 #[cfg(unix)]
 impl UnixListenerValue {
-    fn from_std(listener: StdUnixListener) -> Self {
-        listener
-            .set_nonblocking(true)
-            .expect("unix listeners should switch to nonblocking mode");
-        Self {
+    fn from_std(listener: StdUnixListener) -> io::Result<Self> {
+        listener.set_nonblocking(true)?;
+        Ok(Self {
             inner: Arc::new(UnixListenerState {
                 listener: Mutex::new(Some(listener)),
             }),
-        }
+        })
     }
 
     pub(crate) fn bind(path: &str) -> io::Result<Self> {
-        let _ = fs::remove_file(path);
-        Ok(Self::from_std(StdUnixListener::bind(path)?))
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "unix listener path already exists",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        Self::from_std(StdUnixListener::bind(path)?)
     }
 
     pub(crate) fn accept(
@@ -4607,7 +4932,7 @@ impl UnixListenerValue {
         let deadline = deadline_from_timeout(timeout);
         loop {
             match listener.accept() {
-                Ok((stream, _)) => return Ok(UnixStreamValue::from_std(stream)),
+                Ok((stream, _)) => return UnixStreamValue::from_std(stream),
                 Err(error)
                     if matches!(
                         error.kind(),
@@ -4639,15 +4964,13 @@ impl UnixListenerValue {
 
 #[cfg(unix)]
 impl UnixStreamValue {
-    fn from_std(stream: StdUnixStream) -> Self {
-        stream
-            .set_nonblocking(true)
-            .expect("unix streams should switch to nonblocking mode");
-        Self {
+    fn from_std(stream: StdUnixStream) -> io::Result<Self> {
+        stream.set_nonblocking(true)?;
+        Ok(Self {
             inner: Arc::new(UnixStreamState {
                 stream: Mutex::new(Some(stream)),
             }),
-        }
+        })
     }
 
     pub(crate) fn connect(
@@ -4658,7 +4981,7 @@ impl UnixStreamValue {
         if cancellation.is_some_and(|context| context.is_cancelled()) {
             return Err(cancelled_resource_error());
         }
-        Ok(Self::from_std(StdUnixStream::connect(path)?))
+        Self::from_std(StdUnixStream::connect(path)?)
     }
 
     pub(crate) fn read_line(
@@ -4754,11 +5077,18 @@ impl TlsListenerValue {
                     stream.set_nonblocking(true)?;
                     let connection = ServerConnection::new(self.inner.config.clone())
                         .map_err(io::Error::other)?;
+                    let handshake_deadline = deadline.or_else(|| {
+                        Instant::now().checked_add(DEFAULT_TLS_HANDSHAKE_TIMEOUT)
+                    });
+                    let mut tls_stream = rustls::StreamOwned::new(connection, stream);
+                    complete_tls_server_handshake(
+                        &mut tls_stream,
+                        handshake_deadline,
+                        cancellation,
+                    )?;
                     return Ok(TlsStreamValue {
                         inner: Arc::new(TlsStreamState {
-                            stream: Mutex::new(Some(TlsStreamKind::Server(
-                                rustls::StreamOwned::new(connection, stream),
-                            ))),
+                            stream: Mutex::new(Some(TlsStreamKind::Server(tls_stream))),
                         }),
                     });
                 }
@@ -4789,6 +5119,56 @@ impl TlsListenerValue {
     }
 }
 
+fn complete_tls_client_handshake(
+    stream: &mut rustls::StreamOwned<ClientConnection, StdTcpStream>,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<()> {
+    while stream.conn.is_handshaking() {
+        match stream.conn.complete_io(&mut stream.sock) {
+            Ok(_) => {}
+            Err(error) if is_retryable_network_error(&error) => {
+                #[cfg(unix)]
+                wait_for_fd_event(
+                    stream.sock.as_raw_fd(),
+                    libc::POLLIN | libc::POLLOUT,
+                    deadline,
+                    cancellation,
+                )?;
+                #[cfg(not(unix))]
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn complete_tls_server_handshake(
+    stream: &mut rustls::StreamOwned<ServerConnection, StdTcpStream>,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<()> {
+    while stream.conn.is_handshaking() {
+        match stream.conn.complete_io(&mut stream.sock) {
+            Ok(_) => {}
+            Err(error) if is_retryable_network_error(&error) => {
+                #[cfg(unix)]
+                wait_for_fd_event(
+                    stream.sock.as_raw_fd(),
+                    libc::POLLIN | libc::POLLOUT,
+                    deadline,
+                    cancellation,
+                )?;
+                #[cfg(not(unix))]
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 impl TlsStreamValue {
     pub(crate) fn connect(
         address: &str,
@@ -4810,11 +5190,11 @@ impl TlsStreamValue {
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid TLS server name"))?;
         let connection =
             ClientConnection::new(Arc::new(config), server_name).map_err(io::Error::other)?;
+        let mut stream = rustls::StreamOwned::new(connection, stream);
+        complete_tls_client_handshake(&mut stream, deadline_from_timeout(timeout), cancellation)?;
         Ok(Self {
             inner: Arc::new(TlsStreamState {
-                stream: Mutex::new(Some(TlsStreamKind::Client(rustls::StreamOwned::new(
-                    connection, stream,
-                )))),
+                stream: Mutex::new(Some(TlsStreamKind::Client(stream))),
             }),
         })
     }
@@ -4946,7 +5326,7 @@ impl HttpListenerValue {
         #[cfg(unix)]
         let stream = loop {
             match listener.accept() {
-                Ok((stream, _)) => break TcpStreamValue::from_std(stream),
+                Ok((stream, _)) => break TcpStreamValue::from_std(stream)?,
                 Err(error)
                     if matches!(
                         error.kind(),
@@ -4959,7 +5339,7 @@ impl HttpListenerValue {
             }
         };
         #[cfg(not(unix))]
-        let stream = TcpStreamValue::from_std(listener.accept()?.0);
+        let stream = TcpStreamValue::from_std(listener.accept()?.0)?;
         let (method, path, headers, body) = {
             let mut raw_stream = lock_mutex(&stream.inner.stream);
             let Some(raw_stream) = raw_stream.as_mut() else {
@@ -5096,7 +5476,7 @@ impl HttpResponseValue {
                 ))
             }
         };
-        let request = build_http_request_bytes(method, &url, body, headers);
+        let request = build_http_request_bytes(method, &url, body, headers)?;
         let stream = TcpStreamValue::connect(&host, timeout, cancellation)?;
         let deadline = deadline_from_timeout(timeout);
         let response = {
@@ -5150,29 +5530,32 @@ impl WebSocketListenerValue {
             return Err(closed_resource_error());
         };
         let deadline = deadline_from_timeout(timeout);
+        let cancellation = current_lightweight_task_cancellation();
         loop {
             match listener.accept() {
                 Ok((stream, _)) => {
                     #[cfg(unix)]
-                    stream.set_nonblocking(true)?;
-                    let socket = match websocket_accept(stream) {
-                        Ok(socket) => socket,
-                        #[cfg(unix)]
-                        Err(tungstenite::handshake::HandshakeError::Interrupted(mid)) => {
-                            finish_websocket_handshake(mid, deadline)?
-                        }
-                        #[cfg(not(unix))]
-                        Err(tungstenite::handshake::HandshakeError::Interrupted(_)) => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::WouldBlock,
-                                "websocket handshake unexpectedly blocked",
-                            ));
-                        }
-                        Err(tungstenite::handshake::HandshakeError::Failure(error)) => {
-                            return Err(io::Error::other(error));
-                        }
+                    let mut state = run_blocking_io(
+                        move || accept_websocket_stream(stream, deadline),
+                        cancellation.as_ref(),
+                    )?;
+                    #[cfg(not(unix))]
+                    let mut state = {
+                        let socket =
+                            match websocket_accept_with_config(stream, Some(websocket_config())) {
+                                Ok(socket) => socket,
+                                Err(tungstenite::handshake::HandshakeError::Interrupted(_)) => {
+                                    return Err(io::Error::new(
+                                        io::ErrorKind::WouldBlock,
+                                        "websocket handshake unexpectedly blocked",
+                                    ));
+                                }
+                                Err(tungstenite::handshake::HandshakeError::Failure(error)) => {
+                                    return Err(io::Error::other(error));
+                                }
+                            };
+                        WebSocketStateKind::Plain(socket)
                     };
-                    let mut state = WebSocketStateKind::Plain(socket);
                     #[cfg(unix)]
                     websocket_set_nonblocking(&mut state, true)?;
                     return Ok(WebSocketValue {
@@ -5208,6 +5591,7 @@ impl WebSocketValue {
         #[cfg(unix)]
         {
             let parsed = url::Url::parse(url).map_err(io::Error::other)?;
+            let request = websocket_client_request(&parsed)?;
             let host = parsed.host_str().ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -5230,18 +5614,12 @@ impl WebSocketValue {
             let Some(stream) = guard.take() else {
                 return Err(closed_resource_error());
             };
-            stream.set_nonblocking(true)?;
-            stream.set_nodelay(true)?;
-            let (socket, _) = match client_tls_with_config(url, stream, None, None) {
-                Ok(result) => result,
-                Err(tungstenite::handshake::HandshakeError::Interrupted(mid)) => {
-                    finish_websocket_handshake(mid, deadline_from_timeout(timeout))?
-                }
-                Err(tungstenite::handshake::HandshakeError::Failure(error)) => {
-                    return Err(io::Error::other(error));
-                }
-            };
-            let mut state = WebSocketStateKind::MaybeTls(socket);
+            let deadline = deadline_from_timeout(timeout);
+            let cancellation = current_lightweight_task_cancellation();
+            let mut state = run_blocking_io(
+                move || connect_websocket_stream(stream, request, deadline),
+                cancellation.as_ref(),
+            )?;
             websocket_set_nonblocking(&mut state, true)?;
             return Ok(Self {
                 inner: Arc::new(WebSocketState {
@@ -5440,7 +5818,9 @@ impl TaskValue {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_handle(handle: thread::JoinHandle<TaskExecutionResult>) -> Self {
+    pub(crate) fn from_handle(
+        handle: thread::JoinHandle<std::result::Result<Value, Diagnostic>>,
+    ) -> Self {
         let inner = Arc::new(TaskState {
             handle: Mutex::new(TaskHandle::Running {
                 waiters: Vec::new(),
@@ -5451,8 +5831,8 @@ impl TaskValue {
         let state = inner.clone();
         thread::spawn(move || {
             let result = match handle.join() {
-                Ok(result) => result,
-                Err(_) => Err(Diagnostic::new("spawned task panicked")),
+                Ok(result) => TaskExecutionResult::Ready(result),
+                Err(_) => TaskExecutionResult::Ready(Err(Diagnostic::new("spawned task panicked"))),
             };
             let mut task_state = lock_mutex(&state.handle);
             *task_state = TaskHandle::Completed(result);
@@ -5469,14 +5849,16 @@ impl TaskValue {
             }
 
             if self.inner.lightweight {
-                if let Some(context) = current_lightweight_task_context() {
+                if let Some(task_id) =
+                    with_current_lightweight_task_context(|context| context.task_id)
+                {
                     {
                         let mut state = lock_mutex(&self.inner.handle);
                         match &mut *state {
                             TaskHandle::Completed(result) => return result.clone(),
                             TaskHandle::Running { waiters } => {
-                                if !waiters.contains(&context.task_id) {
-                                    waiters.push(context.task_id);
+                                if !waiters.contains(&task_id) {
+                                    waiters.push(task_id);
                                 }
                             }
                         }
@@ -5506,7 +5888,10 @@ impl TaskValue {
         let deadline = deadline_from_timeout(timeout);
         loop {
             if let Some(result) = self.completed_result() {
-                return TaskWaitStatus::Ready(result);
+                return match result {
+                    TaskExecutionResult::Ready(result) => TaskWaitStatus::Ready(result),
+                    TaskExecutionResult::Cancelled => TaskWaitStatus::Cancelled,
+                };
             }
 
             match wait_for_runtime_scheduler(
@@ -5945,6 +6330,7 @@ pub(crate) fn io_error(error: io::Error) -> Value {
         io::ErrorKind::NotFound => ("NotFound", Vec::new()),
         io::ErrorKind::PermissionDenied => ("PermissionDenied", Vec::new()),
         io::ErrorKind::AlreadyExists => ("AlreadyExists", Vec::new()),
+        io::ErrorKind::IsADirectory => ("IsDirectory", Vec::new()),
         io::ErrorKind::ConnectionRefused => ("ConnectionRefused", Vec::new()),
         io::ErrorKind::ConnectionReset => ("ConnectionReset", Vec::new()),
         io::ErrorKind::ConnectionAborted => ("ConnectionAborted", Vec::new()),

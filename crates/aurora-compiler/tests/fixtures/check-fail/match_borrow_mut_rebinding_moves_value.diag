@@ -1,0 +1,5 @@
+error: use of moved value `b`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/match_borrow_mut_rebinding_moves_value.au:10:11
+   |
+10 |     print(b.len())
+   |           ^

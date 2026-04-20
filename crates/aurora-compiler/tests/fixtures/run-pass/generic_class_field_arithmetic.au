@@ -1,0 +1,9 @@
+class Pair[A]:
+    a: A
+    b: A
+
+def main() -> None:
+    pair = Pair[int32](a=3, b=4)
+    print(pair.a + pair.b)
+    inferred = Pair(a=10, b=3)
+    print(inferred.a + inferred.b)

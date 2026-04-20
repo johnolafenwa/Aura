@@ -8,11 +8,13 @@ license.workspace = true
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
+base64 = "0.22"
 cranelift-codegen = "0.118"
 cranelift-frontend = "0.118"
 cranelift-module = "0.118"
 cranelift-native = "0.118"
 cranelift-object = "0.118"
+getrandom = "0.2"
 httparse = "1"
 libc = "0.2"
 rustls = { version = "0.23", features = ["ring"] }

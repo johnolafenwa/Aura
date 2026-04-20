@@ -1,0 +1,5 @@
+error: `print` is a builtin function name and cannot be redefined
+ --> crates/aurora-compiler/tests/fixtures/check-fail/builtin_function_names_cannot_be_redefined.au:1:1
+  |
+1 | def print(value: int32) -> int32:
+  | ^

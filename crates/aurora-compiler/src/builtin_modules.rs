@@ -162,6 +162,7 @@ fn error_enum_info() -> EnumInfo {
         ("NotFound", Vec::new()),
         ("PermissionDenied", Vec::new()),
         ("AlreadyExists", Vec::new()),
+        ("IsDirectory", Vec::new()),
         ("ConnectionRefused", Vec::new()),
         ("ConnectionReset", Vec::new()),
         ("ConnectionAborted", Vec::new()),

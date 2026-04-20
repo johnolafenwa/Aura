@@ -984,9 +984,14 @@ test("compiler bridge includes Set collection members and MapEntry fields", asyn
       "def main() -> int32:",
       "    mut seen = Set{1, 2, 3}",
       "    counts = {\"a\": 1, \"b\": 2}",
-      "    entry = counts.items()[0]",
-      "    seen.",
-      "    entry.",
+      "    entries: Vec[MapEntry[String, int32]] = counts.items()",
+      "    match entries.get(index=0):",
+      "        case Some(found):",
+      "            entry = found",
+      "            seen.",
+      "            entry.",
+      "        case None:",
+      "            pass",
       "    return 0"
     ].join("\n");
 
@@ -1242,8 +1247,19 @@ test("compiler bridge analyzes indexed member chains and f-string indexed lookup
   try {
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
-    const source =
-      "def main() -> int32:\n    keys = [\"a\", \"b\"]\n    idx = 1\n    mut counts = {\"key\": 7}\n    print(keys[idx].clone())\n    print(f\"val: {counts[\"key\"]}\")\n    return 0\n";
+    const source = [
+      "def main() -> int32:",
+      "    keys = [\"a\", \"b\"]",
+      "    idx = 1",
+      "    mut counts = {\"key\": 7}",
+      "    match keys.get(index=idx):",
+      "        case Some(key):",
+      "            print(key)",
+      "        case None:",
+      "            return 1",
+      "    print(f\"val: {counts[\"key\"]}\")",
+      "    return 0"
+    ].join("\n");
 
     setWorkspaceRoots([repoRoot, tempRoot]);
     const analysis = await analyzeWithCompiler(mainUri, source);

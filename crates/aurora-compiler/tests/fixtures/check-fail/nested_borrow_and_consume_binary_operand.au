@@ -1,0 +1,12 @@
+class Container:
+    name: String
+
+def consume_c(c: Container) -> int32:
+    return 1
+
+def len_of(text: borrow String) -> int32:
+    return text.len()
+
+def main() -> int32:
+    c = Container(name="aurora")
+    return len_of(c.name) + consume_c(c)

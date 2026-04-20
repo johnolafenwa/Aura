@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
 
 use aurora_compiler::{check_source, parse_source, run_source};
 
@@ -63,7 +64,7 @@ fn check_fail_fixtures_match_expected_diagnostics() {
 fn run_pass_fixtures_match_expected_stdout() {
     for fixture in fixture_files("run-pass") {
         let source = read(&fixture);
-        let output = run_source(&source)
+        let output = run_source_on_large_stack(source.clone())
             .unwrap_or_else(|error| panic!("{} should run: {}", fixture.display(), error));
         let expected = read_expected(&fixture, "stdout");
         assert_eq!(
@@ -79,7 +80,7 @@ fn run_pass_fixtures_match_expected_stdout() {
 fn run_fail_fixtures_match_expected_diagnostics() {
     for fixture in fixture_files("run-fail") {
         let source = read(&fixture);
-        let error = match run_source(&source) {
+        let error = match run_source_on_large_stack(source.clone()) {
             Ok(output) => panic!(
                 "{} should fail at runtime, but produced stdout:\n{}",
                 fixture.display(),
@@ -139,4 +140,15 @@ fn workspace_root() -> PathBuf {
 
 fn normalize_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").trim_end().to_string()
+}
+
+fn run_source_on_large_stack(
+    source: String,
+) -> aurora_compiler::Result<aurora_compiler::RunOutput> {
+    thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || run_source(&source))
+        .unwrap_or_else(|error| panic!("failed to spawn runtime fixture thread: {}", error))
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
 }

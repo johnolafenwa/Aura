@@ -6,8 +6,9 @@ use crate::call::{bind_call_arguments, callable_params_from_decl, CallConvention
 use crate::diag::Span;
 use crate::integer::minimal_signed_type_for_negative_literal;
 use crate::sema::{
-    binary_operator_trait, substitute_trait_bound, substitute_type, unary_operator_trait,
-    ModuleNamespace, Program, TraitBound, Type,
+    binary_operator_trait, substitute_trait_bound, substitute_type,
+    substitutions_from_decl_type_args, unary_operator_trait, ModuleNamespace, Program, TraitBound,
+    Type,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -821,6 +822,17 @@ struct Lowerer<'a> {
     scoped_names: Vec<std::collections::HashMap<String, String>>,
 }
 
+#[derive(Clone, Debug)]
+enum PatternWriteback {
+    Use(Operand),
+    Variant {
+        ty: Type,
+        enum_name: String,
+        variant_name: String,
+        payloads: Vec<PatternWriteback>,
+    },
+}
+
 struct LoopLabels {
     break_label: String,
     continue_label: String,
@@ -954,6 +966,68 @@ impl<'a> Lowerer<'a> {
             .and_then(|namespace| namespace.all_enums.get(name))
             .or_else(|| self.program.enums.get(name))
             .or_else(|| self.find_imported_enum_info(name))
+    }
+
+    fn infer_class_constructor_type(
+        &self,
+        class_name: &str,
+        args: &[Argument],
+        explicit_type_args: Option<&[crate::ast::TypeRef]>,
+    ) -> Option<Type> {
+        let class = self.resolve_class_info(class_name)?;
+        if let Some(type_args) = explicit_type_args {
+            return Some(Type::Named(
+                class_name.to_string(),
+                type_args.iter().map(lower_type_ref).collect(),
+            ));
+        }
+        if class.decl.type_params.is_empty() {
+            return Some(Type::named(class_name));
+        }
+
+        let mut next_positional_field = 0usize;
+        let mut saw_named = false;
+        let type_params = class
+            .decl
+            .type_params
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut substitutions = std::collections::HashMap::new();
+
+        for argument in args {
+            let field_name = if let Some(field_name) = argument.name.as_ref() {
+                saw_named = true;
+                field_name.clone()
+            } else {
+                if saw_named {
+                    return Some(Type::named(class_name));
+                }
+                let field = class.decl.fields.get(next_positional_field)?;
+                next_positional_field += 1;
+                field.name.clone()
+            };
+            let field_info = class.fields.get(&field_name)?;
+            let actual_ty = self.infer_expr_type(&argument.value)?;
+            if !crate::sema::type_pattern_matches(
+                &field_info.ty,
+                &actual_ty,
+                &type_params,
+                &mut substitutions,
+            ) {
+                return Some(Type::named(class_name));
+            }
+        }
+
+        let resolved_args = class
+            .decl
+            .type_params
+            .iter()
+            .map(|type_param| substitutions.get(type_param).cloned())
+            .collect::<Option<Vec<_>>>();
+        resolved_args
+            .map(|resolved_args| Type::Named(class_name.to_string(), resolved_args))
+            .or_else(|| Some(Type::named(class_name)))
     }
 
     fn infer_module_path(&self, expr: &Expr) -> Option<String> {
@@ -1420,6 +1494,11 @@ impl<'a> Lowerer<'a> {
     fn lower_match(&mut self, match_stmt: &MatchStmt) {
         let scrutinee = self.lower_expr(&match_stmt.scrutinee);
         let scrutinee_ty = self.infer_expr_type(&match_stmt.scrutinee);
+        let writeback_root = if match_stmt.borrow_mode == Some(ReceiverKind::BorrowMut) {
+            self.render_place_expr_option(&match_stmt.scrutinee)
+        } else {
+            None
+        };
         let after_block = self.new_block("match_end");
         let mut next_case_block = self.current_block;
 
@@ -1432,15 +1511,27 @@ impl<'a> Lowerer<'a> {
                 self.new_block("match_next")
             };
             self.scoped_names.push(std::collections::HashMap::new());
-            self.lower_pattern(
+            let pattern_writeback = self.lower_pattern(
                 &arm.pattern,
                 scrutinee.clone(),
                 scrutinee_ty.as_ref(),
                 arm_block,
                 next_block,
+                writeback_root.is_some(),
             );
             self.switch_to(arm_block);
             self.lower_stmts(&arm.body);
+            if !self.current_terminated() {
+                if let (Some(writeback_place), Some(writeback)) =
+                    (writeback_root.as_ref(), pattern_writeback.as_ref())
+                {
+                    let updated = self.materialize_pattern_writeback(writeback);
+                    self.emit(Instruction::Assign {
+                        target: writeback_place.clone(),
+                        value: Rvalue::Use(updated),
+                    });
+                }
+            }
             if !self.current_terminated() {
                 self.terminate(Terminator::Goto(self.label(after_block)));
             }
@@ -1458,10 +1549,12 @@ impl<'a> Lowerer<'a> {
         scrutinee_ty: Option<&Type>,
         success_block: usize,
         failure_block: usize,
-    ) {
+        collect_writeback: bool,
+    ) -> Option<PatternWriteback> {
         match pattern {
             Pattern::Wildcard(_) => {
                 self.terminate(Terminator::Goto(self.label(success_block)));
+                collect_writeback.then(|| PatternWriteback::Use(scrutinee))
             }
             Pattern::Binding(binding) => {
                 let target = if let Some(ty) = scrutinee_ty.cloned() {
@@ -1474,14 +1567,15 @@ impl<'a> Lowerer<'a> {
                     .expect("match arm scope should exist")
                     .insert(binding.name.clone(), target.clone());
                 self.emit(Instruction::Assign {
-                    target,
+                    target: target.clone(),
                     value: Rvalue::Use(scrutinee),
                 });
                 self.terminate(Terminator::Goto(self.label(success_block)));
+                collect_writeback.then(|| PatternWriteback::Use(Operand::Place(target)))
             }
             Pattern::Literal(pattern) => {
                 let condition = self.lower_literal_pattern_condition(
-                    scrutinee,
+                    scrutinee.clone(),
                     scrutinee_ty,
                     &pattern.kind,
                     pattern.span,
@@ -1491,13 +1585,15 @@ impl<'a> Lowerer<'a> {
                     then_label: self.label(success_block),
                     else_label: self.label(failure_block),
                 });
+                collect_writeback.then(|| PatternWriteback::Use(scrutinee))
             }
             Pattern::Variant(pattern) => {
+                let resolved_enum_name = self.resolve_pattern_enum_name(pattern, scrutinee_ty);
                 let matched_block = self.new_block("match_variant");
                 self.terminate(Terminator::Match {
                     scrutinee: scrutinee.clone(),
                     arms: vec![MirMatchArm {
-                        enum_name: Some(self.resolve_pattern_enum_name(pattern, scrutinee_ty)),
+                        enum_name: Some(resolved_enum_name.clone()),
                         variant_name: Some(pattern.variant_name.clone()),
                         wildcard: false,
                         label: self.label(matched_block),
@@ -1506,21 +1602,25 @@ impl<'a> Lowerer<'a> {
                 });
                 self.switch_to(matched_block);
                 let payload_types = self
-                    .variant_payload_types(
-                        scrutinee_ty,
-                        &self.resolve_pattern_enum_name(pattern, scrutinee_ty),
-                        &pattern.variant_name,
-                    )
+                    .variant_payload_types(scrutinee_ty, &resolved_enum_name, &pattern.variant_name)
                     .unwrap_or_else(|| vec![Type::named("Unknown"); pattern.subpatterns.len()]);
                 if payload_types.len() != pattern.subpatterns.len() {
                     self.terminate(Terminator::Goto(self.label(failure_block)));
-                    return;
+                    return None;
                 }
                 if pattern.subpatterns.is_empty() {
                     self.terminate(Terminator::Goto(self.label(success_block)));
-                    return;
+                    return collect_writeback.then(|| PatternWriteback::Variant {
+                        ty: scrutinee_ty
+                            .cloned()
+                            .unwrap_or_else(|| Type::named("Unknown")),
+                        enum_name: resolved_enum_name,
+                        variant_name: pattern.variant_name.clone(),
+                        payloads: Vec::new(),
+                    });
                 }
                 let mut next_block = matched_block;
+                let mut payload_writebacks = Vec::new();
                 for (index, subpattern) in pattern.subpatterns.iter().enumerate() {
                     self.switch_to(next_block);
                     let payload_ty = payload_types.get(index).cloned();
@@ -1541,15 +1641,26 @@ impl<'a> Lowerer<'a> {
                     } else {
                         self.new_block("match_payload")
                     };
-                    self.lower_pattern(
+                    if let Some(writeback) = self.lower_pattern(
                         subpattern,
                         Operand::Place(payload_target),
                         payload_ty.as_ref(),
                         subpattern_success,
                         failure_block,
-                    );
+                        collect_writeback,
+                    ) {
+                        payload_writebacks.push(writeback);
+                    }
                     next_block = subpattern_success;
                 }
+                collect_writeback.then(|| PatternWriteback::Variant {
+                    ty: scrutinee_ty
+                        .cloned()
+                        .unwrap_or_else(|| Type::named("Unknown")),
+                    enum_name: resolved_enum_name,
+                    variant_name: pattern.variant_name.clone(),
+                    payloads: payload_writebacks,
+                })
             }
         }
     }
@@ -2276,9 +2387,9 @@ impl<'a> Lowerer<'a> {
             ExprKind::Call { callee, args } => self.lower_call(expr, callee, args),
             ExprKind::Match {
                 scrutinee,
-                borrow_mode: _,
+                borrow_mode,
                 arms,
-            } => self.lower_match_expr(expr, scrutinee, arms),
+            } => self.lower_match_expr(expr, scrutinee, *borrow_mode, arms),
         }
     }
 
@@ -2286,10 +2397,16 @@ impl<'a> Lowerer<'a> {
         &mut self,
         expr: &Expr,
         scrutinee_expr: &Expr,
+        borrow_mode: Option<ReceiverKind>,
         arms: &[crate::ast::MatchExprArm],
     ) -> Operand {
         let scrutinee = self.lower_expr(scrutinee_expr);
         let scrutinee_ty = self.infer_expr_type(scrutinee_expr);
+        let writeback_root = if borrow_mode == Some(ReceiverKind::BorrowMut) {
+            self.render_place_expr_option(scrutinee_expr)
+        } else {
+            None
+        };
         let result = self.new_temp_for_expr(expr);
         let after_block = self.new_block("match_expr_end");
         let mut next_case_block = self.current_block;
@@ -2303,12 +2420,13 @@ impl<'a> Lowerer<'a> {
                 self.new_block("match_expr_next")
             };
             self.scoped_names.push(std::collections::HashMap::new());
-            self.lower_pattern(
+            let pattern_writeback = self.lower_pattern(
                 &arm.pattern,
                 scrutinee.clone(),
                 scrutinee_ty.as_ref(),
                 arm_block,
                 next_block,
+                writeback_root.is_some(),
             );
             self.switch_to(arm_block);
             let value = self.lower_expr(&arm.value);
@@ -2316,6 +2434,17 @@ impl<'a> Lowerer<'a> {
                 target: result.clone(),
                 value: Rvalue::Use(value),
             });
+            if !self.current_terminated() {
+                if let (Some(writeback_place), Some(writeback)) =
+                    (writeback_root.as_ref(), pattern_writeback.as_ref())
+                {
+                    let updated = self.materialize_pattern_writeback(writeback);
+                    self.emit(Instruction::Assign {
+                        target: writeback_place.clone(),
+                        value: Rvalue::Use(updated),
+                    });
+                }
+            }
             if !self.current_terminated() {
                 self.terminate(Terminator::Goto(self.label(after_block)));
             }
@@ -2325,6 +2454,33 @@ impl<'a> Lowerer<'a> {
 
         self.switch_to(after_block);
         Operand::Place(result)
+    }
+
+    fn materialize_pattern_writeback(&mut self, writeback: &PatternWriteback) -> Operand {
+        match writeback {
+            PatternWriteback::Use(operand) => operand.clone(),
+            PatternWriteback::Variant {
+                ty,
+                enum_name,
+                variant_name,
+                payloads,
+            } => {
+                let payloads = payloads
+                    .iter()
+                    .map(|payload| self.materialize_pattern_writeback(payload))
+                    .collect::<Vec<_>>();
+                let temp = self.new_typed_temp(ty.clone());
+                self.emit(Instruction::Assign {
+                    target: temp.clone(),
+                    value: Rvalue::EnumVariant {
+                        enum_name: enum_name.clone(),
+                        variant_name: variant_name.clone(),
+                        payloads,
+                    },
+                });
+                Operand::Place(temp)
+            }
+        }
     }
 
     fn lower_logical_expr(&mut self, op: BinaryOp, left: &Expr, right: &Expr) -> Operand {
@@ -3228,13 +3384,11 @@ impl<'a> Lowerer<'a> {
                             });
                         }
                         if self.resolve_class_info(name).is_some() {
-                            return Some(match explicit_type_args {
-                                Some(type_args) => Type::Named(
-                                    name.clone(),
-                                    type_args.iter().map(lower_type_ref).collect(),
-                                ),
-                                None => Type::named(name),
-                            });
+                            return self.infer_class_constructor_type(
+                                name,
+                                args,
+                                explicit_type_args,
+                            );
                         }
                         self.resolve_function_info(name).map(|function| {
                             if let Some(type_args) = explicit_type_args {
@@ -3337,10 +3491,25 @@ impl<'a> Lowerer<'a> {
                         {
                             return Some(enum_ty);
                         }
-                        if let Type::Named(class_name, _) = &receiver_type {
+                        if let Type::Named(class_name, class_args) = &receiver_type {
+                            if let Some(enum_info) = self.resolve_enum_info(class_name) {
+                                if enum_info.variants.contains_key(field) {
+                                    return Some(Type::Named(
+                                        enum_info.decl.name.clone(),
+                                        class_args.clone(),
+                                    ));
+                                }
+                            }
                             if let Some(class) = self.resolve_class_info(class_name) {
                                 if let Some(method) = class.methods.get(field) {
-                                    return Some(method.signature.return_type.clone());
+                                    let substitutions = substitutions_from_decl_type_args(
+                                        &class.decl.type_params,
+                                        class_args,
+                                    );
+                                    return Some(substitute_type(
+                                        &method.signature.return_type,
+                                        &substitutions,
+                                    ));
                                 }
                             }
                         }
@@ -3401,11 +3570,21 @@ impl<'a> Lowerer<'a> {
                 if let Some(enum_ty) = self.builtin_enum_variant_type(&receiver_type, field) {
                     return Some(enum_ty);
                 }
-                let Type::Named(class_name, _) = receiver_type else {
+                let Type::Named(class_name, class_args) = receiver_type else {
                     return None;
                 };
+                if let Some(enum_info) = self.resolve_enum_info(&class_name) {
+                    if enum_info.variants.contains_key(field) {
+                        return Some(Type::Named(enum_info.decl.name.clone(), class_args));
+                    }
+                }
                 let class = self.resolve_class_info(&class_name)?;
-                class.fields.get(field).map(|field| field.ty.clone())
+                let substitutions =
+                    substitutions_from_decl_type_args(&class.decl.type_params, &class_args);
+                class
+                    .fields
+                    .get(field)
+                    .map(|field| substitute_type(&field.ty, &substitutions))
             }
             ExprKind::Index { object, .. } => match self.infer_expr_type(object)? {
                 Type::Named(name, args) if name == "Vec" && args.len() == 1 => {
@@ -3578,10 +3757,15 @@ impl<'a> Lowerer<'a> {
                 .filter(|trait_impl| {
                     trait_impl.trait_name == trait_name && trait_impl.trait_args.len() == 1
                 })
-                .find_map(|trait_impl| {
+                .filter_map(|trait_impl| {
                     let substitutions = self.trait_impl_substitutions(trait_impl, value_ty)?;
-                    Some(substitute_type(&trait_impl.trait_args[0], &substitutions))
-                }),
+                    Some((
+                        crate::sema::trait_impl_specificity(trait_impl),
+                        substitute_type(&trait_impl.trait_args[0], &substitutions),
+                    ))
+                })
+                .max_by_key(|(specificity, _)| *specificity)
+                .map(|(_, result_ty)| result_ty),
         }
     }
 
@@ -3616,7 +3800,7 @@ impl<'a> Lowerer<'a> {
             _ => self
                 .trait_impls_in_scope()
                 .filter(|trait_impl| trait_impl.trait_name == trait_name)
-                .find_map(|trait_impl| {
+                .filter_map(|trait_impl| {
                     let Some(trait_method) = trait_impl.methods.get(field) else {
                         return None;
                     };
@@ -3650,14 +3834,19 @@ impl<'a> Lowerer<'a> {
                         &trait_impl.trait_args,
                         left_ty.clone(),
                     );
-                    Some(substitute_type(
-                        &trait_method.signature.return_type,
-                        &trait_substitutions
-                            .into_iter()
-                            .chain(substitutions)
-                            .collect::<std::collections::HashMap<_, _>>(),
+                    Some((
+                        crate::sema::trait_impl_specificity(trait_impl),
+                        substitute_type(
+                            &trait_method.signature.return_type,
+                            &trait_substitutions
+                                .into_iter()
+                                .chain(substitutions)
+                                .collect::<std::collections::HashMap<_, _>>(),
+                        ),
                     ))
-                }),
+                })
+                .max_by_key(|(specificity, _)| *specificity)
+                .map(|(_, result_ty)| result_ty),
         }
     }
 
@@ -3671,15 +3860,16 @@ impl<'a> Lowerer<'a> {
     )> {
         self.trait_impls_in_scope()
             .filter_map(|trait_impl| {
-                self.trait_impl_substitutions(trait_impl, receiver_type)
-                    .map(|substitutions| (trait_impl, substitutions))
+                let substitutions = self.trait_impl_substitutions(trait_impl, receiver_type)?;
+                let method = trait_impl.methods.get(field)?;
+                Some((
+                    crate::sema::trait_impl_specificity(trait_impl),
+                    method,
+                    substitutions,
+                ))
             })
-            .find_map(|(trait_impl, substitutions)| {
-                trait_impl
-                    .methods
-                    .get(field)
-                    .map(|method| (method, substitutions))
-            })
+            .max_by_key(|(specificity, _, _)| *specificity)
+            .map(|(_, method, substitutions)| (method, substitutions))
     }
 
     fn trait_impl_method_for_class_name(
@@ -3687,21 +3877,21 @@ impl<'a> Lowerer<'a> {
         class_name: &str,
         field: &str,
     ) -> Option<(crate::sema::TraitImplInfo, crate::sema::TraitImplMethodInfo)> {
-        let mut matches =
-            self.trait_impls_in_scope()
-                .filter_map(|trait_impl| match &trait_impl.for_type {
-                    Type::Named(name, _) if name == class_name => trait_impl
-                        .methods
-                        .get(field)
-                        .cloned()
-                        .map(|method| (trait_impl.clone(), method)),
-                    _ => None,
-                });
-        let first = matches.next()?;
-        if matches.next().is_some() {
-            return None;
-        }
-        Some(first)
+        self.trait_impls_in_scope()
+            .filter_map(|trait_impl| match &trait_impl.for_type {
+                Type::Named(name, _) if name == class_name => {
+                    trait_impl.methods.get(field).cloned().map(|method| {
+                        (
+                            crate::sema::trait_impl_specificity(trait_impl),
+                            trait_impl.clone(),
+                            method,
+                        )
+                    })
+                }
+                _ => None,
+            })
+            .max_by_key(|(specificity, _, _)| *specificity)
+            .map(|(_, trait_impl, method)| (trait_impl, method))
     }
 
     fn resolve_pattern_enum_name(

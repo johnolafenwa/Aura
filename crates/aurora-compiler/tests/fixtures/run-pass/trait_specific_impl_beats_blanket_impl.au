@@ -1,0 +1,21 @@
+trait Show:
+    def show(borrow self) -> String
+
+class Box[T]:
+    value: T
+
+impl[T] Show for Box[T]:
+    def show(borrow self) -> String:
+        return "generic"
+
+impl Show for Box[int32]:
+    def show(borrow self) -> String:
+        return "int32"
+
+def render[T: Show](value: T) -> None:
+    print(value.show())
+
+def main() -> int32:
+    render(Box(value=7))
+    render(Box(value="hi"))
+    return 0

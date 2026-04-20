@@ -149,6 +149,16 @@ for index in range(items.len()):
 ```
 
 Indexed reads work as ordinary expressions, so chains like `keys[idx].clone()` are supported.
+For non-copy element types like `String` or user-defined classes, indexed reads require `get(index)` instead of `items[index]` so the cloned read stays explicit:
+
+```python
+names = ["Ada", "Grace"]
+match names.get(0):
+    case Option.Some(value):
+        print(value)
+    case Option.None:
+        pass
+```
 
 See [examples/collections/vec_basics.au](../examples/collections/vec_basics.au), [examples/collections/vec_iteration.au](../examples/collections/vec_iteration.au), and [examples/collections/vec_polish.au](../examples/collections/vec_polish.au).
 
@@ -191,8 +201,12 @@ print(f"value: {counts["aurora"]}")
 
 ```python
 entries = counts.items()
-print(entries[0].key)
-print(entries[0].value)
+match entries.get(0):
+    case Option.Some(entry):
+        print(entry.key)
+        print(entry.value)
+    case Option.None:
+        pass
 ```
 
 The full method surface includes `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`.

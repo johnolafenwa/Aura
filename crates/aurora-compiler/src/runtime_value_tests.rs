@@ -1,12 +1,14 @@
 use super::{
-    cast_numeric_value, io_decode_utf8, lock_mutex, option_none, option_some, render_float,
-    result_err, result_ok, send_error_cancelled, send_error_closed, sleep_with_runtime_scheduler,
-    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpListenerValue, HttpResponseValue, MapValue, RangeValue, SetValue, TaskGroupValue,
-    TaskValue, TcpListenerValue, TcpStreamValue, TryRecvResult, UdpSocketValue, Value, VecValue,
-    WebSocketListenerValue,
+    cast_numeric_value, create_dir_once, io_decode_utf8, io_error, lock_mutex, option_none,
+    option_some, remove_file_checked, render_float, result_err, result_ok, run_blocking_io,
+    run_lightweight_root_task, send_error_cancelled, send_error_closed,
+    sleep_with_runtime_scheduler, spawn_lightweight_task, wait_for_runtime_scheduler,
+    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpListenerValue,
+    HttpResponseValue, MapValue, ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue,
+    RangeValue, SetValue, TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue,
+    TryRecvResult, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
 };
-use crate::diag::Span;
+use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::sema::Type;
 use rcgen::generate_simple_self_signed;
@@ -214,11 +216,19 @@ fn task_and_cancellation_helpers_cover_current_runtime_contract() {
         Ok(Value::Int(IntegerValue::from_signed(9)))
     }));
     assert_eq!(
-        task.join_result().expect("first join should succeed"),
+        match task.join_result() {
+            super::TaskExecutionResult::Ready(result) => result.expect("first join should succeed"),
+            super::TaskExecutionResult::Cancelled => panic!("task should not be cancelled"),
+        },
         Value::Int(IntegerValue::from_signed(9))
     );
     assert_eq!(
-        task.join_result().expect("cached join should also succeed"),
+        match task.join_result() {
+            super::TaskExecutionResult::Ready(result) => {
+                result.expect("cached join should also succeed")
+            }
+            super::TaskExecutionResult::Cancelled => panic!("task should not be cancelled"),
+        },
         Value::Int(IntegerValue::from_signed(9))
     );
 
@@ -285,8 +295,12 @@ fn channel_and_task_helpers_tolerate_poisoned_locks() {
     })
     .join();
     assert_eq!(
-        task.join_result()
-            .expect("poisoned task handle lock should recover"),
+        match task.join_result() {
+            super::TaskExecutionResult::Ready(result) => {
+                result.expect("poisoned task handle lock should recover")
+            }
+            super::TaskExecutionResult::Cancelled => panic!("task should not be cancelled"),
+        },
         Value::Int(IntegerValue::from_signed(17))
     );
 }
@@ -298,12 +312,15 @@ fn runtime_scheduler_wakes_sleep_on_cancellation() {
     let cancellation = group.child_cancellation();
     let start = Instant::now();
     let worker = thread::spawn(move || {
-        sleep_with_runtime_scheduler(StdDuration::from_millis(250), Some(&cancellation));
+        sleep_with_runtime_scheduler(StdDuration::from_millis(250), Some(&cancellation))
     });
 
     thread::sleep(StdDuration::from_millis(20));
     group.cancel();
-    worker.join().expect("scheduler sleep worker should join");
+    assert_eq!(
+        worker.join().expect("scheduler sleep worker should join"),
+        super::RuntimeSchedulerWakeReason::Cancelled
+    );
     assert!(
         start.elapsed() < StdDuration::from_millis(100),
         "scheduler sleep should wake promptly when cancelled; elapsed {:?}",
@@ -433,6 +450,93 @@ fn file_and_encoding_helpers_cover_binary_roundtrip_surface() {
         io_decode_utf8(&read_back).expect("decode_utf8 should succeed"),
         "aurora"
     );
+}
+
+#[test]
+fn filesystem_helpers_surface_directory_conflicts_precisely() {
+    let temp = TempDir::new("aurora-fs-errors");
+    let dir = temp.path().join("data");
+    fs::create_dir(&dir).expect("directory should be created");
+
+    let already_exists = create_dir_once(&dir).expect_err("existing directory should fail");
+    assert_eq!(already_exists.kind(), std::io::ErrorKind::AlreadyExists);
+
+    let is_directory = remove_file_checked(&dir).expect_err("directory removal should fail");
+    assert_eq!(is_directory.kind(), std::io::ErrorKind::IsADirectory);
+
+    let rendered = io_error(is_directory);
+    let Value::EnumVariant(variant) = rendered else {
+        panic!("io_error should return an enum variant");
+    };
+    assert_eq!(variant.variant_name, "IsDirectory");
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_listener_bind_rejects_existing_regular_files() {
+    let temp = TempDir::new("aurora-runtime-unix-bind");
+    let path = temp.path().join("existing.txt");
+    fs::write(&path, "important-user-data").expect("write regular file");
+
+    let error = UnixListenerValue::bind(path.to_str().expect("path should be valid UTF-8"))
+        .expect_err("binding over a regular file should fail");
+    assert!(
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::AlreadyExists
+                | std::io::ErrorKind::InvalidInput
+                | std::io::ErrorKind::PermissionDenied
+        ),
+        "unexpected unix bind error kind: {:?}",
+        error.kind()
+    );
+    assert!(
+        path.is_file(),
+        "failed unix bind should leave the original regular file intact"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_listener_bind_rejects_existing_live_socket_paths() {
+    let path = PathBuf::from(format!("/tmp/aurora-live-{}.sock", std::process::id()));
+    let _ = fs::remove_file(&path);
+    let listener = UnixListenerValue::bind(path.to_str().expect("valid unix socket path"))
+        .expect("first unix listener bind should succeed");
+
+    let error = UnixListenerValue::bind(path.to_str().expect("valid unix socket path"))
+        .expect_err("binding over a live unix socket should fail");
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+
+    listener.close();
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn supervisor_rejects_zero_backoff_when_restart_is_enabled() {
+    let supervisor = ProcessSupervisorValue::new();
+    let error = supervisor
+        .start(
+            "flaky".to_string(),
+            vec!["/usr/bin/false".to_string()],
+            None,
+            Vec::new(),
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessStdioConfig::Null,
+            ProcessRestartPolicy::Always,
+            StdDuration::ZERO,
+            Some(1),
+            true,
+        )
+        .expect_err("zero-backoff restart loops should be rejected");
+    let Value::EnumVariant(variant) = error else {
+        panic!("process supervisor start should return a process.Error variant");
+    };
+    assert_eq!(variant.enum_name, "Error");
+    assert_eq!(variant.variant_name, "Io");
+    assert_eq!(variant.payloads.len(), 1);
+    assert_eq!(variant.payloads[0].render(), "io.Error.InvalidInput");
 }
 
 #[test]
@@ -594,6 +698,318 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
         .expect("websocket bytes should be present");
     assert_eq!(ws_reply, b"pong");
     ws_thread.join().expect("websocket thread should join");
+}
+
+#[test]
+fn tcp_and_http_helpers_handle_large_payloads() {
+    let timeout = StdDuration::from_secs(5);
+    let cancellation = CancellationContext::default();
+    let payload = vec![b'x'; 350_000];
+
+    let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp bind should succeed");
+    let address = listener
+        .local_addr()
+        .expect("listener local addr should succeed");
+    let server = listener.clone();
+    let expected_len = payload.len();
+    let server_thread = thread::spawn(move || {
+        let stream = server
+            .accept(Some(timeout), Some(&CancellationContext::default()))
+            .expect("tcp accept should succeed");
+        let bytes = stream
+            .read_exact(
+                expected_len,
+                Some(timeout),
+                Some(&CancellationContext::default()),
+            )
+            .expect("tcp read_exact should succeed");
+        assert_eq!(bytes.len(), expected_len);
+        stream.close();
+    });
+
+    let client = TcpStreamValue::connect(&address, Some(timeout), Some(&cancellation))
+        .expect("tcp connect should succeed");
+    client
+        .write_bytes(&payload, Some(timeout), Some(&cancellation))
+        .expect("tcp write_bytes should succeed for large payloads");
+    client.close();
+    server_thread
+        .join()
+        .expect("tcp large-payload server should join");
+
+    let body = "x".repeat(100_000);
+    let http_listener =
+        HttpListenerValue::bind("127.0.0.1:0").expect("http listener bind should succeed");
+    let http_address = http_listener
+        .local_addr()
+        .expect("http listener local addr should succeed");
+    let expected_body = body.clone();
+    let http_thread = {
+        let listener = http_listener.clone();
+        thread::spawn(move || {
+            let exchange = listener
+                .accept(Some(timeout), Some(&CancellationContext::default()))
+                .expect("http accept should succeed");
+            exchange
+                .respond_text(200, &expected_body, Vec::new())
+                .expect("http respond should succeed for large payloads");
+        })
+    };
+    let response = HttpResponseValue::request_text(
+        "GET",
+        &format!("http://{http_address}/large"),
+        "",
+        Vec::new(),
+        Some(timeout),
+        Some(&cancellation),
+    )
+    .expect("http request should succeed for large payloads");
+    assert_eq!(
+        response.text().expect("http body should decode"),
+        body,
+        "large HTTP bodies should round-trip"
+    );
+    http_thread.join().expect("http thread should join");
+}
+
+#[test]
+fn lightweight_scheduler_handles_large_http_binary_round_trip() {
+    let timeout = StdDuration::from_secs(5);
+    let body = vec![0x7au8; 50_000];
+    let expected = body.clone();
+    let result = run_lightweight_root_task(move || {
+        let listener = HttpListenerValue::bind("127.0.0.1:0")
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+        let address = listener
+            .local_addr()
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+        let server_body = expected.clone();
+        let server = spawn_lightweight_task(move || {
+            let exchange = listener
+                .accept(Some(timeout), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            exchange
+                .respond_bytes(200, &server_body, Vec::new())
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            Ok(Value::Unit)
+        })?;
+
+        let response = HttpResponseValue::request_bytes(
+            "GET",
+            &format!("http://{address}/large"),
+            &[0],
+            Vec::new(),
+            Some(timeout),
+            None,
+        )
+        .map_err(|error| Diagnostic::new(error.to_string()))?;
+        assert_eq!(response.bytes(), body);
+        match server.join_result() {
+            super::TaskExecutionResult::Ready(result) => {
+                result?;
+            }
+            super::TaskExecutionResult::Cancelled => {
+                return Err(Diagnostic::new("http server task was cancelled"));
+            }
+        }
+        Ok(Value::Unit)
+    });
+    assert!(
+        result.is_ok(),
+        "lightweight HTTP round-trip should succeed: {result:?}"
+    );
+}
+
+#[test]
+fn lightweight_scheduler_handles_http_after_blocking_io_server_step() {
+    let timeout = StdDuration::from_secs(2);
+    let result = run_lightweight_root_task(move || {
+        let listener = HttpListenerValue::bind("127.0.0.1:0")
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+        let address = listener
+            .local_addr()
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+        let server = spawn_lightweight_task(move || {
+            let exchange = listener
+                .accept(Some(timeout), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            let body = run_blocking_io(
+                move || {
+                    thread::sleep(StdDuration::from_millis(20));
+                    Ok::<_, std::io::Error>("x".repeat(50_000))
+                },
+                None,
+            )
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+            exchange
+                .respond_text(200, &body, Vec::new())
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            Ok(Value::Unit)
+        })?;
+
+        let response = HttpResponseValue::request_text(
+            "GET",
+            &format!("http://{address}/large"),
+            "x",
+            Vec::new(),
+            Some(timeout),
+            None,
+        )
+        .map_err(|error| Diagnostic::new(error.to_string()))?;
+        assert_eq!(
+            response
+                .text()
+                .map_err(|error| Diagnostic::new(error.to_string()))?,
+            "x".repeat(50_000)
+        );
+        match server.join_result() {
+            super::TaskExecutionResult::Ready(result) => {
+                result?;
+            }
+            super::TaskExecutionResult::Cancelled => {
+                return Err(Diagnostic::new("http server task was cancelled"));
+            }
+        }
+        Ok(Value::Unit)
+    });
+    assert!(
+        result.is_ok(),
+        "mixed HTTP/blocking-I/O scheduler path should succeed: {result:?}"
+    );
+}
+
+#[test]
+fn lightweight_tasks_observe_blocking_io_completion_before_parent_timeout() {
+    let timeout = StdDuration::from_millis(250);
+    let start = Instant::now();
+    let result = run_lightweight_root_task(move || {
+        let task = spawn_lightweight_task(move || {
+            let value = run_blocking_io(
+                move || {
+                    thread::sleep(StdDuration::from_millis(20));
+                    Ok::<_, std::io::Error>(41i32)
+                },
+                None,
+            )
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+            Ok(Value::Int(IntegerValue::from_signed(i128::from(value))))
+        })?;
+
+        match task.wait_result_with_cancellation(Some(timeout), None) {
+            super::TaskWaitStatus::Ready(result) => {
+                assert_eq!(
+                    result?,
+                    Value::Int(IntegerValue::from_signed(41)),
+                    "blocking I/O completion should resume the waiting task promptly"
+                );
+                Ok(Value::Unit)
+            }
+            super::TaskWaitStatus::TimedOut => {
+                Err(Diagnostic::new("blocking-I/O child task timed out"))
+            }
+            super::TaskWaitStatus::Cancelled => {
+                Err(Diagnostic::new("blocking-I/O child task was cancelled"))
+            }
+        }
+    });
+    assert!(
+        result.is_ok(),
+        "blocking-I/O child task should finish before the wait timeout: {result:?}"
+    );
+    assert!(
+        start.elapsed() < StdDuration::from_millis(150),
+        "blocking-I/O wake should be prompt; elapsed {:?}",
+        start.elapsed()
+    );
+}
+
+#[test]
+fn read_all_surfaces_size_limits_for_unbounded_resources() {
+    const READ_ALL_LIMIT: usize = 1024 * 1024;
+    let temp = TempDir::new("aurora-read-all-limit");
+    let file_path = temp.path().join("large.txt");
+    let oversized = "x".repeat(READ_ALL_LIMIT + 1);
+    fs::write(&file_path, oversized.as_bytes()).expect("large test file should be written");
+
+    let file = FileValue::open(file_path.to_str().expect("utf-8 path")).expect("file should open");
+    let error = file.read_all().expect_err("oversized read_all should fail");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+
+    let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp bind should succeed");
+    let address = listener
+        .local_addr()
+        .expect("listener local addr should succeed");
+    let server = listener.clone();
+    let server_thread = thread::spawn(move || {
+        let stream = server
+            .accept(
+                Some(StdDuration::from_secs(5)),
+                Some(&CancellationContext::default()),
+            )
+            .expect("accept should succeed");
+        stream
+            .write_bytes(
+                oversized.as_bytes(),
+                Some(StdDuration::from_secs(5)),
+                Some(&CancellationContext::default()),
+            )
+            .expect("server write should succeed");
+        stream.close();
+    });
+
+    let client = TcpStreamValue::connect(
+        &address,
+        Some(StdDuration::from_secs(5)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("client should connect");
+    let error = client
+        .read_all(
+            Some(StdDuration::from_secs(5)),
+            Some(&CancellationContext::default()),
+        )
+        .expect_err("oversized tcp read_all should fail");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    server_thread.join().expect("server thread should join");
+}
+
+#[test]
+fn http_request_rejects_control_characters_in_headers() {
+    let error = HttpResponseValue::request_text(
+        "GET",
+        "http://127.0.0.1:1/test",
+        "",
+        vec![("X-Test".to_string(), "safe\r\nX-Evil: injected".to_string())],
+        Some(StdDuration::from_secs(1)),
+        Some(&CancellationContext::default()),
+    )
+    .expect_err("request headers with CRLF should be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn http_request_rejects_invalid_header_names_and_non_ascii_values() {
+    let bad_name = HttpResponseValue::request_text(
+        "GET",
+        "http://127.0.0.1:1/test",
+        "",
+        vec![("Bad(Name)".to_string(), "value".to_string())],
+        Some(StdDuration::from_secs(1)),
+        Some(&CancellationContext::default()),
+    )
+    .expect_err("request headers with invalid token characters should be rejected");
+    assert_eq!(bad_name.kind(), std::io::ErrorKind::InvalidInput);
+
+    let bad_value = HttpResponseValue::request_text(
+        "GET",
+        "http://127.0.0.1:1/test",
+        "",
+        vec![("X-Test".to_string(), "caf\u{00e9}".to_string())],
+        Some(StdDuration::from_secs(1)),
+        Some(&CancellationContext::default()),
+    )
+    .expect_err("request headers with non-ASCII values should be rejected");
+    assert_eq!(bad_value.kind(), std::io::ErrorKind::InvalidInput);
 }
 
 #[cfg(unix)]
@@ -865,6 +1281,45 @@ fn unix_and_tls_helpers_cover_local_socket_and_tls_surface() {
 
 #[cfg(unix)]
 #[test]
+fn tls_listener_accept_requires_a_completed_handshake() {
+    let temp = TempDir::new("aurora-runtime-tls-timeout");
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = temp.path().join("cert.pem");
+    let key_path = temp.path().join("key.pem");
+    fs::write(&cert_path, certificate.cert.pem()).expect("write cert");
+    fs::write(&key_path, certificate.key_pair.serialize_pem()).expect("write key");
+
+    let listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        cert_path.to_str().expect("valid cert path"),
+        key_path.to_str().expect("valid key path"),
+    )
+    .expect("tls listener bind should succeed");
+    let address = listener.local_addr().expect("tls listener addr should succeed");
+
+    let silent_client = thread::spawn(move || {
+        let _client =
+            std::net::TcpStream::connect(address).expect("plain tcp client should connect");
+        thread::sleep(StdDuration::from_millis(300));
+    });
+
+    let error = listener
+        .accept(
+            Some(StdDuration::from_millis(200)),
+            Some(&CancellationContext::default()),
+        )
+        .expect_err("tls accept should fail when the peer never handshakes");
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+
+    silent_client
+        .join()
+        .expect("silent tls client thread should join");
+    listener.close();
+}
+
+#[cfg(unix)]
+#[test]
 fn unix_tls_and_websocket_resources_use_nonblocking_descriptors_internally() {
     let temp = TempDir::new("aurora-runtime-evented-network");
 
@@ -963,6 +1418,16 @@ fn unix_tls_and_websocket_resources_use_nonblocking_descriptors_internally() {
             fd_is_nonblocking(accepted_fd),
             "accepted tls streams should stay in nonblocking mode internally"
         );
+        assert_eq!(
+            accepted
+                .read_exact(
+                    1,
+                    Some(StdDuration::from_secs(2)),
+                    Some(&CancellationContext::default()),
+                )
+                .expect("tls handshake read should succeed"),
+            b"x"
+        );
         accepted.close();
     });
     let tls_client = TlsStreamValue::connect(
@@ -984,6 +1449,13 @@ fn unix_tls_and_websocket_resources_use_nonblocking_descriptors_internally() {
         fd_is_nonblocking(tls_client_fd),
         "tls client streams should stay in nonblocking mode internally"
     );
+    tls_client
+        .write_all(
+            "x",
+            Some(StdDuration::from_secs(2)),
+            Some(&CancellationContext::default()),
+        )
+        .expect("tls handshake write should succeed");
     tls_client.close();
     tls_thread.join().expect("tls server thread should join");
 

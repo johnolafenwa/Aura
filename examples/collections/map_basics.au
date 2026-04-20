@@ -15,8 +15,16 @@ def main() -> int32:
     print_int_option(counts.set(key="aurora", value=5))
     print(counts["aurora"])
     items = counts.items()
-    print(items[0].key)
-    print(items[2].value)
+    match items.get(0):
+        case Some(entry):
+            print(entry.key)
+        case None:
+            pass
+    match items.get(2):
+        case Some(entry):
+            print(entry.value)
+        case None:
+            pass
     print(counts.keys().len())
     print(counts.values().len())
     print(counts.entries().len())

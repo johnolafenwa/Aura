@@ -1048,6 +1048,7 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
         b"Ready".as_ptr(),
         "Ready".len(),
         std::ptr::null_mut(),
+        0,
     );
     assert_eq!(
         super::aurora_direct_variant_matches(
@@ -1059,12 +1060,15 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
         ),
         1
     );
+    let payloads = super::aurora_direct_arg_buffer_new(1);
+    super::aurora_direct_arg_buffer_store(payloads, 0, string_value("payload") as i64);
     let boxed_payload = super::aurora_direct_enum_variant(
         b"Option".as_ptr(),
         "Option".len(),
         b"Some".as_ptr(),
         "Some".len(),
-        string_value("payload"),
+        payloads,
+        1,
     );
     assert_eq!(
         expect_string(super::aurora_direct_variant_payload(boxed_payload, 0)),
@@ -1411,6 +1415,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     b"Ready".as_ptr(),
                     "Ready".len(),
                     std::ptr::null_mut(),
+                    0,
                 );
                 super::aurora_direct_variant_payload(ready, 0);
             }

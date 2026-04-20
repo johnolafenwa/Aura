@@ -3,7 +3,7 @@ enum Maybe[T]:
     Nothing
 
 def main() -> int32:
-    value: Maybe[int32] = Maybe.Nothing
+    value: Maybe[int32] = Maybe[int32].Nothing
     match value:
         case Maybe.Nothing:
             print(0)
