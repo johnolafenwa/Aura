@@ -1332,12 +1332,14 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
     );
     for trait_info in program.traits.values() {
         let trait_type_param_scope = type_param_scope(&trait_info.decl.type_params);
+        let self_placeholder = Type::TypeParam("Self".to_string());
         for method in trait_info.methods.values() {
             let method_type_param_scope =
                 merged_type_param_scope(&trait_type_param_scope, &method.decl.type_params);
             checker.check_param_defaults(
                 &method.decl.params,
                 &method_type_param_scope,
+                Some(&self_placeholder),
                 false,
                 "trait method",
             )?;
@@ -2787,6 +2789,7 @@ impl<'a> FunctionChecker<'a> {
         &self,
         params: &[Param],
         type_param_scope: &BTreeMap<String, ()>,
+        self_type: Option<&Type>,
         allow_defaults: bool,
         owner: &str,
     ) -> Result<()> {
@@ -2806,11 +2809,12 @@ impl<'a> FunctionChecker<'a> {
                     ),
                 ));
             }
-            let lowered = lower_type(
+            let lowered = lower_type_with_self(
                 &param.ty,
                 self.type_names,
                 self.type_arities,
                 type_param_scope,
+                self_type,
             )?;
             match &param.default {
                 Some(default) => {
@@ -2887,7 +2891,13 @@ impl<'a> FunctionChecker<'a> {
                 function.return_passing,
                 return_borrow_source,
             );
-        checker.check_param_defaults(&function.params, &type_param_scope, true, "function")?;
+        checker.check_param_defaults(
+            &function.params,
+            &type_param_scope,
+            None,
+            true,
+            "function",
+        )?;
         let mut locals = HashMap::new();
         checker.seed_imported_modules(&mut locals);
         for param in &function.params {
@@ -2976,7 +2986,13 @@ impl<'a> FunctionChecker<'a> {
                 method.return_passing,
                 return_borrow_source,
             );
-        checker.check_param_defaults(&method.params, &method_type_param_scope, true, "method")?;
+        checker.check_param_defaults(
+            &method.params,
+            &method_type_param_scope,
+            Some(&class_self_type),
+            true,
+            "method",
+        )?;
         let mut locals = HashMap::new();
         checker.seed_imported_modules(&mut locals);
         if let Some(receiver_kind) = method.receiver {
@@ -3129,7 +3145,13 @@ impl<'a> FunctionChecker<'a> {
                 method.return_passing,
                 return_borrow_source,
             );
-        checker.check_param_defaults(&method.params, &type_param_scope, false, "impl method")?;
+        checker.check_param_defaults(
+            &method.params,
+            &type_param_scope,
+            Some(for_type),
+            false,
+            "impl method",
+        )?;
         let mut locals = HashMap::new();
         checker.seed_imported_modules(&mut locals);
         if let Some(receiver_kind) = method.receiver {
@@ -5092,37 +5114,6 @@ impl<'a> FunctionChecker<'a> {
         }
 
         match &base_callee.kind {
-            ExprKind::Name(name) if self.is_builtin_enum_variant_name(name) => {
-                let Some(expected_ty) = expected else {
-                    return Err(Diagnostic::at(
-                        span,
-                        "bare enum variants require an expected enum type or a qualified form such as `Result.Ok(...)`",
-                    ));
-                };
-                let Type::Named(enum_name, _) = expected_ty else {
-                    return Err(Diagnostic::at(
-                        span,
-                        "bare enum variants require an expected enum type or a qualified form such as `Result.Ok(...)`",
-                    ));
-                };
-                if !self
-                    .builtin_enum_variant_payload(expected_ty, enum_name, name)
-                    .is_some()
-                {
-                    return Err(Diagnostic::at(
-                        span,
-                        "bare enum variants require an expected enum type or a qualified form such as `Result.Ok(...)`",
-                    ));
-                }
-                self.type_check_builtin_enum_variant_constructor(
-                    enum_name,
-                    name,
-                    expected_ty,
-                    args,
-                    span,
-                    locals,
-                )
-            }
             ExprKind::Name(name) if BuiltinFunction::from_name(name).is_some() => {
                 let builtin = BuiltinFunction::from_name(name).ok_or_else(|| {
                     Diagnostic::at(
@@ -5636,6 +5627,37 @@ impl<'a> FunctionChecker<'a> {
                 }
 
                 Ok(Type::Named(name.clone(), resolved_args))
+            }
+            ExprKind::Name(name) if self.is_builtin_enum_variant_name(name) => {
+                let Some(expected_ty) = expected else {
+                    return Err(Diagnostic::at(
+                        span,
+                        "bare enum variants require an expected enum type or a qualified form such as `Result.Ok(...)`",
+                    ));
+                };
+                let Type::Named(enum_name, _) = expected_ty else {
+                    return Err(Diagnostic::at(
+                        span,
+                        "bare enum variants require an expected enum type or a qualified form such as `Result.Ok(...)`",
+                    ));
+                };
+                if !self
+                    .builtin_enum_variant_payload(expected_ty, enum_name, name)
+                    .is_some()
+                {
+                    return Err(Diagnostic::at(
+                        span,
+                        "bare enum variants require an expected enum type or a qualified form such as `Result.Ok(...)`",
+                    ));
+                }
+                self.type_check_builtin_enum_variant_constructor(
+                    enum_name,
+                    name,
+                    expected_ty,
+                    args,
+                    span,
+                    locals,
+                )
             }
             ExprKind::Member { object, field } => {
                 let (base_object, object_type_args) = self.peel_specialization(object);

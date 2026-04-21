@@ -7,6 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use rcgen::generate_simple_self_signed;
 
+const READ_ALL_CAP_BYTES: usize = 64 * 1024 * 1024;
+
 fn aura_bin() -> &'static str {
     env!("CARGO_BIN_EXE_aura")
 }
@@ -197,6 +199,47 @@ fn build_and_run_default_source(
         .expect("failed to run default-backend binary");
 
     (build, run)
+}
+
+fn assert_run_and_direct_source_stdout(prefix: &str, source: &str, expected_stdout: &str) {
+    let (temp, source_path) = write_temp_source(prefix, source);
+    let run = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run");
+    assert!(
+        run.status.success(),
+        "aura run should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected_stdout);
+
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build --backend direct");
+    assert!(
+        build.status.success(),
+        "direct backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let direct = Command::new(&output_path)
+        .output()
+        .expect("failed to run direct-backend binary");
+    assert!(
+        direct.status.success(),
+        "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected_stdout);
 }
 
 fn run_aura_source_with_timeout(
@@ -1625,7 +1668,9 @@ fn build_with_direct_backend_supports_bytes_file_io_example() {
 fn build_with_direct_backend_caps_fs_read_to_string_and_read_bytes() {
     let temp = TempDir::new("aurora-direct-file-read-cap");
     let file_path = temp.path().join("huge.txt");
-    fs::write(&file_path, vec![b'x'; (1024 * 1024) + 1]).expect("write oversized file");
+    let file = fs::File::create(&file_path).expect("create oversized file");
+    file.set_len((READ_ALL_CAP_BYTES + 1) as u64)
+        .expect("size oversized file");
     let source_path = temp.path().join("main.au");
     let source = format!(
         "import fs\n\ndef main() -> int32:\n    match fs.read_to_string(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-string\")\n        case Result.Err(error):\n            print(error)\n    match fs.read_bytes(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-bytes\")\n        case Result.Err(error):\n            print(error)\n    return 0\n",
@@ -1667,7 +1712,9 @@ fn build_with_direct_backend_caps_fs_read_to_string_and_read_bytes() {
 fn run_caps_fs_read_to_string_and_read_bytes() {
     let temp = TempDir::new("aurora-run-file-read-cap");
     let file_path = temp.path().join("huge.txt");
-    fs::write(&file_path, vec![b'x'; (1024 * 1024) + 1]).expect("write oversized file");
+    let file = fs::File::create(&file_path).expect("create oversized file");
+    file.set_len((READ_ALL_CAP_BYTES + 1) as u64)
+        .expect("size oversized file");
     let source_path = temp.path().join("main.au");
     let source = format!(
         "import fs\n\ndef main() -> int32:\n    match fs.read_to_string(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-string\")\n        case Result.Err(error):\n            print(error)\n    match fs.read_bytes(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-bytes\")\n        case Result.Err(error):\n            print(error)\n    return 0\n",
@@ -1690,6 +1737,71 @@ fn run_caps_fs_read_to_string_and_read_bytes() {
         String::from_utf8_lossy(&run.stdout),
         "io.Error.InvalidData\nio.Error.InvalidData\n"
     );
+}
+
+#[test]
+fn run_and_direct_backend_preserve_match_borrow_mut_writebacks_after_dead_branches() {
+    let source = r#"enum Opt:
+    Some(int32)
+    None
+
+def main() -> int32:
+    mut x: Opt = Opt.Some(10)
+    match borrow mut x:
+        case Some(v):
+            v = v + 1
+            if false:
+                x = Opt.Some(100)
+        case None:
+            pass
+    match borrow x:
+        case Some(v):
+            print(v)
+        case None:
+            print(-1)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-match-borrow-mut-dead-branch-writeback",
+        source,
+        "11\n",
+    );
+}
+
+#[test]
+fn run_and_direct_backend_match_bare_none_literals_as_option_none() {
+    let source = r#"def none_value() -> Option[int32]:
+    return None
+
+def main() -> int32:
+    a: Option[int32] = None
+    match a:
+        case Some(value):
+            print(value)
+        case None:
+            print(-1)
+
+    nested: Option[Option[int32]] = Some(None)
+    match nested:
+        case Some(inner):
+            match inner:
+                case Some(value):
+                    print(value)
+                case None:
+                    print(-2)
+        case None:
+            print(-3)
+
+    match none_value():
+        case Some(value):
+            print(value)
+        case None:
+            print(-4)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout("aurora-bare-none-direct-match", source, "-1\n-2\n-4\n");
 }
 
 #[test]

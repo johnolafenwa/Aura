@@ -269,6 +269,9 @@ The examples are organized by topic so they can serve both as quick references a
   - prints:
     - `name=aurora`
     - `aurora`
+- `self_parameters.au`
+  - trait methods that use `Self` in parameter and return positions
+  - prints `9`
 - `marker_trait.au`
   - empty marker traits declared with `pass`
   - prints `1`

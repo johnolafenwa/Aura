@@ -3015,7 +3015,19 @@ impl<'a> FunctionCompiler<'a> {
                     self.compile_try_assign(target, target_ty, try_value)?;
                 } else {
                     let target_ty = self.type_of_place(target)?;
-                    let compiled = self.compile_rvalue(value)?;
+                    let compiled = match value {
+                        Rvalue::EnumVariant {
+                            enum_name,
+                            variant_name,
+                            payloads,
+                        } => self.compile_enum_variant_for_target(
+                            enum_name,
+                            variant_name,
+                            payloads,
+                            Some(&target_ty),
+                        )?,
+                        _ => self.compile_rvalue(value)?,
+                    };
                     let coerced = self.coerce_value(compiled, &target_ty)?;
                     self.store_place(target, coerced)?;
                 }
@@ -3228,7 +3240,7 @@ impl<'a> FunctionCompiler<'a> {
                 enum_name,
                 variant_name,
                 payloads,
-            } => self.compile_enum_variant(enum_name, variant_name, payloads),
+            } => self.compile_enum_variant_for_target(enum_name, variant_name, payloads, None),
             Rvalue::VariantPayload { scrutinee, index } => {
                 let scrutinee = self.load_operand(scrutinee)?;
                 self.compile_variant_payload(scrutinee, *index)
@@ -4764,6 +4776,16 @@ impl<'a> FunctionCompiler<'a> {
         }
 
         if let DirectType::Opaque(target_ty) = target {
+            if matches!(value.ty.scalar_kind(), Some(ScalarKind::Unit))
+                && matches!(target_ty, Type::Named(name, args) if name == "Option" && args.len() == 1)
+            {
+                let none =
+                    self.compile_enum_variant_for_target("Option", "None", &[], Some(target))?;
+                return Ok(ValueRef {
+                    values: none.values,
+                    ty: target.clone(),
+                });
+            }
             if is_numeric_type_name(target_ty) {
                 let boxed = self.ensure_opaque(value)?;
                 let (target_ptr, target_len) =
@@ -5124,14 +5146,18 @@ impl<'a> FunctionCompiler<'a> {
         declare_string_constant(self.object, self.string_data, &mut self.builder, bytes)
     }
 
-    fn compile_enum_variant(
+    fn compile_enum_variant_for_target(
         &mut self,
         enum_name: &str,
         variant_name: &str,
         payloads: &[Operand],
+        target: Option<&DirectType>,
     ) -> std::result::Result<ValueRef, String> {
         let (enum_ptr, enum_len) = self.string_constant(enum_name.as_bytes())?;
         let (variant_ptr, variant_len) = self.string_constant(variant_name.as_bytes())?;
+        let expected_payload_types = target.and_then(|target_ty| {
+            enum_variant_payload_types_for_target(enum_name, variant_name, target_ty, &self.classes)
+        });
         let payload_buffer = if payloads.is_empty() {
             self.builder.ins().iconst(types::I64, 0)
         } else {
@@ -5140,6 +5166,15 @@ impl<'a> FunctionCompiler<'a> {
             let buffer = self.builder.inst_results(buffer_inst)[0];
             for (index, payload) in payloads.iter().enumerate() {
                 let loaded = self.load_operand(payload)?;
+                let loaded = if let Some(expected_payload_types) = expected_payload_types.as_ref() {
+                    if let Some(expected_ty) = expected_payload_types.get(index) {
+                        self.coerce_value(loaded, expected_ty)?
+                    } else {
+                        loaded
+                    }
+                } else {
+                    loaded
+                };
                 let payload = self.ensure_opaque(loaded)?;
                 let transferred = self.transfer_opaque_arg(&payload);
                 let index_value = self.builder.ins().iconst(types::I64, index as i64);
@@ -5163,7 +5198,9 @@ impl<'a> FunctionCompiler<'a> {
         );
         Ok(self.owned_opaque_result(
             self.builder.inst_results(inst).to_vec(),
-            Type::named(enum_name),
+            target
+                .map(direct_type_to_type)
+                .unwrap_or_else(|| Type::named(enum_name)),
         ))
     }
 
@@ -7064,7 +7101,7 @@ impl<'a> FunctionCompiler<'a> {
                             let loaded = self.load_operand(&argument.value)?;
                             self.ensure_opaque(loaded)?
                         } else {
-                            self.compile_enum_variant("Option", "None", &[])?
+                            self.compile_enum_variant_for_target("Option", "None", &[], None)?
                         };
                         let env = if let Some(argument) = bound[3] {
                             let loaded = self.load_operand(&argument.value)?;
@@ -7113,7 +7150,12 @@ impl<'a> FunctionCompiler<'a> {
                             let loaded = self.load_operand(&argument.value)?;
                             self.ensure_opaque(loaded)?
                         } else {
-                            self.compile_enum_variant("process.RestartPolicy", "OnFailure", &[])?
+                            self.compile_enum_variant_for_target(
+                                "process.RestartPolicy",
+                                "OnFailure",
+                                &[],
+                                None,
+                            )?
                         };
                         let backoff = if let Some(argument) = bound[8] {
                             let loaded = self.load_operand(&argument.value)?;
@@ -10736,6 +10778,47 @@ fn infer_variant_payload_type(
         _ => return None,
     };
     direct_type(&payload_ty, classes)
+}
+
+fn enum_variant_payload_types_for_target(
+    enum_name: &str,
+    variant_name: &str,
+    target: &DirectType,
+    classes: &HashMap<String, MirClass>,
+) -> Option<Vec<DirectType>> {
+    let DirectType::Opaque(Type::Named(name, args)) = target else {
+        return None;
+    };
+    if name != enum_name {
+        return None;
+    }
+    let payload_types = match (name.as_str(), args.as_slice(), variant_name) {
+        ("Option", [inner], "Some") => vec![inner.clone()],
+        ("Option", [_], "None") => Vec::new(),
+        ("Result", [ok, _], "Ok") => vec![ok.clone()],
+        ("Result", [_, err], "Err") => vec![err.clone()],
+        ("SendError", [inner], "Closed" | "Cancelled" | "TimedOut" | "Full") => {
+            vec![inner.clone()]
+        }
+        ("QueueReceive", [inner], "Item") => vec![inner.clone()],
+        ("QueueReceive", [_], "Closed" | "TimedOut" | "Cancelled") => Vec::new(),
+        ("TaskResult", [inner], "Ready") => vec![inner.clone()],
+        ("TaskResult", [_], "TimedOut" | "Cancelled") => Vec::new(),
+        ("WaitAny", [inner], "Ready") => vec![Type::named("int32"), inner.clone()],
+        ("WaitAny", [_], "TimedOut" | "Cancelled") => Vec::new(),
+        ("WaitAll", [inner], "Ready") => vec![Type::Named("Vec".to_string(), vec![inner.clone()])],
+        ("WaitAll", [_], "TimedOut" | "Cancelled") => Vec::new(),
+        _ => return None,
+    };
+    Some(
+        payload_types
+            .iter()
+            .map(|payload_ty| {
+                direct_type(payload_ty, classes)
+                    .unwrap_or_else(|| DirectType::Opaque(payload_ty.clone()))
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn infer_try_type(

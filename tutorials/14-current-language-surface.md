@@ -298,7 +298,7 @@ Current builtin I/O, networking, and process surface:
 - `fs.File.write_bytes(...)`
 - `fs.File.flush()`
 - `fs.File.close()`
-- one-shot `fs.read_to_string(...)` and `fs.read_bytes(...)` reads are capped at 1 MiB in both `aura run` and direct-built binaries; use file handles for larger streaming workflows
+- one-shot `fs.read_to_string(...)` and `fs.read_bytes(...)` reads are capped at 64 MiB in both `aura run` and direct-built binaries; use file handles for larger streaming workflows
 - `net.connect(...)`
 - `net.connect_timeout(...)`
 - `net.listen(...)`

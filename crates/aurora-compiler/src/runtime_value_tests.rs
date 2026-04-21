@@ -472,6 +472,19 @@ fn filesystem_helpers_surface_directory_conflicts_precisely() {
     assert_eq!(variant.variant_name, "IsDirectory");
 }
 
+#[test]
+fn io_error_maps_closed_and_cancelled_resource_conditions() {
+    let Value::EnumVariant(closed) = io_error(super::closed_resource_error()) else {
+        panic!("closed resource errors should render as io.Error variants");
+    };
+    assert_eq!(closed.variant_name, "Closed");
+
+    let Value::EnumVariant(cancelled) = io_error(super::cancelled_resource_error()) else {
+        panic!("cancelled resource errors should render as io.Error variants");
+    };
+    assert_eq!(cancelled.variant_name, "Cancelled");
+}
+
 #[cfg(unix)]
 #[test]
 fn unix_listener_bind_rejects_existing_regular_files() {
@@ -926,11 +939,12 @@ fn lightweight_tasks_observe_blocking_io_completion_before_parent_timeout() {
 
 #[test]
 fn read_all_surfaces_size_limits_for_unbounded_resources() {
-    const READ_ALL_LIMIT: usize = 1024 * 1024;
     let temp = TempDir::new("aurora-read-all-limit");
     let file_path = temp.path().join("large.txt");
-    let oversized = "x".repeat(READ_ALL_LIMIT + 1);
-    fs::write(&file_path, oversized.as_bytes()).expect("large test file should be written");
+    fs::File::create(&file_path)
+        .expect("large test file should be created")
+        .set_len((super::MAX_READ_ALL_BYTES + 1) as u64)
+        .expect("large test file should be extended");
 
     let file = FileValue::open(file_path.to_str().expect("utf-8 path")).expect("file should open");
     let error = file.read_all().expect_err("oversized read_all should fail");
@@ -942,19 +956,29 @@ fn read_all_surfaces_size_limits_for_unbounded_resources() {
         .expect("listener local addr should succeed");
     let server = listener.clone();
     let server_thread = thread::spawn(move || {
+        const CHUNK_SIZE: usize = 64 * 1024;
+        let chunk = vec![b'x'; CHUNK_SIZE];
+        let mut bytes_remaining = super::MAX_READ_ALL_BYTES + 1;
         let stream = server
             .accept(
                 Some(StdDuration::from_secs(5)),
                 Some(&CancellationContext::default()),
             )
             .expect("accept should succeed");
-        stream
-            .write_bytes(
-                oversized.as_bytes(),
-                Some(StdDuration::from_secs(5)),
-                Some(&CancellationContext::default()),
-            )
-            .expect("server write should succeed");
+        while bytes_remaining > 0 {
+            let chunk_len = chunk.len().min(bytes_remaining);
+            if stream
+                .write_bytes(
+                    &chunk[..chunk_len],
+                    Some(StdDuration::from_secs(5)),
+                    Some(&CancellationContext::default()),
+                )
+                .is_err()
+            {
+                break;
+            }
+            bytes_remaining -= chunk_len;
+        }
         stream.close();
     });
 
@@ -1014,7 +1038,7 @@ fn http_request_rejects_invalid_header_names_and_non_ascii_values() {
 }
 
 #[test]
-fn http_listener_replies_with_413_for_oversized_requests() {
+fn http_listener_replies_with_413_for_oversized_requests_and_continues_accepting() {
     let listener =
         HttpListenerValue::bind("127.0.0.1:0").expect("http listener bind should succeed");
     let address = listener
@@ -1023,13 +1047,17 @@ fn http_listener_replies_with_413_for_oversized_requests() {
     let server = listener.clone();
     let oversized_len = super::MAX_HTTP_MESSAGE_BYTES + 1;
     let server_thread = thread::spawn(move || {
-        let error = server
+        let exchange = server
             .accept(
                 Some(StdDuration::from_secs(2)),
                 Some(&CancellationContext::default()),
             )
-            .expect_err("oversized request should fail on the server");
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            .expect("server should skip the oversized request and accept the next client");
+        assert_eq!(exchange.method(), "GET");
+        assert_eq!(exchange.path(), "/ok");
+        exchange
+            .respond_text(200, "ok", Vec::new())
+            .expect("server should reply to the valid request");
     });
 
     let mut client =
@@ -1043,9 +1071,6 @@ fn http_listener_replies_with_413_for_oversized_requests() {
         )
         .expect("http request head should write");
     client
-        .write_all(&vec![b'x'; oversized_len])
-        .expect("oversized request body should write");
-    client
         .shutdown(std::net::Shutdown::Write)
         .expect("client shutdown should succeed");
 
@@ -1058,9 +1083,89 @@ fn http_listener_replies_with_413_for_oversized_requests() {
         "expected a 413 response, got: {response:?}"
     );
 
+    let response = HttpResponseValue::request_text(
+        "GET",
+        &format!("http://{}/ok", address),
+        "",
+        Vec::new(),
+        Some(StdDuration::from_secs(2)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("listener should continue accepting after a 413");
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.text().expect("response body should decode"),
+        "ok".to_string()
+    );
+
     server_thread
         .join()
         .expect("oversized http server thread should join");
+}
+
+#[test]
+fn http_listener_replies_with_431_for_too_many_headers_and_continues_accepting() {
+    let listener =
+        HttpListenerValue::bind("127.0.0.1:0").expect("http listener bind should succeed");
+    let address = listener
+        .local_addr()
+        .expect("http listener local addr should succeed");
+    let server = listener.clone();
+    let server_thread = thread::spawn(move || {
+        let exchange = server
+            .accept(
+                Some(StdDuration::from_secs(2)),
+                Some(&CancellationContext::default()),
+            )
+            .expect("server should skip the invalid request and accept the next client");
+        assert_eq!(exchange.method(), "GET");
+        assert_eq!(exchange.path(), "/ok");
+        exchange
+            .respond_text(200, "ok", Vec::new())
+            .expect("server should reply to the valid request");
+    });
+
+    let mut client =
+        std::net::TcpStream::connect(&address).expect("http client should connect to listener");
+    let mut request = format!("GET /headers HTTP/1.1\r\nHost: {address}\r\n");
+    for index in 0..=super::MAX_HTTP_HEADERS {
+        request.push_str(&format!("X-Test-{index}: value\r\n"));
+    }
+    request.push_str("\r\n");
+    client
+        .write_all(request.as_bytes())
+        .expect("request with too many headers should write");
+    client
+        .shutdown(std::net::Shutdown::Write)
+        .expect("client shutdown should succeed");
+
+    let mut response = String::new();
+    client
+        .read_to_string(&mut response)
+        .expect("client should receive an HTTP response");
+    assert!(
+        response.starts_with("HTTP/1.1 431 Request Header Fields Too Large\r\n"),
+        "expected a 431 response, got: {response:?}"
+    );
+
+    let response = HttpResponseValue::request_text(
+        "GET",
+        &format!("http://{}/ok", address),
+        "",
+        Vec::new(),
+        Some(StdDuration::from_secs(2)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("listener should continue accepting after a 431");
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.text().expect("response body should decode"),
+        "ok".to_string()
+    );
+
+    server_thread
+        .join()
+        .expect("too-many-headers server thread should join");
 }
 
 #[cfg(unix)]
@@ -1369,6 +1474,91 @@ fn tls_listener_accept_requires_a_completed_handshake() {
         .join()
         .expect("silent tls client thread should join");
     listener.close();
+}
+
+#[cfg(unix)]
+#[test]
+fn tls_listener_accept_skips_timed_out_handshakes_and_accepts_the_next_peer() {
+    let temp = TempDir::new("aurora-runtime-tls-slowloris");
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = temp.path().join("cert.pem");
+    let key_path = temp.path().join("key.pem");
+    fs::write(&cert_path, certificate.cert.pem()).expect("write cert");
+    fs::write(&key_path, certificate.key_pair.serialize_pem()).expect("write key");
+
+    let listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        cert_path.to_str().expect("valid cert path"),
+        key_path.to_str().expect("valid key path"),
+    )
+    .expect("tls listener bind should succeed");
+    let address = listener
+        .local_addr()
+        .expect("tls listener addr should succeed");
+
+    let server = listener.clone();
+    let server_thread = thread::spawn(move || {
+        let stream = server
+            .accept(
+                Some(StdDuration::from_secs(11)),
+                Some(&CancellationContext::default()),
+            )
+            .expect("tls listener should skip the stalled client");
+        let line = stream
+            .read_line(
+                Some(StdDuration::from_secs(2)),
+                Some(&CancellationContext::default()),
+            )
+            .expect("tls read_line should succeed");
+        assert_eq!(line.as_deref(), Some("ready"));
+        stream
+            .write_all(
+                "ok",
+                Some(StdDuration::from_secs(2)),
+                Some(&CancellationContext::default()),
+            )
+            .expect("tls write_all should succeed");
+    });
+
+    let stalled_address = address.clone();
+    let stalled_client = thread::spawn(move || {
+        let _client =
+            std::net::TcpStream::connect(stalled_address).expect("plain tcp client should connect");
+        thread::sleep(StdDuration::from_secs(11));
+    });
+
+    thread::sleep(StdDuration::from_millis(100));
+    let tls_client = TlsStreamValue::connect(
+        &address,
+        "localhost",
+        Some(cert_path.to_str().expect("cert path should be valid UTF-8")),
+        Some(StdDuration::from_secs(12)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("tls connect should succeed after the stalled peer is discarded");
+    tls_client
+        .write_all(
+            "ready\n",
+            Some(StdDuration::from_secs(2)),
+            Some(&CancellationContext::default()),
+        )
+        .expect("tls write_all should succeed");
+    let reply = tls_client
+        .read_exact(
+            2,
+            Some(StdDuration::from_secs(2)),
+            Some(&CancellationContext::default()),
+        )
+        .expect("tls read_exact should succeed");
+    assert_eq!(reply, b"ok");
+
+    stalled_client
+        .join()
+        .expect("stalled tls client thread should join");
+    server_thread
+        .join()
+        .expect("tls slowloris server thread should join");
 }
 
 #[test]

@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-04-20
+Last updated: 2026-04-21
 
 ## In Progress
 
@@ -18,6 +18,8 @@ Last updated: 2026-04-20
 - Raise the language-server coverage gate beyond `91/84/100/91` as the remaining fallback and server branches gain direct regression coverage.
 
 ## Done
+
+- Finished the April 21 fifth-review fix pass: validated the fifth-pass external review, added failing-first regressions, fixed the broad `match borrow mut` dead-branch writeback regression, corrected direct-backend bare `None` enum emission, made TLS and HTTP listeners continue past per-connection handshake/request failures, raised the maintained `read_all` ceiling to `64 MiB`, added `431` handling, enabled `Self` in trait/impl parameter positions, restored user-class precedence over builtin variant names, added `io.Error.Cancelled` plus explicit `io.Error.Closed`/`Cancelled` runtime mapping, hardened websocket transport fallback errors, updated the maintained traits and I/O tutorials plus examples, and reverified the final tree with `cargo fmt --all`, `cargo test -p aurora-compiler --lib -- --nocapture`, `cargo test -p aurora-compiler --test fixtures -- --nocapture`, `cargo test -p aura --test cli -- --nocapture`, and `./target/debug/aura run examples/traits/self_parameters.au`.
 
 - Finished the April 20 fourth-review fix pass: closed the fourth-pass externally reviewed defects across recursive indirect enum construction, nested generic trait-bound direct-backend dispatch, `match borrow mut` writeback and nested-aliasing holes, managed `with` resource field moves, MIR/runtime filesystem read-cap parity, supertrait syntax and inherited bounds, `Option.Some(...)` inference, expression-form `match` positions, unreachable enum-arm detection, nested missing-pattern diagnostics, TLS handshake deadline handling, oversized HTTP request `413` responses, websocket error-kind preservation, compiler-backed LSP cache invalidation, and UNC `file://` URI handling; added failing-first compiler, runtime, CLI, and LSP regressions for those paths; aligned the maintained architecture docs, tutorials, and examples with the fixed surface; and reverified the final tree with `cargo fmt --all`, `cargo test -p aurora-compiler --lib -- --nocapture`, `cargo test -p aurora-compiler --test fixtures -- --nocapture`, `cargo test -p aura --test cli -- --nocapture`, `npm test`, `npm run check`, and direct `aura run` smoke runs for the new examples.
 

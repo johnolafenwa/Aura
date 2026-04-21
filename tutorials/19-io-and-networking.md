@@ -71,7 +71,7 @@ Text and binary one-shot helpers:
 - `fs.read_dir(path)`
 - `fs.remove_file(path)`
 
-The one-shot read helpers cap reads at 1 MiB in both `aura run` and direct-built binaries. Use `fs.open(...)` plus handle reads when you need a larger or incremental file-processing flow.
+The one-shot read helpers cap reads at 64 MiB in both `aura run` and direct-built binaries. Use `fs.open(...)` plus handle reads when you need a larger or incremental file-processing flow.
 
 Scoped file-handle constructors:
 
@@ -430,7 +430,7 @@ See [examples/io/unix_tls_roundtrip.au](../examples/io/unix_tls_roundtrip.au), w
 
 Most maintained socket operations accept optional `timeout=...` arguments. Timeouts are expressed with Aurora `Duration` values such as `100ms`, `1s`, or `2m`.
 
-The socket runtime also threads task-group cancellation into maintained socket waits. If a task group is cancelled while a child is waiting on a maintained network operation, that operation returns an `io.Error` instead of waiting forever.
+The socket runtime also threads task-group cancellation into maintained socket waits. If a task group is cancelled while a child is waiting on a maintained network operation, that operation returns `io.Error.Cancelled` instead of waiting forever.
 
 ## Current Model
 

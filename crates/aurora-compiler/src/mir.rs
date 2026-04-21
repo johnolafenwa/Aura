@@ -2,7 +2,7 @@ use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, Expr, ExprKind, IfStmt, LiteralPatternKind,
     MatchStmt, Param, Pattern, ReceiverKind, Stmt, UnaryOp, WhileStmt,
 };
-use crate::call::{bind_call_arguments, callable_params_from_decl, CallConvention};
+use crate::call::{bind_call_arguments, callable_params_from_decl, BuiltinMember, CallConvention};
 use crate::diag::Span;
 use crate::integer::minimal_signed_type_for_negative_literal;
 use crate::sema::{
@@ -138,25 +138,6 @@ fn place_paths_overlap(left: &str, right: &str) -> bool {
         .take_while(|(lhs, rhs)| lhs == rhs)
         .count();
     shared == left_segments.len() || shared == right_segments.len()
-}
-
-fn rvalue_touches_place(value: &Rvalue, place: &str) -> bool {
-    match value {
-        Rvalue::Call { callee, args } => {
-            matches!(
-                callee,
-                CallTarget::Member {
-                    receiver_place: Some(receiver_place),
-                    ..
-                } if place_paths_overlap(receiver_place, place)
-            ) || args.iter().any(|arg| {
-                arg.writeback_place
-                    .as_ref()
-                    .is_some_and(|writeback_place| place_paths_overlap(writeback_place, place))
-            })
-        }
-        _ => false,
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -869,7 +850,7 @@ enum PatternWriteback {
 
 struct MatchWritebackState {
     root: String,
-    dirty: bool,
+    skip_place: String,
 }
 
 struct LoopLabels {
@@ -1428,6 +1409,10 @@ impl<'a> Lowerer<'a> {
         }
 
         let target = self.render_assign_target(&assign.target);
+        let target_ty = match &assign.target {
+            AssignTarget::Name(name) => self.local_types.get(name).cloned(),
+            _ => None,
+        };
         if let Some(op) = assign.op {
             let value = self.lower_expr(&assign.value);
             self.emit(Instruction::Assign {
@@ -1443,6 +1428,9 @@ impl<'a> Lowerer<'a> {
         }
 
         let value = self.lower_expr(&assign.value);
+        if let (Some(target_ty), Operand::Place(place)) = (target_ty, &value) {
+            self.local_types.entry(place.clone()).or_insert(target_ty);
+        }
         self.emit(Instruction::Assign {
             target,
             value: Rvalue::Use(value),
@@ -1561,34 +1549,35 @@ impl<'a> Lowerer<'a> {
             );
             self.switch_to(arm_block);
             if let Some(writeback_place) = writeback_root.as_ref() {
+                let skip_place = self.new_typed_temp(Type::named("bool"));
                 self.match_writeback_stack.push(MatchWritebackState {
                     root: writeback_place.clone(),
-                    dirty: false,
+                    skip_place: skip_place.clone(),
+                });
+                self.emit(Instruction::Assign {
+                    target: skip_place,
+                    value: Rvalue::Use(Operand::Bool(false)),
                 });
             }
             self.lower_stmts(&arm.body);
-            let skip_writeback = self
-                .match_writeback_stack
-                .last()
-                .is_some_and(|state| state.dirty);
+            let writeback_state = writeback_root
+                .as_ref()
+                .and_then(|_| self.match_writeback_stack.pop());
             if !self.current_terminated() {
-                if let (Some(writeback_place), Some(writeback)) =
-                    (writeback_root.as_ref(), pattern_writeback.as_ref())
-                {
-                    if !skip_writeback {
-                        let updated = self.materialize_pattern_writeback(writeback);
-                        self.emit(Instruction::Assign {
-                            target: writeback_place.clone(),
-                            value: Rvalue::Use(updated),
-                        });
-                    }
+                if let (Some(writeback_place), Some(writeback), Some(state)) = (
+                    writeback_root.as_ref(),
+                    pattern_writeback.as_ref(),
+                    writeback_state.as_ref(),
+                ) {
+                    self.finish_match_arm_with_writeback(
+                        after_block,
+                        writeback_place,
+                        writeback,
+                        &state.skip_place,
+                    );
+                } else {
+                    self.terminate(Terminator::Goto(self.label(after_block)));
                 }
-            }
-            if !self.current_terminated() {
-                self.terminate(Terminator::Goto(self.label(after_block)));
-            }
-            if writeback_root.is_some() {
-                self.match_writeback_stack.pop();
             }
             self.scoped_names.pop();
             next_case_block = next_block;
@@ -2485,9 +2474,14 @@ impl<'a> Lowerer<'a> {
             );
             self.switch_to(arm_block);
             if let Some(writeback_place) = writeback_root.as_ref() {
+                let skip_place = self.new_typed_temp(Type::named("bool"));
                 self.match_writeback_stack.push(MatchWritebackState {
                     root: writeback_place.clone(),
-                    dirty: false,
+                    skip_place: skip_place.clone(),
+                });
+                self.emit(Instruction::Assign {
+                    target: skip_place,
+                    value: Rvalue::Use(Operand::Bool(false)),
                 });
             }
             let value = self.lower_expr(&arm.value);
@@ -2495,28 +2489,24 @@ impl<'a> Lowerer<'a> {
                 target: result.clone(),
                 value: Rvalue::Use(value),
             });
-            let skip_writeback = self
-                .match_writeback_stack
-                .last()
-                .is_some_and(|state| state.dirty);
+            let writeback_state = writeback_root
+                .as_ref()
+                .and_then(|_| self.match_writeback_stack.pop());
             if !self.current_terminated() {
-                if let (Some(writeback_place), Some(writeback)) =
-                    (writeback_root.as_ref(), pattern_writeback.as_ref())
-                {
-                    if !skip_writeback {
-                        let updated = self.materialize_pattern_writeback(writeback);
-                        self.emit(Instruction::Assign {
-                            target: writeback_place.clone(),
-                            value: Rvalue::Use(updated),
-                        });
-                    }
+                if let (Some(writeback_place), Some(writeback), Some(state)) = (
+                    writeback_root.as_ref(),
+                    pattern_writeback.as_ref(),
+                    writeback_state.as_ref(),
+                ) {
+                    self.finish_match_arm_with_writeback(
+                        after_block,
+                        writeback_place,
+                        writeback,
+                        &state.skip_place,
+                    );
+                } else {
+                    self.terminate(Terminator::Goto(self.label(after_block)));
                 }
-            }
-            if !self.current_terminated() {
-                self.terminate(Terminator::Goto(self.label(after_block)));
-            }
-            if writeback_root.is_some() {
-                self.match_writeback_stack.pop();
             }
             self.scoped_names.pop();
             next_case_block = next_block;
@@ -4441,22 +4431,111 @@ impl<'a> Lowerer<'a> {
     }
 
     fn emit(&mut self, instruction: Instruction) {
-        self.mark_match_writeback_dirty(&instruction);
+        let match_writeback_flag = self.match_writeback_flag_for_instruction(&instruction);
         self.blocks[self.current_block]
             .instructions
             .push(instruction);
+        if let Some(skip_place) = match_writeback_flag {
+            self.blocks[self.current_block]
+                .instructions
+                .push(Instruction::Assign {
+                    target: skip_place,
+                    value: Rvalue::Use(Operand::Bool(true)),
+                });
+        }
     }
 
-    fn mark_match_writeback_dirty(&mut self, instruction: &Instruction) {
-        let Some(state) = self.match_writeback_stack.last_mut() else {
-            return;
-        };
+    fn match_writeback_flag_for_instruction(&self, instruction: &Instruction) -> Option<String> {
+        let state = self.match_writeback_stack.last()?;
         let Instruction::Assign { target, value } = instruction else {
-            return;
+            return None;
         };
-        if place_paths_overlap(target, &state.root) || rvalue_touches_place(value, &state.root) {
-            state.dirty = true;
+        if place_paths_overlap(target, &state.root) || self.rvalue_writes_place(value, &state.root)
+        {
+            Some(state.skip_place.clone())
+        } else {
+            None
         }
+    }
+
+    fn rvalue_writes_place(&self, value: &Rvalue, place: &str) -> bool {
+        let Rvalue::Call { callee, args } = value else {
+            return false;
+        };
+        let receiver_writes_place = match callee {
+            CallTarget::Member {
+                object,
+                field,
+                receiver_place: Some(receiver_place),
+            } => {
+                place_paths_overlap(receiver_place, place)
+                    && self.member_call_mutates_receiver(object, field)
+            }
+            _ => false,
+        };
+        receiver_writes_place
+            || args.iter().any(|arg| {
+                arg.writeback_place
+                    .as_ref()
+                    .is_some_and(|writeback_place| place_paths_overlap(writeback_place, place))
+            })
+    }
+
+    fn member_call_mutates_receiver(&self, object: &Operand, field: &str) -> bool {
+        let Some(receiver_type) = self.infer_operand_type(object) else {
+            return false;
+        };
+        if let Type::Named(receiver_name, _) = &receiver_type {
+            if let Some(class) = self.resolve_class_info(receiver_name) {
+                if let Some(method) = class.methods.get(field) {
+                    return method.decl.receiver == Some(ReceiverKind::BorrowMut);
+                }
+            }
+            if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
+                return builtin_member.requires_mutable_receiver();
+            }
+        }
+        self.trait_method_for_receiver(&receiver_type, field)
+            .is_some_and(|(method, _)| method.decl.receiver == Some(ReceiverKind::BorrowMut))
+    }
+
+    fn infer_operand_type(&self, operand: &Operand) -> Option<Type> {
+        match operand {
+            Operand::Place(place) => self.local_types.get(place).cloned(),
+            Operand::Int(_) => Some(Type::named("int32")),
+            Operand::Duration(_) => Some(Type::named("Duration")),
+            Operand::Float(_) => Some(Type::named("float64")),
+            Operand::Bool(_) => Some(Type::named("bool")),
+            Operand::String(_) => Some(Type::named("String")),
+            Operand::Unit => Some(Type::Unit),
+        }
+    }
+
+    fn finish_match_arm_with_writeback(
+        &mut self,
+        after_block: usize,
+        writeback_place: &str,
+        writeback: &PatternWriteback,
+        skip_place: &str,
+    ) {
+        let writeback_block = self.new_block("match_writeback_apply");
+        let skip_block = self.new_block("match_writeback_skip");
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(skip_place.to_string()),
+            then_label: self.label(skip_block),
+            else_label: self.label(writeback_block),
+        });
+
+        self.switch_to(writeback_block);
+        let updated = self.materialize_pattern_writeback(writeback);
+        self.emit(Instruction::Assign {
+            target: writeback_place.to_string(),
+            value: Rvalue::Use(updated),
+        });
+        self.terminate(Terminator::Goto(self.label(after_block)));
+
+        self.switch_to(skip_block);
+        self.terminate(Terminator::Goto(self.label(after_block)));
     }
 
     fn emit_cleanup_range(&mut self, depth: usize, cancel_before_cleanup: bool) {

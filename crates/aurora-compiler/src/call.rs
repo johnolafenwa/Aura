@@ -1760,6 +1760,67 @@ impl BuiltinMember {
             ),
         }
     }
+
+    pub const fn requires_mutable_receiver(self) -> bool {
+        matches!(
+            self,
+            Self::VecPush
+                | Self::VecPop
+                | Self::VecSet
+                | Self::VecRemove
+                | Self::VecSwap
+                | Self::VecExtend
+                | Self::VecInsert
+                | Self::VecClear
+                | Self::VecReverse
+                | Self::MapSet
+                | Self::MapRemove
+                | Self::MapClear
+                | Self::MapExtend
+                | Self::SetInsert
+                | Self::SetRemove
+                | Self::QueuePut
+                | Self::QueueTryPut
+                | Self::QueueClose
+                | Self::FileWriteAll
+                | Self::FileWriteBytes
+                | Self::FileFlush
+                | Self::FileClose
+                | Self::TcpListenerClose
+                | Self::TcpStreamWriteAll
+                | Self::TcpStreamWriteBytes
+                | Self::TcpStreamFlush
+                | Self::TcpStreamShutdownRead
+                | Self::TcpStreamShutdownWrite
+                | Self::TcpStreamShutdownBoth
+                | Self::TcpStreamClose
+                | Self::UdpSocketSendText
+                | Self::UdpSocketSendBytes
+                | Self::UdpSocketClose
+                | Self::HttpListenerClose
+                | Self::HttpExchangeRespondText
+                | Self::HttpExchangeRespondBytes
+                | Self::WebSocketSendText
+                | Self::WebSocketSendBytes
+                | Self::WebSocketClose
+                | Self::UnixListenerClose
+                | Self::UnixStreamWriteAll
+                | Self::UnixStreamClose
+                | Self::TlsListenerClose
+                | Self::TlsStreamWriteAll
+                | Self::TlsStreamClose
+                | Self::ProcessChildKill
+                | Self::ProcessChildTerminate
+                | Self::ProcessChildClose
+                | Self::ProcessPipeWriteAll
+                | Self::ProcessPipeWriteBytes
+                | Self::ProcessPipeFlush
+                | Self::ProcessPipeClose
+                | Self::ProcessSupervisorStart
+                | Self::ProcessSupervisorStop
+                | Self::ProcessSupervisorClose
+        )
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,19 @@
+class Item:
+    value: int32
+
+class Some:
+    value: int32
+
+class Ok:
+    value: int32
+
+class Err:
+    value: int32
+
+def main() -> int32:
+    item = Item(value=1)
+    some = Some(value=2)
+    ok = Ok(value=3)
+    err = Err(value=4)
+    print(item.value + some.value + ok.value + err.value)
+    return 0

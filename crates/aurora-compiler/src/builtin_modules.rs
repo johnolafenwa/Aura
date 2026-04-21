@@ -176,6 +176,7 @@ fn error_enum_info() -> EnumInfo {
         ("InvalidInput", Vec::new()),
         ("InvalidData", Vec::new()),
         ("Closed", Vec::new()),
+        ("Cancelled", Vec::new()),
         (
             "Other",
             vec![EnumPayloadFieldDecl {

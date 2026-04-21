@@ -490,7 +490,7 @@ struct LightweightTaskScheduler {
 // (URL parsing, rustls handshakes, websocket framing). 256 KiB is too small
 // and was causing reproducible EXC_BAD_ACCESS faults on maintained examples.
 const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 1024 * 1024;
-const MAX_READ_ALL_BYTES: usize = 1024 * 1024;
+const MAX_READ_ALL_BYTES: usize = 64 * 1024 * 1024;
 const MAX_UDP_DATAGRAM_BYTES: usize = 65_535;
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 64 << 20;
 const MAX_WEBSOCKET_FRAME_BYTES: usize = 16 << 20;
@@ -2823,15 +2823,24 @@ where
     )
 }
 
+fn read_pem_file_limited(
+    path: &str,
+    label: &str,
+) -> io::Result<io::BufReader<io::Cursor<Vec<u8>>>> {
+    Ok(io::BufReader::new(io::Cursor::new(read_file_limited(
+        path, label,
+    )?)))
+}
+
 fn load_tls_server_config(
     cert_pem_path: &str,
     key_pem_path: &str,
 ) -> io::Result<Arc<ServerConfig>> {
     ensure_rustls_crypto_provider();
-    let mut cert_reader = io::BufReader::new(StdFile::open(cert_pem_path)?);
+    let mut cert_reader = read_pem_file_limited(cert_pem_path, "TLS certificate PEM")?;
     let cert_chain = certs(&mut cert_reader)
         .collect::<std::result::Result<Vec<CertificateDer<'static>>, _>>()?;
-    let mut key_reader = io::BufReader::new(StdFile::open(key_pem_path)?);
+    let mut key_reader = read_pem_file_limited(key_pem_path, "TLS private key PEM")?;
     let Some(private_key) = private_key(&mut key_reader)? else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -2850,7 +2859,7 @@ fn load_tls_root_store(ca_pem_path: Option<&str>) -> io::Result<RootCertStore> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if let Some(ca_pem_path) = ca_pem_path.filter(|path| !path.is_empty()) {
-        let mut reader = io::BufReader::new(StdFile::open(ca_pem_path)?);
+        let mut reader = read_pem_file_limited(ca_pem_path, "TLS CA PEM")?;
         for certificate in certs(&mut reader) {
             let certificate = certificate?;
             roots.add(certificate).map_err(io::Error::other)?;
@@ -2876,6 +2885,7 @@ fn parse_http_response(
 const MAX_HTTP_HEADERS: usize = 64;
 const MAX_HTTP_MESSAGE_BYTES: usize = 1024 * 1024;
 const HTTP_MESSAGE_TOO_LARGE_PREFIX: &str = "HTTP message exceeds the supported size limit";
+const HTTP_HEADERS_TOO_LARGE_PREFIX: &str = "HTTP request exceeded the supported header count";
 
 fn http_message_too_large_error() -> io::Error {
     io::Error::new(
@@ -2890,6 +2900,21 @@ fn http_message_too_large_error() -> io::Error {
 fn is_http_message_too_large_error(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::InvalidData
         && error.to_string().starts_with(HTTP_MESSAGE_TOO_LARGE_PREFIX)
+}
+
+fn http_headers_too_large_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "{} of {} headers",
+            HTTP_HEADERS_TOO_LARGE_PREFIX, MAX_HTTP_HEADERS
+        ),
+    )
+}
+
+fn is_http_headers_too_large_error(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::InvalidData
+        && error.to_string().starts_with(HTTP_HEADERS_TOO_LARGE_PREFIX)
 }
 
 fn http_reason_phrase(status: i32) -> &'static str {
@@ -2914,6 +2939,7 @@ fn http_reason_phrase(status: i32) -> &'static str {
         415 => "Unsupported Media Type",
         426 => "Upgrade Required",
         429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
         501 => "Not Implemented",
         502 => "Bad Gateway",
@@ -2987,11 +3013,12 @@ fn parse_http_request_head(
 ) -> io::Result<Option<(usize, String, String, Vec<(String, String)>, usize)>> {
     let mut raw_headers = [httparse::EMPTY_HEADER; MAX_HTTP_HEADERS];
     let mut request = HttpParseRequest::new(&mut raw_headers);
-    match request.parse(buffer).map_err(|error| {
-        io::Error::new(
+    match request.parse(buffer).map_err(|error| match error {
+        httparse::Error::TooManyHeaders => http_headers_too_large_error(),
+        other => io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("invalid HTTP request: {}", error),
-        )
+            format!("invalid HTTP request: {}", other),
+        ),
     })? {
         HttpParseStatus::Complete(header_len) => {
             let method = request
@@ -3062,6 +3089,10 @@ fn read_http_request_from_stream(
         };
         push_http_chunk(&mut buffer, &chunk)?;
     };
+
+    if header_len.saturating_add(content_length) > MAX_HTTP_MESSAGE_BYTES {
+        return Err(http_message_too_large_error());
+    }
 
     while buffer.len() < header_len.saturating_add(content_length) {
         let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
@@ -3224,23 +3255,27 @@ fn write_http_response_to_stream(
 }
 
 #[cfg(unix)]
-fn websocket_raw_fd(socket: &WebSocketStateKind) -> i32 {
+fn unsupported_websocket_transport_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "unsupported websocket transport",
+    )
+}
+
+#[cfg(unix)]
+fn websocket_raw_fd(socket: &WebSocketStateKind) -> io::Result<i32> {
     match socket {
-        WebSocketStateKind::Plain(socket) => socket.get_ref().as_raw_fd(),
-        WebSocketStateKind::MaybeTls(socket) => match socket.get_ref() {
-            MaybeTlsStream::Plain(stream) => stream.as_raw_fd(),
-            MaybeTlsStream::Rustls(stream) => stream.get_ref().as_raw_fd(),
-            _ => unreachable!("unsupported websocket transport"),
-        },
+        WebSocketStateKind::Plain(socket) => Ok(socket.get_ref().as_raw_fd()),
+        WebSocketStateKind::MaybeTls(socket) => maybe_tls_stream_raw_fd(socket.get_ref()),
     }
 }
 
 #[cfg(unix)]
-fn maybe_tls_stream_raw_fd(stream: &MaybeTlsStream<StdTcpStream>) -> i32 {
+fn maybe_tls_stream_raw_fd(stream: &MaybeTlsStream<StdTcpStream>) -> io::Result<i32> {
     match stream {
-        MaybeTlsStream::Plain(stream) => stream.as_raw_fd(),
-        MaybeTlsStream::Rustls(stream) => stream.get_ref().as_raw_fd(),
-        _ => unreachable!("unsupported websocket transport"),
+        MaybeTlsStream::Plain(stream) => Ok(stream.as_raw_fd()),
+        MaybeTlsStream::Rustls(stream) => Ok(stream.get_ref().as_raw_fd()),
+        _ => Err(unsupported_websocket_transport_error()),
     }
 }
 
@@ -3253,19 +3288,19 @@ fn websocket_error_to_io(error: tungstenite::Error) -> io::Error {
 
 #[cfg(unix)]
 trait WebSocketHandshakeStream {
-    fn raw_fd(&self) -> i32;
+    fn raw_fd(&self) -> io::Result<i32>;
 }
 
 #[cfg(unix)]
 impl WebSocketHandshakeStream for StdTcpStream {
-    fn raw_fd(&self) -> i32 {
-        self.as_raw_fd()
+    fn raw_fd(&self) -> io::Result<i32> {
+        Ok(self.as_raw_fd())
     }
 }
 
 #[cfg(unix)]
 impl WebSocketHandshakeStream for MaybeTlsStream<StdTcpStream> {
-    fn raw_fd(&self) -> i32 {
+    fn raw_fd(&self) -> io::Result<i32> {
         maybe_tls_stream_raw_fd(self)
     }
 }
@@ -3284,7 +3319,7 @@ where
             Ok(result) => return Ok(result),
             Err(tungstenite::handshake::HandshakeError::Interrupted(next_mid)) => {
                 wait_for_fd_event(
-                    next_mid.get_ref().get_ref().raw_fd(),
+                    next_mid.get_ref().get_ref().raw_fd()?,
                     libc::POLLIN | libc::POLLOUT,
                     deadline,
                     None,
@@ -3422,7 +3457,7 @@ fn websocket_read_message(
                 #[cfg(unix)]
                 {
                     wait_for_fd_event(
-                        websocket_raw_fd(socket),
+                        websocket_raw_fd(socket)?,
                         libc::POLLIN | libc::POLLOUT,
                         deadline,
                         None,
@@ -4560,8 +4595,10 @@ impl TcpStreamValue {
                             io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                         ) =>
                     {
-                        if deadline.is_some() && Instant::now() >= deadline.unwrap() {
-                            return Err(timeout_resource_error());
+                        if let Some(deadline) = deadline {
+                            if Instant::now() >= deadline {
+                                return Err(timeout_resource_error());
+                            }
                         }
                         continue;
                     }
@@ -5145,11 +5182,17 @@ impl TlsListenerValue {
             let connection =
                 ServerConnection::new(self.inner.config.clone()).map_err(io::Error::other)?;
             let mut tls_stream = rustls::StreamOwned::new(connection, stream);
-            complete_tls_server_handshake(
+            if let Err(error) = complete_tls_server_handshake(
                 &mut tls_stream,
                 tls_handshake_deadline(deadline),
                 cancellation,
-            )?;
+            ) {
+                if cancellation.is_some_and(CancellationContext::is_cancelled) {
+                    return Err(error);
+                }
+                drop(tls_stream);
+                continue;
+            }
             return Ok(TlsStreamValue {
                 inner: Arc::new(TlsStreamState {
                     stream: Mutex::new(Some(TlsStreamKind::Server(tls_stream))),
@@ -5377,69 +5420,87 @@ impl HttpListenerValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<HttpExchangeValue> {
-        let mut listener = lock_mutex(&self.inner.listener);
-        let Some(listener) = listener.as_mut() else {
-            return Err(closed_resource_error());
-        };
         let deadline = deadline_from_timeout(timeout);
-        #[cfg(unix)]
-        let stream = loop {
-            match listener.accept() {
-                Ok((stream, _)) => break TcpStreamValue::from_std(stream)?,
+        loop {
+            #[cfg(unix)]
+            let stream = {
+                let mut listener = lock_mutex(&self.inner.listener);
+                let Some(listener) = listener.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break TcpStreamValue::from_std(stream)?,
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                            ) =>
+                        {
+                            wait_for_fd_event(
+                                listener.as_raw_fd(),
+                                libc::POLLIN,
+                                deadline,
+                                cancellation,
+                            )?;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+            };
+            #[cfg(not(unix))]
+            let stream = {
+                let mut listener = lock_mutex(&self.inner.listener);
+                let Some(listener) = listener.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                TcpStreamValue::from_std(listener.accept()?.0)?
+            };
+            let request = {
+                let mut raw_stream = lock_mutex(&stream.inner.stream);
+                let Some(raw_stream) = raw_stream.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                read_http_request_from_stream(raw_stream, deadline, cancellation)
+            };
+            let (method, path, headers, body) = match request {
+                Ok(request) => request,
                 Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
+                    if is_http_message_too_large_error(&error)
+                        || is_http_headers_too_large_error(&error) =>
                 {
-                    wait_for_fd_event(listener.as_raw_fd(), libc::POLLIN, deadline, cancellation)?;
+                    let status = if is_http_message_too_large_error(&error) {
+                        413
+                    } else {
+                        431
+                    };
+                    let mut raw_stream = lock_mutex(&stream.inner.stream);
+                    if let Some(raw_stream) = raw_stream.as_mut() {
+                        let _ = write_http_response_to_stream(
+                            raw_stream,
+                            status,
+                            Vec::new(),
+                            b"",
+                            deadline,
+                            cancellation,
+                        );
+                    }
+                    drop(raw_stream);
+                    stream.close();
+                    continue;
                 }
                 Err(error) => return Err(error),
-            }
-        };
-        #[cfg(not(unix))]
-        let stream = TcpStreamValue::from_std(listener.accept()?.0)?;
-        let request = {
-            let mut raw_stream = lock_mutex(&stream.inner.stream);
-            let Some(raw_stream) = raw_stream.as_mut() else {
-                return Err(closed_resource_error());
             };
-            read_http_request_from_stream(raw_stream, deadline, cancellation)
-        };
-        let (method, path, headers, body) = match request {
-            Ok(request) => request,
-            Err(error) if is_http_message_too_large_error(&error) => {
-                let response: io::Result<()> = {
-                    let mut raw_stream = lock_mutex(&stream.inner.stream);
-                    let Some(raw_stream) = raw_stream.as_mut() else {
-                        return Err(closed_resource_error());
-                    };
-                    write_http_response_to_stream(
-                        raw_stream,
-                        413,
-                        Vec::new(),
-                        b"",
-                        deadline,
-                        cancellation,
-                    )?;
-                    let _ = read_all_with_deadline(raw_stream, deadline, cancellation);
-                    Ok(())
-                };
-                stream.close();
-                response?;
-                return Err(error);
-            }
-            Err(error) => return Err(error),
-        };
-        Ok(HttpExchangeValue {
-            inner: Arc::new(HttpExchangeState {
-                stream: Mutex::new(Some(stream)),
-                method,
-                path,
-                headers,
-                body,
-            }),
-        })
+            return Ok(HttpExchangeValue {
+                inner: Arc::new(HttpExchangeState {
+                    stream: Mutex::new(Some(stream)),
+                    method,
+                    path,
+                    headers,
+                    body,
+                }),
+            });
+        }
     }
 
     pub(crate) fn local_addr(&self) -> io::Result<String> {
@@ -5740,7 +5801,12 @@ impl WebSocketValue {
                     Err(tungstenite::Error::WriteBufferFull(returned)) => {
                         message = returned;
                         #[cfg(unix)]
-                        wait_for_fd_event(websocket_raw_fd(socket), libc::POLLOUT, deadline, None)?;
+                        wait_for_fd_event(
+                            websocket_raw_fd(socket)?,
+                            libc::POLLOUT,
+                            deadline,
+                            None,
+                        )?;
                         #[cfg(not(unix))]
                         return Err(io::Error::new(
                             io::ErrorKind::WouldBlock,
@@ -5749,7 +5815,12 @@ impl WebSocketValue {
                     }
                     Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
                         #[cfg(unix)]
-                        wait_for_fd_event(websocket_raw_fd(socket), libc::POLLOUT, deadline, None)?;
+                        wait_for_fd_event(
+                            websocket_raw_fd(socket)?,
+                            libc::POLLOUT,
+                            deadline,
+                            None,
+                        )?;
                         #[cfg(not(unix))]
                         return Err(error);
                     }
@@ -5775,7 +5846,12 @@ impl WebSocketValue {
                     Err(tungstenite::Error::WriteBufferFull(returned)) => {
                         message = returned;
                         #[cfg(unix)]
-                        wait_for_fd_event(websocket_raw_fd(socket), libc::POLLOUT, deadline, None)?;
+                        wait_for_fd_event(
+                            websocket_raw_fd(socket)?,
+                            libc::POLLOUT,
+                            deadline,
+                            None,
+                        )?;
                         #[cfg(not(unix))]
                         return Err(io::Error::new(
                             io::ErrorKind::WouldBlock,
@@ -5784,7 +5860,12 @@ impl WebSocketValue {
                     }
                     Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
                         #[cfg(unix)]
-                        wait_for_fd_event(websocket_raw_fd(socket), libc::POLLOUT, deadline, None)?;
+                        wait_for_fd_event(
+                            websocket_raw_fd(socket)?,
+                            libc::POLLOUT,
+                            deadline,
+                            None,
+                        )?;
                         #[cfg(not(unix))]
                         return Err(error);
                     }
@@ -6423,6 +6504,12 @@ pub(crate) fn io_error(error: io::Error) -> Value {
         io::ErrorKind::NotConnected => ("NotConnected", Vec::new()),
         io::ErrorKind::AddrInUse => ("AddrInUse", Vec::new()),
         io::ErrorKind::AddrNotAvailable => ("AddrNotAvailable", Vec::new()),
+        io::ErrorKind::BrokenPipe if error.to_string() == "resource is closed" => {
+            ("Closed", Vec::new())
+        }
+        io::ErrorKind::Interrupted if error.to_string() == "operation cancelled" => {
+            ("Cancelled", Vec::new())
+        }
         io::ErrorKind::BrokenPipe => ("BrokenPipe", Vec::new()),
         io::ErrorKind::TimedOut => ("TimedOut", Vec::new()),
         io::ErrorKind::WouldBlock => ("WouldBlock", Vec::new()),

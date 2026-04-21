@@ -32,6 +32,13 @@ trait Mapper[T]:
     def map(borrow self, value: T) -> T
 ```
 
+Trait methods and impl methods may also use `Self` in parameter and return positions:
+
+```python
+trait Combine:
+    def combine(borrow self, other: borrow Self) -> Self
+```
+
 Traits may also inherit from other traits:
 
 ```python
@@ -156,6 +163,7 @@ def show[T: Describe](animal: T) -> None:
 See [examples/traits/generic_dispatch_multiple_types.au](../examples/traits/generic_dispatch_multiple_types.au), [examples/traits/generic_trait_bounds.au](../examples/traits/generic_trait_bounds.au), and [examples/traits/specialized_trait_dispatch.au](../examples/traits/specialized_trait_dispatch.au).
 
 See [examples/traits/supertraits.au](../examples/traits/supertraits.au) for a runnable supertrait example.
+See [examples/traits/self_parameters.au](../examples/traits/self_parameters.au) for a runnable `Self`-parameter example.
 
 ## Associated Methods
 
@@ -254,5 +262,6 @@ The implemented trait surface supports:
 - specialized bounds like `T: Mapper[int32]`
 - multiple bounds with `T: A + B`
 - direct trait-method calls on concrete types
+- `Self` in trait and impl method parameter and return positions
 - associated methods without `self`
 - operator traits for `+`, `-`, `*`, `/`, `%`, `<`, `<=`, `>`, `>=`, unary `-`, and `not`
