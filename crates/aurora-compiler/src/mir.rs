@@ -1080,6 +1080,18 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    fn module_enum_type_name(
+        &self,
+        module_path: &str,
+        enum_info: &crate::sema::EnumInfo,
+    ) -> String {
+        let qualified_name = format!("{}.{}", module_path, enum_info.decl.name);
+        match qualified_name.as_str() {
+            "io.Error" | "process.Error" => qualified_name,
+            _ => enum_info.decl.name.clone(),
+        }
+    }
+
     fn find_class_in_modules<'b>(
         modules: &'b BTreeMap<String, ModuleNamespace>,
         name: &str,
@@ -2349,7 +2361,7 @@ impl<'a> Lowerer<'a> {
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
                                 value: Rvalue::EnumVariant {
-                                    enum_name: enum_info.decl.name.clone(),
+                                    enum_name: self.module_enum_type_name(&module_path, &enum_info),
                                     variant_name: field.clone(),
                                     payloads: Vec::new(),
                                 },
@@ -2865,7 +2877,7 @@ impl<'a> Lowerer<'a> {
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
                                 value: Rvalue::EnumVariant {
-                                    enum_name: enum_info.decl.name.clone(),
+                                    enum_name: self.module_enum_type_name(&module_path, &enum_info),
                                     variant_name: field.clone(),
                                     payloads,
                                 },
@@ -3967,6 +3979,17 @@ impl<'a> Lowerer<'a> {
         scrutinee_ty: Option<&Type>,
     ) -> String {
         if let Some(enum_name) = pattern.enum_name.as_deref() {
+            if let Some((module_path, item_name)) = enum_name.rsplit_once('.') {
+                if let Some(namespace) = self.module_namespace(module_path) {
+                    if let Some(enum_info) = namespace
+                        .enums
+                        .get(item_name)
+                        .or_else(|| namespace.all_enums.get(item_name))
+                    {
+                        return self.module_enum_type_name(module_path, enum_info);
+                    }
+                }
+            }
             return self
                 .resolve_enum_info(enum_name)
                 .map(|enum_info| enum_info.decl.name.clone())

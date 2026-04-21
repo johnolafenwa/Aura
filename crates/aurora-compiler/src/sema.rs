@@ -1543,38 +1543,14 @@ fn lower_type_with_self(
     }
 
     if is_builtin_type(type_name) || type_names.contains_key(type_name) {
-        let canonical_name = match type_name {
-            "fs.File"
-            | "process.Child"
-            | "process.Pipe"
-            | "process.Completed"
-            | "process.Supervisor"
-            | "process.ExitStatus"
-            | "process.Wait"
-            | "process.RestartPolicy"
-            | "process.SupervisorEvent"
-            | "process.SupervisorWait"
-            | "process.Stdio"
-            | "process.Error"
-            | "net.TcpStream"
-            | "net.TcpListener"
-            | "net.UdpSocket"
-            | "net.UdpDatagram"
-            | "net.HttpListener"
-            | "net.HttpExchange"
-            | "net.HttpResponse"
-            | "net.WebSocketListener"
-            | "net.WebSocket"
-            | "net.UnixListener"
-            | "net.UnixStream"
-            | "net.TlsListener"
-            | "net.TlsStream"
-            | "io.Error" => type_name.to_string(),
-            _ => type_name
+        let canonical_name = if preserves_qualified_builtin_type_name(type_name) {
+            type_name.to_string()
+        } else {
+            type_name
                 .rsplit_once('.')
                 .map(|(_, leaf)| leaf)
                 .unwrap_or(type_name)
-                .to_string(),
+                .to_string()
         };
         Ok(Type::Named(canonical_name, args))
     } else {
@@ -2181,6 +2157,38 @@ fn is_builtin_type(name: &str) -> bool {
     )
 }
 
+fn preserves_qualified_builtin_type_name(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "fs.File"
+            | "process.Child"
+            | "process.Pipe"
+            | "process.Completed"
+            | "process.Supervisor"
+            | "process.ExitStatus"
+            | "process.Wait"
+            | "process.RestartPolicy"
+            | "process.SupervisorEvent"
+            | "process.SupervisorWait"
+            | "process.Stdio"
+            | "process.Error"
+            | "net.TcpStream"
+            | "net.TcpListener"
+            | "net.UdpSocket"
+            | "net.UdpDatagram"
+            | "net.HttpListener"
+            | "net.HttpExchange"
+            | "net.HttpResponse"
+            | "net.WebSocketListener"
+            | "net.WebSocket"
+            | "net.UnixListener"
+            | "net.UnixStream"
+            | "net.TlsListener"
+            | "net.TlsStream"
+            | "io.Error"
+    )
+}
+
 pub(crate) fn integer_type_bounds(ty: &Type) -> Option<IntegerBounds> {
     integer_type_bounds_impl(ty)
 }
@@ -2287,6 +2295,8 @@ struct LocalBinding {
     passing: ReceiverKind,
     borrow_origin: Option<String>,
     borrow_label: Option<String>,
+    match_borrow_mut_place: Option<String>,
+    stale_match_borrow_mut_place: Option<String>,
     moved: bool,
     moved_fields: BTreeSet<String>,
     frozen_places: BTreeSet<String>,
@@ -2412,6 +2422,8 @@ impl<'a> FunctionChecker<'a> {
                     passing: ReceiverKind::Value,
                     borrow_origin: None,
                     borrow_label: None,
+                    match_borrow_mut_place: None,
+                    stale_match_borrow_mut_place: None,
                     moved: false,
                     moved_fields: BTreeSet::new(),
                     frozen_places: BTreeSet::new(),
@@ -2741,7 +2753,79 @@ impl<'a> FunctionChecker<'a> {
                     .filter_map(|state| state.get(&name))
                     .flat_map(|binding| binding.moved_fields.iter().cloned())
                     .collect();
+                binding.stale_match_borrow_mut_place = branch_states.iter().find_map(|state| {
+                    state
+                        .get(&name)
+                        .and_then(|binding| binding.stale_match_borrow_mut_place.clone())
+                });
             }
+        }
+    }
+
+    fn const_bool_value(&self, expr: &Expr) -> Option<bool> {
+        match &expr.kind {
+            ExprKind::Bool(value) => Some(*value),
+            ExprKind::Group(inner) => self.const_bool_value(inner),
+            ExprKind::Unary {
+                op: UnaryOp::Not,
+                expr: inner,
+            } => self.const_bool_value(inner).map(|value| !value),
+            _ => None,
+        }
+    }
+
+    fn ensure_pattern_binding_not_stale(
+        &self,
+        name: &str,
+        span: crate::diag::Span,
+        binding: &LocalBinding,
+    ) -> Result<()> {
+        if let Some(place) = &binding.stale_match_borrow_mut_place {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "cannot use pattern binding `{}` after reassigning match scrutinee `{}`",
+                    name, place
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn invalidate_match_borrow_mut_bindings_for_place(
+        &self,
+        place: &str,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) {
+        for binding in locals.values_mut() {
+            if binding
+                .match_borrow_mut_place
+                .as_deref()
+                .is_some_and(|binding_place| borrow_places_overlap(binding_place, place))
+            {
+                binding.stale_match_borrow_mut_place = binding.match_borrow_mut_place.clone();
+            }
+        }
+    }
+
+    fn invalidate_match_borrow_mut_bindings_for_borrowed_places(
+        &self,
+        places: &[BorrowedCallPlace],
+        locals: &mut HashMap<String, LocalBinding>,
+    ) {
+        for place in places {
+            if place.passing == ReceiverKind::BorrowMut {
+                self.invalidate_match_borrow_mut_bindings_for_place(&place.path, locals);
+            }
+        }
+    }
+
+    fn module_enum_type_name(&self, module_path: &str, enum_info: &EnumInfo) -> String {
+        let builtin_qualified_name = format!("{}.{}", module_path, enum_info.decl.name);
+        if preserves_qualified_builtin_type_name(&builtin_qualified_name) {
+            builtin_qualified_name
+        } else {
+            enum_info.decl.name.clone()
         }
     }
 
@@ -2918,6 +3002,8 @@ impl<'a> FunctionChecker<'a> {
                     borrow_origin: (param.passing != ReceiverKind::Value)
                         .then(|| param.name.clone()),
                     borrow_label: param.borrow_label.clone(),
+                    match_borrow_mut_place: None,
+                    stale_match_borrow_mut_place: None,
                     moved: false,
                     moved_fields: BTreeSet::new(),
                     frozen_places: BTreeSet::new(),
@@ -3015,6 +3101,8 @@ impl<'a> FunctionChecker<'a> {
                     borrow_origin: (receiver_kind != ReceiverKind::Value)
                         .then(|| "self".to_string()),
                     borrow_label: None,
+                    match_borrow_mut_place: None,
+                    stale_match_borrow_mut_place: None,
                     moved: false,
                     moved_fields: BTreeSet::new(),
                     frozen_places: BTreeSet::new(),
@@ -3040,6 +3128,8 @@ impl<'a> FunctionChecker<'a> {
                     borrow_origin: (param.passing != ReceiverKind::Value)
                         .then(|| param.name.clone()),
                     borrow_label: param.borrow_label.clone(),
+                    match_borrow_mut_place: None,
+                    stale_match_borrow_mut_place: None,
                     moved: false,
                     moved_fields: BTreeSet::new(),
                     frozen_places: BTreeSet::new(),
@@ -3166,6 +3256,8 @@ impl<'a> FunctionChecker<'a> {
                     borrow_origin: (receiver_kind != ReceiverKind::Value)
                         .then(|| "self".to_string()),
                     borrow_label: None,
+                    match_borrow_mut_place: None,
+                    stale_match_borrow_mut_place: None,
                     moved: false,
                     moved_fields: BTreeSet::new(),
                     frozen_places: BTreeSet::new(),
@@ -3191,6 +3283,8 @@ impl<'a> FunctionChecker<'a> {
                     borrow_origin: (param.passing != ReceiverKind::Value)
                         .then(|| param.name.clone()),
                     borrow_label: param.borrow_label.clone(),
+                    match_borrow_mut_place: None,
+                    stale_match_borrow_mut_place: None,
                     moved: false,
                     moved_fields: BTreeSet::new(),
                     frozen_places: BTreeSet::new(),
@@ -3302,6 +3396,7 @@ impl<'a> FunctionChecker<'a> {
 
                     let mut all_return = true;
                     let mut branch_states = Vec::new();
+                    let mut later_branches_reachable = true;
                     for branch in &if_stmt.branches {
                         let mut branch_locals = locals.clone();
                         let branch_flow = self.check_block(
@@ -3311,10 +3406,19 @@ impl<'a> FunctionChecker<'a> {
                             loop_depth,
                             allow_return,
                         )?;
-                        if branch_flow != BlockFlow::AlwaysReturns {
+                        let branch_reachable = later_branches_reachable
+                            && self.const_bool_value(&branch.condition) != Some(false);
+                        if branch_reachable && branch_flow != BlockFlow::AlwaysReturns {
                             all_return = false;
                         }
-                        branch_states.push(branch_locals);
+                        if branch_reachable {
+                            branch_states.push(branch_locals);
+                        }
+                        if later_branches_reachable
+                            && self.const_bool_value(&branch.condition) == Some(true)
+                        {
+                            later_branches_reachable = false;
+                        }
                     }
 
                     let mut else_state = None;
@@ -3327,11 +3431,13 @@ impl<'a> FunctionChecker<'a> {
                             loop_depth,
                             allow_return,
                         )?;
-                        if else_flow != BlockFlow::AlwaysReturns {
+                        if later_branches_reachable && else_flow != BlockFlow::AlwaysReturns {
                             all_return = false;
                         }
-                        else_state = Some(else_locals);
-                    } else {
+                        if later_branches_reachable {
+                            else_state = Some(else_locals);
+                        }
+                    } else if later_branches_reachable {
                         all_return = false;
                     }
 
@@ -3350,7 +3456,9 @@ impl<'a> FunctionChecker<'a> {
                             .iter()
                             .map(|state| state as &HashMap<String, LocalBinding>)
                             .collect::<Vec<_>>();
-                        states.push(&baseline_locals);
+                        if later_branches_reachable {
+                            states.push(&baseline_locals);
+                        }
                         self.merge_control_flow_moves(locals, &states);
                     }
 
@@ -3498,6 +3606,8 @@ impl<'a> FunctionChecker<'a> {
                             passing: binding_passing,
                             borrow_origin: None,
                             borrow_label: None,
+                            match_borrow_mut_place: None,
+                            stale_match_borrow_mut_place: None,
                             moved: false,
                             moved_fields: BTreeSet::new(),
                             frozen_places: BTreeSet::new(),
@@ -3540,8 +3650,15 @@ impl<'a> FunctionChecker<'a> {
                         loop_depth + 1,
                         allow_return,
                     )?;
-                    self.reject_loop_carried_moves(locals, &body_locals, "while", while_stmt.span)?;
-                    self.merge_control_flow_moves(locals, &[&body_locals]);
+                    if self.const_bool_value(&while_stmt.condition) != Some(false) {
+                        self.reject_loop_carried_moves(
+                            locals,
+                            &body_locals,
+                            "while",
+                            while_stmt.span,
+                        )?;
+                        self.merge_control_flow_moves(locals, &[&body_locals]);
+                    }
                 }
                 Stmt::Break(break_stmt) => {
                     if loop_depth == 0 {
@@ -3598,6 +3715,8 @@ impl<'a> FunctionChecker<'a> {
                 passing: ReceiverKind::Value,
                 borrow_origin: None,
                 borrow_label: None,
+                match_borrow_mut_place: None,
+                stale_match_borrow_mut_place: None,
                 moved: false,
                 moved_fields: BTreeSet::new(),
                 frozen_places: BTreeSet::new(),
@@ -3759,6 +3878,7 @@ impl<'a> FunctionChecker<'a> {
                 if let Some(binding) = locals.get_mut(&binding_name) {
                     Self::clear_moved_field_path(binding, &path);
                 }
+                self.invalidate_match_borrow_mut_bindings_for_place(&path, locals);
             }
             return Ok(());
         }
@@ -3780,14 +3900,18 @@ impl<'a> FunctionChecker<'a> {
                 )
             })
             .transpose()?;
-        let existing_ty = locals.get(binding_name).map(|binding| binding.ty.clone());
+        let existing_binding = locals.get(binding_name).cloned();
+        if let Some(existing) = &existing_binding {
+            self.ensure_pattern_binding_not_stale(binding_name, assign.span, existing)?;
+        }
+        let existing_ty = existing_binding.as_ref().map(|binding| binding.ty.clone());
         let value_ty = self.type_of_expr_hint(
             &assign.value,
             locals,
             existing_ty.as_ref().or(annotation_ty.as_ref()),
         )?;
 
-        if let Some(existing) = locals.get(binding_name).cloned() {
+        if let Some(existing) = existing_binding {
             if assign.mutable {
                 return Err(Diagnostic::at(
                     assign.span,
@@ -3859,6 +3983,7 @@ impl<'a> FunctionChecker<'a> {
                 existing.moved = false;
                 existing.moved_fields.clear();
             }
+            self.invalidate_match_borrow_mut_bindings_for_place(binding_name, locals);
             return Ok(());
         }
 
@@ -3896,6 +4021,8 @@ impl<'a> FunctionChecker<'a> {
                         passing: ReceiverKind::Value,
                         borrow_origin: None,
                         borrow_label: None,
+                        match_borrow_mut_place: None,
+                        stale_match_borrow_mut_place: None,
                         moved: false,
                         moved_fields: BTreeSet::new(),
                         frozen_places: BTreeSet::new(),
@@ -3919,6 +4046,8 @@ impl<'a> FunctionChecker<'a> {
                     passing: borrowed.passing,
                     borrow_origin: Some(borrowed.origin),
                     borrow_label: borrowed.borrow_label,
+                    match_borrow_mut_place: None,
+                    stale_match_borrow_mut_place: None,
                     moved: false,
                     moved_fields: BTreeSet::new(),
                     frozen_places: BTreeSet::new(),
@@ -3938,6 +4067,8 @@ impl<'a> FunctionChecker<'a> {
                 passing: ReceiverKind::Value,
                 borrow_origin: None,
                 borrow_label: None,
+                match_borrow_mut_place: None,
+                stale_match_borrow_mut_place: None,
                 moved: false,
                 moved_fields: BTreeSet::new(),
                 frozen_places: BTreeSet::new(),
@@ -3972,6 +4103,7 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Name(name) => {
                 if let Some(binding) = locals.get(name) {
+                    self.ensure_pattern_binding_not_stale(name, expr.span, binding)?;
                     if binding.moved {
                         return Err(Diagnostic::at(
                             expr.span,
@@ -4379,7 +4511,8 @@ impl<'a> FunctionChecker<'a> {
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
                     let left_ty = self.type_of_expr(left, locals)?;
                     let locals_after_left = locals.clone();
-                    let right_ty = self.type_of_expr(right, locals)?;
+                    let mut right_locals = locals_after_left.clone();
+                    let right_ty = self.type_of_expr(right, &mut right_locals)?;
                     let borrow_locals = locals_before.clone();
                     let mut left_borrowed_places = Vec::new();
                     self.collect_expr_borrowed_places(
@@ -4395,7 +4528,8 @@ impl<'a> FunctionChecker<'a> {
                         &borrow_locals,
                         &mut right_borrowed_places,
                     )?;
-                    let right_moved_places = self.newly_moved_places(&locals_after_left, locals);
+                    let right_moved_places =
+                        self.newly_moved_places(&locals_after_left, &right_locals);
                     self.reject_expr_borrow_move_overlap(
                         &left_borrowed_places,
                         &right_moved_places,
@@ -4406,6 +4540,14 @@ impl<'a> FunctionChecker<'a> {
                         &left_moved_places,
                         expr.span,
                     )?;
+                    let right_reachable = match op {
+                        BinaryOp::And => self.const_bool_value(left) != Some(false),
+                        BinaryOp::Or => self.const_bool_value(left) != Some(true),
+                        _ => true,
+                    };
+                    if right_reachable {
+                        *locals = right_locals;
+                    }
                     return self.type_of_binary(expr.span, *op, left_ty, right_ty);
                 }
                 let operand_expected = match op {
@@ -4542,7 +4684,9 @@ impl<'a> FunctionChecker<'a> {
                                     ),
                                 ));
                             }
-                            return Ok(Type::named(enum_info.decl.name.clone()));
+                            return Ok(Type::named(
+                                self.module_enum_type_name(&module_path, enum_info),
+                            ));
                         }
                     }
                 }
@@ -5718,7 +5862,9 @@ impl<'a> FunctionChecker<'a> {
                                     self.consume_value_expr(&argument.value, locals)?;
                                 }
                             }
-                            return Ok(Type::named(enum_info.decl.name.clone()));
+                            return Ok(Type::named(
+                                self.module_enum_type_name(&module_path, enum_info),
+                            ));
                         }
                     }
                 }
@@ -8772,6 +8918,7 @@ impl<'a> FunctionChecker<'a> {
                                 &scrutinee_ty,
                                 &mut arm_locals,
                                 match_stmt.borrow_mode,
+                                active_match_borrow.as_deref(),
                             )?;
                         }
                     }
@@ -8983,6 +9130,7 @@ impl<'a> FunctionChecker<'a> {
         expected_ty: &Type,
         locals: &mut HashMap<String, LocalBinding>,
         borrow_mode: Option<ReceiverKind>,
+        match_borrow_mut_place: Option<&str>,
     ) -> Result<()> {
         match pattern {
             Pattern::Wildcard(_) => Ok(()),
@@ -9010,6 +9158,8 @@ impl<'a> FunctionChecker<'a> {
                         passing: borrow_mode.unwrap_or(ReceiverKind::Value),
                         borrow_origin: None,
                         borrow_label: None,
+                        match_borrow_mut_place: match_borrow_mut_place.map(str::to_string),
+                        stale_match_borrow_mut_place: None,
                         moved: false,
                         moved_fields: BTreeSet::new(),
                         frozen_places: BTreeSet::new(),
@@ -9091,7 +9241,13 @@ impl<'a> FunctionChecker<'a> {
                 for (subpattern, payload_ty) in
                     variant_pattern.subpatterns.iter().zip(payloads.iter())
                 {
-                    self.bind_pattern_locals(subpattern, payload_ty, locals, borrow_mode)?;
+                    self.bind_pattern_locals(
+                        subpattern,
+                        payload_ty,
+                        locals,
+                        borrow_mode,
+                        match_borrow_mut_place,
+                    )?;
                 }
                 Ok(())
             }
@@ -9259,6 +9415,7 @@ impl<'a> FunctionChecker<'a> {
                                 &scrutinee_ty,
                                 &mut arm_locals,
                                 borrow_mode,
+                                active_match_borrow.as_deref(),
                             )?;
                         }
                     }
@@ -9566,7 +9723,10 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
                 if let Some(enum_info) = namespace.enums.get(field) {
-                    return Ok(Type::Named(enum_info.decl.name.clone(), Vec::new()));
+                    return Ok(Type::Named(
+                        self.module_enum_type_name(path, enum_info),
+                        Vec::new(),
+                    ));
                 }
                 return Err(Diagnostic::at(
                     span,
@@ -11004,6 +11164,17 @@ impl<'a> FunctionChecker<'a> {
     }
 
     fn canonical_enum_name(&self, name: &str) -> String {
+        if let Some((module_path, item_name)) = name.rsplit_once('.') {
+            if let Some(namespace) = self.module_namespace(module_path) {
+                if let Some(enum_info) = namespace
+                    .enums
+                    .get(item_name)
+                    .or_else(|| namespace.all_enums.get(item_name))
+                {
+                    return self.module_enum_type_name(module_path, enum_info);
+                }
+            }
+        }
         self.resolve_enum_info(name)
             .map(|enum_info| enum_info.decl.name.clone())
             .unwrap_or_else(|| {
@@ -11630,6 +11801,8 @@ impl<'a> FunctionChecker<'a> {
                 }
             }
         }
+
+        self.invalidate_match_borrow_mut_bindings_for_borrowed_places(&borrowed_places, locals);
 
         Ok(substitute_type(return_type, &substitutions))
     }

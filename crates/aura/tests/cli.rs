@@ -1805,6 +1805,88 @@ def main() -> int32:
 }
 
 #[test]
+fn check_rejects_match_borrow_mut_binding_use_after_scrutinee_reassign() {
+    let source = "enum Opt:\n    Some(int32)\n    None\n\ndef main() -> int32:\n    mut x: Opt = Opt.Some(10)\n    match borrow mut x:\n        case Some(v):\n            x = Opt.Some(v)\n            v = v + 1\n        case None:\n            pass\n    return 0\n";
+    let (_temp, source_path) = write_temp_source("aurora-stale-match-binding", source);
+
+    let output = Command::new(aura_bin())
+        .arg("check")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura check");
+
+    assert!(
+        !output.status.success(),
+        "stale match-borrow bindings should be rejected"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("cannot use pattern binding `v` after reassigning match scrutinee `x`"),
+        "expected stale-binding diagnostic, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn check_accepts_module_qualified_builtin_io_error_variants() {
+    let source =
+        "import io\n\ndef main() -> int32:\n    err: io.Error = io.Error.NotFound\n    return 0\n";
+    let (_temp, source_path) = write_temp_source("aurora-qualified-io-error", source);
+
+    let output = Command::new(aura_bin())
+        .arg("check")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura check");
+
+    assert!(
+        output.status.success(),
+        "qualified io.Error variants should type-check successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_and_direct_backend_preserve_builtin_module_enum_identity() {
+    let source = r#"import fs
+import io
+
+def main() -> int32:
+    print(io.Error.NotFound)
+    err: io.Error = io.Error.NotFound
+    match err:
+        case io.Error.NotFound:
+            print(1)
+        case _:
+            print(2)
+
+    other: io.Error = io.Error.Other(message="miss")
+    print(other)
+    match other:
+        case io.Error.Other(message):
+            print(message)
+        case _:
+            print("nope")
+
+    match fs.read_to_string("/definitely/not/here"):
+        case Result.Ok(_):
+            print(3)
+        case Result.Err(error):
+            if error == io.Error.NotFound:
+                print(4)
+            else:
+                print(5)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-builtin-module-enum-identity",
+        source,
+        "io.Error.NotFound\n1\nio.Error.Other(miss)\nmiss\n4\n",
+    );
+}
+
+#[test]
 fn build_with_direct_backend_supports_tcp_echo_example() {
     assert_direct_backend_example_runs("examples/io/tcp_echo.au", "tcp-echo-direct", "echo:ping\n");
 }

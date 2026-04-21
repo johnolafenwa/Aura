@@ -298,6 +298,8 @@ fn local_binding(
         passing,
         borrow_origin: None,
         borrow_label: None,
+        match_borrow_mut_place: None,
+        stale_match_borrow_mut_place: None,
         moved,
         moved_fields: moved_fields
             .iter()
@@ -3958,6 +3960,8 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             passing: ReceiverKind::Value,
             borrow_origin: None,
             borrow_label: None,
+            match_borrow_mut_place: None,
+            stale_match_borrow_mut_place: None,
             moved: false,
             moved_fields: BTreeSet::new(),
             frozen_places: BTreeSet::new(),
@@ -3983,6 +3987,8 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             passing: ReceiverKind::Borrow,
             borrow_origin: Some("borrowed".to_string()),
             borrow_label: None,
+            match_borrow_mut_place: None,
+            stale_match_borrow_mut_place: None,
             moved: false,
             moved_fields: BTreeSet::new(),
             frozen_places: BTreeSet::new(),
@@ -4005,6 +4011,8 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             passing: ReceiverKind::Value,
             borrow_origin: None,
             borrow_label: None,
+            match_borrow_mut_place: None,
+            stale_match_borrow_mut_place: None,
             moved: true,
             moved_fields: BTreeSet::new(),
             frozen_places: BTreeSet::new(),
@@ -6073,6 +6081,14 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
 }
 
 #[test]
+fn module_qualified_builtin_io_error_variants_type_check() {
+    crate::check_source(
+        "import io\n\ndef main() -> int32:\n    err: io.Error = io.Error.NotFound\n    return 0\n",
+    )
+    .expect("qualified builtin io.Error variants should type-check");
+}
+
+#[test]
 fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
     let span = Span::new(1, 1);
     let type_names = BTreeMap::new();
@@ -6322,6 +6338,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 passing: ReceiverKind::BorrowMut,
                 borrow_origin: Some("counter".to_string()),
                 borrow_label: None,
+                match_borrow_mut_place: None,
+                stale_match_borrow_mut_place: None,
                 moved: false,
                 moved_fields: BTreeSet::from(["value.inner".to_string()]),
                 frozen_places: BTreeSet::new(),
@@ -6337,6 +6355,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 passing: ReceiverKind::Borrow,
                 borrow_origin: Some("borrowed".to_string()),
                 borrow_label: None,
+                match_borrow_mut_place: None,
+                stale_match_borrow_mut_place: None,
                 moved: false,
                 moved_fields: BTreeSet::new(),
                 frozen_places: BTreeSet::new(),
@@ -6352,6 +6372,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 passing: ReceiverKind::Borrow,
                 borrow_origin: Some("self".to_string()),
                 borrow_label: None,
+                match_borrow_mut_place: None,
+                stale_match_borrow_mut_place: None,
                 moved: false,
                 moved_fields: BTreeSet::new(),
                 frozen_places: BTreeSet::new(),
@@ -6430,6 +6452,8 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             passing: ReceiverKind::Value,
             borrow_origin: None,
             borrow_label: None,
+            match_borrow_mut_place: None,
+            stale_match_borrow_mut_place: None,
             moved: false,
             moved_fields: BTreeSet::new(),
             frozen_places: BTreeSet::new(),

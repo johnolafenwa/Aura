@@ -418,6 +418,11 @@ struct TlsListenerState {
     config: Arc<ServerConfig>,
 }
 
+struct PendingTlsServerHandshake {
+    stream: rustls::StreamOwned<ServerConnection, StdTcpStream>,
+    deadline: Option<Instant>,
+}
+
 enum TlsStreamKind {
     Client(rustls::StreamOwned<ClientConnection, StdTcpStream>),
     Server(rustls::StreamOwned<ServerConnection, StdTcpStream>),
@@ -2402,6 +2407,89 @@ fn wait_for_fd_event(
     }
 }
 
+#[cfg(unix)]
+fn wait_for_tls_listener_progress(
+    listener_fd: i32,
+    pending_empty: bool,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<()> {
+    if pending_empty {
+        wait_for_fd_event(listener_fd, libc::POLLIN, deadline, cancellation)
+    } else {
+        let slice = next_wait_slice(deadline, cancellation)?
+            .unwrap_or_else(|| StdDuration::from_millis(50));
+        let wait_deadline = Instant::now().checked_add(slice);
+        match wait_for_fd_event(listener_fd, libc::POLLIN, wait_deadline, cancellation) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+#[cfg_attr(unix, allow(dead_code))]
+fn non_unix_tls_listener_wait_timeout(
+    pending_empty: bool,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<Option<StdDuration>> {
+    if pending_empty && cancellation.is_none() {
+        match deadline {
+            Some(deadline) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    Err(timeout_resource_error())
+                } else {
+                    Ok(Some(deadline.saturating_duration_since(now)))
+                }
+            }
+            None => Ok(None),
+        }
+    } else {
+        next_wait_slice(deadline, cancellation)
+    }
+}
+
+#[cfg(not(unix))]
+fn poll_tls_listener_readable(
+    listener: StdTcpListener,
+    timeout: Option<StdDuration>,
+) -> io::Result<bool> {
+    let mut poll = mio::Poll::new()?;
+    let mut events = mio::Events::with_capacity(1);
+    let mut source = mio::net::TcpListener::from_std(listener);
+    poll.registry()
+        .register(&mut source, mio::Token(0), mio::Interest::READABLE)?;
+    loop {
+        match poll.poll(&mut events, timeout) {
+            Ok(()) => return Ok(!events.is_empty()),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn wait_for_tls_listener_progress(
+    listener: &StdTcpListener,
+    pending_empty: bool,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<()> {
+    let wait_timeout = non_unix_tls_listener_wait_timeout(pending_empty, deadline, cancellation)?;
+    let listener = listener.try_clone()?;
+    let readable = run_blocking_io(
+        move || poll_tls_listener_readable(listener, wait_timeout),
+        cancellation,
+    )?;
+    if readable {
+        return Ok(());
+    }
+    check_deadline_and_cancellation(deadline, cancellation)?;
+    Ok(())
+}
+
 pub(crate) fn io_decode_utf8(bytes: &[u8]) -> io::Result<String> {
     String::from_utf8(bytes.to_vec()).map_err(|error| {
         io::Error::new(
@@ -2915,6 +3003,14 @@ fn http_headers_too_large_error() -> io::Error {
 fn is_http_headers_too_large_error(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::InvalidData
         && error.to_string().starts_with(HTTP_HEADERS_TOO_LARGE_PREFIX)
+}
+
+fn is_http_bad_request_error(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof
+    ) && !is_http_message_too_large_error(error)
+        && !is_http_headers_too_large_error(error)
 }
 
 fn http_reason_phrase(status: i32) -> &'static str {
@@ -5133,7 +5229,6 @@ impl UnixStreamValue {
 impl TlsListenerValue {
     pub(crate) fn bind(address: &str, cert_pem_path: &str, key_pem_path: &str) -> io::Result<Self> {
         let listener = StdTcpListener::bind(address)?;
-        #[cfg(unix)]
         listener.set_nonblocking(true)?;
         Ok(Self {
             inner: Arc::new(TlsListenerState {
@@ -5149,55 +5244,112 @@ impl TlsListenerValue {
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<TlsStreamValue> {
         let deadline = deadline_from_timeout(timeout);
+        let mut pending = VecDeque::new();
         loop {
-            let mut wait_fd = None;
-            let accepted = {
+            #[cfg(unix)]
+            let listener_fd = {
                 let mut listener = lock_mutex(&self.inner.listener);
                 let Some(listener) = listener.as_mut() else {
                     return Err(closed_resource_error());
                 };
-                match listener.accept() {
-                    Ok((stream, _)) => Ok(Some(stream)),
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                        ) =>
-                    {
-                        wait_fd = Some(listener.as_raw_fd());
-                        Ok(None)
+                let listener_fd = listener.as_raw_fd();
+                loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            stream.set_nonblocking(true)?;
+                            let connection = ServerConnection::new(self.inner.config.clone())
+                                .map_err(io::Error::other)?;
+                            pending.push_back(PendingTlsServerHandshake {
+                                stream: rustls::StreamOwned::new(connection, stream),
+                                deadline: tls_handshake_deadline(deadline),
+                            });
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                            ) =>
+                        {
+                            break;
+                        }
+                        Err(error) => return Err(error),
                     }
-                    Err(error) => Err(error),
                 }
-            }?;
-            if let Some(fd) = wait_fd {
-                wait_for_fd_event(fd, libc::POLLIN, deadline, cancellation)?;
-                continue;
-            }
-            let Some(stream) = accepted else {
-                continue;
+                listener_fd
             };
-            #[cfg(unix)]
-            stream.set_nonblocking(true)?;
-            let connection =
-                ServerConnection::new(self.inner.config.clone()).map_err(io::Error::other)?;
-            let mut tls_stream = rustls::StreamOwned::new(connection, stream);
-            if let Err(error) = complete_tls_server_handshake(
-                &mut tls_stream,
-                tls_handshake_deadline(deadline),
-                cancellation,
-            ) {
-                if cancellation.is_some_and(CancellationContext::is_cancelled) {
-                    return Err(error);
+            #[cfg(not(unix))]
+            let wait_listener = {
+                let mut listener = lock_mutex(&self.inner.listener);
+                let Some(listener) = listener.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                let wait_listener = listener.try_clone()?;
+                loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            stream.set_nonblocking(true)?;
+                            let connection = ServerConnection::new(self.inner.config.clone())
+                                .map_err(io::Error::other)?;
+                            pending.push_back(PendingTlsServerHandshake {
+                                stream: rustls::StreamOwned::new(connection, stream),
+                                deadline: tls_handshake_deadline(deadline),
+                            });
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                            ) =>
+                        {
+                            break;
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
-                drop(tls_stream);
-                continue;
+                wait_listener
+            };
+
+            let pending_count = pending.len();
+            for _ in 0..pending_count {
+                let Some(mut handshake) = pending.pop_front() else {
+                    break;
+                };
+                match advance_tls_server_handshake(
+                    &mut handshake.stream,
+                    handshake.deadline,
+                    cancellation,
+                ) {
+                    Ok(true) => {
+                        finalize_tls_server_stream_for_runtime(&mut handshake.stream)?;
+                        return Ok(TlsStreamValue {
+                            inner: Arc::new(TlsStreamState {
+                                stream: Mutex::new(Some(TlsStreamKind::Server(handshake.stream))),
+                            }),
+                        });
+                    }
+                    Ok(false) => pending.push_back(handshake),
+                    Err(error) => {
+                        if cancellation.is_some_and(CancellationContext::is_cancelled) {
+                            return Err(error);
+                        }
+                    }
+                }
             }
-            return Ok(TlsStreamValue {
-                inner: Arc::new(TlsStreamState {
-                    stream: Mutex::new(Some(TlsStreamKind::Server(tls_stream))),
-                }),
-            });
+
+            #[cfg(unix)]
+            wait_for_tls_listener_progress(
+                listener_fd,
+                pending.is_empty(),
+                deadline,
+                cancellation,
+            )?;
+            #[cfg(not(unix))]
+            wait_for_tls_listener_progress(
+                &wait_listener,
+                pending.is_empty(),
+                deadline,
+                cancellation,
+            )?;
         }
     }
 
@@ -5241,6 +5393,7 @@ fn complete_tls_client_handshake(
     Ok(())
 }
 
+#[cfg_attr(unix, allow(dead_code))]
 fn complete_tls_server_handshake(
     stream: &mut rustls::StreamOwned<ServerConnection, StdTcpStream>,
     deadline: Option<Instant>,
@@ -5264,6 +5417,30 @@ fn complete_tls_server_handshake(
             Err(error) => return Err(error),
         }
     }
+    Ok(())
+}
+
+fn advance_tls_server_handshake(
+    stream: &mut rustls::StreamOwned<ServerConnection, StdTcpStream>,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<bool> {
+    while stream.conn.is_handshaking() {
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        match stream.conn.complete_io(&mut stream.sock) {
+            Ok(_) => {}
+            Err(error) if is_retryable_network_error(&error) => return Ok(false),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(true)
+}
+
+fn finalize_tls_server_stream_for_runtime(
+    _stream: &mut rustls::StreamOwned<ServerConnection, StdTcpStream>,
+) -> io::Result<()> {
+    #[cfg(not(unix))]
+    _stream.sock.set_nonblocking(false)?;
     Ok(())
 }
 
@@ -5479,6 +5656,22 @@ impl HttpListenerValue {
                         let _ = write_http_response_to_stream(
                             raw_stream,
                             status,
+                            Vec::new(),
+                            b"",
+                            deadline,
+                            cancellation,
+                        );
+                    }
+                    drop(raw_stream);
+                    stream.close();
+                    continue;
+                }
+                Err(error) if is_http_bad_request_error(&error) => {
+                    let mut raw_stream = lock_mutex(&stream.inner.stream);
+                    if let Some(raw_stream) = raw_stream.as_mut() {
+                        let _ = write_http_response_to_stream(
+                            raw_stream,
+                            400,
                             Vec::new(),
                             b"",
                             deadline,

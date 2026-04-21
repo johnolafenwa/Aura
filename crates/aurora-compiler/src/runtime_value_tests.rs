@@ -1,12 +1,12 @@
 use super::{
-    cast_numeric_value, create_dir_once, io_decode_utf8, io_error, lock_mutex, option_none,
-    option_some, remove_file_checked, render_float, result_err, result_ok, run_blocking_io,
-    run_lightweight_root_task, send_error_cancelled, send_error_closed,
-    sleep_with_runtime_scheduler, spawn_lightweight_task, wait_for_runtime_scheduler,
-    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpListenerValue,
-    HttpResponseValue, MapValue, ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue,
-    RangeValue, SetValue, TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue,
-    TryRecvResult, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
+    cast_numeric_value, create_dir_once, io_decode_utf8, io_error, lock_mutex,
+    non_unix_tls_listener_wait_timeout, option_none, option_some, remove_file_checked,
+    render_float, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
+    send_error_cancelled, send_error_closed, sleep_with_runtime_scheduler, spawn_lightweight_task,
+    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpListenerValue, HttpResponseValue, MapValue, ProcessRestartPolicy, ProcessStdioConfig,
+    ProcessSupervisorValue, RangeValue, SetValue, TaskGroupValue, TaskValue, TcpListenerValue,
+    TcpStreamValue, TryRecvResult, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
 };
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
@@ -303,6 +303,41 @@ fn channel_and_task_helpers_tolerate_poisoned_locks() {
             super::TaskExecutionResult::Cancelled => panic!("task should not be cancelled"),
         },
         Value::Int(IntegerValue::from_signed(17))
+    );
+}
+
+#[test]
+fn non_unix_tls_listener_wait_timeout_blocks_when_no_handshakes_are_pending() {
+    assert_eq!(
+        non_unix_tls_listener_wait_timeout(true, None, None)
+            .expect("idle non-Unix TLS wait should not fail"),
+        None
+    );
+}
+
+#[test]
+fn non_unix_tls_listener_wait_timeout_uses_full_deadline_when_queue_is_empty() {
+    let deadline = Instant::now() + StdDuration::from_millis(200);
+    let wait = non_unix_tls_listener_wait_timeout(true, Some(deadline), None)
+        .expect("deadline-based non-Unix TLS wait should not fail")
+        .expect("deadline-based wait should produce a timeout");
+    assert!(
+        wait > StdDuration::from_millis(100),
+        "idle wait should use the remaining deadline instead of a fixed slice, got {:?}",
+        wait
+    );
+}
+
+#[test]
+fn non_unix_tls_listener_wait_timeout_keeps_short_slices_when_handshakes_are_pending() {
+    let deadline = Instant::now() + StdDuration::from_millis(200);
+    let wait = non_unix_tls_listener_wait_timeout(false, Some(deadline), None)
+        .expect("pending-handshake non-Unix TLS wait should not fail")
+        .expect("pending-handshake wait should produce a slice");
+    assert!(
+        wait <= StdDuration::from_millis(50),
+        "pending handshakes should still advance on short slices, got {:?}",
+        wait
     );
 }
 
@@ -1168,6 +1203,66 @@ fn http_listener_replies_with_431_for_too_many_headers_and_continues_accepting()
         .expect("too-many-headers server thread should join");
 }
 
+#[test]
+fn http_listener_replies_with_400_for_malformed_requests_and_continues_accepting() {
+    let listener =
+        HttpListenerValue::bind("127.0.0.1:0").expect("http listener bind should succeed");
+    let address = listener
+        .local_addr()
+        .expect("http listener local addr should succeed");
+    let server = listener.clone();
+    let server_thread = thread::spawn(move || {
+        let exchange = server
+            .accept(
+                Some(StdDuration::from_secs(2)),
+                Some(&CancellationContext::default()),
+            )
+            .expect("server should skip the malformed request and accept the next client");
+        assert_eq!(exchange.method(), "GET");
+        assert_eq!(exchange.path(), "/ok");
+        exchange
+            .respond_text(200, "ok", Vec::new())
+            .expect("server should reply to the valid request");
+    });
+
+    let mut client =
+        std::net::TcpStream::connect(&address).expect("http client should connect to listener");
+    client
+        .write_all(b"GE T /oops HTTP/1.1\r\nHost: malformed\r\n\r\n")
+        .expect("malformed request should write");
+    client
+        .shutdown(std::net::Shutdown::Write)
+        .expect("client shutdown should succeed");
+
+    let mut response = String::new();
+    client
+        .read_to_string(&mut response)
+        .expect("client should receive an HTTP response");
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+        "expected a 400 response, got: {response:?}"
+    );
+
+    let response = HttpResponseValue::request_text(
+        "GET",
+        &format!("http://{}/ok", address),
+        "",
+        Vec::new(),
+        Some(StdDuration::from_secs(2)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("listener should continue accepting after a malformed request");
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.text().expect("response body should decode"),
+        "ok".to_string()
+    );
+
+    server_thread
+        .join()
+        .expect("malformed-request server thread should join");
+}
+
 #[cfg(unix)]
 #[test]
 fn http_resources_use_nonblocking_descriptors_internally() {
@@ -1559,6 +1654,105 @@ fn tls_listener_accept_skips_timed_out_handshakes_and_accepts_the_next_peer() {
     server_thread
         .join()
         .expect("tls slowloris server thread should join");
+}
+
+#[cfg(unix)]
+#[test]
+fn tls_listener_accept_is_not_linearly_delayed_by_multiple_stalled_peers() {
+    let temp = TempDir::new("aurora-runtime-tls-multi-slowloris");
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = temp.path().join("cert.pem");
+    let key_path = temp.path().join("key.pem");
+    fs::write(&cert_path, certificate.cert.pem()).expect("write cert");
+    fs::write(&key_path, certificate.key_pair.serialize_pem()).expect("write key");
+
+    let listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        cert_path.to_str().expect("valid cert path"),
+        key_path.to_str().expect("valid key path"),
+    )
+    .expect("tls listener bind should succeed");
+    let address = listener
+        .local_addr()
+        .expect("tls listener addr should succeed");
+
+    let server = listener.clone();
+    let server_thread = thread::spawn(move || {
+        let stream = server
+            .accept(
+                Some(StdDuration::from_secs(25)),
+                Some(&CancellationContext::default()),
+            )
+            .expect("tls listener should accept the legitimate peer without linear delay");
+        let line = stream
+            .read_line(
+                Some(StdDuration::from_secs(2)),
+                Some(&CancellationContext::default()),
+            )
+            .expect("tls read_line should succeed");
+        assert_eq!(line.as_deref(), Some("ready"));
+        stream
+            .write_all(
+                "ok",
+                Some(StdDuration::from_secs(2)),
+                Some(&CancellationContext::default()),
+            )
+            .expect("tls write_all should succeed");
+    });
+
+    let stalled_a = {
+        let address = address.clone();
+        thread::spawn(move || {
+            let _client =
+                std::net::TcpStream::connect(address).expect("plain tcp client should connect");
+            thread::sleep(StdDuration::from_secs(11));
+        })
+    };
+    let stalled_b = {
+        let address = address.clone();
+        thread::spawn(move || {
+            let _client =
+                std::net::TcpStream::connect(address).expect("plain tcp client should connect");
+            thread::sleep(StdDuration::from_secs(11));
+        })
+    };
+
+    thread::sleep(StdDuration::from_millis(100));
+    let start = Instant::now();
+    let tls_client = TlsStreamValue::connect(
+        &address,
+        "localhost",
+        Some(cert_path.to_str().expect("cert path should be valid UTF-8")),
+        Some(StdDuration::from_secs(25)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("tls connect should succeed after the stalled peers are queued");
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < StdDuration::from_secs(5),
+        "legitimate tls clients should not be delayed linearly by stalled peers; elapsed {:?}",
+        elapsed
+    );
+    tls_client
+        .write_all(
+            "ready\n",
+            Some(StdDuration::from_secs(2)),
+            Some(&CancellationContext::default()),
+        )
+        .expect("tls client write_all should succeed");
+    let reply = tls_client
+        .read_exact(
+            2,
+            Some(StdDuration::from_secs(2)),
+            Some(&CancellationContext::default()),
+        )
+        .expect("tls client read_exact should succeed");
+    assert_eq!(reply, b"ok");
+
+    stalled_a.join().expect("stalled tls client should join");
+    stalled_b.join().expect("stalled tls client should join");
+    server_thread.join().expect("tls server thread should join");
 }
 
 #[test]
