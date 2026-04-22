@@ -22,19 +22,19 @@ use crate::runtime_value::{
     process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
     process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
     queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
-    render_float, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
-    send_error_cancelled, send_error_closed, send_error_full, send_error_timed_out,
-    sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation, task_result_cancelled,
-    task_result_error, task_result_ready, task_result_timed_out, wait_all_cancelled,
-    wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
-    wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler, CancellationContext,
-    ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue,
-    LightweightTaskFailureSignal, MapValue, ProcessChildValue, ProcessChildWaitStatus,
-    ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskCancelledSignal,
-    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
-    TlsStreamValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
-    WebSocketListenerValue, WebSocketValue,
+    recv_for_task_group_iteration, render_float, result_err, result_ok, run_blocking_io,
+    run_lightweight_root_task, send_error_cancelled, send_error_closed, send_error_full,
+    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
+    task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
+    task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
+    wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
+    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, LightweightTaskFailureSignal, MapValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
+    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RuntimeSchedulerWakeReason,
+    SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
+    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, UdpSocketValue,
+    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::Type;
 
@@ -2886,17 +2886,14 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_in_task_group(
         let channel_value = unsafe { value_ref(channel) };
         let task_group_value = unsafe { value_ref(task_group) };
         match (channel_value, task_group_value) {
-            (Value::Channel(channel), Value::TaskGroup(group)) => {
-                let cancellation = current_cancellation().merged(&group.child_cancellation());
-                boxed_value(
-                    match channel.recv_result_with_cancellation(None, Some(&cancellation)) {
-                        RecvValueResult::Value(value) => queue_receive_item(value),
-                        RecvValueResult::Closed => queue_receive_closed(),
-                        RecvValueResult::TimedOut => queue_receive_timed_out(),
-                        RecvValueResult::Cancelled => queue_receive_cancelled(),
-                    },
-                )
-            }
+            (Value::Channel(channel), Value::TaskGroup(group)) => boxed_value(
+                match recv_for_task_group_iteration(&channel, &current_cancellation(), &group) {
+                    RecvValueResult::Value(value) => queue_receive_item(value),
+                    RecvValueResult::Closed => queue_receive_closed(),
+                    RecvValueResult::TimedOut => queue_receive_timed_out(),
+                    RecvValueResult::Cancelled => queue_receive_cancelled(),
+                },
+            ),
             (Value::Channel(_), other) => runtime_error(format!(
                 "expected `TaskGroup`, found `{}`",
                 value_type_name(other)
@@ -2944,29 +2941,32 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_timeout_value(
 pub extern "C-unwind" fn aurora_direct_channel_recv_or_none(
     channel: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(channel) } {
-        Value::Channel(channel) => boxed_value(
-            match if poll_cancellation(&current_cancellation()) {
-                RecvValueResult::Cancelled
-            } else {
-                match channel.try_recv() {
-                    crate::runtime_value::TryRecvResult::Value(value) => {
-                        RecvValueResult::Value(value)
+    task_runtime_boundary(|| {
+        let cancellation = current_cancellation();
+        match unsafe { value_ref(channel) } {
+            Value::Channel(channel) => boxed_value(
+                match if cancellation.is_cancelled() {
+                    RecvValueResult::Cancelled
+                } else {
+                    match channel.try_recv() {
+                        crate::runtime_value::TryRecvResult::Value(value) => {
+                            RecvValueResult::Value(value)
+                        }
+                        crate::runtime_value::TryRecvResult::Closed => RecvValueResult::Closed,
+                        crate::runtime_value::TryRecvResult::Empty => RecvValueResult::TimedOut,
                     }
-                    crate::runtime_value::TryRecvResult::Closed => RecvValueResult::Closed,
-                    crate::runtime_value::TryRecvResult::Empty => RecvValueResult::TimedOut,
-                }
-            } {
-                RecvValueResult::Value(value) => option_some(value),
-                RecvValueResult::Closed
-                | RecvValueResult::TimedOut
-                | RecvValueResult::Cancelled => option_none(),
-            },
-        ),
-        other => runtime_error(format!(
-            "expected `Queue`, found `{}`",
-            value_type_name(other)
-        )),
+                } {
+                    RecvValueResult::Value(value) => option_some(value),
+                    RecvValueResult::Closed
+                    | RecvValueResult::TimedOut
+                    | RecvValueResult::Cancelled => option_none(),
+                },
+            ),
+            other => runtime_error(format!(
+                "expected `Queue`, found `{}`",
+                value_type_name(other)
+            )),
+        }
     })
 }
 
@@ -3007,10 +3007,11 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_or_value(
     default: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let default = unsafe { take_value(default) };
+        let cancellation = current_cancellation();
+        let default = unsafe { value_ref(default) }.clone();
         match unsafe { value_ref(channel) } {
             Value::Channel(channel) => boxed_value(
-                match if poll_cancellation(&current_cancellation()) {
+                match if cancellation.is_cancelled() {
                     RecvValueResult::Cancelled
                 } else {
                     match channel.try_recv() {
@@ -3042,7 +3043,7 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_or_value_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let default = unsafe { take_value(default) };
+        let default = unsafe { value_ref(default) }.clone();
         let millis = extract_duration_millis(unsafe { value_ref(duration) });
         let millis = match u64::try_from(millis) {
             Ok(millis) => millis,
@@ -3139,29 +3140,34 @@ pub extern "C-unwind" fn aurora_direct_task_join_timeout_value(
 pub extern "C-unwind" fn aurora_direct_task_join_or_none(
     task: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(task) } {
-        Value::Task(task) => match if poll_cancellation(&current_cancellation()) {
-            TaskWaitStatus::Cancelled
-        } else if let Some(result) = task.completed_result_observed() {
-            match result {
-                crate::runtime_value::TaskExecutionResult::Ready(result) => {
-                    TaskWaitStatus::Ready(result)
+    task_runtime_boundary(|| {
+        let cancellation = current_cancellation();
+        match unsafe { value_ref(task) } {
+            Value::Task(task) => match if cancellation.is_cancelled() {
+                TaskWaitStatus::Cancelled
+            } else if let Some(result) = task.completed_result_observed() {
+                match result {
+                    crate::runtime_value::TaskExecutionResult::Ready(result) => {
+                        TaskWaitStatus::Ready(result)
+                    }
+                    crate::runtime_value::TaskExecutionResult::Cancelled => {
+                        TaskWaitStatus::Cancelled
+                    }
                 }
-                crate::runtime_value::TaskExecutionResult::Cancelled => TaskWaitStatus::Cancelled,
-            }
-        } else {
-            TaskWaitStatus::TimedOut
-        } {
-            TaskWaitStatus::Ready(result) => match result {
-                Ok(value) => boxed_value(option_some(value)),
-                Err(_) => boxed_value(option_none()),
+            } else {
+                TaskWaitStatus::TimedOut
+            } {
+                TaskWaitStatus::Ready(result) => match result {
+                    Ok(value) => boxed_value(option_some(value)),
+                    Err(_) => boxed_value(option_none()),
+                },
+                TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(option_none()),
             },
-            TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(option_none()),
-        },
-        other => runtime_error(format!(
-            "expected `Task`, found `{}`",
-            value_type_name(other)
-        )),
+            other => runtime_error(format!(
+                "expected `Task`, found `{}`",
+                value_type_name(other)
+            )),
+        }
     })
 }
 
@@ -3201,9 +3207,10 @@ pub extern "C-unwind" fn aurora_direct_task_join_or_value(
     default: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let default = unsafe { take_value(default) };
+        let cancellation = current_cancellation();
+        let default = unsafe { value_ref(default) }.clone();
         match unsafe { value_ref(task) } {
-            Value::Task(task) => match if poll_cancellation(&current_cancellation()) {
+            Value::Task(task) => match if cancellation.is_cancelled() {
                 TaskWaitStatus::Cancelled
             } else if let Some(result) = task.completed_result_observed() {
                 match result {
@@ -3238,7 +3245,7 @@ pub extern "C-unwind" fn aurora_direct_task_join_or_value_timeout_value(
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let default = unsafe { take_value(default) };
+        let default = unsafe { value_ref(default) }.clone();
         let millis = extract_duration_millis(unsafe { value_ref(duration) });
         let millis = match u64::try_from(millis) {
             Ok(millis) => millis,
@@ -3454,21 +3461,8 @@ pub extern "C-unwind" fn aurora_direct_task_group_close(
             let tasks = group.drain_tasks();
             let cancellation = current_cancellation();
             let mut cancel_group = cancel_before != 0;
-            if !cancel_group {
-                for task in &tasks {
-                    match task.wait_result_with_cancellation(
-                        Some(StdDuration::from_millis(1)),
-                        Some(&cancellation),
-                    ) {
-                        TaskWaitStatus::Ready(_) | TaskWaitStatus::Cancelled => {}
-                        TaskWaitStatus::TimedOut => {
-                            if task.waits_without_deadline() {
-                                cancel_group = true;
-                                break;
-                            }
-                        }
-                    }
-                }
+            if !cancel_group && task_group_cleanup_should_cancel(&tasks, &cancellation) {
+                cancel_group = true;
             }
             if cancel_group {
                 group.cancel();

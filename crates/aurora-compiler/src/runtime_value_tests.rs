@@ -1,12 +1,14 @@
 use super::{
     cast_numeric_value, create_dir_once, io_decode_utf8, io_error, lock_mutex,
-    non_unix_tls_listener_wait_timeout, option_none, option_some, remove_file_checked,
-    render_float, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
-    send_error_cancelled, send_error_closed, sleep_with_runtime_scheduler, spawn_lightweight_task,
-    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpListenerValue, HttpResponseValue, MapValue, ProcessRestartPolicy, ProcessStdioConfig,
-    ProcessSupervisorValue, RangeValue, SetValue, TaskGroupValue, TaskValue, TcpListenerValue,
-    TcpStreamValue, TryRecvResult, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
+    non_unix_tls_listener_wait_timeout, option_none, option_some, recv_for_task_group_iteration,
+    remove_file_checked, render_float, result_err, result_ok, run_blocking_io,
+    run_lightweight_root_task, send_error_cancelled, send_error_closed,
+    sleep_with_runtime_scheduler, spawn_lightweight_task, spawn_lightweight_task_with_cancellation,
+    task_group_cleanup_should_cancel, wait_for_runtime_scheduler, CancellationContext,
+    ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, MapValue,
+    ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, RecvValueResult,
+    SetValue, TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue, TryRecvResult,
+    UdpSocketValue, Value, VecValue, WebSocketListenerValue,
 };
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
@@ -391,6 +393,48 @@ fn runtime_scheduler_wakes_select_wait_on_cancellation() {
         "scheduler wait should wake promptly when cancelled; elapsed {:?}",
         start.elapsed()
     );
+}
+
+#[test]
+fn queue_iteration_wait_wakes_for_unobserved_task_group_failure() {
+    let group = TaskGroupValue::new(&CancellationContext::default());
+    let task = TaskValue::from_handle(thread::spawn(|| Err(Diagnostic::new("boom"))));
+    group.register_task(task);
+    thread::sleep(StdDuration::from_millis(20));
+
+    assert_eq!(
+        recv_for_task_group_iteration(
+            &ChannelValue::new(),
+            &CancellationContext::default(),
+            &group
+        ),
+        RecvValueResult::Cancelled
+    );
+}
+
+#[test]
+fn task_group_cleanup_probe_detects_unbounded_waits_after_fresh_spawns() {
+    let root_result = run_lightweight_root_task(|| {
+        let group = TaskGroupValue::new(&CancellationContext::default());
+        let channel = ChannelValue::new();
+        let child_cancellation = group.child_cancellation();
+        let child_channel = channel.clone();
+        let waiting =
+            spawn_lightweight_task_with_cancellation(child_cancellation.clone(), move || {
+                let _ =
+                    child_channel.recv_result_with_cancellation(None, Some(&child_cancellation));
+                Ok(Value::Unit)
+            })?;
+        group.register_task(waiting);
+
+        let tasks = group.drain_tasks();
+        Ok(Value::Bool(task_group_cleanup_should_cancel(
+            &tasks,
+            &CancellationContext::default(),
+        )))
+    });
+
+    assert_eq!(root_result.unwrap(), Value::Bool(true));
 }
 
 #[test]

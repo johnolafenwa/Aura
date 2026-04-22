@@ -22,16 +22,17 @@ use crate::runtime_value::{
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, read_file_limited, result_err, result_ok,
-    run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
-    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
-    task_result_cancelled, task_result_error, task_result_ready, task_result_timed_out,
-    wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled,
-    wait_any_error, wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
-    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, ProcessChildValue,
-    ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue, ProcessRestartPolicy,
-    ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RunOutput,
+    queue_receive_item, queue_receive_timed_out, read_file_limited, recv_for_task_group_iteration,
+    result_err, result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled,
+    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
+    spawn_lightweight_task, task_group_cleanup_should_cancel, task_result_cancelled,
+    task_result_error, task_result_ready, task_result_timed_out, wait_all_cancelled,
+    wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
+    wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler, CancellationContext,
+    ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue, HttpListenerValue,
+    HttpResponseValue, InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus,
+    ProcessCompletedValue, ProcessPipeValue, ProcessRestartPolicy, ProcessSupervisorValue,
+    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RunOutput,
     RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue, TaskValue,
     TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
     UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
@@ -2388,9 +2389,8 @@ impl MirRuntime {
                         task_group.render()
                     )));
                 };
-                let cancellation = self.cancellation.merged(&group.child_cancellation());
                 Ok(
-                    match channel.recv_result_with_cancellation(None, Some(&cancellation)) {
+                    match recv_for_task_group_iteration(&channel, &self.cancellation, &group) {
                         RecvValueResult::Value(value) => queue_receive_item(value),
                         RecvValueResult::Closed => queue_receive_closed(),
                         RecvValueResult::TimedOut => queue_receive_timed_out(),
@@ -2405,7 +2405,7 @@ impl MirRuntime {
                     expect_optional_timeout(Some(&bound[0].value), "get_or_none(timeout=...)")?;
                 Ok(
                     match if args.is_empty() {
-                        if poll_cancellation(&self.cancellation) {
+                        if self.cancellation.is_cancelled() {
                             RecvValueResult::Cancelled
                         } else {
                             match channel.try_recv() {
@@ -2442,7 +2442,7 @@ impl MirRuntime {
                     expect_optional_timeout(Some(&bound[1].value), "get_or(timeout=...)")?;
                 Ok(
                     match if args.len() == 1 && args[0].name.as_deref() != Some("timeout") {
-                        if poll_cancellation(&self.cancellation) {
+                        if self.cancellation.is_cancelled() {
                             RecvValueResult::Cancelled
                         } else {
                             match channel.try_recv() {
@@ -3243,7 +3243,7 @@ impl MirRuntime {
                     expect_optional_timeout(Some(&bound[0].value), "result_or_none(timeout=...)")?;
                 Ok(
                     match if args.is_empty() {
-                        if poll_cancellation(&self.cancellation) {
+                        if self.cancellation.is_cancelled() {
                             TaskWaitStatus::Cancelled
                         } else if let Some(result) = task.completed_result_observed() {
                             TaskWaitStatus::Ready(match result {
@@ -3280,7 +3280,7 @@ impl MirRuntime {
                     expect_optional_timeout(Some(&bound[1].value), "result_or(timeout=...)")?;
                 Ok(
                     match if args.len() == 1 && args[0].name.as_deref() != Some("timeout") {
-                        if poll_cancellation(&self.cancellation) {
+                        if self.cancellation.is_cancelled() {
                             TaskWaitStatus::Cancelled
                         } else if let Some(result) = task.completed_result_observed() {
                             match result {
@@ -5065,21 +5065,8 @@ impl MirRuntime {
     ) -> Result<()> {
         let tasks = group.drain_tasks();
         let mut cancel_group = cancel_before_cleanup;
-        if !cancel_group {
-            for task in &tasks {
-                match task.wait_result_with_cancellation(
-                    Some(StdDuration::from_millis(1)),
-                    Some(&self.cancellation),
-                ) {
-                    TaskWaitStatus::Ready(_) | TaskWaitStatus::Cancelled => {}
-                    TaskWaitStatus::TimedOut => {
-                        if task.waits_without_deadline() {
-                            cancel_group = true;
-                            break;
-                        }
-                    }
-                }
-            }
+        if !cancel_group && task_group_cleanup_should_cancel(&tasks, &self.cancellation) {
+            cancel_group = true;
         }
         if cancel_group {
             group.cancel();

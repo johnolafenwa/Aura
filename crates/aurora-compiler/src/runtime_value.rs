@@ -261,11 +261,13 @@ struct TaskState {
     ready: Condvar,
     lightweight: bool,
     observed_failure: AtomicBool,
+    group_failure_wake_flags: Mutex<Vec<Arc<AtomicBool>>>,
 }
 
 struct TaskGroupState {
     tasks: Mutex<Vec<TaskValue>>,
     cancel_flag: Arc<AtomicBool>,
+    failure_wake_flag: Arc<AtomicBool>,
     parent_flags: Vec<Arc<AtomicBool>>,
 }
 
@@ -506,6 +508,8 @@ const MAX_WEBSOCKET_FRAME_BYTES: usize = 16 << 20;
 const MAX_WEBSOCKET_WRITE_BUFFER_BYTES: usize = 16 << 20;
 const DEFAULT_TLS_HANDSHAKE_TIMEOUT: StdDuration = StdDuration::from_secs(10);
 const MIN_SUPERVISOR_RESTART_BACKOFF: StdDuration = StdDuration::from_millis(10);
+const TASK_GROUP_CLEANUP_PROBE_TIMEOUT: StdDuration = StdDuration::from_millis(1);
+const TASK_GROUP_CLEANUP_SETTLE_TIMEOUT: StdDuration = StdDuration::from_millis(10);
 
 #[derive(Clone)]
 struct RuntimeSchedulerRegistration {
@@ -1512,6 +1516,7 @@ impl LightweightTaskScheduler {
             ready: Condvar::new(),
             lightweight: true,
             observed_failure: AtomicBool::new(false),
+            group_failure_wake_flags: Mutex::new(Vec::new()),
         });
         let context = Box::new(LightweightTaskContext {
             scheduler: self as *mut _,
@@ -1559,6 +1564,7 @@ impl LightweightTaskScheduler {
             task_state.ready.notify_all();
             waiters
         };
+        notify_group_failure_wake_flags(task_state, &result);
         for waiter in waiters {
             self.waiting.remove(&waiter);
             self.ready
@@ -1575,8 +1581,12 @@ impl LightweightTaskScheduler {
         let _guard = enter_lightweight_task_context(&record.context);
         match record.coroutine.resume(reason) {
             CoroutineResult::Yield(TaskYield::Wait(wait)) => {
-                self.waiting.insert(task_id, wait);
                 self.tasks.insert(task_id, record);
+                if let Some(reason) = wait.ready_reason(false) {
+                    self.ready.push_back((task_id, reason));
+                } else {
+                    self.waiting.insert(task_id, wait);
+                }
             }
             CoroutineResult::Yield(TaskYield::Park) => {
                 self.tasks.insert(task_id, record);
@@ -1751,6 +1761,20 @@ where
     };
     let scheduler = unsafe { &mut *scheduler };
     scheduler.spawn_task(None, entry)
+}
+
+fn notify_group_failure_wake_flags(task_state: &TaskState, result: &TaskExecutionResult) {
+    if !matches!(result, TaskExecutionResult::Ready(Err(_))) {
+        return;
+    }
+    let flags = lock_mutex(&task_state.group_failure_wake_flags).clone();
+    if flags.is_empty() {
+        return;
+    }
+    for flag in flags {
+        flag.store(true, Ordering::SeqCst);
+    }
+    runtime_scheduler().notify();
 }
 
 pub(crate) fn spawn_lightweight_task_with_cancellation<F>(
@@ -6212,6 +6236,7 @@ impl TaskGroupValue {
             inner: Arc::new(TaskGroupState {
                 tasks: Mutex::new(Vec::new()),
                 cancel_flag: Arc::new(AtomicBool::new(false)),
+                failure_wake_flag: Arc::new(AtomicBool::new(false)),
                 parent_flags: parent.flags.clone(),
             }),
         }
@@ -6223,15 +6248,41 @@ impl TaskGroupValue {
         CancellationContext { flags }
     }
 
+    pub(crate) fn queue_iteration_signal(&self) -> CancellationContext {
+        CancellationContext {
+            flags: vec![
+                self.inner.cancel_flag.clone(),
+                self.inner.failure_wake_flag.clone(),
+            ],
+        }
+    }
+
     // Invariant: every task must be registered before its worker thread is spawned so a later
     // drain sees the complete task set.
     pub(crate) fn register_task(&self, task: TaskValue) {
+        task.register_group_failure_wake_flag(self.inner.failure_wake_flag.clone());
         lock_mutex(&self.inner.tasks).push(task);
     }
 
     pub(crate) fn cancel(&self) {
         self.inner.cancel_flag.store(true, Ordering::SeqCst);
         runtime_scheduler().notify();
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.inner.cancel_flag.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn has_unobserved_error(&self) -> bool {
+        lock_mutex(&self.inner.tasks)
+            .iter()
+            .any(|task| task.unobserved_error().is_some())
+    }
+
+    pub(crate) fn clear_failure_wake_if_no_unobserved_error(&self) {
+        if !self.has_unobserved_error() {
+            self.inner.failure_wake_flag.store(false, Ordering::SeqCst);
+        }
     }
 
     // Invariant: callers drain only after they have finished registering tasks for the group.
@@ -6242,6 +6293,18 @@ impl TaskGroupValue {
 }
 
 impl TaskValue {
+    fn register_group_failure_wake_flag(&self, flag: Arc<AtomicBool>) {
+        let mut flags = lock_mutex(&self.inner.group_failure_wake_flags);
+        if !flags.iter().any(|existing| Arc::ptr_eq(existing, &flag)) {
+            flags.push(flag.clone());
+        }
+        drop(flags);
+        if self.unobserved_error().is_some() {
+            flag.store(true, Ordering::SeqCst);
+            runtime_scheduler().notify();
+        }
+    }
+
     fn observe_result(&self, result: &TaskExecutionResult) {
         if matches!(result, TaskExecutionResult::Ready(Err(_))) {
             self.inner.observed_failure.store(true, Ordering::SeqCst);
@@ -6273,6 +6336,7 @@ impl TaskValue {
             ready: Condvar::new(),
             lightweight: false,
             observed_failure: AtomicBool::new(false),
+            group_failure_wake_flags: Mutex::new(Vec::new()),
         });
         let state = inner.clone();
         thread::spawn(move || {
@@ -6281,7 +6345,9 @@ impl TaskValue {
                 Err(_) => TaskExecutionResult::Ready(Err(Diagnostic::new("spawned task panicked"))),
             };
             let mut task_state = lock_mutex(&state.handle);
-            *task_state = TaskHandle::Completed(result);
+            *task_state = TaskHandle::Completed(result.clone());
+            drop(task_state);
+            notify_group_failure_wake_flags(&state, &result);
             state.ready.notify_all();
             runtime_scheduler().notify();
         });
@@ -6406,6 +6472,63 @@ pub(crate) fn option_some(value: Value) -> Value {
         variant_name: "Some".to_string(),
         payloads: vec![value],
     })
+}
+
+pub(crate) fn recv_for_task_group_iteration(
+    channel: &ChannelValue,
+    cancellation: &CancellationContext,
+    group: &TaskGroupValue,
+) -> RecvValueResult {
+    loop {
+        if group.has_unobserved_error() {
+            return RecvValueResult::Cancelled;
+        }
+        let wait_cancellation = cancellation.merged(&group.queue_iteration_signal());
+        match channel.recv_result_with_cancellation(None, Some(&wait_cancellation)) {
+            RecvValueResult::Cancelled => {
+                if cancellation.is_cancelled()
+                    || group.is_cancelled()
+                    || group.has_unobserved_error()
+                {
+                    return RecvValueResult::Cancelled;
+                }
+                group.clear_failure_wake_if_no_unobserved_error();
+            }
+            other => return other,
+        }
+    }
+}
+
+pub(crate) fn task_group_cleanup_should_cancel(
+    tasks: &[TaskValue],
+    cancellation: &CancellationContext,
+) -> bool {
+    let settle_deadline = Instant::now()
+        .checked_add(TASK_GROUP_CLEANUP_SETTLE_TIMEOUT)
+        .unwrap_or_else(Instant::now);
+    loop {
+        let mut saw_incomplete_task = false;
+        for task in tasks {
+            match task.wait_result_with_cancellation(
+                Some(TASK_GROUP_CLEANUP_PROBE_TIMEOUT),
+                Some(cancellation),
+            ) {
+                TaskWaitStatus::Ready(_) | TaskWaitStatus::Cancelled => {}
+                TaskWaitStatus::TimedOut => {
+                    if task.waits_without_deadline() {
+                        return true;
+                    }
+                    if task.completed_result().is_none() {
+                        saw_incomplete_task = true;
+                    }
+                }
+            }
+        }
+
+        if !saw_incomplete_task || Instant::now() >= settle_deadline {
+            return false;
+        }
+    }
 }
 
 pub(crate) fn option_none() -> Value {

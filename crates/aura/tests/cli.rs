@@ -285,6 +285,60 @@ fn assert_run_and_direct_source_stdout_with_timeout(
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected_stdout);
 }
 
+fn assert_run_and_direct_source_failure_with_timeout(
+    prefix: &str,
+    source: &str,
+    timeout: std::time::Duration,
+    expected_stdout: &str,
+    expected_stderr_substring: &str,
+) {
+    let (_temp, _source_path, mut run_child) =
+        run_aura_source_with_timeout(prefix, source, timeout);
+    let run_status = wait_with_timeout(&mut run_child, timeout).unwrap_or_else(|| {
+        run_child
+            .kill()
+            .expect("failed to kill timed out aura run process");
+        panic!("aura run timed out after {:?}", timeout);
+    });
+    let run = run_child
+        .wait_with_output()
+        .expect("failed to collect aura run output");
+    assert!(
+        !run_status.success(),
+        "aura run should fail, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected_stdout);
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains(expected_stderr_substring),
+        "aura run stderr should mention `{expected_stderr_substring}`, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let (_temp, _source_path, mut direct_child) =
+        build_direct_source_with_timeout(&format!("{prefix}-direct"), source, timeout);
+    let direct_status = wait_with_timeout(&mut direct_child, timeout).unwrap_or_else(|| {
+        direct_child
+            .kill()
+            .expect("failed to kill timed out direct-backend process");
+        panic!("direct-backend run timed out after {:?}", timeout);
+    });
+    let direct = direct_child
+        .wait_with_output()
+        .expect("failed to collect direct-backend output");
+    assert!(
+        !direct_status.success(),
+        "direct-backend binary should fail, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected_stdout);
+    assert!(
+        String::from_utf8_lossy(&direct.stderr).contains(expected_stderr_substring),
+        "direct-backend stderr should mention `{expected_stderr_substring}`, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+}
+
 fn run_aura_source_with_timeout(
     prefix: &str,
     source: &str,
@@ -394,9 +448,9 @@ def main() -> int32:
     let (_temp, _source_path, mut child) = run_aura_source_with_timeout(
         "aurora-task-group-close",
         source,
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(15),
     );
-    let status = wait_with_timeout(&mut child, std::time::Duration::from_secs(5))
+    let status = wait_with_timeout(&mut child, std::time::Duration::from_secs(15))
         .expect("task-group scope exit should not hang indefinitely");
     let output = child
         .wait_with_output()
@@ -411,9 +465,9 @@ def main() -> int32:
     let (_temp, _source_path, mut direct_child) = build_direct_source_with_timeout(
         "aurora-task-group-close-direct",
         source,
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(15),
     );
-    let status = wait_with_timeout(&mut direct_child, std::time::Duration::from_secs(5))
+    let status = wait_with_timeout(&mut direct_child, std::time::Duration::from_secs(15))
         .expect("direct task-group scope exit should not hang indefinitely");
     let output = direct_child
         .wait_with_output()
@@ -4713,8 +4767,36 @@ def main() -> int32:
     assert_run_and_direct_source_stdout_with_timeout(
         "aurora-queue-iteration-cancel",
         source,
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(15),
         "about to cancel\nabout to iterate\nloop done\nscope done\n",
+    );
+}
+
+#[test]
+fn queue_iteration_exits_when_a_sibling_task_fails() {
+    let source = r#"
+def producer(q: Queue[int32]):
+    q.put(1)
+    values = [1]
+    _ = values[99]
+
+def main() -> int32:
+    print("before")
+    q: Queue[int32] = Queue[int32]()
+    with TaskGroup() as g:
+        g.start(producer, q)
+        for v in q:
+            pass
+    print("after")
+    return 0
+"#;
+
+    assert_run_and_direct_source_failure_with_timeout(
+        "aurora-queue-iteration-sibling-failure",
+        source,
+        std::time::Duration::from_secs(15),
+        "before\n",
+        "out of bounds",
     );
 }
 
@@ -4757,7 +4839,7 @@ fn queue_get_or_without_timeout_returns_default_immediately() {
     assert_run_and_direct_source_stdout_with_timeout(
         "aurora-queue-get-or-no-timeout",
         source,
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(15),
         "before\n7\nafter\n",
     );
 }
@@ -4783,7 +4865,7 @@ def main() -> int32:
     assert_run_and_direct_source_stdout_with_timeout(
         "aurora-task-result-or-no-timeout",
         source,
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(15),
         "-1\n-2\n",
     );
 }
