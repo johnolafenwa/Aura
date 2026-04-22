@@ -2547,7 +2547,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
                 mir_arg(Some("first"), Operand::Int(0)),
                 mir_arg(Some("second"), Operand::Int(1)),
             ],
-            "`swap` requires a mutable vector place",
+            "vector swap indices `0` and `1` are out of bounds for length `1`",
         ),
         (
             "insert",
@@ -3666,6 +3666,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
     let non_enum_payload = match runtime.evaluate_rvalue(
         &Rvalue::VariantPayload {
             scrutinee: Operand::Int(1),
+            variant_name: "Some".to_string(),
             index: 0,
         },
         &mut env,
@@ -3687,6 +3688,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
     let no_payload = match runtime.evaluate_rvalue(
         &Rvalue::VariantPayload {
             scrutinee: Operand::Place("status".to_string()),
+            variant_name: "Ready".to_string(),
             index: 0,
         },
         &mut env,

@@ -2141,6 +2141,11 @@ impl<'a> AnalysisBuilder<'a> {
                 definition: None,
                 ty: Some(Type::named("TaskResult")),
             }),
+            "TaskResult" if field == "Error" => Some(ResolvedMember {
+                hover: format_variant_hover("TaskResult", field, Some(&Type::named("String"))),
+                definition: None,
+                ty: Some(Type::named("TaskResult")),
+            }),
             "TaskResult" if matches!(field, "TimedOut" | "Cancelled") => Some(ResolvedMember {
                 hover: format_variant_hover("TaskResult", field, None),
                 definition: None,
@@ -2151,6 +2156,11 @@ impl<'a> AnalysisBuilder<'a> {
                 definition: None,
                 ty: Some(Type::named("WaitAny")),
             }),
+            "WaitAny" if field == "Error" => Some(ResolvedMember {
+                hover: "Error(int32, String) -> WaitAny".to_string(),
+                definition: None,
+                ty: Some(Type::named("WaitAny")),
+            }),
             "WaitAny" if matches!(field, "TimedOut" | "Cancelled") => Some(ResolvedMember {
                 hover: format_variant_hover("WaitAny", field, None),
                 definition: None,
@@ -2158,6 +2168,11 @@ impl<'a> AnalysisBuilder<'a> {
             }),
             "WaitAll" if field == "Ready" => Some(ResolvedMember {
                 hover: "Ready(Vec[T]) -> WaitAll".to_string(),
+                definition: None,
+                ty: Some(Type::named("WaitAll")),
+            }),
+            "WaitAll" if field == "Error" => Some(ResolvedMember {
+                hover: "Error(int32, String) -> WaitAll".to_string(),
                 definition: None,
                 ty: Some(Type::named("WaitAll")),
             }),
@@ -2994,6 +3009,11 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 detail: "Ready(T) -> TaskResult".to_string(),
             },
             AnalysisCompletion {
+                name: "Error".to_string(),
+                kind: "variant".to_string(),
+                detail: "Error(String) -> TaskResult".to_string(),
+            },
+            AnalysisCompletion {
                 name: "TimedOut".to_string(),
                 kind: "variant".to_string(),
                 detail: "TimedOut -> TaskResult".to_string(),
@@ -3011,6 +3031,11 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 detail: "Ready(int32, T) -> WaitAny".to_string(),
             },
             AnalysisCompletion {
+                name: "Error".to_string(),
+                kind: "variant".to_string(),
+                detail: "Error(int32, String) -> WaitAny".to_string(),
+            },
+            AnalysisCompletion {
                 name: "TimedOut".to_string(),
                 kind: "variant".to_string(),
                 detail: "TimedOut -> WaitAny".to_string(),
@@ -3026,6 +3051,11 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
                 name: "Ready".to_string(),
                 kind: "variant".to_string(),
                 detail: "Ready(Vec[T]) -> WaitAll".to_string(),
+            },
+            AnalysisCompletion {
+                name: "Error".to_string(),
+                kind: "variant".to_string(),
+                detail: "Error(int32, String) -> WaitAll".to_string(),
             },
             AnalysisCompletion {
                 name: "TimedOut".to_string(),

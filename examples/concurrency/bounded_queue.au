@@ -2,10 +2,10 @@ def consumer(inbox: Queue[int32]) -> int32:
     sleep(5ms)
 
     mut total: int32 = 0
-    total += inbox.get_or(0)
+    total += inbox.get_or(0, timeout=50ms)
 
     sleep(5ms)
-    total += inbox.get_or(0)
+    total += inbox.get_or(0, timeout=50ms)
 
     return total
 
@@ -29,5 +29,5 @@ def main() -> int32:
                 return 1
 
         jobs.close()
-        print(worker.result_or(-1))
+        print(worker.result_or(-1, timeout=50ms))
     return 0

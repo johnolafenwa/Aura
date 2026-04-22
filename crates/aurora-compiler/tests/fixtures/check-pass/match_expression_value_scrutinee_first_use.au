@@ -1,0 +1,15 @@
+class Box:
+    value: int32
+
+def take(b: Box) -> int32:
+    return b.value
+
+def main() -> int32:
+    b = Box(value=5)
+    n = match take(b):
+        case 1:
+            10
+        case _:
+            20
+    print(n)
+    return 0

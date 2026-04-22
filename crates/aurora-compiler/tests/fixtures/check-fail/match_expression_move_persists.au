@@ -1,0 +1,8 @@
+def main() -> int32:
+    text = "hello"
+    picked = match true:
+        case true: text
+        case false: "fallback"
+    print(picked)
+    print(text)
+    return 0

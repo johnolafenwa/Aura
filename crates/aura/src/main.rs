@@ -68,6 +68,9 @@ fn main() {
                     }
                 }
                 Err(error) => {
+                    if let Some(stdout) = error.partial_stdout() {
+                        write_stdout(stdout);
+                    }
                     eprintln!("{}", render_error(&input.path, &input.source, &error));
                     process::exit(1);
                 }

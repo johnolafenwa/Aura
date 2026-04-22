@@ -49,10 +49,11 @@ For user-defined classes, `close(...)` must take `borrow mut self`, no extra par
 with TaskGroup() as group:
     group.start(worker, out)
     group.start(worker, out)
-# leaving the block waits for all child tasks
+# leaving the block waits for children to finish and cancels tasks
+# that are still parked in cancellation-aware waits
 ```
 
-Task groups tie child tasks to a lexical scope. When the `with` block ends, any still-running child tasks are joined. You can also cancel early with `group.cancel()`.
+Task groups tie child tasks to a lexical scope. When the `with` block ends, Aurora waits for child tasks to finish. If a child is still blocked in a cancellation-aware wait such as `Queue.get()`, the scope exit cancels the group first so shutdown does not hang forever. You can also cancel early with `group.cancel()`. Queue iteration with `for value in queue:` inside the same `with TaskGroup()` scope observes that cancellation and exits cleanly.
 
 See [examples/concurrency/task_group_queue_sum.au](../examples/concurrency/task_group_queue_sum.au) and [examples/concurrency/task_group_cancel.au](../examples/concurrency/task_group_cancel.au).
 

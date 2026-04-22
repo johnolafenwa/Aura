@@ -518,6 +518,7 @@ Current collection notes:
 - `for value in borrow mut vec:` requires the iterable place itself to be mutable
 - indexed reads from `Vec[T]` work directly only when `T` is copy; non-copy element reads use `get(index)` for an explicit cloned read
 - `Vec[T]` supports equality and inequality when both sides have the same `Vec[T]` type
+- `Vec.insert(index, value)`, `Vec.set(index, value)`, `Vec.remove(index)`, and `Vec.swap(first, second)` now trap on out-of-bounds indices instead of silently ignoring the operation
 - empty map literals still need an expected `Map[K, V]` type, or you can use `Map[K, V]()` explicitly
 - `Map[K, V]` supports literal construction, indexed reads/writes, and the maintained method surface `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`
 - `Map.items()` and `Map.entries()` return `Vec[MapEntry[K, V]]`, where entry values expose `.key` and `.value`
@@ -527,12 +528,13 @@ Current collection notes:
 - `Queue[T]` supports `Queue[T](capacity=...)` for bounded-capacity queues on the shared runtime scheduler
 - `Queue.put(...)` returns `Result[None, SendError[T]]`, where `SendError[T]` currently includes `Closed(value)`, `Cancelled(value)`, `TimedOut(value)`, and `Full(value)`
 - `Queue.get(timeout=...)` returns `QueueReceive[T]`, distinguishing `Item(value)`, `Closed`, `TimedOut`, and `Cancelled`
-- `Queue.get_or_none(timeout=...)` returns `Option[T]` for the common case where closed, timed out, and cancelled waits all map to “no value”
-- `Queue.get_or(default, timeout=...)` returns either the queued value or a caller-provided fallback
-- `wait_any(...)` returns `WaitAny[T]`
-- `wait_all(...)` returns `WaitAll[T]`
-- `Task.result_or_none(timeout=...)` returns `Option[T]` for the common case where timeout and cancellation both map to “no result yet”
-- `Task.result_or(default, timeout=...)` returns either the task result or a caller-provided fallback
+- `Queue.get_or_none(timeout=...)` returns `Option[T]` for the common case where closed, timed out, and cancelled waits all map to “no value”; without a timeout it performs an immediate non-blocking check
+- `Queue.get_or(default, timeout=...)` returns either the queued value or a caller-provided fallback; without a timeout it returns the fallback immediately when no item is ready
+- `Task.result(timeout=...)` returns `TaskResult[T]`, distinguishing `Ready(value)`, `Error(message)`, `TimedOut`, and `Cancelled`
+- `wait_any(...)` returns `WaitAny[T]`, distinguishing `Ready(index, value)`, `Error(index, message)`, `TimedOut`, and `Cancelled`; `wait_any([])` returns `TimedOut` immediately
+- `wait_all(...)` returns `WaitAll[T]`, distinguishing `Ready(results)`, `Error(index, message)`, `TimedOut`, and `Cancelled`
+- `Task.result_or_none(timeout=...)` returns `Option[T]` for the common case where task failure, timeout, and cancellation all map to “no result yet”; without a timeout it performs an immediate non-blocking check
+- `Task.result_or(default, timeout=...)` returns either the task result or a caller-provided fallback when the task fails, times out, or is cancelled; without a timeout it returns the fallback immediately when the task is not ready
 
 ## Tooling
 
@@ -586,6 +588,8 @@ Current expression/ergonomics limitations:
 - strings use quoted literals; `String(...)` is not a constructor
 - enum variants may be called by bare built-in name when an expected type is available, for example `ok: Result[int32, String] = Ok(7)`
 - `TaskGroup.start(...)` and `TaskGroup.start_soon(...)` support named functions plus associated methods without `self`
+- `TaskGroup()` scope exit waits for started tasks and surfaces unread task failures instead of silently dropping them
+- `group.cancel()` wakes queue iteration over `Queue[T]` in the same `with TaskGroup()` scope so `for value in queue:` can exit cleanly
 - concurrency uses only the maintained `Queue[T]()`, `Task.result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `wait_any(...)`, and `wait_all(...)` surface
 - queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all use the shared evented runtime scheduler
 - Aurora tasks are scheduler-backed lightweight tasks, and ordinary file I/O now also offloads through the shared scheduler instead of pinning a task on a blocking host thread

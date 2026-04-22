@@ -15,8 +15,8 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::Span;
 use crate::mir::{
-    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod,
-    MirModule, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
+    BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMapEntry,
+    MirMethod, MirModule, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -266,6 +266,7 @@ struct NativeCodegen<'a> {
     channel_send_timeout_value: FuncId,
     channel_try_send: FuncId,
     channel_recv: FuncId,
+    channel_recv_in_task_group: FuncId,
     channel_recv_timeout_value: FuncId,
     channel_recv_or_none: FuncId,
     channel_recv_or_none_timeout_value: FuncId,
@@ -550,6 +551,10 @@ impl<'a> NativeCodegen<'a> {
             flag_builder.set("is_pic", "true"),
             "failed to configure native backend: {}"
         );
+        try_or_string_error!(
+            flag_builder.set("unwind_info", "true"),
+            "failed to configure native backend: {}"
+        );
         let flags = settings::Flags::new(flag_builder);
         let isa_builder =
             try_or_string_error!(cranelift_native::builder(), "failed to detect host ISA: {}");
@@ -668,6 +673,7 @@ impl<'a> NativeCodegen<'a> {
             channel_send_timeout_value => ("aurora_direct_channel_send_timeout_value", [types::I64, types::I64, types::I64], Some(types::I64)),
             channel_try_send => ("aurora_direct_channel_try_send", [types::I64, types::I64], Some(types::I64)),
             channel_recv => ("aurora_direct_channel_recv", [types::I64], Some(types::I64)),
+            channel_recv_in_task_group => ("aurora_direct_channel_recv_in_task_group", [types::I64, types::I64], Some(types::I64)),
             channel_recv_timeout_value => ("aurora_direct_channel_recv_timeout_value", [types::I64, types::I64], Some(types::I64)),
             channel_recv_or_none => ("aurora_direct_channel_recv_or_none", [types::I64], Some(types::I64)),
             channel_recv_or_none_timeout_value => ("aurora_direct_channel_recv_or_none_timeout_value", [types::I64, types::I64], Some(types::I64)),
@@ -1002,6 +1008,7 @@ impl<'a> NativeCodegen<'a> {
             channel_send_timeout_value,
             channel_try_send,
             channel_recv,
+            channel_recv_in_task_group,
             channel_recv_timeout_value,
             channel_recv_or_none,
             channel_recv_or_none_timeout_value,
@@ -1671,6 +1678,9 @@ impl<'a> NativeCodegen<'a> {
         let channel_recv = self
             .object
             .declare_func_in_func(self.channel_recv, builder.func);
+        let channel_recv_in_task_group = self
+            .object
+            .declare_func_in_func(self.channel_recv_in_task_group, builder.func);
         let channel_recv_timeout_value = self
             .object
             .declare_func_in_func(self.channel_recv_timeout_value, builder.func);
@@ -2259,6 +2269,7 @@ impl<'a> NativeCodegen<'a> {
             channel_send_timeout_value,
             channel_try_send,
             channel_recv,
+            channel_recv_in_task_group,
             channel_recv_timeout_value,
             channel_recv_or_none,
             channel_recv_or_none_timeout_value,
@@ -2726,6 +2737,7 @@ struct FunctionCompiler<'a> {
     channel_send_timeout_value: cranelift_codegen::ir::FuncRef,
     channel_try_send: cranelift_codegen::ir::FuncRef,
     channel_recv: cranelift_codegen::ir::FuncRef,
+    channel_recv_in_task_group: cranelift_codegen::ir::FuncRef,
     channel_recv_timeout_value: cranelift_codegen::ir::FuncRef,
     channel_recv_or_none: cranelift_codegen::ir::FuncRef,
     channel_recv_or_none_timeout_value: cranelift_codegen::ir::FuncRef,
@@ -3026,6 +3038,32 @@ impl<'a> FunctionCompiler<'a> {
                             payloads,
                             Some(&target_ty),
                         )?,
+                        Rvalue::VecLiteral {
+                            elements,
+                            element_type,
+                        } => self.compile_vec_literal_for_target(
+                            elements,
+                            element_type,
+                            Some(&target_ty),
+                        )?,
+                        Rvalue::MapLiteral {
+                            entries,
+                            key_type,
+                            value_type,
+                        } => self.compile_map_literal_for_target(
+                            entries,
+                            key_type,
+                            value_type,
+                            Some(&target_ty),
+                        )?,
+                        Rvalue::SetLiteral {
+                            elements,
+                            element_type,
+                        } => self.compile_set_literal_for_target(
+                            elements,
+                            element_type,
+                            Some(&target_ty),
+                        )?,
                         _ => self.compile_rvalue(value)?,
                     };
                     let coerced = self.coerce_value(compiled, &target_ty)?;
@@ -3171,66 +3209,16 @@ impl<'a> FunctionCompiler<'a> {
             Rvalue::VecLiteral {
                 elements,
                 element_type,
-            } => {
-                let init = self.builder.ins().call(self.vec_empty, &[]);
-                let vector = self.owned_opaque_result(
-                    self.builder.inst_results(init).to_vec(),
-                    Type::Named("Vec".to_string(), vec![element_type.clone()]),
-                );
-                for element in elements {
-                    let value = self.load_operand(element)?;
-                    let value = self.ensure_opaque(value)?;
-                    let _ = self
-                        .builder
-                        .ins()
-                        .call(self.vec_push_in_place, &[vector.values[0], value.values[0]]);
-                }
-                Ok(vector)
-            }
+            } => self.compile_vec_literal_for_target(elements, element_type, None),
             Rvalue::MapLiteral {
                 entries,
                 key_type,
                 value_type,
-            } => {
-                let init = self.builder.ins().call(self.map_empty, &[]);
-                let map = self.owned_opaque_result(
-                    self.builder.inst_results(init).to_vec(),
-                    Type::Named(
-                        "Map".to_string(),
-                        vec![key_type.clone(), value_type.clone()],
-                    ),
-                );
-                for entry in entries {
-                    let key = self.load_operand(&entry.key)?;
-                    let key = self.ensure_opaque(key)?;
-                    let value = self.load_operand(&entry.value)?;
-                    let value = self.ensure_opaque(value)?;
-                    let _ = self.builder.ins().call(
-                        self.map_set_in_place,
-                        &[map.values[0], key.values[0], value.values[0]],
-                    );
-                }
-                Ok(map)
-            }
+            } => self.compile_map_literal_for_target(entries, key_type, value_type, None),
             Rvalue::SetLiteral {
                 elements,
                 element_type,
-            } => {
-                let init = self.builder.ins().call(self.set_empty, &[]);
-                let set = self.owned_opaque_result(
-                    self.builder.inst_results(init).to_vec(),
-                    Type::Named("Set".to_string(), vec![element_type.clone()]),
-                );
-                for element in elements {
-                    let value = self.load_operand(element)?;
-                    let value = self.ensure_opaque(value)?;
-                    let _ = self
-                        .builder
-                        .ins()
-                        .call(self.set_insert_in_place, &[set.values[0], value.values[0]]);
-                }
-                Ok(set)
-            }
+            } => self.compile_set_literal_for_target(elements, element_type, None),
             Rvalue::Construct { class_name, fields } => self.compile_construct(class_name, fields),
             Rvalue::Member { object, field } => {
                 let object = self.load_operand(object)?;
@@ -3241,7 +3229,11 @@ impl<'a> FunctionCompiler<'a> {
                 variant_name,
                 payloads,
             } => self.compile_enum_variant_for_target(enum_name, variant_name, payloads, None),
-            Rvalue::VariantPayload { scrutinee, index } => {
+            Rvalue::VariantPayload {
+                scrutinee,
+                variant_name: _,
+                index,
+            } => {
                 let scrutinee = self.load_operand(scrutinee)?;
                 self.compile_variant_payload(scrutinee, *index)
             }
@@ -3256,6 +3248,104 @@ impl<'a> FunctionCompiler<'a> {
                 other
             )),
         }
+    }
+
+    fn compile_vec_literal_for_target(
+        &mut self,
+        elements: &[Operand],
+        element_type: &Type,
+        target: Option<&DirectType>,
+    ) -> std::result::Result<ValueRef, String> {
+        let resolved_element_type = match target {
+            Some(DirectType::Opaque(Type::Named(name, args)))
+                if name == "Vec" && args.len() == 1 =>
+            {
+                args[0].clone()
+            }
+            _ => element_type.clone(),
+        };
+        let element_direct_ty =
+            ensure_direct_type(&resolved_element_type, &self.classes, "Vec element")?;
+        let init = self.builder.ins().call(self.vec_empty, &[]);
+        let vector = self.owned_opaque_result(
+            self.builder.inst_results(init).to_vec(),
+            Type::Named("Vec".to_string(), vec![resolved_element_type]),
+        );
+        for element in elements {
+            let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
+            let _ = self
+                .builder
+                .ins()
+                .call(self.vec_push_in_place, &[vector.values[0], value.values[0]]);
+        }
+        Ok(vector)
+    }
+
+    fn compile_map_literal_for_target(
+        &mut self,
+        entries: &[MirMapEntry],
+        key_type: &Type,
+        value_type: &Type,
+        target: Option<&DirectType>,
+    ) -> std::result::Result<ValueRef, String> {
+        let (resolved_key_type, resolved_value_type) = match target {
+            Some(DirectType::Opaque(Type::Named(name, args)))
+                if name == "Map" && args.len() == 2 =>
+            {
+                (args[0].clone(), args[1].clone())
+            }
+            _ => (key_type.clone(), value_type.clone()),
+        };
+        let key_direct_ty = ensure_direct_type(&resolved_key_type, &self.classes, "Map key")?;
+        let value_direct_ty = ensure_direct_type(&resolved_value_type, &self.classes, "Map value")?;
+        let init = self.builder.ins().call(self.map_empty, &[]);
+        let map = self.owned_opaque_result(
+            self.builder.inst_results(init).to_vec(),
+            Type::Named(
+                "Map".to_string(),
+                vec![resolved_key_type, resolved_value_type],
+            ),
+        );
+        for entry in entries {
+            let key = self.load_operand_as_opaque_direct(&entry.key, &key_direct_ty)?;
+            let value = self.load_operand_as_opaque_direct(&entry.value, &value_direct_ty)?;
+            let _ = self.builder.ins().call(
+                self.map_set_in_place,
+                &[map.values[0], key.values[0], value.values[0]],
+            );
+        }
+        Ok(map)
+    }
+
+    fn compile_set_literal_for_target(
+        &mut self,
+        elements: &[Operand],
+        element_type: &Type,
+        target: Option<&DirectType>,
+    ) -> std::result::Result<ValueRef, String> {
+        let resolved_element_type = match target {
+            Some(DirectType::Opaque(Type::Named(name, args)))
+                if name == "Set" && args.len() == 1 =>
+            {
+                args[0].clone()
+            }
+            _ => element_type.clone(),
+        };
+        let element_direct_ty =
+            ensure_direct_type(&resolved_element_type, &self.classes, "Set element")?;
+        let init = self.builder.ins().call(self.set_empty, &[]);
+        let set = self.owned_opaque_result(
+            self.builder.inst_results(init).to_vec(),
+            Type::Named("Set".to_string(), vec![resolved_element_type]),
+        );
+        for element in elements {
+            let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
+            let _ = self
+                .builder
+                .ins()
+                .call(self.set_insert_in_place, &[set.values[0], value.values[0]]);
+        }
+        Ok(set)
     }
 
     fn compile_unary(
@@ -4684,6 +4774,16 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
+    fn load_operand_as_opaque_direct(
+        &mut self,
+        operand: &Operand,
+        expected_ty: &DirectType,
+    ) -> std::result::Result<ValueRef, String> {
+        let loaded = self.load_operand(operand)?;
+        let coerced = self.coerce_value(loaded, expected_ty)?;
+        self.ensure_opaque(coerced)
+    }
+
     fn load_place(&mut self, place: &str) -> std::result::Result<ValueRef, String> {
         let mut segments = place.split('.');
         let root = segments
@@ -5813,8 +5913,8 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `push()` to receive one argument"
                                 .to_string());
                         };
-                        let loaded_value = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
                         let _ = self
                             .builder
                             .ins()
@@ -5933,8 +6033,8 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_index = self.load_operand(&index_arg.value)?;
                         let index = self
                             .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let loaded_value = self.load_operand(&value_arg.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
                         let inst = self.builder.ins().call(
                             self.vec_set_in_place,
                             &[object.values[0], index.values[0], value.values[0]],
@@ -5963,8 +6063,8 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_index = self.load_operand(&index_arg.value)?;
                         let index = self
                             .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let loaded_value = self.load_operand(&value_arg.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
                         let loaded_line = self.load_operand(&line_arg.value)?;
                         let line =
                             self.coerce_value(loaded_line, &DirectType::Scalar(ScalarKind::Int32))?;
@@ -6046,8 +6146,8 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         };
-                        let loaded_value = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
                         let inst = self
                             .builder
                             .ins()
@@ -6067,8 +6167,8 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_index = self.load_operand(&index_arg.value)?;
                         let index = self
                             .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let loaded_value = self.load_operand(&value_arg.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
                         let inst = self.builder.ins().call(
                             self.vec_insert_in_place,
                             &[object.values[0], index.values[0], value.values[0]],
@@ -6143,6 +6243,7 @@ impl<'a> FunctionCompiler<'a> {
                     .get(1)
                     .cloned()
                     .unwrap_or_else(|| Type::named("Unknown"));
+                let key_direct_ty = ensure_direct_type(&key_ty, &self.classes, "Map key")?;
                 let value_direct_ty = ensure_direct_type(&value_ty, &self.classes, "Map value")?;
                 return match field {
                     "len" => {
@@ -6182,8 +6283,8 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         };
-                        let loaded_key = self.load_operand(&argument.value)?;
-                        let key = self.ensure_opaque(loaded_key)?;
+                        let key =
+                            self.load_operand_as_opaque_direct(&argument.value, &key_direct_ty)?;
                         let inst = self
                             .builder
                             .ins()
@@ -6200,8 +6301,8 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         };
-                        let loaded_key = self.load_operand(&key_arg.value)?;
-                        let key = self.ensure_opaque(loaded_key)?;
+                        let key =
+                            self.load_operand_as_opaque_direct(&key_arg.value, &key_direct_ty)?;
                         let loaded_line = self.load_operand(&line_arg.value)?;
                         let line =
                             self.coerce_value(loaded_line, &DirectType::Scalar(ScalarKind::Int32))?;
@@ -6228,10 +6329,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `set()` to receive key and value"
                                 .to_string());
                         };
-                        let loaded_key = self.load_operand(&key_arg.value)?;
-                        let key = self.ensure_opaque(loaded_key)?;
-                        let loaded_value = self.load_operand(&value_arg.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
+                        let key =
+                            self.load_operand_as_opaque_direct(&key_arg.value, &key_direct_ty)?;
+                        let value =
+                            self.load_operand_as_opaque_direct(&value_arg.value, &value_direct_ty)?;
                         let inst = self.builder.ins().call(
                             self.map_set_in_place,
                             &[object.values[0], key.values[0], value.values[0]],
@@ -6251,10 +6352,10 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         };
-                        let loaded_key = self.load_operand(&key_arg.value)?;
-                        let key = self.ensure_opaque(loaded_key)?;
-                        let loaded_value = self.load_operand(&value_arg.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
+                        let key =
+                            self.load_operand_as_opaque_direct(&key_arg.value, &key_direct_ty)?;
+                        let value =
+                            self.load_operand_as_opaque_direct(&value_arg.value, &value_direct_ty)?;
                         let loaded_line = self.load_operand(&line_arg.value)?;
                         let line =
                             self.coerce_value(loaded_line, &DirectType::Scalar(ScalarKind::Int32))?;
@@ -6283,8 +6384,8 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         };
-                        let loaded_key = self.load_operand(&argument.value)?;
-                        let key = self.ensure_opaque(loaded_key)?;
+                        let key =
+                            self.load_operand_as_opaque_direct(&argument.value, &key_direct_ty)?;
                         let inst = self
                             .builder
                             .ins()
@@ -6304,8 +6405,8 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         };
-                        let loaded_key = self.load_operand(&argument.value)?;
-                        let key = self.ensure_opaque(loaded_key)?;
+                        let key =
+                            self.load_operand_as_opaque_direct(&argument.value, &key_direct_ty)?;
                         let inst = self
                             .builder
                             .ins()
@@ -6409,6 +6510,8 @@ impl<'a> FunctionCompiler<'a> {
                     .first()
                     .cloned()
                     .unwrap_or_else(|| Type::named("Unknown"));
+                let element_direct_ty =
+                    ensure_direct_type(&element_ty, &self.classes, "Set element")?;
                 return match field {
                     "len" => {
                         if !args.is_empty() {
@@ -6447,8 +6550,8 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         };
-                        let loaded_value = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
                         let inst = self
                             .builder
                             .ins()
@@ -6465,8 +6568,8 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         };
-                        let loaded_value = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
                         let inst = self.builder.ins().call(
                             self.set_insert_in_place,
                             &[object.values[0], value.values[0]],
@@ -6486,8 +6589,8 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         };
-                        let loaded_value = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
                         let inst = self.builder.ins().call(
                             self.set_remove_in_place,
                             &[object.values[0], value.values[0]],
@@ -8462,6 +8565,12 @@ impl<'a> FunctionCompiler<'a> {
             }
             if name == "Queue" {
                 let object = self.ensure_opaque(object)?;
+                let element_ty = class_args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                let element_direct_ty =
+                    ensure_direct_type(&element_ty, &self.classes, "Queue element")?;
                 return match field {
                     "put" => {
                         let mut value_arg: Option<&MirArg> = None;
@@ -8491,8 +8600,8 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         };
-                        let loaded = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded)?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
                         let inst = if let Some(timeout_arg) = timeout_arg {
                             let timeout = self.load_operand(&timeout_arg.value)?;
                             let timeout = self.ensure_opaque(timeout)?;
@@ -8511,13 +8620,7 @@ impl<'a> FunctionCompiler<'a> {
                                 "Result".to_string(),
                                 vec![
                                     Type::Unit,
-                                    Type::Named(
-                                        "SendError".to_string(),
-                                        vec![class_args
-                                            .first()
-                                            .cloned()
-                                            .unwrap_or_else(|| Type::named("Unknown"))],
-                                    ),
+                                    Type::Named("SendError".to_string(), vec![element_ty.clone()]),
                                 ],
                             ),
                         ))
@@ -8535,8 +8638,8 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         }
-                        let loaded = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded)?;
+                        let value = self
+                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
                         let inst = self
                             .builder
                             .ins()
@@ -8547,13 +8650,7 @@ impl<'a> FunctionCompiler<'a> {
                                 "Result".to_string(),
                                 vec![
                                     Type::Unit,
-                                    Type::Named(
-                                        "SendError".to_string(),
-                                        vec![class_args
-                                            .first()
-                                            .cloned()
-                                            .unwrap_or_else(|| Type::named("Unknown"))],
-                                    ),
+                                    Type::Named("SendError".to_string(), vec![element_ty.clone()]),
                                 ],
                             ),
                         ))
@@ -8596,6 +8693,30 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
+                    "__get_in_task_group" => {
+                        let [task_group] = args else {
+                            return Err(
+                                "direct backend expected internal `__get_in_task_group()` to receive one task-group argument"
+                                    .to_string(),
+                            );
+                        };
+                        let task_group = self.load_operand(&task_group.value)?;
+                        let task_group = self.ensure_opaque(task_group)?;
+                        let inst = self.builder.ins().call(
+                            self.channel_recv_in_task_group,
+                            &[object.values[0], task_group.values[0]],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "QueueReceive".to_string(),
+                                vec![class_args
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                            ),
+                        ))
+                    }
                     "get_or_none" => {
                         let inst = match args {
                             [] => self
@@ -8627,13 +8748,7 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Option".to_string(),
-                                vec![class_args
-                                    .first()
-                                    .cloned()
-                                    .unwrap_or_else(|| Type::named("Unknown"))],
-                            ),
+                            Type::Named("Option".to_string(), vec![element_ty.clone()]),
                         ))
                     }
                     "get_or" => {
@@ -8913,6 +9028,11 @@ impl<'a> FunctionCompiler<'a> {
         class_name: &str,
         fields: &[crate::mir::MirFieldInit],
     ) -> std::result::Result<ValueRef, String> {
+        let class = self
+            .classes
+            .get(class_name)
+            .cloned()
+            .ok_or_else(|| format!("direct backend does not know class `{}`", class_name))?;
         let (class_ptr, class_len) = self.string_constant(class_name.as_bytes())?;
         let init = self
             .builder
@@ -8924,6 +9044,23 @@ impl<'a> FunctionCompiler<'a> {
         );
         for field in fields {
             let loaded = self.load_operand(&field.value)?;
+            let field_ty = class
+                .fields
+                .iter()
+                .find(|candidate| candidate.name == field.name)
+                .map(|candidate| candidate.ty.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "direct backend construction for `{}` is missing field metadata for `{}`",
+                        class_name, field.name
+                    )
+                })?;
+            let field_ty = ensure_direct_type(
+                &field_ty,
+                &self.classes,
+                &format!("field `{}` on class `{}`", field.name, class_name),
+            )?;
+            let loaded = self.coerce_value(loaded, &field_ty)?;
             let loaded = self.ensure_opaque(loaded)?;
             let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
             let inst = self.builder.ins().call(
@@ -10061,10 +10198,12 @@ fn infer_rvalue_type(
             }
         }
         Rvalue::EnumVariant { enum_name, .. } => Some(DirectType::Opaque(Type::named(enum_name))),
-        Rvalue::VariantPayload { scrutinee, index } => {
-            infer_variant_payload_type(scrutinee, *index, variable_types, classes)
-                .or_else(|| Some(DirectType::Opaque(Type::named("Unknown"))))
-        }
+        Rvalue::VariantPayload {
+            scrutinee,
+            variant_name,
+            index,
+        } => infer_variant_payload_type(scrutinee, variant_name, *index, variable_types, classes)
+            .or_else(|| Some(DirectType::Opaque(Type::named("Unknown")))),
         Rvalue::Try { value } => infer_try_type(value, variable_types, classes)
             .or_else(|| Some(DirectType::Opaque(Type::named("Unknown")))),
         Rvalue::StartTask {
@@ -10758,6 +10897,7 @@ fn builtin_opaque_member_return_type(
 
 fn infer_variant_payload_type(
     scrutinee: &Operand,
+    variant_name: &str,
     index: usize,
     variable_types: &HashMap<String, DirectType>,
     classes: &HashMap<String, MirClass>,
@@ -10766,15 +10906,20 @@ fn infer_variant_payload_type(
     let DirectType::Opaque(Type::Named(name, args)) = scrutinee_ty else {
         return None;
     };
-    let payload_ty = match (name.as_str(), args.as_slice(), index) {
-        ("Option", [inner], 0) => inner.clone(),
-        ("Result", [ok, _], 0) => ok.clone(),
-        ("SendError", [inner], 0) => inner.clone(),
-        ("QueueReceive", [inner], 0) => inner.clone(),
-        ("TaskResult", [inner], 0) => inner.clone(),
-        ("WaitAny", [_, _inner], 0) => Type::named("int32"),
-        ("WaitAny", [_, inner], 1) => inner.clone(),
-        ("WaitAll", [inner], 0) => Type::Named("Vec".to_string(), vec![inner.clone()]),
+    let payload_ty = match (name.as_str(), args.as_slice(), variant_name, index) {
+        ("Option", [inner], "Some", 0) => inner.clone(),
+        ("Result", [ok, _], "Ok", 0) => ok.clone(),
+        ("Result", [_, err], "Err", 0) => err.clone(),
+        ("SendError", [inner], "Closed" | "Cancelled" | "TimedOut" | "Full", 0) => inner.clone(),
+        ("QueueReceive", [inner], "Item", 0) => inner.clone(),
+        ("TaskResult", [inner], "Ready", 0) => inner.clone(),
+        ("TaskResult", [_], "Error", 0) => Type::named("String"),
+        ("WaitAny", [_], "Ready" | "Error", 0) => Type::named("int32"),
+        ("WaitAny", [inner], "Ready", 1) => inner.clone(),
+        ("WaitAny", [_], "Error", 1) => Type::named("String"),
+        ("WaitAll", [inner], "Ready", 0) => Type::Named("Vec".to_string(), vec![inner.clone()]),
+        ("WaitAll", [_], "Error", 0) => Type::named("int32"),
+        ("WaitAll", [_], "Error", 1) => Type::named("String"),
         _ => return None,
     };
     direct_type(&payload_ty, classes)
@@ -10803,10 +10948,13 @@ fn enum_variant_payload_types_for_target(
         ("QueueReceive", [inner], "Item") => vec![inner.clone()],
         ("QueueReceive", [_], "Closed" | "TimedOut" | "Cancelled") => Vec::new(),
         ("TaskResult", [inner], "Ready") => vec![inner.clone()],
+        ("TaskResult", [_], "Error") => vec![Type::named("String")],
         ("TaskResult", [_], "TimedOut" | "Cancelled") => Vec::new(),
         ("WaitAny", [inner], "Ready") => vec![Type::named("int32"), inner.clone()],
+        ("WaitAny", [_], "Error") => vec![Type::named("int32"), Type::named("String")],
         ("WaitAny", [_], "TimedOut" | "Cancelled") => Vec::new(),
         ("WaitAll", [inner], "Ready") => vec![Type::Named("Vec".to_string(), vec![inner.clone()])],
+        ("WaitAll", [_], "Error") => vec![Type::named("int32"), Type::named("String")],
         ("WaitAll", [_], "TimedOut" | "Cancelled") => Vec::new(),
         _ => return None,
     };

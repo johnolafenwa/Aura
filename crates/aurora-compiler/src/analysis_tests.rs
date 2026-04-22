@@ -21,6 +21,7 @@ use crate::sema::{ClassInfo, EnumInfo, EnumVariantInfo, FieldInfo, TraitBound, T
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TempDir {
@@ -60,6 +61,19 @@ fn repo_root() -> PathBuf {
         .and_then(|path| path.parent())
         .unwrap()
         .to_path_buf()
+}
+
+fn run_with_large_stack<T, F>(operation: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(operation)
+        .expect("large-stack helper thread should spawn")
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
 }
 
 fn collect_aurora_files(dir: &PathBuf) -> Vec<PathBuf> {
@@ -1997,24 +2011,26 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
 
 #[test]
 fn path_aware_analysis_handles_large_repo_scratch_corpus_without_panicking() {
-    let repo_root = repo_root();
-    let corpus_dirs = [repo_root.join("test_edge"), repo_root.join("test_recheck")];
-    let mut file_count = 0usize;
-    let mut symbol_total = 0usize;
+    run_with_large_stack(|| {
+        let repo_root = repo_root();
+        let corpus_dirs = [repo_root.join("test_edge"), repo_root.join("test_recheck")];
+        let mut file_count = 0usize;
+        let mut symbol_total = 0usize;
 
-    for dir in corpus_dirs {
-        for path in collect_aurora_files(&dir) {
-            file_count += 1;
-            let source = fs::read_to_string(&path)
-                .unwrap_or_else(|error| panic!("failed to read {}: {}", path.display(), error));
-            let output = analyze_path_source(&path, &source);
-            symbol_total += output.symbols.len();
+        for dir in corpus_dirs {
+            for path in collect_aurora_files(&dir) {
+                file_count += 1;
+                let source = fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("failed to read {}: {}", path.display(), error));
+                let output = analyze_path_source(&path, &source);
+                symbol_total += output.symbols.len();
+            }
         }
-    }
 
-    assert!(file_count >= 800, "expected large scratch corpus");
-    assert!(
-        symbol_total > 0,
-        "expected scratch corpus analysis to produce some symbols"
-    );
+        assert!(file_count >= 800, "expected large scratch corpus");
+        assert!(
+            symbol_total > 0,
+            "expected scratch corpus analysis to produce some symbols"
+        );
+    });
 }

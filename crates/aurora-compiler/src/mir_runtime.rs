@@ -15,26 +15,27 @@ use crate::mir::{
     MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::runtime_value::{
-    cancel_current_lightweight_task, cast_numeric_value, decode_process_restart_policy,
-    decode_process_stdio, io_error, io_read_line, option_none, option_some,
-    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
-    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
-    process_stdio_pipe, process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    cast_numeric_value, decode_process_restart_policy, decode_process_stdio, io_error,
+    io_read_line, option_none, option_some, poll_cancellation, process_error_cancelled,
+    process_error_io, process_error_no_command, process_error_spawn, process_error_timed_out,
+    process_exit_status, process_stdio_inherit, process_stdio_null, process_stdio_pipe,
+    process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, read_file_limited, result_err, result_ok,
     run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
     send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
-    task_result_cancelled, task_result_ready, task_result_timed_out, wait_all_cancelled,
-    wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_ready, wait_any_timed_out,
-    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue,
-    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
-    ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
-    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
-    TlsStreamValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
-    VecValue, WebSocketListenerValue, WebSocketValue,
+    task_result_cancelled, task_result_error, task_result_ready, task_result_timed_out,
+    wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled,
+    wait_any_error, wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
+    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, ProcessChildValue,
+    ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue, ProcessRestartPolicy,
+    ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RunOutput,
+    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue, TaskValue,
+    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
+    UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
+    WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -46,22 +47,25 @@ pub fn run(module: &MirModule) -> Result<RunOutput> {
             let result = panic::catch_unwind(AssertUnwindSafe(move || {
                 let stdout = Arc::new(Mutex::new(String::new()));
                 let task_stdout = stdout.clone();
-                let value = if module_uses_lightweight_tasks(&module) {
+                let value_result = if module_uses_lightweight_tasks(&module) {
                     run_lightweight_root_task(move || {
                         let mut runtime =
                             MirRuntime::new(module, task_stdout, CancellationContext::default());
                         runtime.run_main()
-                    })?
+                    })
                 } else {
                     let mut runtime =
                         MirRuntime::new(module, task_stdout, CancellationContext::default());
-                    runtime.run_main()?
+                    runtime.run_main()
                 };
                 let rendered_stdout = lock_stdout(&stdout).clone();
-                Ok(RunOutput {
-                    value,
-                    stdout: rendered_stdout,
-                })
+                match value_result {
+                    Ok(value) => Ok(RunOutput {
+                        value,
+                        stdout: rendered_stdout,
+                    }),
+                    Err(error) => Err(error.with_partial_stdout(rendered_stdout)),
+                }
             }));
             match result {
                 Ok(result) => result,
@@ -210,6 +214,19 @@ fn run_serialized_mir_entrypoint(mir_json: &[u8], source_path: &str, source: &st
             0
         }
         Err(error) => {
+            if let Some(stdout) = error.partial_stdout() {
+                if let Err(write_error) = write_stream(io::stdout().lock(), stdout) {
+                    if write_error.kind() == io::ErrorKind::BrokenPipe {
+                        return 0;
+                    }
+                    let _ = writeln!(
+                        io::stderr().lock(),
+                        "failed to write to stdout: {}",
+                        write_error
+                    );
+                    return 1;
+                }
+            }
             let rendered = render_runtime_error(source_path, source, &error);
             let _ = writeln!(io::stderr().lock(), "{}", rendered);
             1
@@ -1503,7 +1520,11 @@ impl MirRuntime {
                     .map(|payload| self.evaluate_operand(payload, env))
                     .collect::<Result<Vec<_>>>()?,
             }))),
-            Rvalue::VariantPayload { scrutinee, index } => {
+            Rvalue::VariantPayload {
+                scrutinee,
+                variant_name: _,
+                index,
+            } => {
                 let scrutinee = self.evaluate_operand(scrutinee, env)?;
                 let Value::EnumVariant(variant) = scrutinee else {
                     return Err(Diagnostic::new(format!(
@@ -1637,7 +1658,7 @@ impl MirRuntime {
                 if name == "cancelled" {
                     let values = evaluate_named_args(args, env)?;
                     bind_builtin_args(&[], values)?;
-                    return Ok(Value::Bool(self.cancellation.is_cancelled()));
+                    return Ok(Value::Bool(poll_cancellation(&self.cancellation)));
                 }
 
                 if name == "sleep" {
@@ -1660,15 +1681,10 @@ impl MirRuntime {
                             duration
                         ))
                     })?;
-                    if matches!(
-                        sleep_with_runtime_scheduler(
-                            std::time::Duration::from_millis(duration),
-                            Some(&self.cancellation),
-                        ),
-                        RuntimeSchedulerWakeReason::Cancelled
-                    ) {
-                        cancel_current_lightweight_task();
-                    }
+                    let _ = sleep_with_runtime_scheduler(
+                        std::time::Duration::from_millis(duration),
+                        Some(&self.cancellation),
+                    );
                     return Ok(Value::Unit);
                 }
 
@@ -2359,13 +2375,54 @@ impl MirRuntime {
                     },
                 )
             }
+            "__get_in_task_group" => {
+                let [task_group_arg] = args else {
+                    return Err(Diagnostic::new(
+                        "internal queue iteration helper expects one task-group argument",
+                    ));
+                };
+                let task_group = self.evaluate_operand(&task_group_arg.value, env)?;
+                let Value::TaskGroup(group) = task_group else {
+                    return Err(Diagnostic::new(format!(
+                        "internal queue iteration helper expected `TaskGroup`, found `{}`",
+                        task_group.render()
+                    )));
+                };
+                let cancellation = self.cancellation.merged(&group.child_cancellation());
+                Ok(
+                    match channel.recv_result_with_cancellation(None, Some(&cancellation)) {
+                        RecvValueResult::Value(value) => queue_receive_item(value),
+                        RecvValueResult::Closed => queue_receive_closed(),
+                        RecvValueResult::TimedOut => queue_receive_timed_out(),
+                        RecvValueResult::Cancelled => queue_receive_cancelled(),
+                    },
+                )
+            }
             "get_or_none" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["timeout"], values)?;
                 let timeout =
                     expect_optional_timeout(Some(&bound[0].value), "get_or_none(timeout=...)")?;
                 Ok(
-                    match channel.recv_result_with_cancellation(timeout, Some(&self.cancellation)) {
+                    match if args.is_empty() {
+                        if poll_cancellation(&self.cancellation) {
+                            RecvValueResult::Cancelled
+                        } else {
+                            match channel.try_recv() {
+                                crate::runtime_value::TryRecvResult::Value(value) => {
+                                    RecvValueResult::Value(value)
+                                }
+                                crate::runtime_value::TryRecvResult::Closed => {
+                                    RecvValueResult::Closed
+                                }
+                                crate::runtime_value::TryRecvResult::Empty => {
+                                    RecvValueResult::TimedOut
+                                }
+                            }
+                        }
+                    } else {
+                        channel.recv_result_with_cancellation(timeout, Some(&self.cancellation))
+                    } {
                         RecvValueResult::Value(value) => option_some(value),
                         RecvValueResult::Closed
                         | RecvValueResult::TimedOut
@@ -2384,7 +2441,25 @@ impl MirRuntime {
                 let timeout =
                     expect_optional_timeout(Some(&bound[1].value), "get_or(timeout=...)")?;
                 Ok(
-                    match channel.recv_result_with_cancellation(timeout, Some(&self.cancellation)) {
+                    match if args.len() == 1 && args[0].name.as_deref() != Some("timeout") {
+                        if poll_cancellation(&self.cancellation) {
+                            RecvValueResult::Cancelled
+                        } else {
+                            match channel.try_recv() {
+                                crate::runtime_value::TryRecvResult::Value(value) => {
+                                    RecvValueResult::Value(value)
+                                }
+                                crate::runtime_value::TryRecvResult::Closed => {
+                                    RecvValueResult::Closed
+                                }
+                                crate::runtime_value::TryRecvResult::Empty => {
+                                    RecvValueResult::TimedOut
+                                }
+                            }
+                        }
+                    } else {
+                        channel.recv_result_with_cancellation(timeout, Some(&self.cancellation))
+                    } {
                         RecvValueResult::Value(value) => value,
                         RecvValueResult::Closed
                         | RecvValueResult::TimedOut
@@ -2501,19 +2576,20 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["index", "value"], values)?;
                 let index = self.mir_index_from_value(bound[0].value.clone())?;
                 let mut updated = vector;
-                let previous = if index < updated.elements.len() {
-                    Some(std::mem::replace(
-                        &mut updated.elements[index],
-                        bound[1].value.clone(),
-                    ))
-                } else {
-                    None
-                };
+                if index >= updated.elements.len() {
+                    return Err(Diagnostic::new(format!(
+                        "vector set index `{}` is out of bounds for length `{}`",
+                        index,
+                        updated.elements.len()
+                    )));
+                }
+                let previous =
+                    std::mem::replace(&mut updated.elements[index], bound[1].value.clone());
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`set` requires a mutable vector place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(previous.map(option_some).unwrap_or_else(option_none))
+                Ok(option_some(previous))
             }
             "__set_index" => {
                 let values = evaluate_named_args(args, env)?;
@@ -2550,16 +2626,19 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["index"], values)?;
                 let index = self.mir_index_from_value(bound[0].value.clone())?;
                 let mut updated = vector;
-                let previous = if index < updated.elements.len() {
-                    Some(updated.elements.remove(index))
-                } else {
-                    None
-                };
+                if index >= updated.elements.len() {
+                    return Err(Diagnostic::new(format!(
+                        "vector remove index `{}` is out of bounds for length `{}`",
+                        index,
+                        updated.elements.len()
+                    )));
+                }
+                let previous = updated.elements.remove(index);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`remove` requires a mutable vector place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(previous.map(option_some).unwrap_or_else(option_none))
+                Ok(option_some(previous))
             }
             "swap" => {
                 let values = evaluate_named_args(args, env)?;
@@ -2567,15 +2646,20 @@ impl MirRuntime {
                 let first = self.mir_index_from_value(bound[0].value.clone())?;
                 let second = self.mir_index_from_value(bound[1].value.clone())?;
                 let mut updated = vector;
-                let swapped = first < updated.elements.len() && second < updated.elements.len();
-                if swapped {
-                    updated.elements.swap(first, second);
+                if first >= updated.elements.len() || second >= updated.elements.len() {
+                    return Err(Diagnostic::new(format!(
+                        "vector swap indices `{}` and `{}` are out of bounds for length `{}`",
+                        first,
+                        second,
+                        updated.elements.len()
+                    )));
                 }
+                updated.elements.swap(first, second);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`swap` requires a mutable vector place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(Value::Bool(swapped))
+                Ok(Value::Bool(true))
             }
             "contains" => {
                 let values = evaluate_named_args(args, env)?;
@@ -2592,15 +2676,19 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["index", "value"], values)?;
                 let index = self.mir_index_from_value(bound[0].value.clone())?;
                 let mut updated = vector;
-                let inserted = index <= updated.elements.len();
-                if inserted {
-                    updated.elements.insert(index, bound[1].value.clone());
+                if index > updated.elements.len() {
+                    return Err(Diagnostic::new(format!(
+                        "vector insert index `{}` is out of bounds for length `{}`",
+                        index,
+                        updated.elements.len()
+                    )));
                 }
+                updated.elements.insert(index, bound[1].value.clone());
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`insert` requires a mutable vector place"));
                 };
                 env.write_place(place, Value::Vec(updated))?;
-                Ok(Value::Bool(inserted))
+                Ok(Value::Bool(true))
             }
             "clear" => {
                 if !args.is_empty() {
@@ -3154,8 +3242,28 @@ impl MirRuntime {
                 let timeout =
                     expect_optional_timeout(Some(&bound[0].value), "result_or_none(timeout=...)")?;
                 Ok(
-                    match task.wait_result_with_cancellation(timeout, Some(&self.cancellation)) {
-                        TaskWaitStatus::Ready(result) => option_some(result?),
+                    match if args.is_empty() {
+                        if poll_cancellation(&self.cancellation) {
+                            TaskWaitStatus::Cancelled
+                        } else if let Some(result) = task.completed_result_observed() {
+                            TaskWaitStatus::Ready(match result {
+                                crate::runtime_value::TaskExecutionResult::Ready(result) => result,
+                                crate::runtime_value::TaskExecutionResult::Cancelled => {
+                                    return Ok(option_none());
+                                }
+                            })
+                        } else {
+                            TaskWaitStatus::TimedOut
+                        }
+                    } else {
+                        task.wait_result_with_cancellation_observed(
+                            timeout,
+                            Some(&self.cancellation),
+                        )
+                    } {
+                        TaskWaitStatus::Ready(result) => {
+                            result.map(option_some).unwrap_or_else(|_| option_none())
+                        }
                         TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => option_none(),
                     },
                 )
@@ -3171,8 +3279,28 @@ impl MirRuntime {
                 let timeout =
                     expect_optional_timeout(Some(&bound[1].value), "result_or(timeout=...)")?;
                 Ok(
-                    match task.wait_result_with_cancellation(timeout, Some(&self.cancellation)) {
-                        TaskWaitStatus::Ready(result) => result?,
+                    match if args.len() == 1 && args[0].name.as_deref() != Some("timeout") {
+                        if poll_cancellation(&self.cancellation) {
+                            TaskWaitStatus::Cancelled
+                        } else if let Some(result) = task.completed_result_observed() {
+                            match result {
+                                crate::runtime_value::TaskExecutionResult::Ready(result) => {
+                                    TaskWaitStatus::Ready(result)
+                                }
+                                crate::runtime_value::TaskExecutionResult::Cancelled => {
+                                    TaskWaitStatus::Cancelled
+                                }
+                            }
+                        } else {
+                            TaskWaitStatus::TimedOut
+                        }
+                    } else {
+                        task.wait_result_with_cancellation_observed(
+                            timeout,
+                            Some(&self.cancellation),
+                        )
+                    } {
+                        TaskWaitStatus::Ready(result) => result.unwrap_or(default.clone()),
                         TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => default,
                     },
                 )
@@ -4851,8 +4979,11 @@ impl MirRuntime {
 
     fn join_task(&mut self, task: TaskValue, timeout: Option<StdDuration>) -> Result<Value> {
         Ok(
-            match task.wait_result_with_cancellation(timeout, Some(&self.cancellation)) {
-                TaskWaitStatus::Ready(result) => task_result_ready(result?),
+            match task.wait_result_with_cancellation_observed(timeout, Some(&self.cancellation)) {
+                TaskWaitStatus::Ready(result) => match result {
+                    Ok(value) => task_result_ready(value),
+                    Err(error) => task_result_error(error.message),
+                },
                 TaskWaitStatus::TimedOut => task_result_timed_out(),
                 TaskWaitStatus::Cancelled => task_result_cancelled(),
             },
@@ -4860,17 +4991,25 @@ impl MirRuntime {
     }
 
     fn wait_any(&mut self, tasks: Vec<TaskValue>, timeout: Option<StdDuration>) -> Result<Value> {
+        if tasks.is_empty() {
+            return if poll_cancellation(&self.cancellation) {
+                Ok(wait_any_cancelled())
+            } else {
+                Ok(wait_any_timed_out())
+            };
+        }
         let deadline = runtime_deadline_after_timeout(timeout)?;
         loop {
             for (index, task) in tasks.iter().enumerate() {
-                if let Some(result) = task.completed_result() {
+                if let Some(result) = task.completed_result_observed() {
                     let index = i32::try_from(index).map_err(|_| {
                         Diagnostic::new("wait_any result index exceeds int32 range")
                     })?;
                     return match result {
-                        crate::runtime_value::TaskExecutionResult::Ready(result) => {
-                            Ok(wait_any_ready(index, result?))
-                        }
+                        crate::runtime_value::TaskExecutionResult::Ready(result) => match result {
+                            Ok(value) => Ok(wait_any_ready(index, value)),
+                            Err(error) => Ok(wait_any_error(index, error.message)),
+                        },
                         crate::runtime_value::TaskExecutionResult::Cancelled => {
                             Ok(wait_any_cancelled())
                         }
@@ -4896,14 +5035,22 @@ impl MirRuntime {
     fn wait_all(&mut self, tasks: Vec<TaskValue>, timeout: Option<StdDuration>) -> Result<Value> {
         let deadline = runtime_deadline_after_timeout(timeout)?;
         let mut results = Vec::with_capacity(tasks.len());
-        for task in tasks {
+        for (index, task) in tasks.into_iter().enumerate() {
             let remaining = deadline.and_then(|deadline| {
                 deadline
                     .checked_duration_since(Instant::now())
                     .or(Some(StdDuration::from_millis(0)))
             });
-            match task.wait_result_with_cancellation(remaining, Some(&self.cancellation)) {
-                TaskWaitStatus::Ready(result) => results.push(result?),
+            match task.wait_result_with_cancellation_observed(remaining, Some(&self.cancellation)) {
+                TaskWaitStatus::Ready(result) => match result {
+                    Ok(value) => results.push(value),
+                    Err(error) => {
+                        let index = i32::try_from(index).map_err(|_| {
+                            Diagnostic::new("wait_all result index exceeds int32 range")
+                        })?;
+                        return Ok(wait_all_error(index, error.message));
+                    }
+                },
                 TaskWaitStatus::TimedOut => return Ok(wait_all_timed_out()),
                 TaskWaitStatus::Cancelled => return Ok(wait_all_cancelled()),
             }
@@ -4914,29 +5061,39 @@ impl MirRuntime {
     fn close_task_group(
         &mut self,
         group: TaskGroupValue,
-        _cancel_before_cleanup: bool,
+        cancel_before_cleanup: bool,
     ) -> Result<()> {
-        group.cancel();
-
-        let mut first_error = None;
-        for task in group.drain_tasks() {
-            match task.wait_result_with_cancellation(None, Some(&self.cancellation)) {
-                TaskWaitStatus::Ready(result) => {
-                    if let Err(error) = result {
-                        group.cancel();
-                        if first_error.is_none() {
-                            first_error = Some(error);
+        let tasks = group.drain_tasks();
+        let mut cancel_group = cancel_before_cleanup;
+        if !cancel_group {
+            for task in &tasks {
+                match task.wait_result_with_cancellation(
+                    Some(StdDuration::from_millis(1)),
+                    Some(&self.cancellation),
+                ) {
+                    TaskWaitStatus::Ready(_) | TaskWaitStatus::Cancelled => {}
+                    TaskWaitStatus::TimedOut => {
+                        if task.waits_without_deadline() {
+                            cancel_group = true;
+                            break;
                         }
+                    }
+                }
+            }
+        }
+        if cancel_group {
+            group.cancel();
+        }
+        for task in tasks {
+            match task.wait_result_with_cancellation(None, Some(&self.cancellation)) {
+                TaskWaitStatus::Ready(_result) => {
+                    if let Some(error) = task.unobserved_error() {
+                        return Err(error);
                     }
                 }
                 TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => {}
             }
         }
-
-        if let Some(error) = first_error {
-            return Err(error);
-        }
-
         Ok(())
     }
 
@@ -5230,7 +5387,8 @@ fn expect_command_vec(value: &Value, label: &str) -> Result<Vec<String>> {
 fn expect_bytes_value(value: &Value, label: &str) -> Result<Vec<u8>> {
     match value {
         Value::Vec(vector)
-            if vector.element_type == Type::named("uint8")
+            if (vector.element_type == Type::named("uint8")
+                || vector.element_type == Type::named("Unknown"))
                 && vector
                     .elements
                     .iter()

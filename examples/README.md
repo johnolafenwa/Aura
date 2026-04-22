@@ -430,6 +430,7 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
 
 - `task_group_start.au`
   - structured task startup with `TaskGroup.start(...)`, `Queue[T]().get_or_none()`, and `Task.result_or(...)`
+  - the no-timeout `get_or_none()` / `result_or(...)` helpers act as immediate non-blocking checks
   - prints:
     - `2`
     - `4`

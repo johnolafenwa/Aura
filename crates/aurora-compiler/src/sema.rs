@@ -368,20 +368,10 @@ fn type_is_copy_in_context_inner(
         Type::Named(name, args) if name == "QueueReceive" && args.len() == 1 => {
             type_is_copy_in_context_inner(&args[0], classes, enums, visiting)
         }
-        Type::Named(name, args) if name == "TaskResult" && args.len() == 1 => {
-            type_is_copy_in_context_inner(&args[0], classes, enums, visiting)
-        }
-        Type::Named(name, args) if name == "WaitAny" && args.len() == 1 => {
-            type_is_copy_in_context_inner(&Type::named("int32"), classes, enums, visiting)
-                && type_is_copy_in_context_inner(&args[0], classes, enums, visiting)
-        }
-        Type::Named(name, args) if name == "WaitAll" && args.len() == 1 => {
-            type_is_copy_in_context_inner(
-                &Type::Named("Vec".to_string(), vec![args[0].clone()]),
-                classes,
-                enums,
-                visiting,
-            )
+        Type::Named(name, args)
+            if matches!(name.as_str(), "TaskResult" | "WaitAny" | "WaitAll") && args.len() == 1 =>
+        {
+            false
         }
         Type::Named(name, args) => {
             let key = ty.to_string();
@@ -2728,6 +2718,34 @@ impl<'a> FunctionChecker<'a> {
                 }
                 Ok(())
             }
+            ExprKind::Match {
+                scrutinee,
+                borrow_mode,
+                arms,
+            } => {
+                let match_borrow_mut_place = if *borrow_mode == Some(ReceiverKind::BorrowMut) {
+                    self.borrow_call_place(scrutinee)
+                } else {
+                    None
+                };
+                let scrutinee_ty = self.type_of_expr_without_move_state(scrutinee, locals, None)?;
+                let mut arm_states = Vec::with_capacity(arms.len());
+                for arm in arms {
+                    let mut arm_locals = locals.clone();
+                    self.bind_pattern_locals(
+                        &arm.pattern,
+                        &scrutinee_ty,
+                        &mut arm_locals,
+                        *borrow_mode,
+                        match_borrow_mut_place.as_deref(),
+                    )?;
+                    self.consume_value_expr(&arm.value, &mut arm_locals)?;
+                    arm_states.push(arm_locals);
+                }
+                let branch_states = arm_states.iter().collect::<Vec<_>>();
+                self.merge_control_flow_moves(locals, &branch_states);
+                Ok(())
+            }
             ExprKind::Index { .. } => self.type_of_expr(expr, locals).map(|_| ()),
             _ => Ok(()),
         }
@@ -3410,8 +3428,6 @@ impl<'a> FunctionChecker<'a> {
                             && self.const_bool_value(&branch.condition) != Some(false);
                         if branch_reachable && branch_flow != BlockFlow::AlwaysReturns {
                             all_return = false;
-                        }
-                        if branch_reachable {
                             branch_states.push(branch_locals);
                         }
                         if later_branches_reachable
@@ -3433,8 +3449,6 @@ impl<'a> FunctionChecker<'a> {
                         )?;
                         if later_branches_reachable && else_flow != BlockFlow::AlwaysReturns {
                             all_return = false;
-                        }
-                        if later_branches_reachable {
                             else_state = Some(else_locals);
                         }
                     } else if later_branches_reachable {
@@ -3729,6 +3743,12 @@ impl<'a> FunctionChecker<'a> {
             loop_depth,
             allow_return,
         )
+        .map(|flow| {
+            if flow != BlockFlow::AlwaysReturns {
+                self.merge_control_flow_moves(locals, &[&body_locals]);
+            }
+            flow
+        })
     }
 
     fn check_assign(
@@ -3905,6 +3925,7 @@ impl<'a> FunctionChecker<'a> {
             self.ensure_pattern_binding_not_stale(binding_name, assign.span, existing)?;
         }
         let existing_ty = existing_binding.as_ref().map(|binding| binding.ty.clone());
+        let mut borrow_info_locals = locals.clone();
         let value_ty = self.type_of_expr_hint(
             &assign.value,
             locals,
@@ -4008,7 +4029,7 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
 
-        if let Some(borrowed) = self.expr_borrow_info(&assign.value, locals)? {
+        if let Some(borrowed) = self.expr_borrow_info(&assign.value, &mut borrow_info_locals)? {
             if self.is_copy_type(&final_ty) {
                 self.consume_value_expr(&assign.value, locals)?;
                 locals.insert(
@@ -4083,6 +4104,21 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
         self.type_of_expr_hint(expr, locals, None)
+    }
+
+    fn type_of_expr_without_move_state(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Type> {
+        let mut snapshot = locals.clone();
+        for binding in snapshot.values_mut() {
+            binding.moved = false;
+            binding.moved_fields.clear();
+            binding.stale_match_borrow_mut_place = None;
+        }
+        self.type_of_expr_hint(expr, &mut snapshot, expected)
     }
 
     fn type_of_expr_hint(
@@ -4183,11 +4219,6 @@ impl<'a> FunctionChecker<'a> {
                         "empty list literals require an expected `Vec[T]` type annotation in the bootstrap compiler",
                     ));
                 };
-                for element in elements {
-                    if !self.is_copy_type(&element_ty) {
-                        self.consume_value_expr(element, locals)?;
-                    }
-                }
                 Ok(Type::Named("Vec".to_string(), vec![element_ty]))
             }
             ExprKind::Set(elements) => {
@@ -4218,11 +4249,6 @@ impl<'a> FunctionChecker<'a> {
                         "empty set literals require an expected `Set[T]` type annotation in the bootstrap compiler",
                     ));
                 };
-                for element in elements {
-                    if !self.is_copy_type(&element_ty) {
-                        self.consume_value_expr(element, locals)?;
-                    }
-                }
                 Ok(Type::Named("Set".to_string(), vec![element_ty]))
             }
             ExprKind::Map(entries) => {
@@ -4277,14 +4303,6 @@ impl<'a> FunctionChecker<'a> {
                         "empty map literals require an expected `Map[K, V]` type annotation in the bootstrap compiler",
                     ));
                 };
-                for entry in entries {
-                    if !self.is_copy_type(&key_ty) {
-                        self.consume_value_expr(&entry.key, locals)?;
-                    }
-                    if !self.is_copy_type(&value_ty) {
-                        self.consume_value_expr(&entry.value, locals)?;
-                    }
-                }
                 Ok(Type::Named("Map".to_string(), vec![key_ty, value_ty]))
             }
             ExprKind::Match {
@@ -8943,8 +8961,8 @@ impl<'a> FunctionChecker<'a> {
                     )?;
                     if arm_flow != BlockFlow::AlwaysReturns {
                         all_return = false;
+                        arm_states.push(arm_locals);
                     }
-                    arm_states.push(arm_locals);
                 }
 
                 for (variant_name, payloads) in &variants {
@@ -9014,6 +9032,7 @@ impl<'a> FunctionChecker<'a> {
             let mut all_return = true;
             let mut covered_literals = BTreeMap::<LiteralPatternKey, crate::diag::Span>::new();
             let mut covered_bools = BTreeSet::<bool>::new();
+            let mut arm_states = Vec::new();
 
             for (index, arm) in match_stmt.arms.iter().enumerate() {
                 let mut arm_locals = locals.clone();
@@ -9083,6 +9102,7 @@ impl<'a> FunctionChecker<'a> {
                 )?;
                 if arm_flow != BlockFlow::AlwaysReturns {
                     all_return = false;
+                    arm_states.push(arm_locals);
                 }
             }
 
@@ -9113,6 +9133,9 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
             }
+
+            let branch_states = arm_states.iter().collect::<Vec<_>>();
+            self.merge_control_flow_moves(locals, &branch_states);
 
             if all_return {
                 Ok(BlockFlow::AlwaysReturns)
@@ -9506,6 +9529,7 @@ impl<'a> FunctionChecker<'a> {
             let mut wildcard_seen = false;
             let mut covered_literals = BTreeSet::<LiteralPatternKey>::new();
             let mut covered_bools = BTreeSet::<bool>::new();
+            let mut arm_states = Vec::new();
 
             for (index, arm) in arms.iter().enumerate() {
                 let mut arm_locals = locals.clone();
@@ -9578,6 +9602,7 @@ impl<'a> FunctionChecker<'a> {
                 } else {
                     result_ty = Some(arm_ty);
                 }
+                arm_states.push(arm_locals);
             }
 
             if matches!(scrutinee_ty, Type::Named(ref name, ref args) if name == "bool" && args.is_empty())
@@ -9605,8 +9630,11 @@ impl<'a> FunctionChecker<'a> {
                     "match over `{}` requires a final wildcard arm because the domain is open-ended",
                     scrutinee_ty
                 ),
-            ));
+                ));
             }
+
+            let branch_states = arm_states.iter().collect::<Vec<_>>();
+            self.merge_control_flow_moves(locals, &branch_states);
 
             Ok(result_ty.unwrap_or(Type::Unit))
         })();
@@ -11831,6 +11859,7 @@ impl<'a> FunctionChecker<'a> {
             ]),
             Type::Named(name, args) if name == "TaskResult" && args.len() == 1 => Some(vec![
                 ("Ready".to_string(), vec![args[0].clone()]),
+                ("Error".to_string(), vec![Type::named("String")]),
                 ("TimedOut".to_string(), Vec::new()),
                 ("Cancelled".to_string(), Vec::new()),
             ]),
@@ -11839,6 +11868,10 @@ impl<'a> FunctionChecker<'a> {
                     "Ready".to_string(),
                     vec![Type::named("int32"), args[0].clone()],
                 ),
+                (
+                    "Error".to_string(),
+                    vec![Type::named("int32"), Type::named("String")],
+                ),
                 ("TimedOut".to_string(), Vec::new()),
                 ("Cancelled".to_string(), Vec::new()),
             ]),
@@ -11846,6 +11879,10 @@ impl<'a> FunctionChecker<'a> {
                 (
                     "Ready".to_string(),
                     vec![Type::Named("Vec".to_string(), vec![args[0].clone()])],
+                ),
+                (
+                    "Error".to_string(),
+                    vec![Type::named("int32"), Type::named("String")],
                 ),
                 ("TimedOut".to_string(), Vec::new()),
                 ("Cancelled".to_string(), Vec::new()),
@@ -11901,10 +11938,13 @@ impl<'a> FunctionChecker<'a> {
             ("QueueReceive", "Item", [value]) => Some(vec![value.clone()]),
             ("QueueReceive", "Closed" | "TimedOut" | "Cancelled", [_]) => Some(Vec::new()),
             ("TaskResult", "Ready", [value]) => Some(vec![value.clone()]),
+            ("TaskResult", "Error", [_]) => Some(vec![Type::named("String")]),
             ("TaskResult", "TimedOut" | "Cancelled", [_]) => Some(Vec::new()),
-            ("WaitAny", "Ready", [index, value]) => Some(vec![index.clone(), value.clone()]),
+            ("WaitAny", "Ready", [value]) => Some(vec![Type::named("int32"), value.clone()]),
+            ("WaitAny", "Error", [_]) => Some(vec![Type::named("int32"), Type::named("String")]),
             ("WaitAny", "TimedOut" | "Cancelled", [_]) => Some(Vec::new()),
             ("WaitAll", "Ready", [values]) => Some(vec![values.clone()]),
+            ("WaitAll", "Error", [_]) => Some(vec![Type::named("int32"), Type::named("String")]),
             ("WaitAll", "TimedOut" | "Cancelled", [_]) => Some(Vec::new()),
             _ => None,
         }

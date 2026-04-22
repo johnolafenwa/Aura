@@ -42,6 +42,8 @@ print(jobs.get_or_none(timeout=100ms))
 print(jobs.get_or(0, timeout=100ms))
 ```
 
+Without a timeout, `get_or_none()` and `get_or(default)` are immediate non-blocking checks. They return `Option.None` or the fallback value when no item is ready yet.
+
 Use `get(timeout=...)` when you need to distinguish all wait states. It returns `QueueReceive[T]`:
 
 ```python
@@ -108,11 +110,11 @@ Task groups tie child tasks to a lexical scope:
 with TaskGroup() as group:
     first = group.start(worker, jobs)
     second = group.start(worker, jobs)
-    print(first.result_or(-1))
-    print(second.result_or(-1))
+    print(first.result_or(-1, timeout=50ms))
+    print(second.result_or(-1, timeout=50ms))
 ```
 
-When the `with` block ends, any still-running child tasks are joined. This keeps child work scoped to the parent block.
+When the `with` block ends, Aurora waits for child tasks to finish. If a child is still parked in a cancellation-aware wait with no deadline, Aurora cancels the group first so the scope can shut down cleanly instead of hanging forever. This keeps child work scoped to the parent block.
 
 ### Starting Tasks
 
@@ -130,7 +132,7 @@ with TaskGroup() as group:
     group.start_soon(producer, jobs)
 ```
 
-That is Aurora's maintained replacement for fire-and-forget task creation. Background work still belongs to a group and still shuts down with the surrounding scope.
+That is Aurora's maintained replacement for fire-and-forget task creation. Background work still belongs to a group, scope exit still waits for it, and unread task failures still surface when the group closes.
 
 See [examples/concurrency/task_group_start.au](../examples/concurrency/task_group_start.au) and [examples/concurrency/task_group_start_soon.au](../examples/concurrency/task_group_start_soon.au).
 
@@ -156,12 +158,18 @@ print(task.result_or_none(timeout=100ms))
 print(task.result_or(-1, timeout=100ms))
 ```
 
+These convenience forms map task failures to `Option.None` or the caller-provided fallback, alongside timeout and cancellation.
+
+Without a timeout, `result_or_none()` and `result_or(default)` are immediate non-blocking checks. They return `Option.None` or the fallback value when the task is not ready yet.
+
 Use `Task.result(timeout=...)` when you need to distinguish all wait states. It returns `TaskResult[T]`:
 
 ```python
 match task.result():
     case TaskResult.Ready(value):
         print(value)
+    case TaskResult.Error(message):
+        print(message)
     case TaskResult.TimedOut:
         print("timed out")
     case TaskResult.Cancelled:
@@ -179,11 +187,16 @@ match wait_any(task_list, timeout=20ms):
     case WaitAny.Ready(index, value):
         print(index)
         print(value)
+    case WaitAny.Error(index, message):
+        print(index)
+        print(message)
     case WaitAny.TimedOut:
         print("timedout")
     case WaitAny.Cancelled:
         print("cancelled")
 ```
+
+`wait_any([])` returns `WaitAny.TimedOut` immediately.
 
 `wait_all(tasks, timeout=...)` returns `WaitAll[T]`:
 
@@ -192,6 +205,9 @@ match wait_all(task_list, timeout=20ms):
     case WaitAll.Ready(results):
         for result in results:
             print(result)
+    case WaitAll.Error(index, message):
+        print(index)
+        print(message)
     case WaitAll.TimedOut:
         print("timedout")
     case WaitAll.Cancelled:
@@ -213,6 +229,10 @@ def worker(out: Queue[int32]):
         out.put(i)
         i += 1
 ```
+
+`sleep(...)` also wakes early when the group is cancelled, so task code after the sleep can call `cancelled()` and decide how to exit.
+
+If the current `with TaskGroup()` scope is iterating a `Queue[T]` from that scope with `for value in queue:`, `group.cancel()` also wakes that queue iteration so it can finish cleanly instead of parking forever.
 
 Cancellation is cooperative. Aurora does not forcibly kill tasks.
 
@@ -245,13 +265,13 @@ def main() -> int32:
         task = group.start(producer, jobs)
 
         while true:
-            match jobs.get_or_none():
+            match jobs.get_or_none(timeout=50ms):
                 case Option.Some(value):
                     print(value)
                 case Option.None:
                     break
 
-        print(task.result_or(-1))
+        print(task.result_or(-1, timeout=50ms))
     return 0
 ```
 

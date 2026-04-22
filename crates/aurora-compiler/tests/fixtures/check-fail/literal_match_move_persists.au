@@ -1,0 +1,10 @@
+def main() -> int32:
+    text = "hello"
+    match 1:
+        case 1:
+            alias = text
+            print(alias)
+        case _:
+            pass
+    print(text)
+    return 0

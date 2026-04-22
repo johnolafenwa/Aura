@@ -280,7 +280,7 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
     (
         "examples/collections/vec_polish.au",
         include_str!("../../../examples/collections/vec_polish.au"),
-        "Ada\nGrace\ntrue\nfalse\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
+        "Ada\nGrace\ntrue\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
     ),
     (
         "examples/concurrency/queue_iteration.au",
@@ -473,7 +473,7 @@ where
     F: FnOnce() -> T + Send + 'static,
 {
     thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
+        .stack_size(64 * 1024 * 1024)
         .spawn(operation)
         .expect("large-stack helper thread should spawn")
         .join()
@@ -1187,124 +1187,128 @@ fn imported_function_return_types_keep_members_visible_across_modules() {
 
 #[test]
 fn broad_scratch_corpus_checks_analysis_and_mir_lowering_do_not_panic() {
-    let repo_root = repo_root();
-    let corpus_dirs = [repo_root.join("test_edge"), repo_root.join("test_recheck")];
+    run_with_large_stack(|| {
+        let repo_root = repo_root();
+        let corpus_dirs = [repo_root.join("test_edge"), repo_root.join("test_recheck")];
 
-    let mut file_count = 0usize;
-    let mut checked_ok = 0usize;
-    let mut lowered_ok = 0usize;
-    let mut emitted_ok = 0usize;
-    let mut emission_panics = 0usize;
+        let mut file_count = 0usize;
+        let mut checked_ok = 0usize;
+        let mut lowered_ok = 0usize;
+        let mut emitted_ok = 0usize;
+        let mut emission_panics = 0usize;
 
-    for dir in corpus_dirs {
-        for path in collect_aurora_files(&dir) {
-            file_count += 1;
-            let source = fs::read_to_string(&path)
-                .unwrap_or_else(|error| panic!("failed to read {}: {}", path.display(), error));
+        for dir in corpus_dirs {
+            for path in collect_aurora_files(&dir) {
+                file_count += 1;
+                let source = fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("failed to read {}: {}", path.display(), error));
 
-            let _ = analyze_path_source(&path, &source);
+                let _ = analyze_path_source(&path, &source);
 
-            if check_path(&path).is_ok() {
-                checked_ok += 1;
-            }
+                if check_path(&path).is_ok() {
+                    checked_ok += 1;
+                }
 
-            if let Ok(mir) = lower_path_to_mir(&path) {
-                lowered_ok += 1;
-                match catch_unwind(AssertUnwindSafe(|| emit_host_native_object(&mir))) {
-                    Ok(Ok(_)) => emitted_ok += 1,
-                    Ok(Err(_)) => {}
-                    Err(_) => {
-                        emission_panics += 1;
-                        eprintln!("direct backend panicked for {}", path.display());
+                if let Ok(mir) = lower_path_to_mir(&path) {
+                    lowered_ok += 1;
+                    match catch_unwind(AssertUnwindSafe(|| emit_host_native_object(&mir))) {
+                        Ok(Ok(_)) => emitted_ok += 1,
+                        Ok(Err(_)) => {}
+                        Err(_) => {
+                            emission_panics += 1;
+                            eprintln!("direct backend panicked for {}", path.display());
+                        }
                     }
                 }
             }
         }
-    }
 
-    assert!(file_count >= 800, "expected large scratch corpus");
-    assert!(checked_ok > 0, "expected some scratch files to type-check");
-    assert!(
-        lowered_ok > 0,
-        "expected some scratch files to lower to MIR"
-    );
-    assert!(
-        emitted_ok > 0,
-        "expected some scratch files to emit native direct objects"
-    );
-    assert!(
-        emission_panics < lowered_ok,
-        "expected most lowered scratch files to avoid direct backend panics"
-    );
+        assert!(file_count >= 800, "expected large scratch corpus");
+        assert!(checked_ok > 0, "expected some scratch files to type-check");
+        assert!(
+            lowered_ok > 0,
+            "expected some scratch files to lower to MIR"
+        );
+        assert!(
+            emitted_ok > 0,
+            "expected some scratch files to emit native direct objects"
+        );
+        assert!(
+            emission_panics < lowered_ok,
+            "expected most lowered scratch files to avoid direct backend panics"
+        );
+    });
 }
 
 #[test]
 fn broad_scratch_corpus_runtime_paths_do_not_panic() {
-    let repo_root = repo_root();
-    let corpus_dirs = [repo_root.join("test_edge"), repo_root.join("test_recheck")];
+    run_with_large_stack(|| {
+        let repo_root = repo_root();
+        let corpus_dirs = [repo_root.join("test_edge"), repo_root.join("test_recheck")];
 
-    let mut runnable = 0usize;
-    let mut run_completed = 0usize;
-    let mut explicit_mir_completed = 0usize;
-    let mut run_panics = 0usize;
-    let mut explicit_mir_panics = 0usize;
+        let mut runnable = 0usize;
+        let mut run_completed = 0usize;
+        let mut explicit_mir_completed = 0usize;
+        let mut run_panics = 0usize;
+        let mut explicit_mir_panics = 0usize;
 
-    for dir in corpus_dirs {
-        for path in collect_aurora_files(&dir) {
-            if !should_execute_runtime_corpus_case(&path) {
-                continue;
-            }
-            if check_path(&path).is_err() {
-                continue;
-            }
-            runnable += 1;
-            if runnable % 50 == 0 {
-                eprintln!(
-                    "runtime corpus progress: processed {} runnable files (current: {})",
-                    runnable,
-                    path.display()
-                );
-            }
-
-            let run_path_result = run_with_large_stack({
-                let path = path.clone();
-                move || catch_unwind(AssertUnwindSafe(|| run_path(&path)))
-            });
-            match run_path_result {
-                Ok(Ok(_)) | Ok(Err(_)) => run_completed += 1,
-                Err(_) => {
-                    run_panics += 1;
-                    eprintln!("run path panicked for {}", path.display());
+        for dir in corpus_dirs {
+            for path in collect_aurora_files(&dir) {
+                if !should_execute_runtime_corpus_case(&path) {
+                    continue;
                 }
-            }
-
-            let explicit_mir_result = run_with_large_stack({
-                let path = path.clone();
-                move || {
-                    catch_unwind(AssertUnwindSafe(|| {
-                        lower_path_to_mir(&path).and_then(|mir| run_mir(&mir))
-                    }))
+                if check_path(&path).is_err() {
+                    continue;
                 }
-            });
-            match explicit_mir_result {
-                Ok(Ok(_)) | Ok(Err(_)) => explicit_mir_completed += 1,
-                Err(_) => {
-                    explicit_mir_panics += 1;
-                    eprintln!("MIR runtime panicked for {}", path.display());
+                runnable += 1;
+                if runnable % 50 == 0 {
+                    eprintln!(
+                        "runtime corpus progress: processed {} runnable files (current: {})",
+                        runnable,
+                        path.display()
+                    );
+                }
+
+                let run_path_result = run_with_large_stack({
+                    let path = path.clone();
+                    move || catch_unwind(AssertUnwindSafe(|| run_path(&path)))
+                });
+                match run_path_result {
+                    Ok(Ok(_)) | Ok(Err(_)) => run_completed += 1,
+                    Err(_) => {
+                        run_panics += 1;
+                        eprintln!("run path panicked for {}", path.display());
+                    }
+                }
+
+                let explicit_mir_result = run_with_large_stack({
+                    let path = path.clone();
+                    move || {
+                        catch_unwind(AssertUnwindSafe(|| {
+                            lower_path_to_mir(&path).and_then(|mir| run_mir(&mir))
+                        }))
+                    }
+                });
+                match explicit_mir_result {
+                    Ok(Ok(_)) | Ok(Err(_)) => explicit_mir_completed += 1,
+                    Err(_) => {
+                        explicit_mir_panics += 1;
+                        eprintln!("MIR runtime panicked for {}", path.display());
+                    }
                 }
             }
         }
-    }
 
-    assert!(runnable > 0, "expected runnable scratch programs");
-    assert!(
-        run_completed > 0 && explicit_mir_completed > 0,
-        "expected runtime corpus to exercise both execution paths"
-    );
-    assert!(
-        run_panics < runnable && explicit_mir_panics < runnable,
-        "expected most runtime corpus files to avoid execution panics"
-    );
+        assert!(runnable > 0, "expected runnable scratch programs");
+        assert!(
+            run_completed > 0 && explicit_mir_completed > 0,
+            "expected runtime corpus to exercise both execution paths"
+        );
+        assert!(
+            run_panics < runnable && explicit_mir_panics < runnable,
+            "expected most runtime corpus files to avoid execution panics"
+        );
+    });
 }
 
 #[test]
@@ -2115,6 +2119,8 @@ def main() -> int32:
         group.start_soon(mark_ready, "{ready_path}")
         match reader.result(timeout=2s):
             case TaskResult.Ready(_):
+                pass
+            case TaskResult.Error(_message):
                 pass
             case TaskResult.Cancelled:
                 pass

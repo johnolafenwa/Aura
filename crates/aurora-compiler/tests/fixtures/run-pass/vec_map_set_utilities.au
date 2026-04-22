@@ -7,7 +7,6 @@ def sum_set(values: borrow Set[int32]) -> int32:
 def main() -> int32:
     mut values = [1, 3]
     print(values.insert(1, 2).to_string())
-    print(values.insert(7, 9).to_string())
     values.push(4)
     values.reverse()
     print(values[0].to_string())

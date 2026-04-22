@@ -6,6 +6,6 @@ def main() -> int32:
     jobs = Queue[int32]()
     with TaskGroup() as group:
         group.start_soon(producer, jobs)
-        print(jobs.get_or(0))
+        print(jobs.get_or(0, timeout=50ms))
 
     return 0

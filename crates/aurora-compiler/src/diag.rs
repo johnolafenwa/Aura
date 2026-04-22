@@ -27,6 +27,7 @@ pub struct Diagnostic {
     pub span: Option<Span>,
     pub render_path: Option<String>,
     pub render_source: Option<String>,
+    pub partial_stdout: Option<String>,
 }
 
 impl Diagnostic {
@@ -36,6 +37,7 @@ impl Diagnostic {
             span: None,
             render_path: None,
             render_source: None,
+            partial_stdout: None,
         }
     }
 
@@ -45,6 +47,7 @@ impl Diagnostic {
             span: Some(span),
             render_path: None,
             render_source: None,
+            partial_stdout: None,
         }
     }
 
@@ -56,6 +59,15 @@ impl Diagnostic {
         self.render_path = Some(path.into());
         self.render_source = Some(source.into());
         self
+    }
+
+    pub fn with_partial_stdout(mut self, stdout: impl Into<String>) -> Self {
+        self.partial_stdout = Some(stdout.into());
+        self
+    }
+
+    pub fn partial_stdout(&self) -> Option<&str> {
+        self.partial_stdout.as_deref()
     }
 
     pub fn render_with_source(&self, path: &str, source: &str) -> String {

@@ -13,9 +13,10 @@ use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_value::{
-    cancel_current_lightweight_task, cast_numeric_value, current_lightweight_task_cancellation,
-    decode_process_restart_policy, decode_process_stdio, io_error, io_read_line, option_none,
-    option_some, process_error_cancelled, process_error_io, process_error_no_command,
+    cancel_current_lightweight_task_boundary, cast_numeric_value,
+    current_lightweight_task_cancellation, decode_process_restart_policy, decode_process_stdio,
+    fail_current_lightweight_task, io_error, io_read_line, option_none, option_some,
+    poll_cancellation, process_error_cancelled, process_error_io, process_error_no_command,
     process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
     process_stdio_null, process_stdio_pipe, process_supervisor_wait_cancelled,
     process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
@@ -24,17 +25,22 @@ use crate::runtime_value::{
     render_float, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
     send_error_cancelled, send_error_closed, send_error_full, send_error_timed_out,
     sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation, task_result_cancelled,
-    task_result_ready, task_result_timed_out, wait_all_cancelled, wait_all_ready,
-    wait_all_timed_out, wait_any_cancelled, wait_any_ready, wait_any_timed_out,
-    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, MapValue, ProcessChildValue,
-    ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
-    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RuntimeSchedulerWakeReason,
-    SendValueError, SetValue, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
-    TcpStreamValue, TlsListenerValue, TlsStreamValue, UdpSocketValue, UnixListenerValue,
-    UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    task_result_error, task_result_ready, task_result_timed_out, wait_all_cancelled,
+    wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
+    wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler, CancellationContext,
+    ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue,
+    LightweightTaskFailureSignal, MapValue, ProcessChildValue, ProcessChildWaitStatus,
+    ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    RecvValueResult, RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskCancelledSignal,
+    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
+    TlsStreamValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
+    WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::Type;
+
+thread_local! {
+    static TASK_RUNTIME_ERROR_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 fn write_stdout(text: &str) {
     let mut stdout = io::stdout().lock();
@@ -133,7 +139,7 @@ pub struct OpaqueValue {
     value: RwLock<Value>,
 }
 
-type NativeThunk = unsafe extern "C" fn(*const i64, usize) -> *mut OpaqueValue;
+type NativeThunk = unsafe extern "C-unwind" fn(*const i64, usize) -> *mut OpaqueValue;
 const DIRECT_MAX_CALL_DEPTH: usize = 256;
 const DIRECT_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
 
@@ -526,7 +532,7 @@ fn await_process_capture_task(task: Option<TaskValue>, label: &str) -> String {
     let Some(task) = task else {
         return String::new();
     };
-    match task.wait_result_with_cancellation(None, Some(&current_cancellation())) {
+    match task.wait_result_with_cancellation_observed(None, Some(&current_cancellation())) {
         TaskWaitStatus::Ready(Ok(Value::String(text))) => text,
         TaskWaitStatus::Ready(Ok(other)) => runtime_error(format!(
             "process {} capture returned `{}` instead of `String`",
@@ -553,6 +559,9 @@ fn render_runtime_diagnostic(diagnostic: Diagnostic) -> String {
 }
 
 fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
+    if TASK_RUNTIME_ERROR_CAPTURE.with(|capture| capture.get()) {
+        std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
+    }
     let _ = writeln!(
         io::stderr().lock(),
         "{}",
@@ -567,6 +576,38 @@ fn runtime_error(message: impl AsRef<str>) -> ! {
 
 fn runtime_error_at(span: Span, message: impl AsRef<str>) -> ! {
     runtime_diagnostic_error(Diagnostic::at(span, message.as_ref()))
+}
+
+fn with_task_runtime_error_capture<T>(f: impl FnOnce() -> T) -> T {
+    struct CaptureGuard {
+        previous: bool,
+    }
+
+    impl Drop for CaptureGuard {
+        fn drop(&mut self) {
+            TASK_RUNTIME_ERROR_CAPTURE.with(|capture| capture.set(self.previous));
+        }
+    }
+
+    TASK_RUNTIME_ERROR_CAPTURE.with(|capture| {
+        let previous = capture.replace(true);
+        let _guard = CaptureGuard { previous };
+        f()
+    })
+}
+
+#[track_caller]
+fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(value) => value,
+        Err(payload) if payload.is::<TaskCancelledSignal>() => {
+            cancel_current_lightweight_task_boundary()
+        }
+        Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
+            Ok(signal) => fail_current_lightweight_task(signal.0),
+            Err(payload) => std::panic::resume_unwind(payload),
+        },
+    }
 }
 
 fn runtime_span(line: i64, column: i64) -> Option<Span> {
@@ -836,119 +877,138 @@ fn eval_unary_value(value: Value, op: UnaryOp) -> std::result::Result<Value, Dia
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_runtime_init(
+pub extern "C-unwind" fn aurora_direct_runtime_init(
     path_ptr: *const u8,
     path_len: usize,
     source_ptr: *const u8,
     source_len: usize,
 ) {
-    let _ = DIRECT_PROGRAM_SOURCE.set(ProgramSourceContext {
-        path: decode_bytes(path_ptr, path_len),
-        source: decode_bytes(source_ptr, source_len),
-    });
+    task_runtime_boundary(|| {
+        let _ = DIRECT_PROGRAM_SOURCE.set(ProgramSourceContext {
+            path: decode_bytes(path_ptr, path_len),
+            source: decode_bytes(source_ptr, source_len),
+        });
+    })
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn aurora_direct_run_root(thunk_ptr: i64) -> i32 {
-    if thunk_ptr == 0 {
-        runtime_error("invalid direct root thunk pointer");
-    }
-    let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
-    let result = std::thread::Builder::new()
-        .stack_size(DIRECT_RUNTIME_STACK_SIZE)
-        .spawn(move || {
-            run_lightweight_root_task(move || {
-                with_cancellation_scope(CancellationContext::default(), || {
-                    let result_ptr = unsafe { thunk(std::ptr::null(), 0) };
-                    Ok(unsafe { consume_value(result_ptr) })
+pub unsafe extern "C-unwind" fn aurora_direct_run_root(thunk_ptr: i64) -> i32 {
+    task_runtime_boundary(|| {
+        if thunk_ptr == 0 {
+            runtime_error("invalid direct root thunk pointer");
+        }
+        let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
+        let result = std::thread::Builder::new()
+            .stack_size(DIRECT_RUNTIME_STACK_SIZE)
+            .spawn(move || {
+                run_lightweight_root_task(move || {
+                    with_cancellation_scope(CancellationContext::default(), || {
+                        let result_ptr = unsafe { thunk(std::ptr::null(), 0) };
+                        Ok(unsafe { consume_value(result_ptr) })
+                    })
                 })
             })
-        })
-        .unwrap_or_else(|error| {
-            runtime_error(format!("failed to start direct runtime thread: {}", error))
-        })
-        .join()
-        .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
-    match result {
-        Ok(Value::Int(value)) => value.as_i128().unwrap_or_default() as i32,
-        Ok(Value::Unit) => 0,
-        Ok(other) => runtime_error(format!(
-            "direct main entry must return `int32` or `None`, found `{}`",
-            value_type_name(&other)
-        )),
-        Err(error) => runtime_diagnostic_error(error),
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn aurora_direct_enter_call() {
-    DIRECT_CALL_DEPTH.with(|slot| {
-        let depth = slot.get();
-        if depth >= DIRECT_MAX_CALL_DEPTH {
-            runtime_error(format!(
-                "maximum call depth of {} exceeded in the direct backend",
-                DIRECT_MAX_CALL_DEPTH
-            ));
+            .unwrap_or_else(|error| {
+                runtime_error(format!("failed to start direct runtime thread: {}", error))
+            })
+            .join()
+            .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
+        match result {
+            Ok(Value::Int(value)) => value.as_i128().unwrap_or_default() as i32,
+            Ok(Value::Unit) => 0,
+            Ok(other) => runtime_error(format!(
+                "direct main entry must return `int32` or `None`, found `{}`",
+                value_type_name(&other)
+            )),
+            Err(error) => runtime_diagnostic_error(error),
         }
-        slot.set(depth + 1);
-    });
+    })
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn aurora_direct_exit_call() {
-    DIRECT_CALL_DEPTH.with(|slot| {
-        let depth = slot.get();
-        if depth > 0 {
-            slot.set(depth - 1);
-        }
-    });
+pub unsafe extern "C-unwind" fn aurora_direct_enter_call() {
+    task_runtime_boundary(|| {
+        DIRECT_CALL_DEPTH.with(|slot| {
+            let depth = slot.get();
+            if depth >= DIRECT_MAX_CALL_DEPTH {
+                runtime_error(format!(
+                    "maximum call depth of {} exceeded in the direct backend",
+                    DIRECT_MAX_CALL_DEPTH
+                ));
+            }
+            slot.set(depth + 1);
+        });
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_print_i64(value: i64) {
-    write_stdout(&format!("{}\n", value));
+pub unsafe extern "C-unwind" fn aurora_direct_exit_call() {
+    task_runtime_boundary(|| {
+        DIRECT_CALL_DEPTH.with(|slot| {
+            let depth = slot.get();
+            if depth > 0 {
+                slot.set(depth - 1);
+            }
+        });
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_print_f64(value: f64) {
-    write_stdout(&render_float(value));
-    write_stdout("\n");
+pub extern "C-unwind" fn aurora_direct_print_i64(value: i64) {
+    task_runtime_boundary(|| {
+        write_stdout(&format!("{}\n", value));
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_print_bool(value: i64) {
-    write_stdout(render_bool(value));
-    write_stdout("\n");
+pub extern "C-unwind" fn aurora_direct_print_f64(value: f64) {
+    task_runtime_boundary(|| {
+        write_stdout(&render_float(value));
+        write_stdout("\n");
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_box_i64(value: i64) -> *mut OpaqueValue {
-    boxed_value(Value::Int(IntegerValue::from_signed(value as i128)))
+pub extern "C-unwind" fn aurora_direct_print_bool(value: i64) {
+    task_runtime_boundary(|| {
+        write_stdout(render_bool(value));
+        write_stdout("\n");
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_box_uint_literal(ptr: *const u8, len: usize) -> *mut OpaqueValue {
-    let text = decode_bytes(ptr, len);
-    let value = match text.parse::<u128>() {
-        Ok(value) => value,
-        Err(_) => runtime_error(format!("invalid embedded uint literal `{}`", text)),
-    };
-    boxed_value(Value::Int(IntegerValue::from_literal(value)))
+pub extern "C-unwind" fn aurora_direct_box_i64(value: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(Value::Int(IntegerValue::from_signed(value as i128))))
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_box_f64(value: f64) -> *mut OpaqueValue {
-    boxed_value(Value::Float(value))
+pub extern "C-unwind" fn aurora_direct_box_uint_literal(
+    ptr: *const u8,
+    len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let text = decode_bytes(ptr, len);
+        let value = match text.parse::<u128>() {
+            Ok(value) => value,
+            Err(_) => runtime_error(format!("invalid embedded uint literal `{}`", text)),
+        };
+        boxed_value(Value::Int(IntegerValue::from_literal(value)))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_box_bool(value: i64) -> *mut OpaqueValue {
-    boxed_value(Value::Bool(value != 0))
+pub extern "C-unwind" fn aurora_direct_box_f64(value: f64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(Value::Float(value)))
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_box_unit() -> *mut OpaqueValue {
-    boxed_value(Value::Unit)
+pub extern "C-unwind" fn aurora_direct_box_bool(value: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(Value::Bool(value != 0)))
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_box_unit() -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(Value::Unit))
 }
 
 #[no_mangle]
@@ -956,18 +1016,22 @@ pub extern "C" fn aurora_direct_box_unit() -> *mut OpaqueValue {
 ///
 /// `value` must be either null or a live `OpaqueValue` pointer allocated by the Aurora direct
 /// runtime. Callers must only retain pointers whose storage is still owned by the current process.
-pub unsafe extern "C" fn aurora_direct_retain_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    if !value.is_null() {
-        let opaque = unsafe {
-            value.as_ref().unwrap_or_else(|| {
-                runtime_error("direct runtime received a null opaque value pointer")
-            })
-        };
-        if let Err(message) = retain_ref_count(&opaque.ref_count) {
-            runtime_error(message);
+pub unsafe extern "C-unwind" fn aurora_direct_retain_value(
+    value: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        if !value.is_null() {
+            let opaque = unsafe {
+                value.as_ref().unwrap_or_else(|| {
+                    runtime_error("direct runtime received a null opaque value pointer")
+                })
+            };
+            if let Err(message) = retain_ref_count(&opaque.ref_count) {
+                runtime_error(message);
+            }
         }
-    }
-    value
+        value
+    })
 }
 
 #[no_mangle]
@@ -976,39 +1040,49 @@ pub unsafe extern "C" fn aurora_direct_retain_value(value: *mut OpaqueValue) -> 
 /// `value` must be either null or a live `OpaqueValue` pointer allocated by the Aurora direct
 /// runtime. Each successful retain/release pair must be balanced according to the direct-runtime
 /// ownership contract.
-pub unsafe extern "C" fn aurora_direct_release_value(value: *mut OpaqueValue) {
-    if !value.is_null() {
-        unsafe {
-            let opaque = value.as_ref().unwrap_or_else(|| {
-                runtime_error("direct runtime received a null opaque value pointer")
-            });
-            if release_ref_count(&opaque.ref_count).unwrap_or_else(|message| runtime_error(message))
-            {
-                drop(Box::from_raw(value));
+pub unsafe extern "C-unwind" fn aurora_direct_release_value(value: *mut OpaqueValue) {
+    task_runtime_boundary(|| {
+        if !value.is_null() {
+            unsafe {
+                let opaque = value.as_ref().unwrap_or_else(|| {
+                    runtime_error("direct runtime received a null opaque value pointer")
+                });
+                if release_ref_count(&opaque.ref_count)
+                    .unwrap_or_else(|message| runtime_error(message))
+                {
+                    drop(Box::from_raw(value));
+                }
             }
         }
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_literal(ptr: *const u8, len: usize) -> *mut OpaqueValue {
-    boxed_value(Value::String(decode_bytes(ptr, len)))
+pub extern "C-unwind" fn aurora_direct_string_literal(
+    ptr: *const u8,
+    len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(Value::String(decode_bytes(ptr, len))))
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_stringify_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    let rendered = unsafe { value_ref(value) }.render();
-    boxed_value(Value::String(rendered))
+pub extern "C-unwind" fn aurora_direct_stringify_value(
+    value: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let rendered = unsafe { value_ref(value) }.render();
+        boxed_value(Value::String(rendered))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_duration_literal(value: i64) -> *mut OpaqueValue {
-    boxed_value(Value::Duration(value as i128))
+pub extern "C-unwind" fn aurora_direct_duration_literal(value: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(Value::Duration(value as i128)))
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_len(value: *mut OpaqueValue) -> i64 {
-    match unsafe { value_ref(value) } {
+pub extern "C-unwind" fn aurora_direct_string_len(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::String(text) => match i64::try_from(text.len()) {
             Ok(length) => length,
             Err(_) => runtime_error("string length does not fit in the direct runtime range"),
@@ -1017,355 +1091,391 @@ pub extern "C" fn aurora_direct_string_len(value: *mut OpaqueValue) -> i64 {
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_contains(
+pub extern "C-unwind" fn aurora_direct_string_contains(
     value: *mut OpaqueValue,
     needle: *mut OpaqueValue,
 ) -> i64 {
-    let Value::String(needle) = (unsafe { take_value(needle) }) else {
-        runtime_error("`contains` requires a `String` argument");
-    };
-    match unsafe { value_ref(value) } {
-        Value::String(text) => i64::from(text.contains(&needle)),
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let Value::String(needle) = (unsafe { take_value(needle) }) else {
+            runtime_error("`contains` requires a `String` argument");
+        };
+        match unsafe { value_ref(value) } {
+            Value::String(text) => i64::from(text.contains(&needle)),
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_starts_with(
+pub extern "C-unwind" fn aurora_direct_string_starts_with(
     value: *mut OpaqueValue,
     prefix: *mut OpaqueValue,
 ) -> i64 {
-    let Value::String(prefix) = (unsafe { take_value(prefix) }) else {
-        runtime_error("`starts_with` requires a `String` argument");
-    };
-    match unsafe { value_ref(value) } {
-        Value::String(text) => i64::from(text.starts_with(&prefix)),
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let Value::String(prefix) = (unsafe { take_value(prefix) }) else {
+            runtime_error("`starts_with` requires a `String` argument");
+        };
+        match unsafe { value_ref(value) } {
+            Value::String(text) => i64::from(text.starts_with(&prefix)),
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_ends_with(
+pub extern "C-unwind" fn aurora_direct_string_ends_with(
     value: *mut OpaqueValue,
     suffix: *mut OpaqueValue,
 ) -> i64 {
-    let Value::String(suffix) = (unsafe { take_value(suffix) }) else {
-        runtime_error("`ends_with` requires a `String` argument");
-    };
-    match unsafe { value_ref(value) } {
-        Value::String(text) => i64::from(text.ends_with(&suffix)),
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let Value::String(suffix) = (unsafe { take_value(suffix) }) else {
+            runtime_error("`ends_with` requires a `String` argument");
+        };
+        match unsafe { value_ref(value) } {
+            Value::String(text) => i64::from(text.ends_with(&suffix)),
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_split(
+pub extern "C-unwind" fn aurora_direct_string_split(
     value: *mut OpaqueValue,
     separator: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let Value::String(separator) = (unsafe { take_value(separator) }) else {
-        runtime_error("`split` requires a `String` argument");
-    };
-    match unsafe { value_ref(value) } {
-        Value::String(text) => boxed_value(Value::Vec(VecValue {
-            element_type: Type::named("String"),
-            elements: text
-                .split(&separator)
-                .map(|part| Value::String(part.to_string()))
-                .collect(),
-        })),
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let Value::String(separator) = (unsafe { take_value(separator) }) else {
+            runtime_error("`split` requires a `String` argument");
+        };
+        match unsafe { value_ref(value) } {
+            Value::String(text) => boxed_value(Value::Vec(VecValue {
+                element_type: Type::named("String"),
+                elements: text
+                    .split(&separator)
+                    .map(|part| Value::String(part.to_string()))
+                    .collect(),
+            })),
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_replace(
+pub extern "C-unwind" fn aurora_direct_string_replace(
     value: *mut OpaqueValue,
     from: *mut OpaqueValue,
     to: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let Value::String(from) = (unsafe { take_value(from) }) else {
-        runtime_error("`replace` requires `String` for `from`");
-    };
-    let Value::String(to) = (unsafe { take_value(to) }) else {
-        runtime_error("`replace` requires `String` for `to`");
-    };
-    match unsafe { value_ref(value) } {
-        Value::String(text) => boxed_value(Value::String(text.replace(&from, &to))),
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let Value::String(from) = (unsafe { take_value(from) }) else {
+            runtime_error("`replace` requires `String` for `from`");
+        };
+        let Value::String(to) = (unsafe { take_value(to) }) else {
+            runtime_error("`replace` requires `String` for `to`");
+        };
+        match unsafe { value_ref(value) } {
+            Value::String(text) => boxed_value(Value::String(text.replace(&from, &to))),
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_to_lower(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(value) } {
+pub extern "C-unwind" fn aurora_direct_string_to_lower(
+    value: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::String(text) => boxed_value(Value::String(text.to_lowercase())),
         other => runtime_error(format!(
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_to_upper(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(value) } {
+pub extern "C-unwind" fn aurora_direct_string_to_upper(
+    value: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::String(text) => boxed_value(Value::String(text.to_uppercase())),
         other => runtime_error(format!(
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_strip_prefix(
+pub extern "C-unwind" fn aurora_direct_string_strip_prefix(
     value: *mut OpaqueValue,
     prefix: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let Value::String(prefix) = (unsafe { take_value(prefix) }) else {
-        runtime_error("`strip_prefix` requires a `String` argument");
-    };
-    match unsafe { value_ref(value) } {
-        Value::String(text) => boxed_value(
-            text.strip_prefix(&prefix)
-                .map(|rest| option_some(Value::String(rest.to_string())))
-                .unwrap_or_else(option_none),
-        ),
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let Value::String(prefix) = (unsafe { take_value(prefix) }) else {
+            runtime_error("`strip_prefix` requires a `String` argument");
+        };
+        match unsafe { value_ref(value) } {
+            Value::String(text) => boxed_value(
+                text.strip_prefix(&prefix)
+                    .map(|rest| option_some(Value::String(rest.to_string())))
+                    .unwrap_or_else(option_none),
+            ),
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_strip_suffix(
+pub extern "C-unwind" fn aurora_direct_string_strip_suffix(
     value: *mut OpaqueValue,
     suffix: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let Value::String(suffix) = (unsafe { take_value(suffix) }) else {
-        runtime_error("`strip_suffix` requires a `String` argument");
-    };
-    match unsafe { value_ref(value) } {
-        Value::String(text) => boxed_value(
-            text.strip_suffix(&suffix)
-                .map(|rest| option_some(Value::String(rest.to_string())))
-                .unwrap_or_else(option_none),
-        ),
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let Value::String(suffix) = (unsafe { take_value(suffix) }) else {
+            runtime_error("`strip_suffix` requires a `String` argument");
+        };
+        match unsafe { value_ref(value) } {
+            Value::String(text) => boxed_value(
+                text.strip_suffix(&suffix)
+                    .map(|rest| option_some(Value::String(rest.to_string())))
+                    .unwrap_or_else(option_none),
+            ),
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_trim(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(value) } {
+pub extern "C-unwind" fn aurora_direct_string_trim(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::String(text) => boxed_value(Value::String(text.trim().to_string())),
         other => runtime_error(format!(
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_string_join(
+pub extern "C-unwind" fn aurora_direct_string_join(
     separator: *mut OpaqueValue,
     parts: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let Value::Vec(parts) = (unsafe { take_value(parts) }) else {
-        runtime_error("`join` requires `Vec[String]`");
-    };
-    match unsafe { value_ref(separator) } {
-        Value::String(separator) => {
-            let mut rendered_parts = Vec::new();
-            for value in parts.elements {
-                let Value::String(part) = value else {
-                    runtime_error("`join` requires `Vec[String]`");
-                };
-                rendered_parts.push(part);
+    task_runtime_boundary(|| {
+        let Value::Vec(parts) = (unsafe { take_value(parts) }) else {
+            runtime_error("`join` requires `Vec[String]`");
+        };
+        match unsafe { value_ref(separator) } {
+            Value::String(separator) => {
+                let mut rendered_parts = Vec::new();
+                for value in parts.elements {
+                    let Value::String(part) = value else {
+                        runtime_error("`join` requires `Vec[String]`");
+                    };
+                    rendered_parts.push(part);
+                }
+                boxed_value(Value::String(rendered_parts.join(&separator)))
             }
-            boxed_value(Value::String(rendered_parts.join(&separator)))
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_abs(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    let value = unsafe { take_value(value) };
-    match value {
-        Value::Int(IntegerValue::Signed(value)) => value
-            .checked_abs()
-            .map(IntegerValue::from_signed)
-            .map(Value::Int)
-            .map(boxed_value)
-            .unwrap_or_else(|| runtime_error("`abs(...)` overflowed the signed integer range")),
-        Value::Int(IntegerValue::Unsigned(value)) => {
-            boxed_value(Value::Int(IntegerValue::Unsigned(value)))
+pub extern "C-unwind" fn aurora_direct_abs(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let value = unsafe { take_value(value) };
+        match value {
+            Value::Int(IntegerValue::Signed(value)) => value
+                .checked_abs()
+                .map(IntegerValue::from_signed)
+                .map(Value::Int)
+                .map(boxed_value)
+                .unwrap_or_else(|| runtime_error("`abs(...)` overflowed the signed integer range")),
+            Value::Int(IntegerValue::Unsigned(value)) => {
+                boxed_value(Value::Int(IntegerValue::Unsigned(value)))
+            }
+            Value::Float(value) => boxed_value(Value::Float(value.abs())),
+            other => runtime_error(format!(
+                "`abs(...)` expects an integer or float value, found `{}`",
+                value_type_name(&other)
+            )),
         }
-        Value::Float(value) => boxed_value(Value::Float(value.abs())),
-        other => runtime_error(format!(
-            "`abs(...)` expects an integer or float value, found `{}`",
-            value_type_name(&other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_min(
+pub extern "C-unwind" fn aurora_direct_min(
     left: *mut OpaqueValue,
     right: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let left = unsafe { take_value(left) };
-    let right = unsafe { take_value(right) };
-    let value = match (&left, &right) {
-        (Value::Int(left_value), Value::Int(right_value)) => {
-            if left_value <= right_value {
-                left
-            } else {
-                right
+    task_runtime_boundary(|| {
+        let left = unsafe { take_value(left) };
+        let right = unsafe { take_value(right) };
+        let value = match (&left, &right) {
+            (Value::Int(left_value), Value::Int(right_value)) => {
+                if left_value <= right_value {
+                    left
+                } else {
+                    right
+                }
             }
-        }
-        (Value::Float(left_value), Value::Float(right_value)) => {
-            if left_value <= right_value {
-                left
-            } else {
-                right
+            (Value::Float(left_value), Value::Float(right_value)) => {
+                if left_value <= right_value {
+                    left
+                } else {
+                    right
+                }
             }
-        }
-        _ => runtime_error("`min(...)` expects matching numeric arguments"),
-    };
-    boxed_value(value)
+            _ => runtime_error("`min(...)` expects matching numeric arguments"),
+        };
+        boxed_value(value)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_max(
+pub extern "C-unwind" fn aurora_direct_max(
     left: *mut OpaqueValue,
     right: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let left = unsafe { take_value(left) };
-    let right = unsafe { take_value(right) };
-    let value = match (&left, &right) {
-        (Value::Int(left_value), Value::Int(right_value)) => {
-            if left_value >= right_value {
-                left
-            } else {
-                right
+    task_runtime_boundary(|| {
+        let left = unsafe { take_value(left) };
+        let right = unsafe { take_value(right) };
+        let value = match (&left, &right) {
+            (Value::Int(left_value), Value::Int(right_value)) => {
+                if left_value >= right_value {
+                    left
+                } else {
+                    right
+                }
             }
-        }
-        (Value::Float(left_value), Value::Float(right_value)) => {
-            if left_value >= right_value {
-                left
-            } else {
-                right
+            (Value::Float(left_value), Value::Float(right_value)) => {
+                if left_value >= right_value {
+                    left
+                } else {
+                    right
+                }
             }
+            _ => runtime_error("`max(...)` expects matching numeric arguments"),
+        };
+        boxed_value(value)
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_sqrt(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let value = unsafe { take_value(value) };
+        match value {
+            Value::Float(value) => boxed_value(Value::Float(value.sqrt())),
+            other => runtime_error(format!(
+                "`sqrt(...)` expects `float32` or `float64`, found `{}`",
+                value_type_name(&other)
+            )),
         }
-        _ => runtime_error("`max(...)` expects matching numeric arguments"),
-    };
-    boxed_value(value)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_sqrt(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    let value = unsafe { take_value(value) };
-    match value {
-        Value::Float(value) => boxed_value(Value::Float(value.sqrt())),
-        other => runtime_error(format!(
-            "`sqrt(...)` expects `float32` or `float64`, found `{}`",
-            value_type_name(&other)
-        )),
-    }
+pub extern "C-unwind" fn aurora_direct_parse_int32(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let value = unsafe { take_value(value) };
+        match value {
+            Value::String(text) => match text.parse::<i32>() {
+                Ok(value) => boxed_value(result_ok(Value::Int(IntegerValue::from_signed(
+                    value as i128,
+                )))),
+                Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
+            },
+            other => runtime_error(format!(
+                "`parse_int32(...)` expects `String`, found `{}`",
+                value_type_name(&other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_parse_int32(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    let value = unsafe { take_value(value) };
-    match value {
-        Value::String(text) => match text.parse::<i32>() {
-            Ok(value) => boxed_value(result_ok(Value::Int(IntegerValue::from_signed(
-                value as i128,
-            )))),
-            Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
-        },
-        other => runtime_error(format!(
-            "`parse_int32(...)` expects `String`, found `{}`",
-            value_type_name(&other)
-        )),
-    }
+pub extern "C-unwind" fn aurora_direct_parse_int64(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let value = unsafe { take_value(value) };
+        match value {
+            Value::String(text) => match text.parse::<i64>() {
+                Ok(value) => boxed_value(result_ok(Value::Int(IntegerValue::from_signed(
+                    value as i128,
+                )))),
+                Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
+            },
+            other => runtime_error(format!(
+                "`parse_int64(...)` expects `String`, found `{}`",
+                value_type_name(&other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_parse_int64(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    let value = unsafe { take_value(value) };
-    match value {
-        Value::String(text) => match text.parse::<i64>() {
-            Ok(value) => boxed_value(result_ok(Value::Int(IntegerValue::from_signed(
-                value as i128,
-            )))),
-            Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
-        },
-        other => runtime_error(format!(
-            "`parse_int64(...)` expects `String`, found `{}`",
-            value_type_name(&other)
-        )),
-    }
+pub extern "C-unwind" fn aurora_direct_parse_float64(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let value = unsafe { take_value(value) };
+        match value {
+            Value::String(text) => match text.parse::<f64>() {
+                Ok(value) if value.is_finite() => boxed_value(result_ok(Value::Float(value))),
+                Ok(_) => boxed_value(result_err(Value::String(
+                    "float must be finite".to_string(),
+                ))),
+                Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
+            },
+            other => runtime_error(format!(
+                "`parse_float64(...)` expects `String`, found `{}`",
+                value_type_name(&other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_parse_float64(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    let value = unsafe { take_value(value) };
-    match value {
-        Value::String(text) => match text.parse::<f64>() {
-            Ok(value) if value.is_finite() => boxed_value(result_ok(Value::Float(value))),
-            Ok(_) => boxed_value(result_err(Value::String(
-                "float must be finite".to_string(),
-            ))),
-            Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
-        },
-        other => runtime_error(format!(
-            "`parse_float64(...)` expects `String`, found `{}`",
-            value_type_name(&other)
-        )),
-    }
+pub extern "C-unwind" fn aurora_direct_range_new(start: i64, end: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_value(Value::Range(RangeValue {
+            start: start as i128,
+            end: end as i128,
+        }))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_range_new(start: i64, end: i64) -> *mut OpaqueValue {
-    boxed_value(Value::Range(RangeValue {
-        start: start as i128,
-        end: end as i128,
-    }))
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_range_current(range: *mut OpaqueValue) -> i64 {
-    match unsafe { value_ref(range) } {
+pub extern "C-unwind" fn aurora_direct_range_current(range: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| match unsafe { value_ref(range) } {
         Value::Range(range) => match i64::try_from(range.start) {
             Ok(start) => start,
             Err(_) => runtime_error("range start is outside host i64 bounds"),
@@ -1374,12 +1484,12 @@ pub extern "C" fn aurora_direct_range_current(range: *mut OpaqueValue) -> i64 {
             "expected `Range`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_range_end(range: *mut OpaqueValue) -> i64 {
-    match unsafe { value_ref(range) } {
+pub extern "C-unwind" fn aurora_direct_range_end(range: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| match unsafe { value_ref(range) } {
         Value::Range(range) => match i64::try_from(range.end) {
             Ok(end) => end,
             Err(_) => runtime_error("range end is outside host i64 bounds"),
@@ -1388,12 +1498,12 @@ pub extern "C" fn aurora_direct_range_end(range: *mut OpaqueValue) -> i64 {
             "expected `Range`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_range_advance(range: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(range) } {
+pub extern "C-unwind" fn aurora_direct_range_advance(range: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(range) } {
         Value::Range(range) => boxed_value(Value::Range(RangeValue {
             start: range.start + 1,
             end: range.end,
@@ -1402,7 +1512,7 @@ pub extern "C" fn aurora_direct_range_advance(range: *mut OpaqueValue) -> *mut O
             "expected `Range`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 fn with_vector<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&VecValue) -> T) -> T {
@@ -1509,474 +1619,519 @@ fn checked_vec_index_at(index: i64, line: i64, column: i64) -> usize {
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_empty() -> *mut OpaqueValue {
-    boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("Unknown"),
-        elements: Vec::new(),
-    }))
+pub extern "C-unwind" fn aurora_direct_vec_empty() -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_value(Value::Vec(VecValue {
+            element_type: Type::named("Unknown"),
+            elements: Vec::new(),
+        }))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_len(vec: *mut OpaqueValue) -> i64 {
-    match i64::try_from(with_vector(vec, |vector| vector.elements.len())) {
-        Ok(length) => length,
-        Err(_) => runtime_error("vector length does not fit in the direct runtime range"),
-    }
+pub extern "C-unwind" fn aurora_direct_vec_len(vec: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| {
+        match i64::try_from(with_vector(vec, |vector| vector.elements.len())) {
+            Ok(length) => length,
+            Err(_) => runtime_error("vector length does not fit in the direct runtime range"),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_is_empty(vec: *mut OpaqueValue) -> i64 {
-    i64::from(with_vector(vec, |vector| vector.elements.is_empty()))
+pub extern "C-unwind" fn aurora_direct_vec_is_empty(vec: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| i64::from(with_vector(vec, |vector| vector.elements.is_empty())))
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_push_in_place(
+pub extern "C-unwind" fn aurora_direct_vec_push_in_place(
     vec: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let value = unsafe { take_value(value) };
-    let inferred = inferred_collection_type(&value);
-    with_vector_mut(vec, |vector| {
-        if vector.element_type == Type::named("Unknown") && inferred != Type::named("Unknown") {
-            vector.element_type = inferred;
+    task_runtime_boundary(|| {
+        let value = unsafe { take_value(value) };
+        let inferred = inferred_collection_type(&value);
+        with_vector_mut(vec, |vector| {
+            if vector.element_type == Type::named("Unknown") && inferred != Type::named("Unknown") {
+                vector.element_type = inferred;
+            }
+            vector.elements.push(value);
+        });
+        boxed_value(Value::Unit)
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_vec_pop_in_place(vec: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let value = with_vector_mut(vec, |vector| vector.elements.pop());
+        match value {
+            Some(value) => boxed_value(option_some(value)),
+            None => boxed_value(option_none()),
         }
-        vector.elements.push(value);
-    });
-    boxed_value(Value::Unit)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_pop_in_place(vec: *mut OpaqueValue) -> *mut OpaqueValue {
-    let value = with_vector_mut(vec, |vector| vector.elements.pop());
-    match value {
-        Some(value) => boxed_value(option_some(value)),
-        None => boxed_value(option_none()),
-    }
+pub extern "C-unwind" fn aurora_direct_vec_get(
+    vec: *mut OpaqueValue,
+    index: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let index = checked_vec_index(index);
+        let value = with_vector(vec, |vector| vector.elements.get(index).cloned());
+        boxed_value(value.map(option_some).unwrap_or_else(option_none))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_get(vec: *mut OpaqueValue, index: i64) -> *mut OpaqueValue {
-    let index = checked_vec_index(index);
-    let value = with_vector(vec, |vector| vector.elements.get(index).cloned());
-    boxed_value(value.map(option_some).unwrap_or_else(option_none))
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_vec_set_in_place(
+pub extern "C-unwind" fn aurora_direct_vec_set_in_place(
     vec: *mut OpaqueValue,
     index: i64,
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let index = checked_vec_index(index);
-    let value = unsafe { take_value(value) };
-    let previous = with_vector_mut(vec, |vector| {
-        if index < vector.elements.len() {
-            Some(std::mem::replace(&mut vector.elements[index], value))
-        } else {
-            None
-        }
-    });
-    boxed_value(previous.map(option_some).unwrap_or_else(option_none))
+    task_runtime_boundary(|| {
+        let index = checked_vec_index(index);
+        let value = unsafe { take_value(value) };
+        let previous = with_vector_mut(vec, |vector| {
+            if index >= vector.elements.len() {
+                runtime_error(format!(
+                    "vector set index `{}` is out of bounds for length `{}`",
+                    index,
+                    vector.elements.len()
+                ));
+            }
+            std::mem::replace(&mut vector.elements[index], value)
+        });
+        boxed_value(option_some(previous))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_remove_in_place(
+pub extern "C-unwind" fn aurora_direct_vec_remove_in_place(
     vec: *mut OpaqueValue,
     index: i64,
 ) -> *mut OpaqueValue {
-    let index = checked_vec_index(index);
-    let previous = with_vector_mut(vec, |vector| {
-        if index < vector.elements.len() {
-            Some(vector.elements.remove(index))
-        } else {
-            None
-        }
-    });
-    boxed_value(previous.map(option_some).unwrap_or_else(option_none))
+    task_runtime_boundary(|| {
+        let index = checked_vec_index(index);
+        let previous = with_vector_mut(vec, |vector| {
+            if index >= vector.elements.len() {
+                runtime_error(format!(
+                    "vector remove index `{}` is out of bounds for length `{}`",
+                    index,
+                    vector.elements.len()
+                ));
+            }
+            vector.elements.remove(index)
+        });
+        boxed_value(option_some(previous))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_swap_in_place(
+pub extern "C-unwind" fn aurora_direct_vec_swap_in_place(
     vec: *mut OpaqueValue,
     first: i64,
     second: i64,
 ) -> i64 {
-    let first = checked_vec_index(first);
-    let second = checked_vec_index(second);
-    let swapped = with_vector_mut(vec, |vector| {
-        let swapped = first < vector.elements.len() && second < vector.elements.len();
-        if swapped {
+    task_runtime_boundary(|| {
+        let first = checked_vec_index(first);
+        let second = checked_vec_index(second);
+        with_vector_mut(vec, |vector| {
+            if first >= vector.elements.len() || second >= vector.elements.len() {
+                runtime_error(format!(
+                    "vector swap indices `{}` and `{}` are out of bounds for length `{}`",
+                    first,
+                    second,
+                    vector.elements.len()
+                ));
+            }
             vector.elements.swap(first, second);
-        }
-        swapped
-    });
-    i64::from(swapped)
+        });
+        1
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_contains(
+pub extern "C-unwind" fn aurora_direct_vec_contains(
     vec: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> i64 {
-    let needle = unsafe { take_value(value) };
-    i64::from(with_vector(vec, |vector| {
-        vector.elements.iter().any(|candidate| *candidate == needle)
-    }))
+    task_runtime_boundary(|| {
+        let needle = unsafe { take_value(value) };
+        i64::from(with_vector(vec, |vector| {
+            vector.elements.iter().any(|candidate| *candidate == needle)
+        }))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_insert_in_place(
+pub extern "C-unwind" fn aurora_direct_vec_insert_in_place(
     vec: *mut OpaqueValue,
     index: i64,
     value: *mut OpaqueValue,
 ) -> i64 {
-    let index = checked_vec_index(index);
-    let value = unsafe { take_value(value) };
-    let inserted = with_vector_mut(vec, |vector| {
-        let inserted = index <= vector.elements.len();
-        if inserted {
+    task_runtime_boundary(|| {
+        let index = checked_vec_index(index);
+        let value = unsafe { take_value(value) };
+        with_vector_mut(vec, |vector| {
+            if index > vector.elements.len() {
+                runtime_error(format!(
+                    "vector insert index `{}` is out of bounds for length `{}`",
+                    index,
+                    vector.elements.len()
+                ));
+            }
             vector.elements.insert(index, value);
-        }
-        inserted
-    });
-    i64::from(inserted)
+        });
+        1
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_clear_in_place(vec: *mut OpaqueValue) -> *mut OpaqueValue {
-    with_vector_mut(vec, |vector| vector.elements.clear());
-    boxed_value(Value::Unit)
+pub extern "C-unwind" fn aurora_direct_vec_clear_in_place(
+    vec: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        with_vector_mut(vec, |vector| vector.elements.clear());
+        boxed_value(Value::Unit)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_reverse_in_place(vec: *mut OpaqueValue) -> *mut OpaqueValue {
-    with_vector_mut(vec, |vector| vector.elements.reverse());
-    boxed_value(Value::Unit)
+pub extern "C-unwind" fn aurora_direct_vec_reverse_in_place(
+    vec: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        with_vector_mut(vec, |vector| vector.elements.reverse());
+        boxed_value(Value::Unit)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_extend_in_place(
+pub extern "C-unwind" fn aurora_direct_vec_extend_in_place(
     vec: *mut OpaqueValue,
     other: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let other = unsafe { take_value(other) };
-    let Value::Vec(other) = other else {
-        runtime_error("`extend` requires another `Vec[T]` value");
-    };
-    with_vector_mut(vec, |vector| vector.elements.extend(other.elements));
-    boxed_value(Value::Unit)
+    task_runtime_boundary(|| {
+        let other = unsafe { take_value(other) };
+        let Value::Vec(other) = other else {
+            runtime_error("`extend` requires another `Vec[T]` value");
+        };
+        with_vector_mut(vec, |vector| vector.elements.extend(other.elements));
+        boxed_value(Value::Unit)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_index(
+pub extern "C-unwind" fn aurora_direct_vec_index(
     vec: *mut OpaqueValue,
     index: i64,
     line: i64,
     column: i64,
 ) -> *mut OpaqueValue {
-    let index = checked_vec_index_at(index, line, column);
-    let (value, len) = with_vector(vec, |vector| {
-        (vector.elements.get(index).cloned(), vector.elements.len())
-    });
-    let Some(value) = value else {
-        match runtime_span(line, column) {
-            Some(span) => runtime_error_at(
-                span,
-                format!(
+    task_runtime_boundary(|| {
+        let index = checked_vec_index_at(index, line, column);
+        let (value, len) = with_vector(vec, |vector| {
+            (vector.elements.get(index).cloned(), vector.elements.len())
+        });
+        let Some(value) = value else {
+            match runtime_span(line, column) {
+                Some(span) => runtime_error_at(
+                    span,
+                    format!(
+                        "vector index `{}` is out of bounds for length `{}`",
+                        index, len
+                    ),
+                ),
+                None => runtime_error(format!(
                     "vector index `{}` is out of bounds for length `{}`",
                     index, len
-                ),
-            ),
-            None => runtime_error(format!(
-                "vector index `{}` is out of bounds for length `{}`",
-                index, len
-            )),
-        }
-    };
-    boxed_value(value)
+                )),
+            }
+        };
+        boxed_value(value)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_index_option(
+pub extern "C-unwind" fn aurora_direct_vec_index_option(
     vec: *mut OpaqueValue,
     index: i64,
 ) -> *mut OpaqueValue {
-    let index = checked_vec_index(index);
-    let value = with_vector(vec, |vector| vector.elements.get(index).cloned());
-    boxed_value(value.map(option_some).unwrap_or_else(option_none))
+    task_runtime_boundary(|| {
+        let index = checked_vec_index(index);
+        let value = with_vector(vec, |vector| vector.elements.get(index).cloned());
+        boxed_value(value.map(option_some).unwrap_or_else(option_none))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_vec_set_index_in_place(
+pub extern "C-unwind" fn aurora_direct_vec_set_index_in_place(
     vec: *mut OpaqueValue,
     index: i64,
     value: *mut OpaqueValue,
     line: i64,
     column: i64,
 ) -> *mut OpaqueValue {
-    let index = checked_vec_index_at(index, line, column);
-    let value = unsafe { take_value(value) };
-    let result = with_vector_mut(vec, |vector| {
-        if index >= vector.elements.len() {
-            Err(vector.elements.len())
-        } else {
-            vector.elements[index] = value;
-            Ok(())
-        }
-    });
-    if let Err(len) = result {
-        match runtime_span(line, column) {
-            Some(span) => runtime_error_at(
-                span,
-                format!(
+    task_runtime_boundary(|| {
+        let index = checked_vec_index_at(index, line, column);
+        let value = unsafe { take_value(value) };
+        let result = with_vector_mut(vec, |vector| {
+            if index >= vector.elements.len() {
+                Err(vector.elements.len())
+            } else {
+                vector.elements[index] = value;
+                Ok(())
+            }
+        });
+        if let Err(len) = result {
+            match runtime_span(line, column) {
+                Some(span) => runtime_error_at(
+                    span,
+                    format!(
+                        "vector index `{}` is out of bounds for length `{}`",
+                        index, len
+                    ),
+                ),
+                None => runtime_error(format!(
                     "vector index `{}` is out of bounds for length `{}`",
                     index, len
-                ),
-            ),
-            None => runtime_error(format!(
-                "vector index `{}` is out of bounds for length `{}`",
-                index, len
-            )),
+                )),
+            }
         }
-    }
-    boxed_value(Value::Unit)
+        boxed_value(Value::Unit)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_map_empty() -> *mut OpaqueValue {
-    boxed_value(Value::Map(MapValue {
-        key_type: Type::named("Unknown"),
-        value_type: Type::named("Unknown"),
-        entries: Vec::new(),
-    }))
+pub extern "C-unwind" fn aurora_direct_map_empty() -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_value(Value::Map(MapValue {
+            key_type: Type::named("Unknown"),
+            value_type: Type::named("Unknown"),
+            entries: Vec::new(),
+        }))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_map_len(map: *mut OpaqueValue) -> i64 {
-    match i64::try_from(with_map(map, |map| map.entries.len())) {
-        Ok(length) => length,
-        Err(_) => runtime_error("map length does not fit in the direct runtime range"),
-    }
+pub extern "C-unwind" fn aurora_direct_map_len(map: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(
+        || match i64::try_from(with_map(map, |map| map.entries.len())) {
+            Ok(length) => length,
+            Err(_) => runtime_error("map length does not fit in the direct runtime range"),
+        },
+    )
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_map_is_empty(map: *mut OpaqueValue) -> i64 {
-    i64::from(with_map(map, |map| map.entries.is_empty()))
+pub extern "C-unwind" fn aurora_direct_map_is_empty(map: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| i64::from(with_map(map, |map| map.entries.is_empty())))
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_map_get(
+pub extern "C-unwind" fn aurora_direct_map_get(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let key = unsafe { take_value(key) };
-    let value = with_map(map, |map| {
-        map.entries
-            .iter()
-            .find(|(candidate_key, _)| *candidate_key == key)
-            .map(|(_, value)| value.clone())
-    });
-    boxed_value(value.map(option_some).unwrap_or_else(option_none))
+    task_runtime_boundary(|| {
+        let key = unsafe { take_value(key) };
+        let value = with_map(map, |map| {
+            map.entries
+                .iter()
+                .find(|(candidate_key, _)| *candidate_key == key)
+                .map(|(_, value)| value.clone())
+        });
+        boxed_value(value.map(option_some).unwrap_or_else(option_none))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_map_set_in_place(
+pub extern "C-unwind" fn aurora_direct_map_set_in_place(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let key = unsafe { take_value(key) };
-    let value = unsafe { take_value(value) };
-    let inferred_key_type = inferred_collection_type(&key);
-    let inferred_value_type = inferred_collection_type(&value);
-    let previous = with_map_mut(map, |map| {
-        if map.key_type == Type::named("Unknown") && inferred_key_type != Type::named("Unknown") {
-            map.key_type = inferred_key_type.clone();
-        }
-        if map.value_type == Type::named("Unknown") && inferred_value_type != Type::named("Unknown")
-        {
-            map.value_type = inferred_value_type.clone();
-        }
-        if let Some(index) = map
-            .entries
-            .iter()
-            .position(|(candidate_key, _)| *candidate_key == key)
-        {
-            Some(std::mem::replace(&mut map.entries[index].1, value))
-        } else {
-            map.entries.push((key, value));
-            None
-        }
-    });
-    boxed_value(previous.map(option_some).unwrap_or_else(option_none))
+    task_runtime_boundary(|| {
+        let key = unsafe { take_value(key) };
+        let value = unsafe { take_value(value) };
+        let inferred_key_type = inferred_collection_type(&key);
+        let inferred_value_type = inferred_collection_type(&value);
+        let previous = with_map_mut(map, |map| {
+            if map.key_type == Type::named("Unknown") && inferred_key_type != Type::named("Unknown")
+            {
+                map.key_type = inferred_key_type.clone();
+            }
+            if map.value_type == Type::named("Unknown")
+                && inferred_value_type != Type::named("Unknown")
+            {
+                map.value_type = inferred_value_type.clone();
+            }
+            if let Some(index) = map
+                .entries
+                .iter()
+                .position(|(candidate_key, _)| *candidate_key == key)
+            {
+                Some(std::mem::replace(&mut map.entries[index].1, value))
+            } else {
+                map.entries.push((key, value));
+                None
+            }
+        });
+        boxed_value(previous.map(option_some).unwrap_or_else(option_none))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_map_remove_in_place(
+pub extern "C-unwind" fn aurora_direct_map_remove_in_place(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let key = unsafe { take_value(key) };
-    let previous = with_map_mut(map, |map| {
-        if let Some(index) = map
-            .entries
-            .iter()
-            .position(|(candidate_key, _)| *candidate_key == key)
-        {
-            Some(map.entries.remove(index).1)
-        } else {
-            None
-        }
-    });
-    boxed_value(previous.map(option_some).unwrap_or_else(option_none))
+    task_runtime_boundary(|| {
+        let key = unsafe { take_value(key) };
+        let previous = with_map_mut(map, |map| {
+            if let Some(index) = map
+                .entries
+                .iter()
+                .position(|(candidate_key, _)| *candidate_key == key)
+            {
+                Some(map.entries.remove(index).1)
+            } else {
+                None
+            }
+        });
+        boxed_value(previous.map(option_some).unwrap_or_else(option_none))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_map_contains_key(
+pub extern "C-unwind" fn aurora_direct_map_contains_key(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
 ) -> i64 {
-    let key = unsafe { take_value(key) };
-    i64::from(with_map(map, |map| {
-        map.entries
-            .iter()
-            .any(|(candidate_key, _)| *candidate_key == key)
-    }))
+    task_runtime_boundary(|| {
+        let key = unsafe { take_value(key) };
+        i64::from(with_map(map, |map| {
+            map.entries
+                .iter()
+                .any(|(candidate_key, _)| *candidate_key == key)
+        }))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_map_keys(map: *mut OpaqueValue) -> *mut OpaqueValue {
-    let (key_type, elements) = with_map(map, |map| {
-        (
-            map.key_type.clone(),
-            map.entries
-                .iter()
-                .map(|(key, _)| key.clone())
-                .collect::<Vec<_>>(),
-        )
-    });
-    boxed_value(Value::Vec(VecValue {
-        element_type: key_type,
-        elements,
-    }))
+pub extern "C-unwind" fn aurora_direct_map_keys(map: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let (key_type, elements) = with_map(map, |map| {
+            (
+                map.key_type.clone(),
+                map.entries
+                    .iter()
+                    .map(|(key, _)| key.clone())
+                    .collect::<Vec<_>>(),
+            )
+        });
+        boxed_value(Value::Vec(VecValue {
+            element_type: key_type,
+            elements,
+        }))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_map_values(map: *mut OpaqueValue) -> *mut OpaqueValue {
-    let (value_type, elements) = with_map(map, |map| {
-        (
-            map.value_type.clone(),
-            map.entries
-                .iter()
-                .map(|(_, value)| value.clone())
-                .collect::<Vec<_>>(),
-        )
-    });
-    boxed_value(Value::Vec(VecValue {
-        element_type: value_type,
-        elements,
-    }))
+pub extern "C-unwind" fn aurora_direct_map_values(map: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let (value_type, elements) = with_map(map, |map| {
+            (
+                map.value_type.clone(),
+                map.entries
+                    .iter()
+                    .map(|(_, value)| value.clone())
+                    .collect::<Vec<_>>(),
+            )
+        });
+        boxed_value(Value::Vec(VecValue {
+            element_type: value_type,
+            elements,
+        }))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_map_items(map: *mut OpaqueValue) -> *mut OpaqueValue {
-    let (element_type, elements) = with_map(map, |map| {
-        (
-            Type::Named(
-                "MapEntry".to_string(),
-                vec![map.key_type.clone(), map.value_type.clone()],
-            ),
-            map.entries
-                .iter()
-                .map(|(key, value)| {
-                    Value::Instance(InstanceValue {
-                        class_name: "MapEntry".to_string(),
-                        fields: BTreeMap::from([
-                            ("key".to_string(), key.clone()),
-                            ("value".to_string(), value.clone()),
-                        ]),
+pub extern "C-unwind" fn aurora_direct_map_items(map: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let (element_type, elements) = with_map(map, |map| {
+            (
+                Type::Named(
+                    "MapEntry".to_string(),
+                    vec![map.key_type.clone(), map.value_type.clone()],
+                ),
+                map.entries
+                    .iter()
+                    .map(|(key, value)| {
+                        Value::Instance(InstanceValue {
+                            class_name: "MapEntry".to_string(),
+                            fields: BTreeMap::from([
+                                ("key".to_string(), key.clone()),
+                                ("value".to_string(), value.clone()),
+                            ]),
+                        })
                     })
-                })
-                .collect::<Vec<_>>(),
-        )
-    });
-    boxed_value(Value::Vec(VecValue {
-        element_type,
-        elements,
-    }))
+                    .collect::<Vec<_>>(),
+            )
+        });
+        boxed_value(Value::Vec(VecValue {
+            element_type,
+            elements,
+        }))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_map_entries(map: *mut OpaqueValue) -> *mut OpaqueValue {
-    aurora_direct_map_items(map)
+pub extern "C-unwind" fn aurora_direct_map_entries(map: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| aurora_direct_map_items(map))
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_map_index(
+pub extern "C-unwind" fn aurora_direct_map_index(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
     line: i64,
     column: i64,
 ) -> *mut OpaqueValue {
-    let key = unsafe { take_value(key) };
-    let value = with_map(map, |map| {
-        map.entries
-            .iter()
-            .find(|(candidate_key, _)| *candidate_key == key)
-            .map(|(_, value)| value.clone())
-    });
-    let Some(value) = value else {
-        match runtime_span(line, column) {
-            Some(span) => {
-                runtime_error_at(span, format!("map key `{}` was not present", key.render()))
+    task_runtime_boundary(|| {
+        let key = unsafe { take_value(key) };
+        let value = with_map(map, |map| {
+            map.entries
+                .iter()
+                .find(|(candidate_key, _)| *candidate_key == key)
+                .map(|(_, value)| value.clone())
+        });
+        let Some(value) = value else {
+            match runtime_span(line, column) {
+                Some(span) => {
+                    runtime_error_at(span, format!("map key `{}` was not present", key.render()))
+                }
+                None => runtime_error(format!("map key `{}` was not present", key.render())),
             }
-            None => runtime_error(format!("map key `{}` was not present", key.render())),
-        }
-    };
-    boxed_value(value)
+        };
+        boxed_value(value)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_map_set_index_in_place(
+pub extern "C-unwind" fn aurora_direct_map_set_index_in_place(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
     value: *mut OpaqueValue,
     _line: i64,
     _column: i64,
 ) -> *mut OpaqueValue {
-    let key = unsafe { take_value(key) };
-    let value = unsafe { take_value(value) };
-    with_map_mut(map, |map| {
-        if let Some(index) = map
-            .entries
-            .iter()
-            .position(|(candidate_key, _)| *candidate_key == key)
-        {
-            map.entries[index].1 = value;
-        } else {
-            map.entries.push((key, value));
-        }
-    });
-    boxed_value(Value::Unit)
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_map_clear_in_place(map: *mut OpaqueValue) -> *mut OpaqueValue {
-    with_map_mut(map, |map| map.entries.clear());
-    boxed_value(Value::Unit)
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_map_extend_in_place(
-    map: *mut OpaqueValue,
-    other: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    let other = unsafe { take_value(other) };
-    let Value::Map(other) = other else {
-        runtime_error("`extend` requires another `Map[K, V]` value");
-    };
-    with_map_mut(map, |map| {
-        for (key, value) in other.entries {
+    task_runtime_boundary(|| {
+        let key = unsafe { take_value(key) };
+        let value = unsafe { take_value(value) };
+        with_map_mut(map, |map| {
             if let Some(index) = map
                 .entries
                 .iter()
@@ -1986,103 +2141,152 @@ pub extern "C" fn aurora_direct_map_extend_in_place(
             } else {
                 map.entries.push((key, value));
             }
-        }
-    });
-    boxed_value(Value::Unit)
+        });
+        boxed_value(Value::Unit)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_set_empty() -> *mut OpaqueValue {
-    boxed_value(Value::Set(SetValue {
-        element_type: Type::named("Unknown"),
-        elements: Vec::new(),
-    }))
+pub extern "C-unwind" fn aurora_direct_map_clear_in_place(
+    map: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        with_map_mut(map, |map| map.entries.clear());
+        boxed_value(Value::Unit)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_set_len(set: *mut OpaqueValue) -> i64 {
-    match i64::try_from(with_set(set, |set| set.elements.len())) {
-        Ok(length) => length,
-        Err(_) => runtime_error("set length does not fit in the direct runtime range"),
-    }
+pub extern "C-unwind" fn aurora_direct_map_extend_in_place(
+    map: *mut OpaqueValue,
+    other: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let other = unsafe { take_value(other) };
+        let Value::Map(other) = other else {
+            runtime_error("`extend` requires another `Map[K, V]` value");
+        };
+        with_map_mut(map, |map| {
+            for (key, value) in other.entries {
+                if let Some(index) = map
+                    .entries
+                    .iter()
+                    .position(|(candidate_key, _)| *candidate_key == key)
+                {
+                    map.entries[index].1 = value;
+                } else {
+                    map.entries.push((key, value));
+                }
+            }
+        });
+        boxed_value(Value::Unit)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_set_is_empty(set: *mut OpaqueValue) -> i64 {
-    i64::from(with_set(set, |set| set.elements.is_empty()))
+pub extern "C-unwind" fn aurora_direct_set_empty() -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_value(Value::Set(SetValue {
+            element_type: Type::named("Unknown"),
+            elements: Vec::new(),
+        }))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_set_contains(
+pub extern "C-unwind" fn aurora_direct_set_len(set: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(
+        || match i64::try_from(with_set(set, |set| set.elements.len())) {
+            Ok(length) => length,
+            Err(_) => runtime_error("set length does not fit in the direct runtime range"),
+        },
+    )
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_set_is_empty(set: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| i64::from(with_set(set, |set| set.elements.is_empty())))
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_set_contains(
     set: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> i64 {
-    let needle = unsafe { take_value(value) };
-    i64::from(with_set(set, |set| {
-        set.elements.iter().any(|candidate| *candidate == needle)
-    }))
+    task_runtime_boundary(|| {
+        let needle = unsafe { take_value(value) };
+        i64::from(with_set(set, |set| {
+            set.elements.iter().any(|candidate| *candidate == needle)
+        }))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_set_insert_in_place(
+pub extern "C-unwind" fn aurora_direct_set_insert_in_place(
     set: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> i64 {
-    let value = unsafe { take_value(value) };
-    let inferred = inferred_collection_type(&value);
-    let inserted = with_set_mut(set, |set| {
-        if set.element_type == Type::named("Unknown") && inferred != Type::named("Unknown") {
-            set.element_type = inferred.clone();
-        }
-        if set.elements.iter().any(|candidate| *candidate == value) {
-            false
-        } else {
-            set.elements.push(value);
-            true
-        }
-    });
-    i64::from(inserted)
+    task_runtime_boundary(|| {
+        let value = unsafe { take_value(value) };
+        let inferred = inferred_collection_type(&value);
+        let inserted = with_set_mut(set, |set| {
+            if set.element_type == Type::named("Unknown") && inferred != Type::named("Unknown") {
+                set.element_type = inferred.clone();
+            }
+            if set.elements.iter().any(|candidate| *candidate == value) {
+                false
+            } else {
+                set.elements.push(value);
+                true
+            }
+        });
+        i64::from(inserted)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_set_remove_in_place(
+pub extern "C-unwind" fn aurora_direct_set_remove_in_place(
     set: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> i64 {
-    let value = unsafe { take_value(value) };
-    let removed = with_set_mut(set, |set| {
-        if let Some(index) = set
-            .elements
-            .iter()
-            .position(|candidate| *candidate == value)
-        {
-            set.elements.remove(index);
-            true
-        } else {
-            false
-        }
-    });
-    i64::from(removed)
+    task_runtime_boundary(|| {
+        let value = unsafe { take_value(value) };
+        let removed = with_set_mut(set, |set| {
+            if let Some(index) = set
+                .elements
+                .iter()
+                .position(|candidate| *candidate == value)
+            {
+                set.elements.remove(index);
+                true
+            } else {
+                false
+            }
+        });
+        i64::from(removed)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_set_index_option(
+pub extern "C-unwind" fn aurora_direct_set_index_option(
     set: *mut OpaqueValue,
     index: i64,
 ) -> *mut OpaqueValue {
-    let index = checked_vec_index(index);
-    let value = with_set(set, |set| set.elements.get(index).cloned());
-    boxed_value(value.map(option_some).unwrap_or_else(option_none))
+    task_runtime_boundary(|| {
+        let index = checked_vec_index(index);
+        let value = with_set(set, |set| set.elements.get(index).cloned());
+        boxed_value(value.map(option_some).unwrap_or_else(option_none))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_clone_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    boxed_value(unsafe { value_ref(value) })
+pub extern "C-unwind" fn aurora_direct_clone_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(unsafe { value_ref(value) }))
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_unbox_i64(value: *mut OpaqueValue) -> i64 {
-    match unsafe { value_ref(value) } {
+pub extern "C-unwind" fn aurora_direct_unbox_i64(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::Int(value) => match value.as_i128().and_then(|value| i64::try_from(value).ok()) {
             Some(value) => value,
             None => runtime_error("direct backend expected an integer that fits in host i64"),
@@ -2091,40 +2295,42 @@ pub extern "C" fn aurora_direct_unbox_i64(value: *mut OpaqueValue) -> i64 {
             "direct backend expected `int32`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_unbox_f64(value: *mut OpaqueValue) -> f64 {
-    match unsafe { value_ref(value) } {
+pub extern "C-unwind" fn aurora_direct_unbox_f64(value: *mut OpaqueValue) -> f64 {
+    task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::Float(value) => value,
         other => runtime_error(format!(
             "direct backend expected `float64`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_unbox_bool(value: *mut OpaqueValue) -> i64 {
-    match unsafe { value_ref(value) } {
+pub extern "C-unwind" fn aurora_direct_unbox_bool(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::Bool(value) => i64::from(value),
         other => runtime_error(format!(
             "direct backend expected `bool`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_print_value(value: *mut OpaqueValue) {
-    write_stdout(unsafe { value_ref(value) }.render().as_str());
-    write_stdout("\n");
+pub extern "C-unwind" fn aurora_direct_print_value(value: *mut OpaqueValue) {
+    task_runtime_boundary(|| {
+        write_stdout(unsafe { value_ref(value) }.render().as_str());
+        write_stdout("\n");
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_value_as_condition(value: *mut OpaqueValue) -> i64 {
-    match unsafe { value_ref(value) } {
+pub extern "C-unwind" fn aurora_direct_value_as_condition(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::Bool(value) => i64::from(value),
         Value::Int(value) => i64::from(!value.is_zero()),
         Value::Unit => 0,
@@ -2132,192 +2338,209 @@ pub extern "C" fn aurora_direct_value_as_condition(value: *mut OpaqueValue) -> i
             "direct backend cannot use `{}` as a branch condition",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_unary_value(op: i32, value: *mut OpaqueValue) -> *mut OpaqueValue {
-    let op = match op {
-        0 => UnaryOp::Neg,
-        1 => UnaryOp::Not,
-        other => runtime_error(format!("unknown unary opcode `{}`", other)),
-    };
-    match eval_unary_value(unsafe { take_value(value) }, op) {
-        Ok(value) => boxed_value(value),
-        Err(error) => runtime_error(error.message),
-    }
+pub extern "C-unwind" fn aurora_direct_unary_value(
+    op: i32,
+    value: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let op = match op {
+            0 => UnaryOp::Neg,
+            1 => UnaryOp::Not,
+            other => runtime_error(format!("unknown unary opcode `{}`", other)),
+        };
+        match eval_unary_value(unsafe { take_value(value) }, op) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_error(error.message),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_unary_value_at(
+pub extern "C-unwind" fn aurora_direct_unary_value_at(
     op: i32,
     value: *mut OpaqueValue,
     line: i64,
     column: i64,
 ) -> *mut OpaqueValue {
-    let op = match op {
-        0 => UnaryOp::Neg,
-        1 => UnaryOp::Not,
-        other => runtime_error(format!("unknown unary opcode `{}`", other)),
-    };
-    match eval_unary_value(unsafe { take_value(value) }, op) {
-        Ok(value) => boxed_value(value),
-        Err(error) => match runtime_span(line, column) {
-            Some(span) => runtime_error_at(span, error.message),
-            None => runtime_error(error.message),
-        },
-    }
+    task_runtime_boundary(|| {
+        let op = match op {
+            0 => UnaryOp::Neg,
+            1 => UnaryOp::Not,
+            other => runtime_error(format!("unknown unary opcode `{}`", other)),
+        };
+        match eval_unary_value(unsafe { take_value(value) }, op) {
+            Ok(value) => boxed_value(value),
+            Err(error) => match runtime_span(line, column) {
+                Some(span) => runtime_error_at(span, error.message),
+                None => runtime_error(error.message),
+            },
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_binary_value(
+pub extern "C-unwind" fn aurora_direct_binary_value(
     op: i32,
     left: *mut OpaqueValue,
     right: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let op = match op {
-        0 => BinaryOp::Add,
-        1 => BinaryOp::Sub,
-        2 => BinaryOp::Mul,
-        3 => BinaryOp::Div,
-        4 => BinaryOp::Mod,
-        5 => BinaryOp::Eq,
-        6 => BinaryOp::NotEq,
-        7 => BinaryOp::Less,
-        8 => BinaryOp::LessEq,
-        9 => BinaryOp::Greater,
-        10 => BinaryOp::GreaterEq,
-        11 => BinaryOp::And,
-        12 => BinaryOp::Or,
-        other => runtime_error(format!("unknown binary opcode `{}`", other)),
-    };
-    match eval_binary_value(
-        unsafe { take_value(left) },
-        unsafe { take_value(right) },
-        op,
-    ) {
-        Ok(value) => boxed_value(value),
-        Err(error) => runtime_error(error.message),
-    }
+    task_runtime_boundary(|| {
+        let op = match op {
+            0 => BinaryOp::Add,
+            1 => BinaryOp::Sub,
+            2 => BinaryOp::Mul,
+            3 => BinaryOp::Div,
+            4 => BinaryOp::Mod,
+            5 => BinaryOp::Eq,
+            6 => BinaryOp::NotEq,
+            7 => BinaryOp::Less,
+            8 => BinaryOp::LessEq,
+            9 => BinaryOp::Greater,
+            10 => BinaryOp::GreaterEq,
+            11 => BinaryOp::And,
+            12 => BinaryOp::Or,
+            other => runtime_error(format!("unknown binary opcode `{}`", other)),
+        };
+        match eval_binary_value(
+            unsafe { take_value(left) },
+            unsafe { take_value(right) },
+            op,
+        ) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_error(error.message),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_binary_value_at(
+pub extern "C-unwind" fn aurora_direct_binary_value_at(
     op: i32,
     left: *mut OpaqueValue,
     right: *mut OpaqueValue,
     line: i64,
     column: i64,
 ) -> *mut OpaqueValue {
-    let op = match op {
-        0 => BinaryOp::Add,
-        1 => BinaryOp::Sub,
-        2 => BinaryOp::Mul,
-        3 => BinaryOp::Div,
-        4 => BinaryOp::Mod,
-        5 => BinaryOp::Eq,
-        6 => BinaryOp::NotEq,
-        7 => BinaryOp::Less,
-        8 => BinaryOp::LessEq,
-        9 => BinaryOp::Greater,
-        10 => BinaryOp::GreaterEq,
-        11 => BinaryOp::And,
-        12 => BinaryOp::Or,
-        other => runtime_error(format!("unknown binary opcode `{}`", other)),
-    };
-    match eval_binary_value(
-        unsafe { take_value(left) },
-        unsafe { take_value(right) },
-        op,
-    ) {
-        Ok(value) => boxed_value(value),
-        Err(error) => match runtime_span(line, column) {
-            Some(span) => runtime_error_at(span, error.message),
-            None => runtime_error(error.message),
-        },
-    }
+    task_runtime_boundary(|| {
+        let op = match op {
+            0 => BinaryOp::Add,
+            1 => BinaryOp::Sub,
+            2 => BinaryOp::Mul,
+            3 => BinaryOp::Div,
+            4 => BinaryOp::Mod,
+            5 => BinaryOp::Eq,
+            6 => BinaryOp::NotEq,
+            7 => BinaryOp::Less,
+            8 => BinaryOp::LessEq,
+            9 => BinaryOp::Greater,
+            10 => BinaryOp::GreaterEq,
+            11 => BinaryOp::And,
+            12 => BinaryOp::Or,
+            other => runtime_error(format!("unknown binary opcode `{}`", other)),
+        };
+        match eval_binary_value(
+            unsafe { take_value(left) },
+            unsafe { take_value(right) },
+            op,
+        ) {
+            Ok(value) => boxed_value(value),
+            Err(error) => match runtime_span(line, column) {
+                Some(span) => runtime_error_at(span, error.message),
+                None => runtime_error(error.message),
+            },
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_cast_value(
+pub extern "C-unwind" fn aurora_direct_cast_value(
     value: *mut OpaqueValue,
     target_ptr: *const u8,
     target_len: usize,
 ) -> *mut OpaqueValue {
-    let target = Type::named(decode_bytes(target_ptr, target_len));
-    match cast_numeric_value(unsafe { take_value(value) }, &target, None) {
-        Ok(value) => boxed_value(value),
-        Err(error) => runtime_error(error.message),
-    }
+    task_runtime_boundary(|| {
+        let target = Type::named(decode_bytes(target_ptr, target_len));
+        match cast_numeric_value(unsafe { take_value(value) }, &target, None) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_error(error.message),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_cast_value_at(
+pub extern "C-unwind" fn aurora_direct_cast_value_at(
     value: *mut OpaqueValue,
     target_ptr: *const u8,
     target_len: usize,
     line: i64,
     column: i64,
 ) -> *mut OpaqueValue {
-    let target = Type::named(decode_bytes(target_ptr, target_len));
-    match cast_numeric_value(unsafe { take_value(value) }, &target, None) {
-        Ok(value) => boxed_value(value),
-        Err(error) => match runtime_span(line, column) {
-            Some(span) => runtime_error_at(span, error.message),
-            None => runtime_error(error.message),
-        },
-    }
+    task_runtime_boundary(|| {
+        let target = Type::named(decode_bytes(target_ptr, target_len));
+        match cast_numeric_value(unsafe { take_value(value) }, &target, None) {
+            Ok(value) => boxed_value(value),
+            Err(error) => match runtime_span(line, column) {
+                Some(span) => runtime_error_at(span, error.message),
+                None => runtime_error(error.message),
+            },
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_value_type_matches(
+pub extern "C-unwind" fn aurora_direct_value_type_matches(
     value: *mut OpaqueValue,
     type_ptr: *const u8,
     type_len: usize,
 ) -> i64 {
-    let expected = decode_bytes(type_ptr, type_len);
-    let actual = unsafe { value_ref(value) };
-    let matches = match &actual {
-        Value::Instance(instance) => instance.class_name == expected,
-        Value::EnumVariant(variant) => variant.enum_name == expected,
-        Value::String(_) => expected == "String",
-        Value::Vec(_) => expected == "Vec",
-        Value::Set(_) => expected == "Set",
-        Value::Map(_) => expected == "Map",
-        Value::Channel(_) => expected == "Queue",
-        Value::Task(_) => expected == "Task",
-        Value::TaskGroup(_) => expected == "TaskGroup",
-        Value::File(_) => expected == "fs.File",
-        Value::TcpListener(_) => expected == "net.TcpListener",
-        Value::TcpStream(_) => expected == "net.TcpStream",
-        Value::UdpSocket(_) => expected == "net.UdpSocket",
-        Value::UdpDatagram(_) => expected == "net.UdpDatagram",
-        Value::HttpListener(_) => expected == "net.HttpListener",
-        Value::HttpExchange(_) => expected == "net.HttpExchange",
-        Value::HttpResponse(_) => expected == "net.HttpResponse",
-        Value::WebSocketListener(_) => expected == "net.WebSocketListener",
-        Value::WebSocket(_) => expected == "net.WebSocket",
-        Value::UnixListener(_) => expected == "net.UnixListener",
-        Value::UnixStream(_) => expected == "net.UnixStream",
-        Value::TlsListener(_) => expected == "net.TlsListener",
-        Value::TlsStream(_) => expected == "net.TlsStream",
-        Value::ProcessChild(_) => expected == "process.Child",
-        Value::ProcessPipe(_) => expected == "process.Pipe",
-        Value::ProcessCompleted(_) => expected == "process.Completed",
-        Value::ProcessSupervisor(_) => expected == "process.Supervisor",
-        Value::Duration(_) => expected == "Duration",
-        Value::Range(_) => expected == "Range",
-        Value::Bool(_) => expected == "bool",
-        Value::Float(_) => expected == "float64" || expected == "float32",
-        Value::Int(_) => expected.starts_with("int") || expected.starts_with("uint"),
-        Value::Unit => expected == "None",
-        Value::ModuleNamespace(_) => expected.starts_with("module "),
-    };
-    i64::from(matches)
+    task_runtime_boundary(|| {
+        let expected = decode_bytes(type_ptr, type_len);
+        let actual = unsafe { value_ref(value) };
+        let matches = match &actual {
+            Value::Instance(instance) => instance.class_name == expected,
+            Value::EnumVariant(variant) => variant.enum_name == expected,
+            Value::String(_) => expected == "String",
+            Value::Vec(_) => expected == "Vec",
+            Value::Set(_) => expected == "Set",
+            Value::Map(_) => expected == "Map",
+            Value::Channel(_) => expected == "Queue",
+            Value::Task(_) => expected == "Task",
+            Value::TaskGroup(_) => expected == "TaskGroup",
+            Value::File(_) => expected == "fs.File",
+            Value::TcpListener(_) => expected == "net.TcpListener",
+            Value::TcpStream(_) => expected == "net.TcpStream",
+            Value::UdpSocket(_) => expected == "net.UdpSocket",
+            Value::UdpDatagram(_) => expected == "net.UdpDatagram",
+            Value::HttpListener(_) => expected == "net.HttpListener",
+            Value::HttpExchange(_) => expected == "net.HttpExchange",
+            Value::HttpResponse(_) => expected == "net.HttpResponse",
+            Value::WebSocketListener(_) => expected == "net.WebSocketListener",
+            Value::WebSocket(_) => expected == "net.WebSocket",
+            Value::UnixListener(_) => expected == "net.UnixListener",
+            Value::UnixStream(_) => expected == "net.UnixStream",
+            Value::TlsListener(_) => expected == "net.TlsListener",
+            Value::TlsStream(_) => expected == "net.TlsStream",
+            Value::ProcessChild(_) => expected == "process.Child",
+            Value::ProcessPipe(_) => expected == "process.Pipe",
+            Value::ProcessCompleted(_) => expected == "process.Completed",
+            Value::ProcessSupervisor(_) => expected == "process.Supervisor",
+            Value::Duration(_) => expected == "Duration",
+            Value::Range(_) => expected == "Range",
+            Value::Bool(_) => expected == "bool",
+            Value::Float(_) => expected == "float64" || expected == "float32",
+            Value::Int(_) => expected.starts_with("int") || expected.starts_with("uint"),
+            Value::Unit => expected == "None",
+            Value::ModuleNamespace(_) => expected.starts_with("module "),
+        };
+        i64::from(matches)
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_enum_variant(
+pub extern "C-unwind" fn aurora_direct_enum_variant(
     enum_ptr: *const u8,
     enum_len: usize,
     variant_ptr: *const u8,
@@ -2325,43 +2548,47 @@ pub extern "C" fn aurora_direct_enum_variant(
     payloads_ptr: *mut i64,
     payload_count: i64,
 ) -> *mut OpaqueValue {
-    let payload_count = usize::try_from(payload_count)
-        .unwrap_or_else(|_| runtime_error("invalid enum payload count"));
-    boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: decode_bytes(enum_ptr, enum_len),
-        variant_name: decode_bytes(variant_ptr, variant_len),
-        payloads: if payload_count == 0 {
-            Vec::new()
-        } else {
-            unsafe { consume_opaque_buffer(payloads_ptr, payload_count) }
-        },
-    }))
+    task_runtime_boundary(|| {
+        let payload_count = usize::try_from(payload_count)
+            .unwrap_or_else(|_| runtime_error("invalid enum payload count"));
+        boxed_value(Value::EnumVariant(EnumVariantValue {
+            enum_name: decode_bytes(enum_ptr, enum_len),
+            variant_name: decode_bytes(variant_ptr, variant_len),
+            payloads: if payload_count == 0 {
+                Vec::new()
+            } else {
+                unsafe { consume_opaque_buffer(payloads_ptr, payload_count) }
+            },
+        }))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_variant_matches(
+pub extern "C-unwind" fn aurora_direct_variant_matches(
     value: *mut OpaqueValue,
     enum_ptr: *const u8,
     enum_len: usize,
     variant_ptr: *const u8,
     variant_len: usize,
 ) -> i64 {
-    let expected_enum = decode_bytes(enum_ptr, enum_len);
-    let expected_variant = decode_bytes(variant_ptr, variant_len);
-    match unsafe { value_ref(value) } {
-        Value::EnumVariant(variant) => i64::from(
-            variant.enum_name == expected_enum && variant.variant_name == expected_variant,
-        ),
-        _ => 0,
-    }
+    task_runtime_boundary(|| {
+        let expected_enum = decode_bytes(enum_ptr, enum_len);
+        let expected_variant = decode_bytes(variant_ptr, variant_len);
+        match unsafe { value_ref(value) } {
+            Value::EnumVariant(variant) => i64::from(
+                variant.enum_name == expected_enum && variant.variant_name == expected_variant,
+            ),
+            _ => 0,
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_variant_payload(
+pub extern "C-unwind" fn aurora_direct_variant_payload(
     value: *mut OpaqueValue,
     index: i64,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(value) } {
+    task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::EnumVariant(variant) => match variant.payloads.get(index.max(0) as usize) {
             Some(payload) => boxed_value(payload.clone()),
             None => runtime_error(format!(
@@ -2373,11 +2600,11 @@ pub extern "C" fn aurora_direct_variant_payload(
             "expected enum value, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_instance_new(
+pub extern "C-unwind" fn aurora_direct_instance_new(
     class_ptr: *const u8,
     class_len: usize,
     names_ptr: *const *const u8,
@@ -2385,149 +2612,167 @@ pub extern "C" fn aurora_direct_instance_new(
     values_ptr: *const *mut OpaqueValue,
     count: usize,
 ) -> *mut OpaqueValue {
-    let class_name = decode_bytes(class_ptr, class_len);
-    let names = unsafe { slice::from_raw_parts(names_ptr, count) };
-    let lens = unsafe { slice::from_raw_parts(lens_ptr, count) };
-    let values = unsafe { slice::from_raw_parts(values_ptr, count) };
-    let mut fields = BTreeMap::new();
-    for index in 0..count {
-        let name = decode_bytes(names[index], lens[index]);
-        fields.insert(name, unsafe { take_value(values[index]) });
-    }
-    boxed_value(Value::Instance(InstanceValue { class_name, fields }))
+    task_runtime_boundary(|| {
+        let class_name = decode_bytes(class_ptr, class_len);
+        let names = unsafe { slice::from_raw_parts(names_ptr, count) };
+        let lens = unsafe { slice::from_raw_parts(lens_ptr, count) };
+        let values = unsafe { slice::from_raw_parts(values_ptr, count) };
+        let mut fields = BTreeMap::new();
+        for index in 0..count {
+            let name = decode_bytes(names[index], lens[index]);
+            fields.insert(name, unsafe { take_value(values[index]) });
+        }
+        boxed_value(Value::Instance(InstanceValue { class_name, fields }))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_instance_empty(
+pub extern "C-unwind" fn aurora_direct_instance_empty(
     class_ptr: *const u8,
     class_len: usize,
 ) -> *mut OpaqueValue {
-    boxed_value(Value::Instance(InstanceValue {
-        class_name: decode_bytes(class_ptr, class_len),
-        fields: BTreeMap::new(),
-    }))
+    task_runtime_boundary(|| {
+        boxed_value(Value::Instance(InstanceValue {
+            class_name: decode_bytes(class_ptr, class_len),
+            fields: BTreeMap::new(),
+        }))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_instance_get_field(
+pub extern "C-unwind" fn aurora_direct_instance_get_field(
     value: *mut OpaqueValue,
     field_ptr: *const u8,
     field_len: usize,
 ) -> *mut OpaqueValue {
-    let field = decode_bytes(field_ptr, field_len);
-    match unsafe { value_ref(value) } {
-        Value::Instance(instance) => instance
-            .fields
-            .get(&field)
-            .cloned()
-            .map(boxed_value)
-            .unwrap_or_else(|| {
-                runtime_error(format!(
-                    "class `{}` has no field `{}`",
-                    instance.class_name, field
-                ))
-            }),
-        other => runtime_error(format!(
-            "cannot access field `{}` on non-instance `{}`",
-            field,
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let field = decode_bytes(field_ptr, field_len);
+        match unsafe { value_ref(value) } {
+            Value::Instance(instance) => instance
+                .fields
+                .get(&field)
+                .cloned()
+                .map(boxed_value)
+                .unwrap_or_else(|| {
+                    runtime_error(format!(
+                        "class `{}` has no field `{}`",
+                        instance.class_name, field
+                    ))
+                }),
+            other => runtime_error(format!(
+                "cannot access field `{}` on non-instance `{}`",
+                field,
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_instance_set_field(
+pub extern "C-unwind" fn aurora_direct_instance_set_field(
     value: *mut OpaqueValue,
     field_ptr: *const u8,
     field_len: usize,
     new_value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let field = decode_bytes(field_ptr, field_len);
-    match unsafe { value_ref(value) } {
-        Value::Instance(instance) => {
-            let mut updated = instance.clone();
-            updated
-                .fields
-                .insert(field, unsafe { take_value(new_value) });
-            boxed_value(Value::Instance(updated))
+    task_runtime_boundary(|| {
+        let field = decode_bytes(field_ptr, field_len);
+        match unsafe { value_ref(value) } {
+            Value::Instance(instance) => {
+                let mut updated = instance.clone();
+                updated
+                    .fields
+                    .insert(field, unsafe { take_value(new_value) });
+                boxed_value(Value::Instance(updated))
+            }
+            other => runtime_error(format!(
+                "cannot assign field `{}` on non-instance `{}`",
+                field,
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "cannot assign field `{}` on non-instance `{}`",
-            field,
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_arg_buffer_new(count: i64) -> *mut i64 {
-    let count = match usize::try_from(count) {
-        Ok(count) => count,
-        Err(_) => runtime_error("invalid arg buffer size"),
-    };
-    let mut values = vec![0i64; count].into_boxed_slice();
-    let ptr = values.as_mut_ptr();
-    Box::leak(values);
-    ptr
+pub extern "C-unwind" fn aurora_direct_arg_buffer_new(count: i64) -> *mut i64 {
+    task_runtime_boundary(|| {
+        let count = match usize::try_from(count) {
+            Ok(count) => count,
+            Err(_) => runtime_error("invalid arg buffer size"),
+        };
+        let mut values = vec![0i64; count].into_boxed_slice();
+        let ptr = values.as_mut_ptr();
+        Box::leak(values);
+        ptr
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_arg_buffer_store(buffer: *mut i64, index: i64, value: i64) {
-    let index = match usize::try_from(index) {
-        Ok(index) => index,
-        Err(_) => runtime_error("invalid arg index"),
-    };
-    unsafe {
-        let previous = *buffer.add(index);
-        if previous != 0 {
-            aurora_direct_release_value(previous as *mut OpaqueValue);
+pub extern "C-unwind" fn aurora_direct_arg_buffer_store(buffer: *mut i64, index: i64, value: i64) {
+    task_runtime_boundary(|| {
+        let index = match usize::try_from(index) {
+            Ok(index) => index,
+            Err(_) => runtime_error("invalid arg index"),
+        };
+        unsafe {
+            let previous = *buffer.add(index);
+            if previous != 0 {
+                aurora_direct_release_value(previous as *mut OpaqueValue);
+            }
+            if value != 0 {
+                aurora_direct_retain_value(value as *mut OpaqueValue);
+            }
+            *buffer.add(index) = value;
         }
-        if value != 0 {
-            aurora_direct_retain_value(value as *mut OpaqueValue);
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_channel_new(capacity: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        if capacity.is_null() {
+            return boxed_value(Value::Channel(ChannelValue::new()));
         }
-        *buffer.add(index) = value;
-    }
+        let capacity = expect_i32_value(
+            unsafe { value_ref(capacity) }.borrow(),
+            "queue(capacity=...)",
+        );
+        if capacity <= 0 {
+            runtime_error("`queue(capacity=...)` expects a positive `int32`");
+        }
+        boxed_value(Value::Channel(ChannelValue::with_capacity(
+            capacity as usize,
+        )))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_channel_new(capacity: *mut OpaqueValue) -> *mut OpaqueValue {
-    if capacity.is_null() {
-        return boxed_value(Value::Channel(ChannelValue::new()));
-    }
-    let capacity = expect_i32_value(
-        unsafe { value_ref(capacity) }.borrow(),
-        "queue(capacity=...)",
-    );
-    if capacity <= 0 {
-        runtime_error("`queue(capacity=...)` expects a positive `int32`");
-    }
-    boxed_value(Value::Channel(ChannelValue::with_capacity(
-        capacity as usize,
-    )))
+pub extern "C-unwind" fn aurora_direct_task_group_new() -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_value(Value::TaskGroup(TaskGroupValue::new(
+            &current_cancellation(),
+        )))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_task_group_new() -> *mut OpaqueValue {
-    boxed_value(Value::TaskGroup(TaskGroupValue::new(
-        &current_cancellation(),
-    )))
+pub extern "C-unwind" fn aurora_direct_cancelled() -> i64 {
+    task_runtime_boundary(|| {
+        if poll_cancellation(&current_cancellation()) {
+            1
+        } else {
+            0
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_cancelled() -> i64 {
-    if current_cancellation().is_cancelled() {
-        1
-    } else {
-        0
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_channel_send(
+pub extern "C-unwind" fn aurora_direct_channel_send(
     channel: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(channel) } {
+    task_runtime_boundary(|| match unsafe { value_ref(channel) } {
         Value::Channel(channel) => {
             match channel
                 .send_with_cancellation(unsafe { take_value(value) }, Some(&current_cancellation()))
@@ -2549,49 +2794,53 @@ pub extern "C" fn aurora_direct_channel_send(
             "expected `Queue`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_channel_send_timeout_value(
+pub extern "C-unwind" fn aurora_direct_channel_send_timeout_value(
     channel: *mut OpaqueValue,
     value: *mut OpaqueValue,
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis = match u64::try_from(millis) {
-        Ok(millis) => millis,
-        Err(_) => runtime_error("invalid queue timeout duration"),
-    };
-    match unsafe { value_ref(channel) } {
-        Value::Channel(channel) => match channel.send_with_timeout(
-            unsafe { take_value(value) },
-            Some(StdDuration::from_millis(millis)),
-            Some(&current_cancellation()),
-        ) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(SendValueError::Closed(value)) => boxed_value(result_err(send_error_closed(value))),
-            Err(SendValueError::Cancelled(value)) => {
-                boxed_value(result_err(send_error_cancelled(value)))
-            }
-            Err(SendValueError::TimedOut(value)) => {
-                boxed_value(result_err(send_error_timed_out(value)))
-            }
-            Err(SendValueError::Full(value)) => boxed_value(result_err(send_error_full(value))),
-        },
-        other => runtime_error(format!(
-            "expected `Queue`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let millis = extract_duration_millis(unsafe { value_ref(duration) });
+        let millis = match u64::try_from(millis) {
+            Ok(millis) => millis,
+            Err(_) => runtime_error("invalid queue timeout duration"),
+        };
+        match unsafe { value_ref(channel) } {
+            Value::Channel(channel) => match channel.send_with_timeout(
+                unsafe { take_value(value) },
+                Some(StdDuration::from_millis(millis)),
+                Some(&current_cancellation()),
+            ) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(SendValueError::Closed(value)) => {
+                    boxed_value(result_err(send_error_closed(value)))
+                }
+                Err(SendValueError::Cancelled(value)) => {
+                    boxed_value(result_err(send_error_cancelled(value)))
+                }
+                Err(SendValueError::TimedOut(value)) => {
+                    boxed_value(result_err(send_error_timed_out(value)))
+                }
+                Err(SendValueError::Full(value)) => boxed_value(result_err(send_error_full(value))),
+            },
+            other => runtime_error(format!(
+                "expected `Queue`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_channel_try_send(
+pub extern "C-unwind" fn aurora_direct_channel_try_send(
     channel: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(channel) } {
+    task_runtime_boundary(|| match unsafe { value_ref(channel) } {
         Value::Channel(channel) => match channel.try_send_result(unsafe { take_value(value) }) {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(SendValueError::Closed(value)) => boxed_value(result_err(send_error_closed(value))),
@@ -2607,12 +2856,12 @@ pub extern "C" fn aurora_direct_channel_try_send(
             "expected `Queue`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_channel_recv(channel: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(channel) } {
+pub extern "C-unwind" fn aurora_direct_channel_recv(channel: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(channel) } {
         Value::Channel(channel) => boxed_value(
             match channel.recv_result_with_cancellation(None, Some(&current_cancellation())) {
                 RecvValueResult::Value(value) => queue_receive_item(value),
@@ -2625,45 +2874,89 @@ pub extern "C" fn aurora_direct_channel_recv(channel: *mut OpaqueValue) -> *mut 
             "expected `Queue`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_channel_recv_timeout_value(
+pub extern "C-unwind" fn aurora_direct_channel_recv_in_task_group(
+    channel: *mut OpaqueValue,
+    task_group: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let channel_value = unsafe { value_ref(channel) };
+        let task_group_value = unsafe { value_ref(task_group) };
+        match (channel_value, task_group_value) {
+            (Value::Channel(channel), Value::TaskGroup(group)) => {
+                let cancellation = current_cancellation().merged(&group.child_cancellation());
+                boxed_value(
+                    match channel.recv_result_with_cancellation(None, Some(&cancellation)) {
+                        RecvValueResult::Value(value) => queue_receive_item(value),
+                        RecvValueResult::Closed => queue_receive_closed(),
+                        RecvValueResult::TimedOut => queue_receive_timed_out(),
+                        RecvValueResult::Cancelled => queue_receive_cancelled(),
+                    },
+                )
+            }
+            (Value::Channel(_), other) => runtime_error(format!(
+                "expected `TaskGroup`, found `{}`",
+                value_type_name(other)
+            )),
+            (other, _) => runtime_error(format!(
+                "expected `Queue`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_channel_recv_timeout_value(
     channel: *mut OpaqueValue,
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis = match u64::try_from(millis) {
-        Ok(millis) => millis,
-        Err(_) => runtime_error("invalid queue timeout duration"),
-    };
-    match unsafe { value_ref(channel) } {
-        Value::Channel(channel) => boxed_value(
-            match channel.recv_result_with_cancellation(
-                Some(StdDuration::from_millis(millis)),
-                Some(&current_cancellation()),
-            ) {
-                RecvValueResult::Value(value) => queue_receive_item(value),
-                RecvValueResult::Closed => queue_receive_closed(),
-                RecvValueResult::TimedOut => queue_receive_timed_out(),
-                RecvValueResult::Cancelled => queue_receive_cancelled(),
-            },
-        ),
-        other => runtime_error(format!(
-            "expected `Queue`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let millis = extract_duration_millis(unsafe { value_ref(duration) });
+        let millis = match u64::try_from(millis) {
+            Ok(millis) => millis,
+            Err(_) => runtime_error("invalid queue timeout duration"),
+        };
+        match unsafe { value_ref(channel) } {
+            Value::Channel(channel) => boxed_value(
+                match channel.recv_result_with_cancellation(
+                    Some(StdDuration::from_millis(millis)),
+                    Some(&current_cancellation()),
+                ) {
+                    RecvValueResult::Value(value) => queue_receive_item(value),
+                    RecvValueResult::Closed => queue_receive_closed(),
+                    RecvValueResult::TimedOut => queue_receive_timed_out(),
+                    RecvValueResult::Cancelled => queue_receive_cancelled(),
+                },
+            ),
+            other => runtime_error(format!(
+                "expected `Queue`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_channel_recv_or_none(
+pub extern "C-unwind" fn aurora_direct_channel_recv_or_none(
     channel: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(channel) } {
+    task_runtime_boundary(|| match unsafe { value_ref(channel) } {
         Value::Channel(channel) => boxed_value(
-            match channel.recv_result_with_cancellation(None, Some(&current_cancellation())) {
+            match if poll_cancellation(&current_cancellation()) {
+                RecvValueResult::Cancelled
+            } else {
+                match channel.try_recv() {
+                    crate::runtime_value::TryRecvResult::Value(value) => {
+                        RecvValueResult::Value(value)
+                    }
+                    crate::runtime_value::TryRecvResult::Closed => RecvValueResult::Closed,
+                    crate::runtime_value::TryRecvResult::Empty => RecvValueResult::TimedOut,
+                }
+            } {
                 RecvValueResult::Value(value) => option_some(value),
                 RecvValueResult::Closed
                 | RecvValueResult::TimedOut
@@ -2674,94 +2967,112 @@ pub extern "C" fn aurora_direct_channel_recv_or_none(
             "expected `Queue`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_channel_recv_or_none_timeout_value(
+pub extern "C-unwind" fn aurora_direct_channel_recv_or_none_timeout_value(
     channel: *mut OpaqueValue,
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis = match u64::try_from(millis) {
-        Ok(millis) => millis,
-        Err(_) => runtime_error("invalid queue timeout duration"),
-    };
-    match unsafe { value_ref(channel) } {
-        Value::Channel(channel) => boxed_value(
-            match channel.recv_result_with_cancellation(
-                Some(StdDuration::from_millis(millis)),
-                Some(&current_cancellation()),
-            ) {
-                RecvValueResult::Value(value) => option_some(value),
-                RecvValueResult::Closed
-                | RecvValueResult::TimedOut
-                | RecvValueResult::Cancelled => option_none(),
-            },
-        ),
-        other => runtime_error(format!(
-            "expected `Queue`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let millis = extract_duration_millis(unsafe { value_ref(duration) });
+        let millis = match u64::try_from(millis) {
+            Ok(millis) => millis,
+            Err(_) => runtime_error("invalid queue timeout duration"),
+        };
+        match unsafe { value_ref(channel) } {
+            Value::Channel(channel) => boxed_value(
+                match channel.recv_result_with_cancellation(
+                    Some(StdDuration::from_millis(millis)),
+                    Some(&current_cancellation()),
+                ) {
+                    RecvValueResult::Value(value) => option_some(value),
+                    RecvValueResult::Closed
+                    | RecvValueResult::TimedOut
+                    | RecvValueResult::Cancelled => option_none(),
+                },
+            ),
+            other => runtime_error(format!(
+                "expected `Queue`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_channel_recv_or_value(
+pub extern "C-unwind" fn aurora_direct_channel_recv_or_value(
     channel: *mut OpaqueValue,
     default: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let default = unsafe { take_value(default) };
-    match unsafe { value_ref(channel) } {
-        Value::Channel(channel) => boxed_value(
-            match channel.recv_result_with_cancellation(None, Some(&current_cancellation())) {
-                RecvValueResult::Value(value) => value,
-                RecvValueResult::Closed
-                | RecvValueResult::TimedOut
-                | RecvValueResult::Cancelled => default,
-            },
-        ),
-        other => runtime_error(format!(
-            "expected `Queue`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let default = unsafe { take_value(default) };
+        match unsafe { value_ref(channel) } {
+            Value::Channel(channel) => boxed_value(
+                match if poll_cancellation(&current_cancellation()) {
+                    RecvValueResult::Cancelled
+                } else {
+                    match channel.try_recv() {
+                        crate::runtime_value::TryRecvResult::Value(value) => {
+                            RecvValueResult::Value(value)
+                        }
+                        crate::runtime_value::TryRecvResult::Closed => RecvValueResult::Closed,
+                        crate::runtime_value::TryRecvResult::Empty => RecvValueResult::TimedOut,
+                    }
+                } {
+                    RecvValueResult::Value(value) => value,
+                    RecvValueResult::Closed
+                    | RecvValueResult::TimedOut
+                    | RecvValueResult::Cancelled => default,
+                },
+            ),
+            other => runtime_error(format!(
+                "expected `Queue`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_channel_recv_or_value_timeout_value(
+pub extern "C-unwind" fn aurora_direct_channel_recv_or_value_timeout_value(
     channel: *mut OpaqueValue,
     default: *mut OpaqueValue,
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let default = unsafe { take_value(default) };
-    let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis = match u64::try_from(millis) {
-        Ok(millis) => millis,
-        Err(_) => runtime_error("invalid queue timeout duration"),
-    };
-    match unsafe { value_ref(channel) } {
-        Value::Channel(channel) => boxed_value(
-            match channel.recv_result_with_cancellation(
-                Some(StdDuration::from_millis(millis)),
-                Some(&current_cancellation()),
-            ) {
-                RecvValueResult::Value(value) => value,
-                RecvValueResult::Closed
-                | RecvValueResult::TimedOut
-                | RecvValueResult::Cancelled => default,
-            },
-        ),
-        other => runtime_error(format!(
-            "expected `Queue`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let default = unsafe { take_value(default) };
+        let millis = extract_duration_millis(unsafe { value_ref(duration) });
+        let millis = match u64::try_from(millis) {
+            Ok(millis) => millis,
+            Err(_) => runtime_error("invalid queue timeout duration"),
+        };
+        match unsafe { value_ref(channel) } {
+            Value::Channel(channel) => boxed_value(
+                match channel.recv_result_with_cancellation(
+                    Some(StdDuration::from_millis(millis)),
+                    Some(&current_cancellation()),
+                ) {
+                    RecvValueResult::Value(value) => value,
+                    RecvValueResult::Closed
+                    | RecvValueResult::TimedOut
+                    | RecvValueResult::Cancelled => default,
+                },
+            ),
+            other => runtime_error(format!(
+                "expected `Queue`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_channel_close(channel: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(channel) } {
+pub extern "C-unwind" fn aurora_direct_channel_close(
+    channel: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(channel) } {
         Value::Channel(channel) => {
             channel.close();
             boxed_value(Value::Unit)
@@ -2770,17 +3081,17 @@ pub extern "C" fn aurora_direct_channel_close(channel: *mut OpaqueValue) -> *mut
             "expected `Queue`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_task_join(task: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(task) } {
+pub extern "C-unwind" fn aurora_direct_task_join(task: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(task) } {
         Value::Task(task) => {
-            match task.wait_result_with_cancellation(None, Some(&current_cancellation())) {
+            match task.wait_result_with_cancellation_observed(None, Some(&current_cancellation())) {
                 TaskWaitStatus::Ready(result) => match result {
                     Ok(value) => boxed_value(task_result_ready(value)),
-                    Err(error) => runtime_diagnostic_error(error),
+                    Err(error) => boxed_value(task_result_error(error.message)),
                 },
                 TaskWaitStatus::TimedOut => boxed_value(task_result_timed_out()),
                 TaskWaitStatus::Cancelled => boxed_value(task_result_cancelled()),
@@ -2790,75 +3101,60 @@ pub extern "C" fn aurora_direct_task_join(task: *mut OpaqueValue) -> *mut Opaque
             "expected `Task`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_task_join_timeout_value(
+pub extern "C-unwind" fn aurora_direct_task_join_timeout_value(
     task: *mut OpaqueValue,
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis = match u64::try_from(millis) {
-        Ok(millis) => millis,
-        Err(_) => runtime_error("invalid task result timeout duration"),
-    };
-    match unsafe { value_ref(task) } {
-        Value::Task(task) => match task.wait_result_with_cancellation(
-            Some(StdDuration::from_millis(millis)),
-            Some(&current_cancellation()),
-        ) {
-            TaskWaitStatus::Ready(result) => match result {
-                Ok(value) => boxed_value(task_result_ready(value)),
-                Err(error) => runtime_diagnostic_error(error),
-            },
-            TaskWaitStatus::TimedOut => boxed_value(task_result_timed_out()),
-            TaskWaitStatus::Cancelled => boxed_value(task_result_cancelled()),
-        },
-        other => runtime_error(format!(
-            "expected `Task`, found `{}`",
-            value_type_name(other)
-        )),
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_task_join_or_none(task: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(task) } {
-        Value::Task(task) => {
-            match task.wait_result_with_cancellation(None, Some(&current_cancellation())) {
+    task_runtime_boundary(|| {
+        let millis = extract_duration_millis(unsafe { value_ref(duration) });
+        let millis = match u64::try_from(millis) {
+            Ok(millis) => millis,
+            Err(_) => runtime_error("invalid task result timeout duration"),
+        };
+        match unsafe { value_ref(task) } {
+            Value::Task(task) => match task.wait_result_with_cancellation_observed(
+                Some(StdDuration::from_millis(millis)),
+                Some(&current_cancellation()),
+            ) {
                 TaskWaitStatus::Ready(result) => match result {
-                    Ok(value) => boxed_value(option_some(value)),
-                    Err(error) => runtime_diagnostic_error(error),
+                    Ok(value) => boxed_value(task_result_ready(value)),
+                    Err(error) => boxed_value(task_result_error(error.message)),
                 },
-                TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(option_none()),
-            }
+                TaskWaitStatus::TimedOut => boxed_value(task_result_timed_out()),
+                TaskWaitStatus::Cancelled => boxed_value(task_result_cancelled()),
+            },
+            other => runtime_error(format!(
+                "expected `Task`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `Task`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_task_join_or_none_timeout_value(
+pub extern "C-unwind" fn aurora_direct_task_join_or_none(
     task: *mut OpaqueValue,
-    duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis = match u64::try_from(millis) {
-        Ok(millis) => millis,
-        Err(_) => runtime_error("invalid task result timeout duration"),
-    };
-    match unsafe { value_ref(task) } {
-        Value::Task(task) => match task.wait_result_with_cancellation(
-            Some(StdDuration::from_millis(millis)),
-            Some(&current_cancellation()),
-        ) {
+    task_runtime_boundary(|| match unsafe { value_ref(task) } {
+        Value::Task(task) => match if poll_cancellation(&current_cancellation()) {
+            TaskWaitStatus::Cancelled
+        } else if let Some(result) = task.completed_result_observed() {
+            match result {
+                crate::runtime_value::TaskExecutionResult::Ready(result) => {
+                    TaskWaitStatus::Ready(result)
+                }
+                crate::runtime_value::TaskExecutionResult::Cancelled => TaskWaitStatus::Cancelled,
+            }
+        } else {
+            TaskWaitStatus::TimedOut
+        } {
             TaskWaitStatus::Ready(result) => match result {
                 Ok(value) => boxed_value(option_some(value)),
-                Err(error) => runtime_diagnostic_error(error),
+                Err(_) => boxed_value(option_none()),
             },
             TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(option_none()),
         },
@@ -2866,60 +3162,105 @@ pub extern "C" fn aurora_direct_task_join_or_none_timeout_value(
             "expected `Task`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_task_join_or_value(
+pub extern "C-unwind" fn aurora_direct_task_join_or_none_timeout_value(
+    task: *mut OpaqueValue,
+    duration: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let millis = extract_duration_millis(unsafe { value_ref(duration) });
+        let millis = match u64::try_from(millis) {
+            Ok(millis) => millis,
+            Err(_) => runtime_error("invalid task result timeout duration"),
+        };
+        match unsafe { value_ref(task) } {
+            Value::Task(task) => match task.wait_result_with_cancellation_observed(
+                Some(StdDuration::from_millis(millis)),
+                Some(&current_cancellation()),
+            ) {
+                TaskWaitStatus::Ready(result) => match result {
+                    Ok(value) => boxed_value(option_some(value)),
+                    Err(_) => boxed_value(option_none()),
+                },
+                TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(option_none()),
+            },
+            other => runtime_error(format!(
+                "expected `Task`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_task_join_or_value(
     task: *mut OpaqueValue,
     default: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let default = unsafe { take_value(default) };
-    match unsafe { value_ref(task) } {
-        Value::Task(task) => {
-            match task.wait_result_with_cancellation(None, Some(&current_cancellation())) {
+    task_runtime_boundary(|| {
+        let default = unsafe { take_value(default) };
+        match unsafe { value_ref(task) } {
+            Value::Task(task) => match if poll_cancellation(&current_cancellation()) {
+                TaskWaitStatus::Cancelled
+            } else if let Some(result) = task.completed_result_observed() {
+                match result {
+                    crate::runtime_value::TaskExecutionResult::Ready(result) => {
+                        TaskWaitStatus::Ready(result)
+                    }
+                    crate::runtime_value::TaskExecutionResult::Cancelled => {
+                        TaskWaitStatus::Cancelled
+                    }
+                }
+            } else {
+                TaskWaitStatus::TimedOut
+            } {
                 TaskWaitStatus::Ready(result) => match result {
                     Ok(value) => boxed_value(value),
-                    Err(error) => runtime_diagnostic_error(error),
+                    Err(_) => boxed_value(default),
                 },
                 TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(default),
-            }
+            },
+            other => runtime_error(format!(
+                "expected `Task`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `Task`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_task_join_or_value_timeout_value(
+pub extern "C-unwind" fn aurora_direct_task_join_or_value_timeout_value(
     task: *mut OpaqueValue,
     default: *mut OpaqueValue,
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let default = unsafe { take_value(default) };
-    let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis = match u64::try_from(millis) {
-        Ok(millis) => millis,
-        Err(_) => runtime_error("invalid task result timeout duration"),
-    };
-    match unsafe { value_ref(task) } {
-        Value::Task(task) => match task.wait_result_with_cancellation(
-            Some(StdDuration::from_millis(millis)),
-            Some(&current_cancellation()),
-        ) {
-            TaskWaitStatus::Ready(result) => match result {
-                Ok(value) => boxed_value(value),
-                Err(error) => runtime_diagnostic_error(error),
+    task_runtime_boundary(|| {
+        let default = unsafe { take_value(default) };
+        let millis = extract_duration_millis(unsafe { value_ref(duration) });
+        let millis = match u64::try_from(millis) {
+            Ok(millis) => millis,
+            Err(_) => runtime_error("invalid task result timeout duration"),
+        };
+        match unsafe { value_ref(task) } {
+            Value::Task(task) => match task.wait_result_with_cancellation_observed(
+                Some(StdDuration::from_millis(millis)),
+                Some(&current_cancellation()),
+            ) {
+                TaskWaitStatus::Ready(result) => match result {
+                    Ok(value) => boxed_value(value),
+                    Err(_) => boxed_value(default),
+                },
+                TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(default),
             },
-            TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => boxed_value(default),
-        },
-        other => runtime_error(format!(
-            "expected `Task`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+            other => runtime_error(format!(
+                "expected `Task`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 fn expect_task_vec(value: &Value, context: &str) -> Vec<TaskValue> {
@@ -2950,15 +3291,23 @@ fn wait_any_tasks(
 ) -> Result<Value, Diagnostic> {
     let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
     let cancellation = current_cancellation();
+    if tasks.is_empty() {
+        return if poll_cancellation(&cancellation) {
+            Ok(wait_any_cancelled())
+        } else {
+            Ok(wait_any_timed_out())
+        };
+    }
     loop {
         for (index, task) in tasks.iter().enumerate() {
-            if let Some(result) = task.completed_result() {
+            if let Some(result) = task.completed_result_observed() {
                 let index = i32::try_from(index)
                     .map_err(|_| Diagnostic::new("wait_any result index exceeds int32 range"))?;
                 return match result {
-                    crate::runtime_value::TaskExecutionResult::Ready(result) => {
-                        Ok(wait_any_ready(index, result?))
-                    }
+                    crate::runtime_value::TaskExecutionResult::Ready(result) => match result {
+                        Ok(value) => Ok(wait_any_ready(index, value)),
+                        Err(error) => Ok(wait_any_error(index, error.message)),
+                    },
                     crate::runtime_value::TaskExecutionResult::Cancelled => {
                         Ok(wait_any_cancelled())
                     }
@@ -2988,14 +3337,22 @@ fn wait_all_tasks(
     let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
     let cancellation = current_cancellation();
     let mut results = Vec::with_capacity(tasks.len());
-    for task in tasks {
+    for (index, task) in tasks.into_iter().enumerate() {
         let remaining = deadline.and_then(|deadline| {
             deadline
                 .checked_duration_since(Instant::now())
                 .or(Some(StdDuration::from_millis(0)))
         });
-        match task.wait_result_with_cancellation(remaining, Some(&cancellation)) {
-            TaskWaitStatus::Ready(result) => results.push(result?),
+        match task.wait_result_with_cancellation_observed(remaining, Some(&cancellation)) {
+            TaskWaitStatus::Ready(result) => match result {
+                Ok(value) => results.push(value),
+                Err(error) => {
+                    let index = i32::try_from(index).map_err(|_| {
+                        Diagnostic::new("wait_all result index exceeds int32 range")
+                    })?;
+                    return Ok(wait_all_error(index, error.message));
+                }
+            },
             TaskWaitStatus::TimedOut => return Ok(wait_all_timed_out()),
             TaskWaitStatus::Cancelled => return Ok(wait_all_cancelled()),
         }
@@ -3004,68 +3361,78 @@ fn wait_all_tasks(
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_wait_any(tasks: *mut OpaqueValue) -> *mut OpaqueValue {
-    match wait_any_tasks(
-        expect_task_vec(unsafe { &value_ref(tasks) }, "wait_any"),
-        None,
-    ) {
-        Ok(value) => boxed_value(value),
-        Err(error) => runtime_diagnostic_error(error),
-    }
+pub extern "C-unwind" fn aurora_direct_wait_any(tasks: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        match wait_any_tasks(
+            expect_task_vec(unsafe { &value_ref(tasks) }, "wait_any"),
+            None,
+        ) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_wait_any_timeout_value(
+pub extern "C-unwind" fn aurora_direct_wait_any_timeout_value(
     tasks: *mut OpaqueValue,
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis = match u64::try_from(millis) {
-        Ok(millis) => millis,
-        Err(_) => runtime_error("invalid wait_any timeout duration"),
-    };
-    match wait_any_tasks(
-        expect_task_vec(unsafe { &value_ref(tasks) }, "wait_any"),
-        Some(StdDuration::from_millis(millis)),
-    ) {
-        Ok(value) => boxed_value(value),
-        Err(error) => runtime_diagnostic_error(error),
-    }
+    task_runtime_boundary(|| {
+        let millis = extract_duration_millis(unsafe { value_ref(duration) });
+        let millis = match u64::try_from(millis) {
+            Ok(millis) => millis,
+            Err(_) => runtime_error("invalid wait_any timeout duration"),
+        };
+        match wait_any_tasks(
+            expect_task_vec(unsafe { &value_ref(tasks) }, "wait_any"),
+            Some(StdDuration::from_millis(millis)),
+        ) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_wait_all(tasks: *mut OpaqueValue) -> *mut OpaqueValue {
-    match wait_all_tasks(
-        expect_task_vec(unsafe { &value_ref(tasks) }, "wait_all"),
-        None,
-    ) {
-        Ok(value) => boxed_value(value),
-        Err(error) => runtime_diagnostic_error(error),
-    }
+pub extern "C-unwind" fn aurora_direct_wait_all(tasks: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        match wait_all_tasks(
+            expect_task_vec(unsafe { &value_ref(tasks) }, "wait_all"),
+            None,
+        ) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_wait_all_timeout_value(
+pub extern "C-unwind" fn aurora_direct_wait_all_timeout_value(
     tasks: *mut OpaqueValue,
     duration: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis = match u64::try_from(millis) {
-        Ok(millis) => millis,
-        Err(_) => runtime_error("invalid wait_all timeout duration"),
-    };
-    match wait_all_tasks(
-        expect_task_vec(unsafe { &value_ref(tasks) }, "wait_all"),
-        Some(StdDuration::from_millis(millis)),
-    ) {
-        Ok(value) => boxed_value(value),
-        Err(error) => runtime_diagnostic_error(error),
-    }
+    task_runtime_boundary(|| {
+        let millis = extract_duration_millis(unsafe { value_ref(duration) });
+        let millis = match u64::try_from(millis) {
+            Ok(millis) => millis,
+            Err(_) => runtime_error("invalid wait_all timeout duration"),
+        };
+        match wait_all_tasks(
+            expect_task_vec(unsafe { &value_ref(tasks) }, "wait_all"),
+            Some(StdDuration::from_millis(millis)),
+        ) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_task_group_cancel(group: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(group) } {
+pub extern "C-unwind" fn aurora_direct_task_group_cancel(
+    group: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(group) } {
         Value::TaskGroup(group) => {
             group.cancel();
             boxed_value(Value::Unit)
@@ -3074,32 +3441,47 @@ pub extern "C" fn aurora_direct_task_group_cancel(group: *mut OpaqueValue) -> *m
             "expected `TaskGroup`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_task_group_close(
+pub extern "C-unwind" fn aurora_direct_task_group_close(
     group: *mut OpaqueValue,
-    _cancel_before: i64,
+    cancel_before: i64,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(group) } {
+    task_runtime_boundary(|| match unsafe { value_ref(group) } {
         Value::TaskGroup(group) => {
-            group.cancel();
-            let mut first_error = None;
-            for task in group.drain_tasks() {
-                match task.join_result() {
-                    crate::runtime_value::TaskExecutionResult::Ready(Err(error)) => {
-                        group.cancel();
-                        if first_error.is_none() {
-                            first_error = Some(error);
+            let tasks = group.drain_tasks();
+            let cancellation = current_cancellation();
+            let mut cancel_group = cancel_before != 0;
+            if !cancel_group {
+                for task in &tasks {
+                    match task.wait_result_with_cancellation(
+                        Some(StdDuration::from_millis(1)),
+                        Some(&cancellation),
+                    ) {
+                        TaskWaitStatus::Ready(_) | TaskWaitStatus::Cancelled => {}
+                        TaskWaitStatus::TimedOut => {
+                            if task.waits_without_deadline() {
+                                cancel_group = true;
+                                break;
+                            }
                         }
                     }
-                    crate::runtime_value::TaskExecutionResult::Ready(Ok(_))
-                    | crate::runtime_value::TaskExecutionResult::Cancelled => {}
                 }
             }
-            if let Some(error) = first_error {
-                runtime_diagnostic_error(error);
+            if cancel_group {
+                group.cancel();
+            }
+            for task in tasks {
+                match task.wait_result_with_cancellation(None, Some(&cancellation)) {
+                    TaskWaitStatus::Ready(_) => {
+                        if let Some(error) = task.unobserved_error() {
+                            runtime_diagnostic_error(error);
+                        }
+                    }
+                    TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => {}
+                }
             }
             boxed_value(Value::Unit)
         }
@@ -3107,12 +3489,12 @@ pub extern "C" fn aurora_direct_task_group_close(
             "expected `TaskGroup`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_io_write(text: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(text) } {
+pub extern "C-unwind" fn aurora_direct_io_write(text: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(text) } {
         Value::String(text) => match write_stdout_result(&text) {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -3121,40 +3503,42 @@ pub extern "C" fn aurora_direct_io_write(text: *mut OpaqueValue) -> *mut OpaqueV
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_io_flush() -> *mut OpaqueValue {
-    match flush_stdout_result() {
+pub extern "C-unwind" fn aurora_direct_io_flush() -> *mut OpaqueValue {
+    task_runtime_boundary(|| match flush_stdout_result() {
         Ok(()) => boxed_value(result_ok(Value::Unit)),
         Err(error) => boxed_value(result_err(io_error(error))),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_io_read_line() -> *mut OpaqueValue {
-    match io_read_line() {
+pub extern "C-unwind" fn aurora_direct_io_read_line() -> *mut OpaqueValue {
+    task_runtime_boundary(|| match io_read_line() {
         Ok(Some(line)) => boxed_value(result_ok(option_some(Value::String(line)))),
         Ok(None) => boxed_value(result_ok(option_none())),
         Err(error) => boxed_value(result_err(io_error(error))),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fs_exists(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(path) } {
+pub extern "C-unwind" fn aurora_direct_fs_exists(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => boxed_value(Value::Bool(std::path::Path::new(&path).exists())),
         other => runtime_error(format!(
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fs_read_to_string(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(path) } {
+pub extern "C-unwind" fn aurora_direct_fs_read_to_string(
+    path: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
             move || {
                 let bytes = read_file_limited(&path, "fs.read_to_string")?;
@@ -3170,12 +3554,12 @@ pub extern "C" fn aurora_direct_fs_read_to_string(path: *mut OpaqueValue) -> *mu
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fs_read_bytes(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(path) } {
+pub extern "C-unwind" fn aurora_direct_fs_read_bytes(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
             move || read_file_limited(&path, "fs.read_bytes"),
             Some(&current_cancellation()),
@@ -3187,112 +3571,120 @@ pub extern "C" fn aurora_direct_fs_read_bytes(path: *mut OpaqueValue) -> *mut Op
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fs_write_string(
+pub extern "C-unwind" fn aurora_direct_fs_write_string(
     path: *mut OpaqueValue,
     text: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let path = match unsafe { value_ref(path) } {
-        Value::String(path) => path.clone(),
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    };
-    let text = match unsafe { value_ref(text) } {
-        Value::String(text) => text.clone(),
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    };
-    match run_blocking_io(
-        move || std::fs::write(path, text),
-        Some(&current_cancellation()),
-    ) {
-        Ok(()) => boxed_value(result_ok(Value::Unit)),
-        Err(error) => boxed_value(result_err(io_error(error))),
-    }
+    task_runtime_boundary(|| {
+        let path = match unsafe { value_ref(path) } {
+            Value::String(path) => path.clone(),
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        let text = match unsafe { value_ref(text) } {
+            Value::String(text) => text.clone(),
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        match run_blocking_io(
+            move || std::fs::write(path, text),
+            Some(&current_cancellation()),
+        ) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fs_write_bytes(
+pub extern "C-unwind" fn aurora_direct_fs_write_bytes(
     path: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let path = expect_string_value(&unsafe { value_ref(path) }, "fs.write_bytes(...)");
-    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "fs.write_bytes(...)");
-    match run_blocking_io(
-        move || std::fs::write(path, bytes),
-        Some(&current_cancellation()),
-    ) {
-        Ok(()) => boxed_value(result_ok(Value::Unit)),
-        Err(error) => boxed_value(result_err(io_error(error))),
-    }
+    task_runtime_boundary(|| {
+        let path = expect_string_value(&unsafe { value_ref(path) }, "fs.write_bytes(...)");
+        let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "fs.write_bytes(...)");
+        match run_blocking_io(
+            move || std::fs::write(path, bytes),
+            Some(&current_cancellation()),
+        ) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fs_append_string(
+pub extern "C-unwind" fn aurora_direct_fs_append_string(
     path: *mut OpaqueValue,
     text: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let path = match unsafe { value_ref(path) } {
-        Value::String(path) => path.clone(),
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    };
-    let text = match unsafe { value_ref(text) } {
-        Value::String(text) => text.clone(),
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    };
-    match run_blocking_io(
-        move || {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .and_then(|mut file| file.write_all(text.as_bytes()))
-        },
-        Some(&current_cancellation()),
-    ) {
-        Ok(()) => boxed_value(result_ok(Value::Unit)),
-        Err(error) => boxed_value(result_err(io_error(error))),
-    }
+    task_runtime_boundary(|| {
+        let path = match unsafe { value_ref(path) } {
+            Value::String(path) => path.clone(),
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        let text = match unsafe { value_ref(text) } {
+            Value::String(text) => text.clone(),
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        match run_blocking_io(
+            move || {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .and_then(|mut file| file.write_all(text.as_bytes()))
+            },
+            Some(&current_cancellation()),
+        ) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fs_append_bytes(
+pub extern "C-unwind" fn aurora_direct_fs_append_bytes(
     path: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let path = expect_string_value(&unsafe { value_ref(path) }, "fs.append_bytes(...)");
-    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "fs.append_bytes(...)");
-    match run_blocking_io(
-        move || {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .and_then(|mut file| file.write_all(&bytes))
-        },
-        Some(&current_cancellation()),
-    ) {
-        Ok(()) => boxed_value(result_ok(Value::Unit)),
-        Err(error) => boxed_value(result_err(io_error(error))),
-    }
+    task_runtime_boundary(|| {
+        let path = expect_string_value(&unsafe { value_ref(path) }, "fs.append_bytes(...)");
+        let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "fs.append_bytes(...)");
+        match run_blocking_io(
+            move || {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .and_then(|mut file| file.write_all(&bytes))
+            },
+            Some(&current_cancellation()),
+        ) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fs_create_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(path) } {
+pub extern "C-unwind" fn aurora_direct_fs_create_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
             move || crate::runtime_value::create_dir_once(path),
             Some(&current_cancellation()),
@@ -3304,12 +3696,12 @@ pub extern "C" fn aurora_direct_fs_create_dir(path: *mut OpaqueValue) -> *mut Op
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(path) } {
+pub extern "C-unwind" fn aurora_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
             move || {
                 let mut names = std::fs::read_dir(path)?
@@ -3331,12 +3723,12 @@ pub extern "C" fn aurora_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut Opaq
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fs_remove_file(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(path) } {
+pub extern "C-unwind" fn aurora_direct_fs_remove_file(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
             move || crate::runtime_value::remove_file_checked(path),
             Some(&current_cancellation()),
@@ -3348,12 +3740,12 @@ pub extern "C" fn aurora_direct_fs_remove_file(path: *mut OpaqueValue) -> *mut O
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fs_open(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(path) } {
+pub extern "C-unwind" fn aurora_direct_fs_open(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match FileValue::open(&path) {
             Ok(file) => boxed_value(result_ok(Value::File(file))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -3362,12 +3754,12 @@ pub extern "C" fn aurora_direct_fs_open(path: *mut OpaqueValue) -> *mut OpaqueVa
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fs_create(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(path) } {
+pub extern "C-unwind" fn aurora_direct_fs_create(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match FileValue::create(&path) {
             Ok(file) => boxed_value(result_ok(Value::File(file))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -3376,12 +3768,12 @@ pub extern "C" fn aurora_direct_fs_create(path: *mut OpaqueValue) -> *mut Opaque
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fs_append(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(path) } {
+pub extern "C-unwind" fn aurora_direct_fs_append(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match FileValue::append(&path) {
             Ok(file) => boxed_value(result_ok(Value::File(file))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -3390,12 +3782,12 @@ pub extern "C" fn aurora_direct_fs_append(path: *mut OpaqueValue) -> *mut Opaque
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_file_read_all(file: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(file) } {
+pub extern "C-unwind" fn aurora_direct_file_read_all(file: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(file) } {
         Value::File(file) => match file.read_all() {
             Ok(text) => boxed_value(result_ok(Value::String(text))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -3404,12 +3796,12 @@ pub extern "C" fn aurora_direct_file_read_all(file: *mut OpaqueValue) -> *mut Op
             "expected `fs.File`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_file_read_bytes(file: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(file) } {
+pub extern "C-unwind" fn aurora_direct_file_read_bytes(file: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(file) } {
         Value::File(file) => match file.read_bytes() {
             Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -3418,54 +3810,58 @@ pub extern "C" fn aurora_direct_file_read_bytes(file: *mut OpaqueValue) -> *mut 
             "expected `fs.File`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_file_write_all(
+pub extern "C-unwind" fn aurora_direct_file_write_all(
     file: *mut OpaqueValue,
     text: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let text = match unsafe { value_ref(text) } {
-        Value::String(text) => text.clone(),
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    };
-    match unsafe { value_ref(file) } {
-        Value::File(file) => match file.write_all(&text) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `fs.File`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let text = match unsafe { value_ref(text) } {
+            Value::String(text) => text.clone(),
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        match unsafe { value_ref(file) } {
+            Value::File(file) => match file.write_all(&text) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `fs.File`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_file_write_bytes(
+pub extern "C-unwind" fn aurora_direct_file_write_bytes(
     file: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "write_bytes(...)");
-    match unsafe { value_ref(file) } {
-        Value::File(file) => match file.write_bytes(&bytes) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `fs.File`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "write_bytes(...)");
+        match unsafe { value_ref(file) } {
+            Value::File(file) => match file.write_bytes(&bytes) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `fs.File`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_file_flush(file: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(file) } {
+pub extern "C-unwind" fn aurora_direct_file_flush(file: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(file) } {
         Value::File(file) => match file.flush() {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -3474,12 +3870,12 @@ pub extern "C" fn aurora_direct_file_flush(file: *mut OpaqueValue) -> *mut Opaqu
             "expected `fs.File`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_file_close(file: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(file) } {
+pub extern "C-unwind" fn aurora_direct_file_close(file: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(file) } {
         Value::File(file) => {
             file.close();
             boxed_value(Value::Unit)
@@ -3488,31 +3884,31 @@ pub extern "C" fn aurora_direct_file_close(file: *mut OpaqueValue) -> *mut Opaqu
             "expected `fs.File`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_inherit() -> *mut OpaqueValue {
-    boxed_value(process_stdio_inherit())
+pub extern "C-unwind" fn aurora_direct_process_inherit() -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(process_stdio_inherit()))
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_null() -> *mut OpaqueValue {
-    boxed_value(process_stdio_null())
+pub extern "C-unwind" fn aurora_direct_process_null() -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(process_stdio_null()))
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_pipe() -> *mut OpaqueValue {
-    boxed_value(process_stdio_pipe())
+pub extern "C-unwind" fn aurora_direct_process_pipe() -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(process_stdio_pipe()))
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_supervisor() -> *mut OpaqueValue {
-    boxed_value(Value::ProcessSupervisor(ProcessSupervisorValue::new()))
+pub extern "C-unwind" fn aurora_direct_process_supervisor() -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(Value::ProcessSupervisor(ProcessSupervisorValue::new())))
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_start(
+pub extern "C-unwind" fn aurora_direct_process_start(
     command: *mut OpaqueValue,
     cwd: *mut OpaqueValue,
     env: *mut OpaqueValue,
@@ -3521,27 +3917,29 @@ pub extern "C" fn aurora_direct_process_start(
     stderr: *mut OpaqueValue,
     group: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let command = expect_command_vec(&unsafe { value_ref(command) }, "process.start(...)");
-    if command.is_empty() {
-        return boxed_value(result_err(process_error_no_command()));
-    }
-    let cwd = expect_optional_string_value(&unsafe { value_ref(cwd) }, "process.start(...)");
-    let env = expect_headers_map(&unsafe { value_ref(env) }, "process.start(...)");
-    let stdin = decode_process_stdio(&unsafe { value_ref(stdin) }, "process.start(...)")
-        .unwrap_or_else(|error| runtime_diagnostic_error(error));
-    let stdout = decode_process_stdio(&unsafe { value_ref(stdout) }, "process.start(...)")
-        .unwrap_or_else(|error| runtime_diagnostic_error(error));
-    let stderr = decode_process_stdio(&unsafe { value_ref(stderr) }, "process.start(...)")
-        .unwrap_or_else(|error| runtime_diagnostic_error(error));
-    let group = expect_bool_value(&unsafe { value_ref(group) }, "process.start(...)");
-    match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr, group) {
-        Ok(child) => boxed_value(result_ok(Value::ProcessChild(child))),
-        Err(error) => boxed_value(result_err(process_error_spawn(error.to_string()))),
-    }
+    task_runtime_boundary(|| {
+        let command = expect_command_vec(&unsafe { value_ref(command) }, "process.start(...)");
+        if command.is_empty() {
+            return boxed_value(result_err(process_error_no_command()));
+        }
+        let cwd = expect_optional_string_value(&unsafe { value_ref(cwd) }, "process.start(...)");
+        let env = expect_headers_map(&unsafe { value_ref(env) }, "process.start(...)");
+        let stdin = decode_process_stdio(&unsafe { value_ref(stdin) }, "process.start(...)")
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let stdout = decode_process_stdio(&unsafe { value_ref(stdout) }, "process.start(...)")
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let stderr = decode_process_stdio(&unsafe { value_ref(stderr) }, "process.start(...)")
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let group = expect_bool_value(&unsafe { value_ref(group) }, "process.start(...)");
+        match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr, group) {
+            Ok(child) => boxed_value(result_ok(Value::ProcessChild(child))),
+            Err(error) => boxed_value(result_err(process_error_spawn(error.to_string()))),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_run(
+pub extern "C-unwind" fn aurora_direct_process_run(
     command: *mut OpaqueValue,
     cwd: *mut OpaqueValue,
     env: *mut OpaqueValue,
@@ -3551,89 +3949,94 @@ pub extern "C" fn aurora_direct_process_run(
     timeout: *mut OpaqueValue,
     group: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let command = expect_command_vec(&unsafe { value_ref(command) }, "process.run(...)");
-    if command.is_empty() {
-        return boxed_value(result_err(process_error_no_command()));
-    }
-    let cwd = expect_optional_string_value(&unsafe { value_ref(cwd) }, "process.run(...)");
-    let env = expect_headers_map(&unsafe { value_ref(env) }, "process.run(...)");
-    let stdin = decode_process_stdio(&unsafe { value_ref(stdin) }, "process.run(...)")
-        .unwrap_or_else(|error| runtime_diagnostic_error(error));
-    let stdout = decode_process_stdio(&unsafe { value_ref(stdout) }, "process.run(...)")
-        .unwrap_or_else(|error| runtime_diagnostic_error(error));
-    let stderr = decode_process_stdio(&unsafe { value_ref(stderr) }, "process.run(...)")
-        .unwrap_or_else(|error| runtime_diagnostic_error(error));
-    let timeout = process_optional_timeout_from_ptr(timeout, "process.run(...)");
-    let group = expect_bool_value(&unsafe { value_ref(group) }, "process.run(...)");
+    task_runtime_boundary(|| {
+        let command = expect_command_vec(&unsafe { value_ref(command) }, "process.run(...)");
+        if command.is_empty() {
+            return boxed_value(result_err(process_error_no_command()));
+        }
+        let cwd = expect_optional_string_value(&unsafe { value_ref(cwd) }, "process.run(...)");
+        let env = expect_headers_map(&unsafe { value_ref(env) }, "process.run(...)");
+        let stdin = decode_process_stdio(&unsafe { value_ref(stdin) }, "process.run(...)")
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let stdout = decode_process_stdio(&unsafe { value_ref(stdout) }, "process.run(...)")
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let stderr = decode_process_stdio(&unsafe { value_ref(stderr) }, "process.run(...)")
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let timeout = process_optional_timeout_from_ptr(timeout, "process.run(...)");
+        let group = expect_bool_value(&unsafe { value_ref(group) }, "process.run(...)");
 
-    let child = match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr, group) {
-        Ok(child) => child,
-        Err(error) => return boxed_value(result_err(process_error_spawn(error.to_string()))),
-    };
+        let child = match ProcessChildValue::spawn(command, cwd, env, stdin, stdout, stderr, group)
+        {
+            Ok(child) => child,
+            Err(error) => return boxed_value(result_err(process_error_spawn(error.to_string()))),
+        };
 
-    let cancellation = current_cancellation();
-    let stdout_task = child
-        .stdout()
-        .map(|pipe| {
-            let capture_cancellation = cancellation.clone();
-            spawn_lightweight_task_with_cancellation(capture_cancellation.clone(), move || {
-                match pipe.read_all(Some(&capture_cancellation)) {
-                    Ok(text) => Ok(Value::String(text)),
-                    Err(error) => Err(Diagnostic::new(format!(
-                        "process stdout capture failed: {}",
-                        error
-                    ))),
-                }
+        let cancellation = current_cancellation();
+        let stdout_task = child
+            .stdout()
+            .map(|pipe| {
+                let capture_cancellation = cancellation.clone();
+                spawn_lightweight_task_with_cancellation(capture_cancellation.clone(), move || {
+                    match pipe.read_all(Some(&capture_cancellation)) {
+                        Ok(text) => Ok(Value::String(text)),
+                        Err(error) => Err(Diagnostic::new(format!(
+                            "process stdout capture failed: {}",
+                            error
+                        ))),
+                    }
+                })
             })
-        })
-        .transpose()
-        .unwrap_or_else(|error| runtime_diagnostic_error(error));
-    let stderr_task = child
-        .stderr()
-        .map(|pipe| {
-            let capture_cancellation = cancellation.clone();
-            spawn_lightweight_task_with_cancellation(capture_cancellation.clone(), move || {
-                match pipe.read_all(Some(&capture_cancellation)) {
-                    Ok(text) => Ok(Value::String(text)),
-                    Err(error) => Err(Diagnostic::new(format!(
-                        "process stderr capture failed: {}",
-                        error
-                    ))),
-                }
+            .transpose()
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let stderr_task = child
+            .stderr()
+            .map(|pipe| {
+                let capture_cancellation = cancellation.clone();
+                spawn_lightweight_task_with_cancellation(capture_cancellation.clone(), move || {
+                    match pipe.read_all(Some(&capture_cancellation)) {
+                        Ok(text) => Ok(Value::String(text)),
+                        Err(error) => Err(Diagnostic::new(format!(
+                            "process stderr capture failed: {}",
+                            error
+                        ))),
+                    }
+                })
             })
-        })
-        .transpose()
-        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+            .transpose()
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
 
-    let status = match child.wait(timeout, Some(&cancellation)) {
-        ProcessChildWaitStatus::Exited(status) => status,
-        ProcessChildWaitStatus::TimedOut => {
-            child.close();
-            return boxed_value(result_err(process_error_timed_out()));
-        }
-        ProcessChildWaitStatus::Cancelled => {
-            child.close();
-            return boxed_value(result_err(process_error_cancelled()));
-        }
-        ProcessChildWaitStatus::Failed(error) => {
-            child.close();
-            return boxed_value(result_err(process_error_from_io(error)));
-        }
-    };
-    let stdout = await_process_capture_task(stdout_task, "stdout");
-    let stderr = await_process_capture_task(stderr_task, "stderr");
-    boxed_value(result_ok(Value::ProcessCompleted(
-        ProcessCompletedValue::new(
-            crate::runtime_value::process_exit_status(status),
-            stdout,
-            stderr,
-        ),
-    )))
+        let status = match child.wait(timeout, Some(&cancellation)) {
+            ProcessChildWaitStatus::Exited(status) => status,
+            ProcessChildWaitStatus::TimedOut => {
+                child.close();
+                return boxed_value(result_err(process_error_timed_out()));
+            }
+            ProcessChildWaitStatus::Cancelled => {
+                child.close();
+                return boxed_value(result_err(process_error_cancelled()));
+            }
+            ProcessChildWaitStatus::Failed(error) => {
+                child.close();
+                return boxed_value(result_err(process_error_from_io(error)));
+            }
+        };
+        let stdout = await_process_capture_task(stdout_task, "stdout");
+        let stderr = await_process_capture_task(stderr_task, "stderr");
+        boxed_value(result_ok(Value::ProcessCompleted(
+            ProcessCompletedValue::new(
+                crate::runtime_value::process_exit_status(status),
+                stdout,
+                stderr,
+            ),
+        )))
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_child_stdin(child: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(child) } {
+pub extern "C-unwind" fn aurora_direct_process_child_stdin(
+    child: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(child) } {
         Value::ProcessChild(child) => boxed_value(
             child
                 .stdin()
@@ -3645,12 +4048,14 @@ pub extern "C" fn aurora_direct_process_child_stdin(child: *mut OpaqueValue) -> 
             "expected `process.Child`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_child_stdout(child: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(child) } {
+pub extern "C-unwind" fn aurora_direct_process_child_stdout(
+    child: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(child) } {
         Value::ProcessChild(child) => boxed_value(
             child
                 .stdout()
@@ -3662,12 +4067,14 @@ pub extern "C" fn aurora_direct_process_child_stdout(child: *mut OpaqueValue) ->
             "expected `process.Child`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_child_stderr(child: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(child) } {
+pub extern "C-unwind" fn aurora_direct_process_child_stderr(
+    child: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(child) } {
         Value::ProcessChild(child) => boxed_value(
             child
                 .stderr()
@@ -3679,75 +4086,87 @@ pub extern "C" fn aurora_direct_process_child_stderr(child: *mut OpaqueValue) ->
             "expected `process.Child`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_child_wait(
+pub extern "C-unwind" fn aurora_direct_process_child_wait(
     child: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = process_optional_timeout_from_ptr(timeout, "wait(timeout=...)");
-    match unsafe { value_ref(child) } {
-        Value::ProcessChild(child) => {
-            boxed_value(match child.wait(timeout, Some(&current_cancellation())) {
-                ProcessChildWaitStatus::Exited(status) => process_wait_exited(status),
-                ProcessChildWaitStatus::TimedOut => process_wait_timed_out(),
-                ProcessChildWaitStatus::Cancelled => process_wait_cancelled(),
-                ProcessChildWaitStatus::Failed(error) => {
-                    process_wait_failed(process_error_from_io(error))
-                }
-            })
+    task_runtime_boundary(|| {
+        let timeout = process_optional_timeout_from_ptr(timeout, "wait(timeout=...)");
+        match unsafe { value_ref(child) } {
+            Value::ProcessChild(child) => {
+                boxed_value(match child.wait(timeout, Some(&current_cancellation())) {
+                    ProcessChildWaitStatus::Exited(status) => process_wait_exited(status),
+                    ProcessChildWaitStatus::TimedOut => process_wait_timed_out(),
+                    ProcessChildWaitStatus::Cancelled => process_wait_cancelled(),
+                    ProcessChildWaitStatus::Failed(error) => {
+                        process_wait_failed(process_error_from_io(error))
+                    }
+                })
+            }
+            other => runtime_error(format!(
+                "expected `process.Child`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `process.Child`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_child_wait_or_none(
+pub extern "C-unwind" fn aurora_direct_process_child_wait_or_none(
     child: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = process_optional_timeout_from_ptr(timeout, "wait_or_none(timeout=...)");
-    match unsafe { value_ref(child) } {
-        Value::ProcessChild(child) => match child
-            .wait_or_none(timeout, Some(&current_cancellation()))
-        {
-            Ok(Some(status)) => boxed_value(result_ok(option_some(process_exit_status(status)))),
-            Ok(None) => boxed_value(result_ok(option_none())),
-            Err(error) => boxed_value(result_err(error)),
-        },
-        other => runtime_error(format!(
-            "expected `process.Child`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let timeout = process_optional_timeout_from_ptr(timeout, "wait_or_none(timeout=...)");
+        match unsafe { value_ref(child) } {
+            Value::ProcessChild(child) => {
+                match child.wait_or_none(timeout, Some(&current_cancellation())) {
+                    Ok(Some(status)) => {
+                        boxed_value(result_ok(option_some(process_exit_status(status))))
+                    }
+                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Err(error) => boxed_value(result_err(error)),
+                }
+            }
+            other => runtime_error(format!(
+                "expected `process.Child`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_child_wait_ok(
+pub extern "C-unwind" fn aurora_direct_process_child_wait_ok(
     child: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = process_optional_timeout_from_ptr(timeout, "wait_ok(timeout=...)");
-    match unsafe { value_ref(child) } {
-        Value::ProcessChild(child) => match child.wait_ok(timeout, Some(&current_cancellation())) {
-            Ok(status) => boxed_value(result_ok(process_exit_status(status))),
-            Err(error) => boxed_value(result_err(error)),
-        },
-        other => runtime_error(format!(
-            "expected `process.Child`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let timeout = process_optional_timeout_from_ptr(timeout, "wait_ok(timeout=...)");
+        match unsafe { value_ref(child) } {
+            Value::ProcessChild(child) => {
+                match child.wait_ok(timeout, Some(&current_cancellation())) {
+                    Ok(status) => boxed_value(result_ok(process_exit_status(status))),
+                    Err(error) => boxed_value(result_err(error)),
+                }
+            }
+            other => runtime_error(format!(
+                "expected `process.Child`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_child_kill(child: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(child) } {
+pub extern "C-unwind" fn aurora_direct_process_child_kill(
+    child: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(child) } {
         Value::ProcessChild(child) => match child.kill() {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(process_error_from_io(error))),
@@ -3756,14 +4175,14 @@ pub extern "C" fn aurora_direct_process_child_kill(child: *mut OpaqueValue) -> *
             "expected `process.Child`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_child_terminate(
+pub extern "C-unwind" fn aurora_direct_process_child_terminate(
     child: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(child) } {
+    task_runtime_boundary(|| match unsafe { value_ref(child) } {
         Value::ProcessChild(child) => match child.terminate() {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(process_error_from_io(error))),
@@ -3772,12 +4191,14 @@ pub extern "C" fn aurora_direct_process_child_terminate(
             "expected `process.Child`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_child_close(child: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(child) } {
+pub extern "C-unwind" fn aurora_direct_process_child_close(
+    child: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(child) } {
         Value::ProcessChild(child) => {
             child.close();
             boxed_value(Value::Unit)
@@ -3786,12 +4207,14 @@ pub extern "C" fn aurora_direct_process_child_close(child: *mut OpaqueValue) -> 
             "expected `process.Child`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_pipe_read_all(pipe: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(pipe) } {
+pub extern "C-unwind" fn aurora_direct_process_pipe_read_all(
+    pipe: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(pipe) } {
         Value::ProcessPipe(pipe) => match pipe.read_all(Some(&current_cancellation())) {
             Ok(text) => boxed_value(result_ok(Value::String(text))),
             Err(error) => boxed_value(result_err(process_error_from_io(error))),
@@ -3800,100 +4223,113 @@ pub extern "C" fn aurora_direct_process_pipe_read_all(pipe: *mut OpaqueValue) ->
             "expected `process.Pipe`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_pipe_read_line(
+pub extern "C-unwind" fn aurora_direct_process_pipe_read_line(
     pipe: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = process_optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
-    match unsafe { value_ref(pipe) } {
-        Value::ProcessPipe(pipe) => match pipe.read_line(timeout, Some(&current_cancellation())) {
-            Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
-            Ok(None) => boxed_value(result_ok(option_none())),
-            Err(error) => boxed_value(result_err(process_error_from_io(error))),
-        },
-        other => runtime_error(format!(
-            "expected `process.Pipe`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let timeout = process_optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
+        match unsafe { value_ref(pipe) } {
+            Value::ProcessPipe(pipe) => {
+                match pipe.read_line(timeout, Some(&current_cancellation())) {
+                    Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
+                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Err(error) => boxed_value(result_err(process_error_from_io(error))),
+                }
+            }
+            other => runtime_error(format!(
+                "expected `process.Pipe`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_pipe_read_bytes(
+pub extern "C-unwind" fn aurora_direct_process_pipe_read_bytes(
     pipe: *mut OpaqueValue,
     max_bytes: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let count = expect_i32_value(&unsafe { value_ref(max_bytes) }, "read_bytes(...)");
-    let count = usize::try_from(count)
-        .unwrap_or_else(|_| runtime_error("`read_bytes(...)` expects a non-negative `max_bytes`"));
-    let timeout = process_optional_timeout_from_ptr(timeout, "read_bytes(timeout=...)");
-    match unsafe { value_ref(pipe) } {
-        Value::ProcessPipe(pipe) => {
-            match pipe.read_bytes(count, timeout, Some(&current_cancellation())) {
-                Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
-                Ok(None) => boxed_value(result_ok(option_none())),
-                Err(error) => boxed_value(result_err(process_error_from_io(error))),
+    task_runtime_boundary(|| {
+        let count = expect_i32_value(&unsafe { value_ref(max_bytes) }, "read_bytes(...)");
+        let count = usize::try_from(count).unwrap_or_else(|_| {
+            runtime_error("`read_bytes(...)` expects a non-negative `max_bytes`")
+        });
+        let timeout = process_optional_timeout_from_ptr(timeout, "read_bytes(timeout=...)");
+        match unsafe { value_ref(pipe) } {
+            Value::ProcessPipe(pipe) => {
+                match pipe.read_bytes(count, timeout, Some(&current_cancellation())) {
+                    Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
+                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Err(error) => boxed_value(result_err(process_error_from_io(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `process.Pipe`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `process.Pipe`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_pipe_write_all(
+pub extern "C-unwind" fn aurora_direct_process_pipe_write_all(
     pipe: *mut OpaqueValue,
     text: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let text = expect_string_value(&unsafe { value_ref(text) }, "write_all(...)");
-    let timeout = process_optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
-    match unsafe { value_ref(pipe) } {
-        Value::ProcessPipe(pipe) => {
-            match pipe.write_all(&text, timeout, Some(&current_cancellation())) {
-                Ok(()) => boxed_value(result_ok(Value::Unit)),
-                Err(error) => boxed_value(result_err(process_error_from_io(error))),
+    task_runtime_boundary(|| {
+        let text = expect_string_value(&unsafe { value_ref(text) }, "write_all(...)");
+        let timeout = process_optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
+        match unsafe { value_ref(pipe) } {
+            Value::ProcessPipe(pipe) => {
+                match pipe.write_all(&text, timeout, Some(&current_cancellation())) {
+                    Ok(()) => boxed_value(result_ok(Value::Unit)),
+                    Err(error) => boxed_value(result_err(process_error_from_io(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `process.Pipe`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `process.Pipe`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_pipe_write_bytes(
+pub extern "C-unwind" fn aurora_direct_process_pipe_write_bytes(
     pipe: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "write_bytes(...)");
-    let timeout = process_optional_timeout_from_ptr(timeout, "write_bytes(timeout=...)");
-    match unsafe { value_ref(pipe) } {
-        Value::ProcessPipe(pipe) => {
-            match pipe.write_bytes(&bytes, timeout, Some(&current_cancellation())) {
-                Ok(()) => boxed_value(result_ok(Value::Unit)),
-                Err(error) => boxed_value(result_err(process_error_from_io(error))),
+    task_runtime_boundary(|| {
+        let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "write_bytes(...)");
+        let timeout = process_optional_timeout_from_ptr(timeout, "write_bytes(timeout=...)");
+        match unsafe { value_ref(pipe) } {
+            Value::ProcessPipe(pipe) => {
+                match pipe.write_bytes(&bytes, timeout, Some(&current_cancellation())) {
+                    Ok(()) => boxed_value(result_ok(Value::Unit)),
+                    Err(error) => boxed_value(result_err(process_error_from_io(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `process.Pipe`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `process.Pipe`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_pipe_flush(pipe: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(pipe) } {
+pub extern "C-unwind" fn aurora_direct_process_pipe_flush(
+    pipe: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(pipe) } {
         Value::ProcessPipe(pipe) => match pipe.flush() {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(process_error_from_io(error))),
@@ -3902,12 +4338,14 @@ pub extern "C" fn aurora_direct_process_pipe_flush(pipe: *mut OpaqueValue) -> *m
             "expected `process.Pipe`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_pipe_close(pipe: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(pipe) } {
+pub extern "C-unwind" fn aurora_direct_process_pipe_close(
+    pipe: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(pipe) } {
         Value::ProcessPipe(pipe) => {
             pipe.close();
             boxed_value(Value::Unit)
@@ -3916,64 +4354,66 @@ pub extern "C" fn aurora_direct_process_pipe_close(pipe: *mut OpaqueValue) -> *m
             "expected `process.Pipe`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_completed_status(
+pub extern "C-unwind" fn aurora_direct_process_completed_status(
     completed: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(completed) } {
+    task_runtime_boundary(|| match unsafe { value_ref(completed) } {
         Value::ProcessCompleted(completed) => boxed_value(completed.status()),
         other => runtime_error(format!(
             "expected `process.Completed`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_completed_success(completed: *mut OpaqueValue) -> i64 {
-    match unsafe { value_ref(completed) } {
+pub extern "C-unwind" fn aurora_direct_process_completed_success(
+    completed: *mut OpaqueValue,
+) -> i64 {
+    task_runtime_boundary(|| match unsafe { value_ref(completed) } {
         Value::ProcessCompleted(completed) => i64::from(completed.success()),
         other => runtime_error(format!(
             "expected `process.Completed`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_completed_stdout(
+pub extern "C-unwind" fn aurora_direct_process_completed_stdout(
     completed: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(completed) } {
+    task_runtime_boundary(|| match unsafe { value_ref(completed) } {
         Value::ProcessCompleted(completed) => boxed_value(Value::String(completed.stdout())),
         other => runtime_error(format!(
             "expected `process.Completed`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_completed_stderr(
+pub extern "C-unwind" fn aurora_direct_process_completed_stderr(
     completed: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(completed) } {
+    task_runtime_boundary(|| match unsafe { value_ref(completed) } {
         Value::ProcessCompleted(completed) => boxed_value(Value::String(completed.stderr())),
         other => runtime_error(format!(
             "expected `process.Completed`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_completed_check(
+pub extern "C-unwind" fn aurora_direct_process_completed_check(
     completed: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(completed) } {
+    task_runtime_boundary(|| match unsafe { value_ref(completed) } {
         Value::ProcessCompleted(completed) => match completed.check() {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(error)),
@@ -3982,11 +4422,11 @@ pub extern "C" fn aurora_direct_process_completed_check(
             "expected `process.Completed`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_supervisor_start(
+pub extern "C-unwind" fn aurora_direct_process_supervisor_start(
     supervisor: *mut OpaqueValue,
     name: *mut OpaqueValue,
     command: *mut OpaqueValue,
@@ -4000,92 +4440,100 @@ pub extern "C" fn aurora_direct_process_supervisor_start(
     max_restarts: *mut OpaqueValue,
     group: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let name = expect_string_value(&unsafe { value_ref(name) }, "start(...)");
-    let command = expect_command_vec(&unsafe { value_ref(command) }, "start(...)");
-    let cwd = expect_optional_string_value(&unsafe { value_ref(cwd) }, "start(...)");
-    let env = expect_headers_map(&unsafe { value_ref(env) }, "start(...)");
-    let stdin = decode_process_stdio(&unsafe { value_ref(stdin) }, "start(...)")
-        .unwrap_or_else(|error| runtime_diagnostic_error(error));
-    let stdout = decode_process_stdio(&unsafe { value_ref(stdout) }, "start(...)")
-        .unwrap_or_else(|error| runtime_diagnostic_error(error));
-    let stderr = decode_process_stdio(&unsafe { value_ref(stderr) }, "start(...)")
-        .unwrap_or_else(|error| runtime_diagnostic_error(error));
-    let restart = decode_process_restart_policy(&unsafe { value_ref(restart) }, "start(...)")
-        .unwrap_or_else(|error| runtime_diagnostic_error(error));
-    let backoff = duration_from_ptr(backoff, "start(...)");
-    let max_restarts = supervisor_max_restarts_from_ptr(max_restarts, "start(...)");
-    let group = expect_bool_value(&unsafe { value_ref(group) }, "start(...)");
-    match unsafe { value_ref(supervisor) } {
-        Value::ProcessSupervisor(supervisor) => match supervisor.start(
-            name,
-            command,
-            cwd,
-            env,
-            stdin,
-            stdout,
-            stderr,
-            restart,
-            backoff,
-            max_restarts,
-            group,
-        ) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(error) => boxed_value(result_err(error)),
-        },
-        other => runtime_error(format!(
-            "expected `process.Supervisor`, found `{}`",
-            value_type_name(other)
-        )),
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_process_supervisor_wait(
-    supervisor: *mut OpaqueValue,
-    timeout: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    let timeout = process_optional_timeout_from_ptr(timeout, "wait(timeout=...)");
-    match unsafe { value_ref(supervisor) } {
-        Value::ProcessSupervisor(supervisor) => boxed_value(
-            match supervisor.wait(timeout, Some(&current_cancellation())) {
-                ProcessSupervisorWaitStatus::Event(event) => process_supervisor_wait_event(event),
-                ProcessSupervisorWaitStatus::TimedOut => process_supervisor_wait_timed_out(),
-                ProcessSupervisorWaitStatus::Cancelled => process_supervisor_wait_cancelled(),
-            },
-        ),
-        other => runtime_error(format!(
-            "expected `process.Supervisor`, found `{}`",
-            value_type_name(other)
-        )),
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_process_supervisor_wait_or_none(
-    supervisor: *mut OpaqueValue,
-    timeout: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    let timeout = process_optional_timeout_from_ptr(timeout, "wait_or_none(timeout=...)");
-    match unsafe { value_ref(supervisor) } {
-        Value::ProcessSupervisor(supervisor) => {
-            match supervisor.wait_or_none(timeout, Some(&current_cancellation())) {
-                Ok(Some(event)) => boxed_value(result_ok(option_some(event))),
-                Ok(None) => boxed_value(result_ok(option_none())),
+    task_runtime_boundary(|| {
+        let name = expect_string_value(&unsafe { value_ref(name) }, "start(...)");
+        let command = expect_command_vec(&unsafe { value_ref(command) }, "start(...)");
+        let cwd = expect_optional_string_value(&unsafe { value_ref(cwd) }, "start(...)");
+        let env = expect_headers_map(&unsafe { value_ref(env) }, "start(...)");
+        let stdin = decode_process_stdio(&unsafe { value_ref(stdin) }, "start(...)")
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let stdout = decode_process_stdio(&unsafe { value_ref(stdout) }, "start(...)")
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let stderr = decode_process_stdio(&unsafe { value_ref(stderr) }, "start(...)")
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let restart = decode_process_restart_policy(&unsafe { value_ref(restart) }, "start(...)")
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        let backoff = duration_from_ptr(backoff, "start(...)");
+        let max_restarts = supervisor_max_restarts_from_ptr(max_restarts, "start(...)");
+        let group = expect_bool_value(&unsafe { value_ref(group) }, "start(...)");
+        match unsafe { value_ref(supervisor) } {
+            Value::ProcessSupervisor(supervisor) => match supervisor.start(
+                name,
+                command,
+                cwd,
+                env,
+                stdin,
+                stdout,
+                stderr,
+                restart,
+                backoff,
+                max_restarts,
+                group,
+            ) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
                 Err(error) => boxed_value(result_err(error)),
-            }
+            },
+            other => runtime_error(format!(
+                "expected `process.Supervisor`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `process.Supervisor`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_supervisor_stop(
+pub extern "C-unwind" fn aurora_direct_process_supervisor_wait(
+    supervisor: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let timeout = process_optional_timeout_from_ptr(timeout, "wait(timeout=...)");
+        match unsafe { value_ref(supervisor) } {
+            Value::ProcessSupervisor(supervisor) => boxed_value(
+                match supervisor.wait(timeout, Some(&current_cancellation())) {
+                    ProcessSupervisorWaitStatus::Event(event) => {
+                        process_supervisor_wait_event(event)
+                    }
+                    ProcessSupervisorWaitStatus::TimedOut => process_supervisor_wait_timed_out(),
+                    ProcessSupervisorWaitStatus::Cancelled => process_supervisor_wait_cancelled(),
+                },
+            ),
+            other => runtime_error(format!(
+                "expected `process.Supervisor`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_process_supervisor_wait_or_none(
+    supervisor: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let timeout = process_optional_timeout_from_ptr(timeout, "wait_or_none(timeout=...)");
+        match unsafe { value_ref(supervisor) } {
+            Value::ProcessSupervisor(supervisor) => {
+                match supervisor.wait_or_none(timeout, Some(&current_cancellation())) {
+                    Ok(Some(event)) => boxed_value(result_ok(option_some(event))),
+                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Err(error) => boxed_value(result_err(error)),
+                }
+            }
+            other => runtime_error(format!(
+                "expected `process.Supervisor`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_process_supervisor_stop(
     supervisor: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(supervisor) } {
+    task_runtime_boundary(|| match unsafe { value_ref(supervisor) } {
         Value::ProcessSupervisor(supervisor) => match supervisor.stop() {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(error)),
@@ -4094,25 +4542,27 @@ pub extern "C" fn aurora_direct_process_supervisor_stop(
             "expected `process.Supervisor`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_supervisor_is_empty(supervisor: *mut OpaqueValue) -> i64 {
-    match unsafe { value_ref(supervisor) } {
+pub extern "C-unwind" fn aurora_direct_process_supervisor_is_empty(
+    supervisor: *mut OpaqueValue,
+) -> i64 {
+    task_runtime_boundary(|| match unsafe { value_ref(supervisor) } {
         Value::ProcessSupervisor(supervisor) => i64::from(supervisor.is_empty()),
         other => runtime_error(format!(
             "expected `process.Supervisor`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_process_supervisor_close(
+pub extern "C-unwind" fn aurora_direct_process_supervisor_close(
     supervisor: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(supervisor) } {
+    task_runtime_boundary(|| match unsafe { value_ref(supervisor) } {
         Value::ProcessSupervisor(supervisor) => {
             supervisor.close();
             boxed_value(Value::Unit)
@@ -4121,12 +4571,12 @@ pub extern "C" fn aurora_direct_process_supervisor_close(
             "expected `process.Supervisor`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_connect(address: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(address) } {
+pub extern "C-unwind" fn aurora_direct_net_connect(address: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(address) } {
         Value::String(address) => {
             match TcpStreamValue::connect(&address, None, Some(&current_cancellation())) {
                 Ok(stream) => boxed_value(result_ok(Value::TcpStream(stream))),
@@ -4137,32 +4587,34 @@ pub extern "C" fn aurora_direct_net_connect(address: *mut OpaqueValue) -> *mut O
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_connect_timeout(
+pub extern "C-unwind" fn aurora_direct_net_connect_timeout(
     address: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "net.connect_timeout(...)");
-    match unsafe { value_ref(address) } {
-        Value::String(address) => {
-            match TcpStreamValue::connect(&address, timeout, Some(&current_cancellation())) {
-                Ok(stream) => boxed_value(result_ok(Value::TcpStream(stream))),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "net.connect_timeout(...)");
+        match unsafe { value_ref(address) } {
+            Value::String(address) => {
+                match TcpStreamValue::connect(&address, timeout, Some(&current_cancellation())) {
+                    Ok(stream) => boxed_value(result_ok(Value::TcpStream(stream))),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_listen(address: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(address) } {
+pub extern "C-unwind" fn aurora_direct_net_listen(address: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(address) } {
         Value::String(address) => match TcpListenerValue::bind(&address) {
             Ok(listener) => boxed_value(result_ok(Value::TcpListener(listener))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4171,12 +4623,12 @@ pub extern "C" fn aurora_direct_net_listen(address: *mut OpaqueValue) -> *mut Op
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_udp_bind(address: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(address) } {
+pub extern "C-unwind" fn aurora_direct_net_udp_bind(address: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(address) } {
         Value::String(address) => match UdpSocketValue::bind(&address) {
             Ok(socket) => boxed_value(result_ok(Value::UdpSocket(socket))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4185,12 +4637,12 @@ pub extern "C" fn aurora_direct_net_udp_bind(address: *mut OpaqueValue) -> *mut 
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_unix_listen(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(path) } {
+pub extern "C-unwind" fn aurora_direct_net_unix_listen(path: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match UnixListenerValue::bind(&path) {
             Ok(listener) => boxed_value(result_ok(Value::UnixListener(listener))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4199,12 +4651,14 @@ pub extern "C" fn aurora_direct_net_unix_listen(path: *mut OpaqueValue) -> *mut 
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_unix_connect(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(path) } {
+pub extern "C-unwind" fn aurora_direct_net_unix_connect(
+    path: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => {
             match UnixStreamValue::connect(&path, None, Some(&current_cancellation())) {
                 Ok(stream) => boxed_value(result_ok(Value::UnixStream(stream))),
@@ -4215,104 +4669,114 @@ pub extern "C" fn aurora_direct_net_unix_connect(path: *mut OpaqueValue) -> *mut
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_unix_connect_timeout(
+pub extern "C-unwind" fn aurora_direct_net_unix_connect_timeout(
     path: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "net.unix_connect_timeout(...)");
-    match unsafe { value_ref(path) } {
-        Value::String(path) => {
-            match UnixStreamValue::connect(&path, timeout, Some(&current_cancellation())) {
-                Ok(stream) => boxed_value(result_ok(Value::UnixStream(stream))),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "net.unix_connect_timeout(...)");
+        match unsafe { value_ref(path) } {
+            Value::String(path) => {
+                match UnixStreamValue::connect(&path, timeout, Some(&current_cancellation())) {
+                    Ok(stream) => boxed_value(result_ok(Value::UnixStream(stream))),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_tls_listen(
+pub extern "C-unwind" fn aurora_direct_net_tls_listen(
     address: *mut OpaqueValue,
     cert_pem_path: *mut OpaqueValue,
     key_pem_path: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let address = expect_string_value(&unsafe { value_ref(address) }, "net.tls_listen(...)");
-    let cert_pem_path =
-        expect_string_value(&unsafe { value_ref(cert_pem_path) }, "net.tls_listen(...)");
-    let key_pem_path =
-        expect_string_value(&unsafe { value_ref(key_pem_path) }, "net.tls_listen(...)");
-    match TlsListenerValue::bind(&address, &cert_pem_path, &key_pem_path) {
-        Ok(listener) => boxed_value(result_ok(Value::TlsListener(listener))),
-        Err(error) => boxed_value(result_err(io_error(error))),
-    }
+    task_runtime_boundary(|| {
+        let address = expect_string_value(&unsafe { value_ref(address) }, "net.tls_listen(...)");
+        let cert_pem_path =
+            expect_string_value(&unsafe { value_ref(cert_pem_path) }, "net.tls_listen(...)");
+        let key_pem_path =
+            expect_string_value(&unsafe { value_ref(key_pem_path) }, "net.tls_listen(...)");
+        match TlsListenerValue::bind(&address, &cert_pem_path, &key_pem_path) {
+            Ok(listener) => boxed_value(result_ok(Value::TlsListener(listener))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_tls_connect(
+pub extern "C-unwind" fn aurora_direct_net_tls_connect(
     address: *mut OpaqueValue,
     server_name: *mut OpaqueValue,
     ca_pem_path: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let address = expect_string_value(&unsafe { value_ref(address) }, "net.tls_connect(...)");
-    let server_name =
-        expect_string_value(&unsafe { value_ref(server_name) }, "net.tls_connect(...)");
-    let ca_pem_path =
-        expect_string_value(&unsafe { value_ref(ca_pem_path) }, "net.tls_connect(...)");
-    match TlsStreamValue::connect(
-        &address,
-        &server_name,
-        Some(&ca_pem_path),
-        None,
-        Some(&current_cancellation()),
-    ) {
-        Ok(stream) => boxed_value(result_ok(Value::TlsStream(stream))),
-        Err(error) => boxed_value(result_err(io_error(error))),
-    }
+    task_runtime_boundary(|| {
+        let address = expect_string_value(&unsafe { value_ref(address) }, "net.tls_connect(...)");
+        let server_name =
+            expect_string_value(&unsafe { value_ref(server_name) }, "net.tls_connect(...)");
+        let ca_pem_path =
+            expect_string_value(&unsafe { value_ref(ca_pem_path) }, "net.tls_connect(...)");
+        match TlsStreamValue::connect(
+            &address,
+            &server_name,
+            Some(&ca_pem_path),
+            None,
+            Some(&current_cancellation()),
+        ) {
+            Ok(stream) => boxed_value(result_ok(Value::TlsStream(stream))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_tls_connect_timeout(
+pub extern "C-unwind" fn aurora_direct_net_tls_connect_timeout(
     address: *mut OpaqueValue,
     server_name: *mut OpaqueValue,
     ca_pem_path: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let address = expect_string_value(
-        &unsafe { value_ref(address) },
-        "net.tls_connect_timeout(...)",
-    );
-    let server_name = expect_string_value(
-        &unsafe { value_ref(server_name) },
-        "net.tls_connect_timeout(...)",
-    );
-    let ca_pem_path = expect_string_value(
-        &unsafe { value_ref(ca_pem_path) },
-        "net.tls_connect_timeout(...)",
-    );
-    let timeout = optional_timeout_from_ptr(timeout, "net.tls_connect_timeout(...)");
-    match TlsStreamValue::connect(
-        &address,
-        &server_name,
-        Some(&ca_pem_path),
-        timeout,
-        Some(&current_cancellation()),
-    ) {
-        Ok(stream) => boxed_value(result_ok(Value::TlsStream(stream))),
-        Err(error) => boxed_value(result_err(io_error(error))),
-    }
+    task_runtime_boundary(|| {
+        let address = expect_string_value(
+            &unsafe { value_ref(address) },
+            "net.tls_connect_timeout(...)",
+        );
+        let server_name = expect_string_value(
+            &unsafe { value_ref(server_name) },
+            "net.tls_connect_timeout(...)",
+        );
+        let ca_pem_path = expect_string_value(
+            &unsafe { value_ref(ca_pem_path) },
+            "net.tls_connect_timeout(...)",
+        );
+        let timeout = optional_timeout_from_ptr(timeout, "net.tls_connect_timeout(...)");
+        match TlsStreamValue::connect(
+            &address,
+            &server_name,
+            Some(&ca_pem_path),
+            timeout,
+            Some(&current_cancellation()),
+        ) {
+            Ok(stream) => boxed_value(result_ok(Value::TlsStream(stream))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_http_listen(address: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(address) } {
+pub extern "C-unwind" fn aurora_direct_net_http_listen(
+    address: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(address) } {
         Value::String(address) => match HttpListenerValue::bind(&address) {
             Ok(listener) => boxed_value(result_ok(Value::HttpListener(listener))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4321,141 +4785,152 @@ pub extern "C" fn aurora_direct_net_http_listen(address: *mut OpaqueValue) -> *m
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_http_request_text(
+pub extern "C-unwind" fn aurora_direct_net_http_request_text(
     method: *mut OpaqueValue,
     url: *mut OpaqueValue,
     body: *mut OpaqueValue,
     headers: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let method = expect_string_value(&unsafe { value_ref(method) }, "net.http_request_text(...)");
-    let url = expect_string_value(&unsafe { value_ref(url) }, "net.http_request_text(...)");
-    let body = expect_string_value(&unsafe { value_ref(body) }, "net.http_request_text(...)");
-    let headers = expect_headers_map(&unsafe { value_ref(headers) }, "net.http_request_text(...)");
-    match HttpResponseValue::request_text(
-        &method,
-        &url,
-        &body,
-        headers,
-        None,
-        Some(&current_cancellation()),
-    ) {
-        Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
-        Err(error) => boxed_value(result_err(io_error(error))),
-    }
+    task_runtime_boundary(|| {
+        let method =
+            expect_string_value(&unsafe { value_ref(method) }, "net.http_request_text(...)");
+        let url = expect_string_value(&unsafe { value_ref(url) }, "net.http_request_text(...)");
+        let body = expect_string_value(&unsafe { value_ref(body) }, "net.http_request_text(...)");
+        let headers =
+            expect_headers_map(&unsafe { value_ref(headers) }, "net.http_request_text(...)");
+        match HttpResponseValue::request_text(
+            &method,
+            &url,
+            &body,
+            headers,
+            None,
+            Some(&current_cancellation()),
+        ) {
+            Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_http_request_text_timeout(
+pub extern "C-unwind" fn aurora_direct_net_http_request_text_timeout(
     method: *mut OpaqueValue,
     url: *mut OpaqueValue,
     body: *mut OpaqueValue,
     headers: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let method = expect_string_value(
-        &unsafe { value_ref(method) },
-        "net.http_request_text_timeout(...)",
-    );
-    let url = expect_string_value(
-        &unsafe { value_ref(url) },
-        "net.http_request_text_timeout(...)",
-    );
-    let body = expect_string_value(
-        &unsafe { value_ref(body) },
-        "net.http_request_text_timeout(...)",
-    );
-    let headers = expect_headers_map(
-        &unsafe { value_ref(headers) },
-        "net.http_request_text_timeout(...)",
-    );
-    let timeout = optional_timeout_from_ptr(timeout, "net.http_request_text_timeout(...)");
-    match HttpResponseValue::request_text(
-        &method,
-        &url,
-        &body,
-        headers,
-        timeout,
-        Some(&current_cancellation()),
-    ) {
-        Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
-        Err(error) => boxed_value(result_err(io_error(error))),
-    }
+    task_runtime_boundary(|| {
+        let method = expect_string_value(
+            &unsafe { value_ref(method) },
+            "net.http_request_text_timeout(...)",
+        );
+        let url = expect_string_value(
+            &unsafe { value_ref(url) },
+            "net.http_request_text_timeout(...)",
+        );
+        let body = expect_string_value(
+            &unsafe { value_ref(body) },
+            "net.http_request_text_timeout(...)",
+        );
+        let headers = expect_headers_map(
+            &unsafe { value_ref(headers) },
+            "net.http_request_text_timeout(...)",
+        );
+        let timeout = optional_timeout_from_ptr(timeout, "net.http_request_text_timeout(...)");
+        match HttpResponseValue::request_text(
+            &method,
+            &url,
+            &body,
+            headers,
+            timeout,
+            Some(&current_cancellation()),
+        ) {
+            Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_http_request_bytes(
+pub extern "C-unwind" fn aurora_direct_net_http_request_bytes(
     method: *mut OpaqueValue,
     url: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
     headers: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let method = expect_string_value(&unsafe { value_ref(method) }, "net.http_request_bytes(...)");
-    let url = expect_string_value(&unsafe { value_ref(url) }, "net.http_request_bytes(...)");
-    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "net.http_request_bytes(...)");
-    let headers = expect_headers_map(
-        &unsafe { value_ref(headers) },
-        "net.http_request_bytes(...)",
-    );
-    match HttpResponseValue::request_bytes(
-        &method,
-        &url,
-        &bytes,
-        headers,
-        None,
-        Some(&current_cancellation()),
-    ) {
-        Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
-        Err(error) => boxed_value(result_err(io_error(error))),
-    }
+    task_runtime_boundary(|| {
+        let method =
+            expect_string_value(&unsafe { value_ref(method) }, "net.http_request_bytes(...)");
+        let url = expect_string_value(&unsafe { value_ref(url) }, "net.http_request_bytes(...)");
+        let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "net.http_request_bytes(...)");
+        let headers = expect_headers_map(
+            &unsafe { value_ref(headers) },
+            "net.http_request_bytes(...)",
+        );
+        match HttpResponseValue::request_bytes(
+            &method,
+            &url,
+            &bytes,
+            headers,
+            None,
+            Some(&current_cancellation()),
+        ) {
+            Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_http_request_bytes_timeout(
+pub extern "C-unwind" fn aurora_direct_net_http_request_bytes_timeout(
     method: *mut OpaqueValue,
     url: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
     headers: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let method = expect_string_value(
-        &unsafe { value_ref(method) },
-        "net.http_request_bytes_timeout(...)",
-    );
-    let url = expect_string_value(
-        &unsafe { value_ref(url) },
-        "net.http_request_bytes_timeout(...)",
-    );
-    let bytes = expect_bytes_value(
-        &unsafe { value_ref(bytes) },
-        "net.http_request_bytes_timeout(...)",
-    );
-    let headers = expect_headers_map(
-        &unsafe { value_ref(headers) },
-        "net.http_request_bytes_timeout(...)",
-    );
-    let timeout = optional_timeout_from_ptr(timeout, "net.http_request_bytes_timeout(...)");
-    match HttpResponseValue::request_bytes(
-        &method,
-        &url,
-        &bytes,
-        headers,
-        timeout,
-        Some(&current_cancellation()),
-    ) {
-        Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
-        Err(error) => boxed_value(result_err(io_error(error))),
-    }
+    task_runtime_boundary(|| {
+        let method = expect_string_value(
+            &unsafe { value_ref(method) },
+            "net.http_request_bytes_timeout(...)",
+        );
+        let url = expect_string_value(
+            &unsafe { value_ref(url) },
+            "net.http_request_bytes_timeout(...)",
+        );
+        let bytes = expect_bytes_value(
+            &unsafe { value_ref(bytes) },
+            "net.http_request_bytes_timeout(...)",
+        );
+        let headers = expect_headers_map(
+            &unsafe { value_ref(headers) },
+            "net.http_request_bytes_timeout(...)",
+        );
+        let timeout = optional_timeout_from_ptr(timeout, "net.http_request_bytes_timeout(...)");
+        match HttpResponseValue::request_bytes(
+            &method,
+            &url,
+            &bytes,
+            headers,
+            timeout,
+            Some(&current_cancellation()),
+        ) {
+            Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_websocket_listen(
+pub extern "C-unwind" fn aurora_direct_net_websocket_listen(
     address: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(address) } {
+    task_runtime_boundary(|| match unsafe { value_ref(address) } {
         Value::String(address) => match WebSocketListenerValue::bind(&address) {
             Ok(listener) => boxed_value(result_ok(Value::WebSocketListener(listener))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4464,12 +4939,14 @@ pub extern "C" fn aurora_direct_net_websocket_listen(
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_websocket_connect(url: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(url) } {
+pub extern "C-unwind" fn aurora_direct_net_websocket_connect(
+    url: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(url) } {
         Value::String(url) => match WebSocketValue::connect(&url, None) {
             Ok(socket) => boxed_value(result_ok(Value::WebSocket(socket))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4478,52 +4955,56 @@ pub extern "C" fn aurora_direct_net_websocket_connect(url: *mut OpaqueValue) -> 
             "expected `String`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_net_websocket_connect_timeout(
+pub extern "C-unwind" fn aurora_direct_net_websocket_connect_timeout(
     url: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "net.websocket_connect_timeout(...)");
-    match unsafe { value_ref(url) } {
-        Value::String(url) => match WebSocketValue::connect(&url, timeout) {
-            Ok(socket) => boxed_value(result_ok(Value::WebSocket(socket))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "net.websocket_connect_timeout(...)");
+        match unsafe { value_ref(url) } {
+            Value::String(url) => match WebSocketValue::connect(&url, timeout) {
+                Ok(socket) => boxed_value(result_ok(Value::WebSocket(socket))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_listener_accept(
+pub extern "C-unwind" fn aurora_direct_tcp_listener_accept(
     listener: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
-    match unsafe { value_ref(listener) } {
-        Value::TcpListener(listener) => {
-            match listener.accept(timeout, Some(&current_cancellation())) {
-                Ok(stream) => boxed_value(result_ok(Value::TcpStream(stream))),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+        match unsafe { value_ref(listener) } {
+            Value::TcpListener(listener) => {
+                match listener.accept(timeout, Some(&current_cancellation())) {
+                    Ok(stream) => boxed_value(result_ok(Value::TcpStream(stream))),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.TcpListener`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.TcpListener`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_listener_local_addr(
+pub extern "C-unwind" fn aurora_direct_tcp_listener_local_addr(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(listener) } {
+    task_runtime_boundary(|| match unsafe { value_ref(listener) } {
         Value::TcpListener(listener) => match listener.local_addr() {
             Ok(address) => boxed_value(result_ok(Value::String(address))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4532,12 +5013,14 @@ pub extern "C" fn aurora_direct_tcp_listener_local_addr(
             "expected `net.TcpListener`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_listener_close(listener: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(listener) } {
+pub extern "C-unwind" fn aurora_direct_tcp_listener_close(
+    listener: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(listener) } {
         Value::TcpListener(listener) => {
             listener.close();
             boxed_value(Value::Unit)
@@ -4546,152 +5029,167 @@ pub extern "C" fn aurora_direct_tcp_listener_close(listener: *mut OpaqueValue) -
             "expected `net.TcpListener`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_stream_read_all(
+pub extern "C-unwind" fn aurora_direct_tcp_stream_read_all(
     stream: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "read_all(timeout=...)");
-    match unsafe { value_ref(stream) } {
-        Value::TcpStream(stream) => match stream.read_all(timeout, Some(&current_cancellation())) {
-            Ok(text) => boxed_value(result_ok(Value::String(text))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `net.TcpStream`, found `{}`",
-            value_type_name(other)
-        )),
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_tcp_stream_read_line(
-    stream: *mut OpaqueValue,
-    timeout: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
-    match unsafe { value_ref(stream) } {
-        Value::TcpStream(stream) => {
-            match stream.read_line(timeout, Some(&current_cancellation())) {
-                Ok(Some(line)) => boxed_value(result_ok(option_some(Value::String(line)))),
-                Ok(None) => boxed_value(result_ok(option_none())),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "read_all(timeout=...)");
+        match unsafe { value_ref(stream) } {
+            Value::TcpStream(stream) => {
+                match stream.read_all(timeout, Some(&current_cancellation())) {
+                    Ok(text) => boxed_value(result_ok(Value::String(text))),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.TcpStream`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.TcpStream`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_stream_read_bytes(
+pub extern "C-unwind" fn aurora_direct_tcp_stream_read_line(
+    stream: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
+        match unsafe { value_ref(stream) } {
+            Value::TcpStream(stream) => {
+                match stream.read_line(timeout, Some(&current_cancellation())) {
+                    Ok(Some(line)) => boxed_value(result_ok(option_some(Value::String(line)))),
+                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
+            }
+            other => runtime_error(format!(
+                "expected `net.TcpStream`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_tcp_stream_read_bytes(
     stream: *mut OpaqueValue,
     max_bytes: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let max_bytes = expect_i32_value(&unsafe { value_ref(max_bytes) }, "read_bytes(...)");
-    let max_bytes = usize::try_from(max_bytes)
-        .unwrap_or_else(|_| runtime_error("`read_bytes(...)` requires a non-negative max_bytes"));
-    let timeout = optional_timeout_from_ptr(timeout, "read_bytes(timeout=...)");
-    match unsafe { value_ref(stream) } {
-        Value::TcpStream(stream) => {
-            match stream.read_bytes(max_bytes, timeout, Some(&current_cancellation())) {
-                Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
-                Ok(None) => boxed_value(result_ok(option_none())),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let max_bytes = expect_i32_value(&unsafe { value_ref(max_bytes) }, "read_bytes(...)");
+        let max_bytes = usize::try_from(max_bytes).unwrap_or_else(|_| {
+            runtime_error("`read_bytes(...)` requires a non-negative max_bytes")
+        });
+        let timeout = optional_timeout_from_ptr(timeout, "read_bytes(timeout=...)");
+        match unsafe { value_ref(stream) } {
+            Value::TcpStream(stream) => {
+                match stream.read_bytes(max_bytes, timeout, Some(&current_cancellation())) {
+                    Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
+                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.TcpStream`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.TcpStream`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_stream_read_exact(
+pub extern "C-unwind" fn aurora_direct_tcp_stream_read_exact(
     stream: *mut OpaqueValue,
     count: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let count = expect_i32_value(&unsafe { value_ref(count) }, "read_exact(...)");
-    let count = usize::try_from(count)
-        .unwrap_or_else(|_| runtime_error("`read_exact(...)` requires a non-negative count"));
-    let timeout = optional_timeout_from_ptr(timeout, "read_exact(timeout=...)");
-    match unsafe { value_ref(stream) } {
-        Value::TcpStream(stream) => {
-            match stream.read_exact(count, timeout, Some(&current_cancellation())) {
-                Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let count = expect_i32_value(&unsafe { value_ref(count) }, "read_exact(...)");
+        let count = usize::try_from(count)
+            .unwrap_or_else(|_| runtime_error("`read_exact(...)` requires a non-negative count"));
+        let timeout = optional_timeout_from_ptr(timeout, "read_exact(timeout=...)");
+        match unsafe { value_ref(stream) } {
+            Value::TcpStream(stream) => {
+                match stream.read_exact(count, timeout, Some(&current_cancellation())) {
+                    Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.TcpStream`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.TcpStream`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_stream_write_all(
+pub extern "C-unwind" fn aurora_direct_tcp_stream_write_all(
     stream: *mut OpaqueValue,
     text: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let text = match unsafe { value_ref(text) } {
-        Value::String(text) => text.clone(),
-        other => runtime_error(format!(
-            "expected `String`, found `{}`",
-            value_type_name(other)
-        )),
-    };
-    let timeout = optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
-    match unsafe { value_ref(stream) } {
-        Value::TcpStream(stream) => {
-            match stream.write_all(&text, timeout, Some(&current_cancellation())) {
-                Ok(()) => boxed_value(result_ok(Value::Unit)),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let text = match unsafe { value_ref(text) } {
+            Value::String(text) => text.clone(),
+            other => runtime_error(format!(
+                "expected `String`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        let timeout = optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
+        match unsafe { value_ref(stream) } {
+            Value::TcpStream(stream) => {
+                match stream.write_all(&text, timeout, Some(&current_cancellation())) {
+                    Ok(()) => boxed_value(result_ok(Value::Unit)),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.TcpStream`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.TcpStream`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_stream_write_bytes(
+pub extern "C-unwind" fn aurora_direct_tcp_stream_write_bytes(
     stream: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "write_bytes(...)");
-    let timeout = optional_timeout_from_ptr(timeout, "write_bytes(timeout=...)");
-    match unsafe { value_ref(stream) } {
-        Value::TcpStream(stream) => {
-            match stream.write_bytes(&bytes, timeout, Some(&current_cancellation())) {
-                Ok(()) => boxed_value(result_ok(Value::Unit)),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "write_bytes(...)");
+        let timeout = optional_timeout_from_ptr(timeout, "write_bytes(timeout=...)");
+        match unsafe { value_ref(stream) } {
+            Value::TcpStream(stream) => {
+                match stream.write_bytes(&bytes, timeout, Some(&current_cancellation())) {
+                    Ok(()) => boxed_value(result_ok(Value::Unit)),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.TcpStream`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.TcpStream`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_stream_shutdown_read(
+pub extern "C-unwind" fn aurora_direct_tcp_stream_shutdown_read(
     stream: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(stream) } {
+    task_runtime_boundary(|| match unsafe { value_ref(stream) } {
         Value::TcpStream(stream) => match stream.shutdown_read() {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4700,14 +5198,14 @@ pub extern "C" fn aurora_direct_tcp_stream_shutdown_read(
             "expected `net.TcpStream`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_stream_shutdown_write(
+pub extern "C-unwind" fn aurora_direct_tcp_stream_shutdown_write(
     stream: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(stream) } {
+    task_runtime_boundary(|| match unsafe { value_ref(stream) } {
         Value::TcpStream(stream) => match stream.shutdown_write() {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4716,14 +5214,14 @@ pub extern "C" fn aurora_direct_tcp_stream_shutdown_write(
             "expected `net.TcpStream`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_stream_shutdown_both(
+pub extern "C-unwind" fn aurora_direct_tcp_stream_shutdown_both(
     stream: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(stream) } {
+    task_runtime_boundary(|| match unsafe { value_ref(stream) } {
         Value::TcpStream(stream) => match stream.shutdown_both() {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4732,12 +5230,14 @@ pub extern "C" fn aurora_direct_tcp_stream_shutdown_both(
             "expected `net.TcpStream`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_stream_flush(stream: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(stream) } {
+pub extern "C-unwind" fn aurora_direct_tcp_stream_flush(
+    stream: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(stream) } {
         Value::TcpStream(stream) => match stream.flush() {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4746,14 +5246,14 @@ pub extern "C" fn aurora_direct_tcp_stream_flush(stream: *mut OpaqueValue) -> *m
             "expected `net.TcpStream`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_stream_local_addr(
+pub extern "C-unwind" fn aurora_direct_tcp_stream_local_addr(
     stream: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(stream) } {
+    task_runtime_boundary(|| match unsafe { value_ref(stream) } {
         Value::TcpStream(stream) => match stream.local_addr() {
             Ok(address) => boxed_value(result_ok(Value::String(address))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4762,12 +5262,14 @@ pub extern "C" fn aurora_direct_tcp_stream_local_addr(
             "expected `net.TcpStream`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_stream_peer_addr(stream: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(stream) } {
+pub extern "C-unwind" fn aurora_direct_tcp_stream_peer_addr(
+    stream: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(stream) } {
         Value::TcpStream(stream) => match stream.peer_addr() {
             Ok(address) => boxed_value(result_ok(Value::String(address))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4776,12 +5278,14 @@ pub extern "C" fn aurora_direct_tcp_stream_peer_addr(stream: *mut OpaqueValue) -
             "expected `net.TcpStream`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tcp_stream_close(stream: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(stream) } {
+pub extern "C-unwind" fn aurora_direct_tcp_stream_close(
+    stream: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(stream) } {
         Value::TcpStream(stream) => {
             stream.close();
             boxed_value(Value::Unit)
@@ -4790,114 +5294,124 @@ pub extern "C" fn aurora_direct_tcp_stream_close(stream: *mut OpaqueValue) -> *m
             "expected `net.TcpStream`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_udp_socket_send_text(
+pub extern "C-unwind" fn aurora_direct_udp_socket_send_text(
     socket: *mut OpaqueValue,
     address: *mut OpaqueValue,
     text: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let address = expect_string_value(&unsafe { value_ref(address) }, "send_text(...)");
-    let text = expect_string_value(&unsafe { value_ref(text) }, "send_text(...)");
-    let timeout = optional_timeout_from_ptr(timeout, "send_text(timeout=...)");
-    match unsafe { value_ref(socket) } {
-        Value::UdpSocket(socket) => {
-            match socket.send_to_text(&address, &text, timeout, Some(&current_cancellation())) {
-                Ok(()) => boxed_value(result_ok(Value::Unit)),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let address = expect_string_value(&unsafe { value_ref(address) }, "send_text(...)");
+        let text = expect_string_value(&unsafe { value_ref(text) }, "send_text(...)");
+        let timeout = optional_timeout_from_ptr(timeout, "send_text(timeout=...)");
+        match unsafe { value_ref(socket) } {
+            Value::UdpSocket(socket) => {
+                match socket.send_to_text(&address, &text, timeout, Some(&current_cancellation())) {
+                    Ok(()) => boxed_value(result_ok(Value::Unit)),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.UdpSocket`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.UdpSocket`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_udp_socket_send_bytes(
+pub extern "C-unwind" fn aurora_direct_udp_socket_send_bytes(
     socket: *mut OpaqueValue,
     address: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let address = expect_string_value(&unsafe { value_ref(address) }, "send_bytes(...)");
-    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "send_bytes(...)");
-    let timeout = optional_timeout_from_ptr(timeout, "send_bytes(timeout=...)");
-    match unsafe { value_ref(socket) } {
-        Value::UdpSocket(socket) => {
-            match socket.send_to_bytes(&address, &bytes, timeout, Some(&current_cancellation())) {
-                Ok(()) => boxed_value(result_ok(Value::Unit)),
-                Err(error) => boxed_value(result_err(io_error(error))),
-            }
-        }
-        other => runtime_error(format!(
-            "expected `net.UdpSocket`, found `{}`",
-            value_type_name(other)
-        )),
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_udp_socket_recv(
-    socket: *mut OpaqueValue,
-    max_bytes: *mut OpaqueValue,
-    timeout: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    let max_bytes = expect_i32_value(&unsafe { value_ref(max_bytes) }, "recv(...)");
-    let max_bytes = usize::try_from(max_bytes)
-        .unwrap_or_else(|_| runtime_error("`recv(...)` requires a non-negative max_bytes"));
-    let timeout = optional_timeout_from_ptr(timeout, "recv(timeout=...)");
-    match unsafe { value_ref(socket) } {
-        Value::UdpSocket(socket) => {
-            match socket.recv(max_bytes, timeout, Some(&current_cancellation())) {
-                Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
-                Ok(None) => boxed_value(result_ok(option_none())),
-                Err(error) => boxed_value(result_err(io_error(error))),
-            }
-        }
-        other => runtime_error(format!(
-            "expected `net.UdpSocket`, found `{}`",
-            value_type_name(other)
-        )),
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn aurora_direct_udp_socket_recv_from(
-    socket: *mut OpaqueValue,
-    max_bytes: *mut OpaqueValue,
-    timeout: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    let max_bytes = expect_i32_value(&unsafe { value_ref(max_bytes) }, "recv_from(...)");
-    let max_bytes = usize::try_from(max_bytes)
-        .unwrap_or_else(|_| runtime_error("`recv_from(...)` requires a non-negative max_bytes"));
-    let timeout = optional_timeout_from_ptr(timeout, "recv_from(timeout=...)");
-    match unsafe { value_ref(socket) } {
-        Value::UdpSocket(socket) => {
-            match socket.recv_from(max_bytes, timeout, Some(&current_cancellation())) {
-                Ok(Some(datagram)) => {
-                    boxed_value(result_ok(option_some(Value::UdpDatagram(datagram))))
+    task_runtime_boundary(|| {
+        let address = expect_string_value(&unsafe { value_ref(address) }, "send_bytes(...)");
+        let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "send_bytes(...)");
+        let timeout = optional_timeout_from_ptr(timeout, "send_bytes(timeout=...)");
+        match unsafe { value_ref(socket) } {
+            Value::UdpSocket(socket) => {
+                match socket.send_to_bytes(&address, &bytes, timeout, Some(&current_cancellation()))
+                {
+                    Ok(()) => boxed_value(result_ok(Value::Unit)),
+                    Err(error) => boxed_value(result_err(io_error(error))),
                 }
-                Ok(None) => boxed_value(result_ok(option_none())),
-                Err(error) => boxed_value(result_err(io_error(error))),
             }
+            other => runtime_error(format!(
+                "expected `net.UdpSocket`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.UdpSocket`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_udp_socket_local_addr(
+pub extern "C-unwind" fn aurora_direct_udp_socket_recv(
+    socket: *mut OpaqueValue,
+    max_bytes: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let max_bytes = expect_i32_value(&unsafe { value_ref(max_bytes) }, "recv(...)");
+        let max_bytes = usize::try_from(max_bytes)
+            .unwrap_or_else(|_| runtime_error("`recv(...)` requires a non-negative max_bytes"));
+        let timeout = optional_timeout_from_ptr(timeout, "recv(timeout=...)");
+        match unsafe { value_ref(socket) } {
+            Value::UdpSocket(socket) => {
+                match socket.recv(max_bytes, timeout, Some(&current_cancellation())) {
+                    Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
+                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
+            }
+            other => runtime_error(format!(
+                "expected `net.UdpSocket`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_udp_socket_recv_from(
+    socket: *mut OpaqueValue,
+    max_bytes: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let max_bytes = expect_i32_value(&unsafe { value_ref(max_bytes) }, "recv_from(...)");
+        let max_bytes = usize::try_from(max_bytes).unwrap_or_else(|_| {
+            runtime_error("`recv_from(...)` requires a non-negative max_bytes")
+        });
+        let timeout = optional_timeout_from_ptr(timeout, "recv_from(timeout=...)");
+        match unsafe { value_ref(socket) } {
+            Value::UdpSocket(socket) => {
+                match socket.recv_from(max_bytes, timeout, Some(&current_cancellation())) {
+                    Ok(Some(datagram)) => {
+                        boxed_value(result_ok(option_some(Value::UdpDatagram(datagram))))
+                    }
+                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
+            }
+            other => runtime_error(format!(
+                "expected `net.UdpSocket`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_udp_socket_local_addr(
     socket: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(socket) } {
+    task_runtime_boundary(|| match unsafe { value_ref(socket) } {
         Value::UdpSocket(socket) => match socket.local_addr() {
             Ok(address) => boxed_value(result_ok(Value::String(address))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4906,12 +5420,14 @@ pub extern "C" fn aurora_direct_udp_socket_local_addr(
             "expected `net.UdpSocket`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_udp_socket_peer_addr(socket: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(socket) } {
+pub extern "C-unwind" fn aurora_direct_udp_socket_peer_addr(
+    socket: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(socket) } {
         Value::UdpSocket(socket) => match socket.peer_addr() {
             Ok(address) => boxed_value(result_ok(Value::String(address))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4920,12 +5436,14 @@ pub extern "C" fn aurora_direct_udp_socket_peer_addr(socket: *mut OpaqueValue) -
             "expected `net.UdpSocket`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_udp_socket_close(socket: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(socket) } {
+pub extern "C-unwind" fn aurora_direct_udp_socket_close(
+    socket: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(socket) } {
         Value::UdpSocket(socket) => {
             socket.close();
             boxed_value(Value::Unit)
@@ -4934,36 +5452,40 @@ pub extern "C" fn aurora_direct_udp_socket_close(socket: *mut OpaqueValue) -> *m
             "expected `net.UdpSocket`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_udp_datagram_address(
+pub extern "C-unwind" fn aurora_direct_udp_datagram_address(
     datagram: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(datagram) } {
+    task_runtime_boundary(|| match unsafe { value_ref(datagram) } {
         Value::UdpDatagram(datagram) => boxed_value(Value::String(datagram.address())),
         other => runtime_error(format!(
             "expected `net.UdpDatagram`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_udp_datagram_bytes(datagram: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(datagram) } {
+pub extern "C-unwind" fn aurora_direct_udp_datagram_bytes(
+    datagram: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(datagram) } {
         Value::UdpDatagram(datagram) => boxed_value(bytes_vec_value(datagram.bytes())),
         other => runtime_error(format!(
             "expected `net.UdpDatagram`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_udp_datagram_text(datagram: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(datagram) } {
+pub extern "C-unwind" fn aurora_direct_udp_datagram_text(
+    datagram: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(datagram) } {
         Value::UdpDatagram(datagram) => match datagram.text() {
             Ok(text) => boxed_value(result_ok(Value::String(text))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -4972,34 +5494,36 @@ pub extern "C" fn aurora_direct_udp_datagram_text(datagram: *mut OpaqueValue) ->
             "expected `net.UdpDatagram`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_listener_accept(
+pub extern "C-unwind" fn aurora_direct_http_listener_accept(
     listener: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
-    match unsafe { value_ref(listener) } {
-        Value::HttpListener(listener) => {
-            match listener.accept(timeout, Some(&current_cancellation())) {
-                Ok(exchange) => boxed_value(result_ok(Value::HttpExchange(exchange))),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+        match unsafe { value_ref(listener) } {
+            Value::HttpListener(listener) => {
+                match listener.accept(timeout, Some(&current_cancellation())) {
+                    Ok(exchange) => boxed_value(result_ok(Value::HttpExchange(exchange))),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.HttpListener`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.HttpListener`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_listener_local_addr(
+pub extern "C-unwind" fn aurora_direct_http_listener_local_addr(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(listener) } {
+    task_runtime_boundary(|| match unsafe { value_ref(listener) } {
         Value::HttpListener(listener) => match listener.local_addr() {
             Ok(address) => boxed_value(result_ok(Value::String(address))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -5008,14 +5532,14 @@ pub extern "C" fn aurora_direct_http_listener_local_addr(
             "expected `net.HttpListener`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_listener_close(
+pub extern "C-unwind" fn aurora_direct_http_listener_close(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(listener) } {
+    task_runtime_boundary(|| match unsafe { value_ref(listener) } {
         Value::HttpListener(listener) => {
             listener.close();
             boxed_value(Value::Unit)
@@ -5024,51 +5548,53 @@ pub extern "C" fn aurora_direct_http_listener_close(
             "expected `net.HttpListener`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_exchange_method(
+pub extern "C-unwind" fn aurora_direct_http_exchange_method(
     exchange: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(exchange) } {
+    task_runtime_boundary(|| match unsafe { value_ref(exchange) } {
         Value::HttpExchange(exchange) => boxed_value(Value::String(exchange.method())),
         other => runtime_error(format!(
             "expected `net.HttpExchange`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_exchange_path(exchange: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(exchange) } {
+pub extern "C-unwind" fn aurora_direct_http_exchange_path(
+    exchange: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(exchange) } {
         Value::HttpExchange(exchange) => boxed_value(Value::String(exchange.path())),
         other => runtime_error(format!(
             "expected `net.HttpExchange`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_exchange_headers(
+pub extern "C-unwind" fn aurora_direct_http_exchange_headers(
     exchange: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(exchange) } {
+    task_runtime_boundary(|| match unsafe { value_ref(exchange) } {
         Value::HttpExchange(exchange) => boxed_value(headers_map_value(exchange.headers())),
         other => runtime_error(format!(
             "expected `net.HttpExchange`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_exchange_body_text(
+pub extern "C-unwind" fn aurora_direct_http_exchange_body_text(
     exchange: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(exchange) } {
+    task_runtime_boundary(|| match unsafe { value_ref(exchange) } {
         Value::HttpExchange(exchange) => match exchange.body_text() {
             Ok(text) => boxed_value(result_ok(Value::String(text))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -5077,106 +5603,114 @@ pub extern "C" fn aurora_direct_http_exchange_body_text(
             "expected `net.HttpExchange`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_exchange_body_bytes(
+pub extern "C-unwind" fn aurora_direct_http_exchange_body_bytes(
     exchange: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(exchange) } {
+    task_runtime_boundary(|| match unsafe { value_ref(exchange) } {
         Value::HttpExchange(exchange) => boxed_value(bytes_vec_value(exchange.body_bytes())),
         other => runtime_error(format!(
             "expected `net.HttpExchange`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_exchange_respond_text(
+pub extern "C-unwind" fn aurora_direct_http_exchange_respond_text(
     exchange: *mut OpaqueValue,
     status: *mut OpaqueValue,
     text: *mut OpaqueValue,
     headers: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let status = expect_i32_value(&unsafe { value_ref(status) }, "respond_text(...)");
-    let text = expect_string_value(&unsafe { value_ref(text) }, "respond_text(...)");
-    let headers = expect_headers_map(&unsafe { value_ref(headers) }, "respond_text(...)");
-    match unsafe { value_ref(exchange) } {
-        Value::HttpExchange(exchange) => match exchange.respond_text(status, &text, headers) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `net.HttpExchange`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let status = expect_i32_value(&unsafe { value_ref(status) }, "respond_text(...)");
+        let text = expect_string_value(&unsafe { value_ref(text) }, "respond_text(...)");
+        let headers = expect_headers_map(&unsafe { value_ref(headers) }, "respond_text(...)");
+        match unsafe { value_ref(exchange) } {
+            Value::HttpExchange(exchange) => match exchange.respond_text(status, &text, headers) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `net.HttpExchange`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_exchange_respond_bytes(
+pub extern "C-unwind" fn aurora_direct_http_exchange_respond_bytes(
     exchange: *mut OpaqueValue,
     status: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
     headers: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let status = expect_i32_value(&unsafe { value_ref(status) }, "respond_bytes(...)");
-    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "respond_bytes(...)");
-    let headers = expect_headers_map(&unsafe { value_ref(headers) }, "respond_bytes(...)");
-    match unsafe { value_ref(exchange) } {
-        Value::HttpExchange(exchange) => match exchange.respond_bytes(status, &bytes, headers) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `net.HttpExchange`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let status = expect_i32_value(&unsafe { value_ref(status) }, "respond_bytes(...)");
+        let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "respond_bytes(...)");
+        let headers = expect_headers_map(&unsafe { value_ref(headers) }, "respond_bytes(...)");
+        match unsafe { value_ref(exchange) } {
+            Value::HttpExchange(exchange) => {
+                match exchange.respond_bytes(status, &bytes, headers) {
+                    Ok(()) => boxed_value(result_ok(Value::Unit)),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
+            }
+            other => runtime_error(format!(
+                "expected `net.HttpExchange`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_response_status(response: *mut OpaqueValue) -> i64 {
-    match unsafe { value_ref(response) } {
+pub extern "C-unwind" fn aurora_direct_http_response_status(response: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| match unsafe { value_ref(response) } {
         Value::HttpResponse(response) => i64::from(response.status()),
         other => runtime_error(format!(
             "expected `net.HttpResponse`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_response_reason(
+pub extern "C-unwind" fn aurora_direct_http_response_reason(
     response: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(response) } {
+    task_runtime_boundary(|| match unsafe { value_ref(response) } {
         Value::HttpResponse(response) => boxed_value(Value::String(response.reason())),
         other => runtime_error(format!(
             "expected `net.HttpResponse`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_response_headers(
+pub extern "C-unwind" fn aurora_direct_http_response_headers(
     response: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(response) } {
+    task_runtime_boundary(|| match unsafe { value_ref(response) } {
         Value::HttpResponse(response) => boxed_value(headers_map_value(response.headers())),
         other => runtime_error(format!(
             "expected `net.HttpResponse`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_response_text(response: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(response) } {
+pub extern "C-unwind" fn aurora_direct_http_response_text(
+    response: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(response) } {
         Value::HttpResponse(response) => match response.text() {
             Ok(text) => boxed_value(result_ok(Value::String(text))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -5185,45 +5719,47 @@ pub extern "C" fn aurora_direct_http_response_text(response: *mut OpaqueValue) -
             "expected `net.HttpResponse`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_http_response_bytes(
+pub extern "C-unwind" fn aurora_direct_http_response_bytes(
     response: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(response) } {
+    task_runtime_boundary(|| match unsafe { value_ref(response) } {
         Value::HttpResponse(response) => boxed_value(bytes_vec_value(response.bytes())),
         other => runtime_error(format!(
             "expected `net.HttpResponse`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_websocket_listener_accept(
+pub extern "C-unwind" fn aurora_direct_websocket_listener_accept(
     listener: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
-    match unsafe { value_ref(listener) } {
-        Value::WebSocketListener(listener) => match listener.accept(timeout) {
-            Ok(socket) => boxed_value(result_ok(Value::WebSocket(socket))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `net.WebSocketListener`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+        match unsafe { value_ref(listener) } {
+            Value::WebSocketListener(listener) => match listener.accept(timeout) {
+                Ok(socket) => boxed_value(result_ok(Value::WebSocket(socket))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `net.WebSocketListener`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_websocket_listener_local_addr(
+pub extern "C-unwind" fn aurora_direct_websocket_listener_local_addr(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(listener) } {
+    task_runtime_boundary(|| match unsafe { value_ref(listener) } {
         Value::WebSocketListener(listener) => match listener.local_addr() {
             Ok(address) => boxed_value(result_ok(Value::String(address))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -5232,90 +5768,100 @@ pub extern "C" fn aurora_direct_websocket_listener_local_addr(
             "expected `net.WebSocketListener`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_websocket_send_text(
+pub extern "C-unwind" fn aurora_direct_websocket_send_text(
     socket: *mut OpaqueValue,
     text: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let text = expect_string_value(&unsafe { value_ref(text) }, "send_text(...)");
-    let timeout = optional_timeout_from_ptr(timeout, "send_text(timeout=...)");
-    match unsafe { value_ref(socket) } {
-        Value::WebSocket(socket) => match socket.send_text(&text, timeout) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `net.WebSocket`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let text = expect_string_value(&unsafe { value_ref(text) }, "send_text(...)");
+        let timeout = optional_timeout_from_ptr(timeout, "send_text(timeout=...)");
+        match unsafe { value_ref(socket) } {
+            Value::WebSocket(socket) => match socket.send_text(&text, timeout) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `net.WebSocket`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_websocket_send_bytes(
+pub extern "C-unwind" fn aurora_direct_websocket_send_bytes(
     socket: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "send_bytes(...)");
-    let timeout = optional_timeout_from_ptr(timeout, "send_bytes(timeout=...)");
-    match unsafe { value_ref(socket) } {
-        Value::WebSocket(socket) => match socket.send_bytes(&bytes, timeout) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `net.WebSocket`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "send_bytes(...)");
+        let timeout = optional_timeout_from_ptr(timeout, "send_bytes(timeout=...)");
+        match unsafe { value_ref(socket) } {
+            Value::WebSocket(socket) => match socket.send_bytes(&bytes, timeout) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `net.WebSocket`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_websocket_recv_text(
+pub extern "C-unwind" fn aurora_direct_websocket_recv_text(
     socket: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "recv_text(timeout=...)");
-    match unsafe { value_ref(socket) } {
-        Value::WebSocket(socket) => match socket.recv_text(timeout) {
-            Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
-            Ok(None) => boxed_value(result_ok(option_none())),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `net.WebSocket`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "recv_text(timeout=...)");
+        match unsafe { value_ref(socket) } {
+            Value::WebSocket(socket) => match socket.recv_text(timeout) {
+                Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
+                Ok(None) => boxed_value(result_ok(option_none())),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `net.WebSocket`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_websocket_recv_bytes(
+pub extern "C-unwind" fn aurora_direct_websocket_recv_bytes(
     socket: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "recv_bytes(timeout=...)");
-    match unsafe { value_ref(socket) } {
-        Value::WebSocket(socket) => match socket.recv_bytes(timeout) {
-            Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
-            Ok(None) => boxed_value(result_ok(option_none())),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `net.WebSocket`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "recv_bytes(timeout=...)");
+        match unsafe { value_ref(socket) } {
+            Value::WebSocket(socket) => match socket.recv_bytes(timeout) {
+                Ok(Some(bytes)) => boxed_value(result_ok(option_some(bytes_vec_value(bytes)))),
+                Ok(None) => boxed_value(result_ok(option_none())),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `net.WebSocket`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_websocket_close(socket: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(socket) } {
+pub extern "C-unwind" fn aurora_direct_websocket_close(
+    socket: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(socket) } {
         Value::WebSocket(socket) => {
             let _ = socket.close();
             boxed_value(Value::Unit)
@@ -5324,34 +5870,36 @@ pub extern "C" fn aurora_direct_websocket_close(socket: *mut OpaqueValue) -> *mu
             "expected `net.WebSocket`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_unix_listener_accept(
+pub extern "C-unwind" fn aurora_direct_unix_listener_accept(
     listener: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
-    match unsafe { value_ref(listener) } {
-        Value::UnixListener(listener) => {
-            match listener.accept(timeout, Some(&current_cancellation())) {
-                Ok(stream) => boxed_value(result_ok(Value::UnixStream(stream))),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+        match unsafe { value_ref(listener) } {
+            Value::UnixListener(listener) => {
+                match listener.accept(timeout, Some(&current_cancellation())) {
+                    Ok(stream) => boxed_value(result_ok(Value::UnixStream(stream))),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.UnixListener`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.UnixListener`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_unix_listener_close(
+pub extern "C-unwind" fn aurora_direct_unix_listener_close(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(listener) } {
+    task_runtime_boundary(|| match unsafe { value_ref(listener) } {
         Value::UnixListener(listener) => {
             listener.close();
             boxed_value(Value::Unit)
@@ -5360,78 +5908,87 @@ pub extern "C" fn aurora_direct_unix_listener_close(
             "expected `net.UnixListener`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_unix_stream_read_line(
+pub extern "C-unwind" fn aurora_direct_unix_stream_read_line(
     stream: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
-    match unsafe { value_ref(stream) } {
-        Value::UnixStream(stream) => match stream.read_line(timeout, Some(&current_cancellation()))
-        {
-            Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
-            Ok(None) => boxed_value(result_ok(option_none())),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `net.UnixStream`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
+        match unsafe { value_ref(stream) } {
+            Value::UnixStream(stream) => {
+                match stream.read_line(timeout, Some(&current_cancellation())) {
+                    Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
+                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
+            }
+            other => runtime_error(format!(
+                "expected `net.UnixStream`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_unix_stream_read_exact(
+pub extern "C-unwind" fn aurora_direct_unix_stream_read_exact(
     stream: *mut OpaqueValue,
     count: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let count = expect_i32_value(&unsafe { value_ref(count) }, "read_exact(...)");
-    let count = usize::try_from(count)
-        .unwrap_or_else(|_| runtime_error("`read_exact(...)` requires a non-negative count"));
-    let timeout = optional_timeout_from_ptr(timeout, "read_exact(timeout=...)");
-    match unsafe { value_ref(stream) } {
-        Value::UnixStream(stream) => {
-            match stream.read_exact(count, timeout, Some(&current_cancellation())) {
-                Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let count = expect_i32_value(&unsafe { value_ref(count) }, "read_exact(...)");
+        let count = usize::try_from(count)
+            .unwrap_or_else(|_| runtime_error("`read_exact(...)` requires a non-negative count"));
+        let timeout = optional_timeout_from_ptr(timeout, "read_exact(timeout=...)");
+        match unsafe { value_ref(stream) } {
+            Value::UnixStream(stream) => {
+                match stream.read_exact(count, timeout, Some(&current_cancellation())) {
+                    Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.UnixStream`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.UnixStream`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_unix_stream_write_all(
+pub extern "C-unwind" fn aurora_direct_unix_stream_write_all(
     stream: *mut OpaqueValue,
     text: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let text = expect_string_value(&unsafe { value_ref(text) }, "write_all(...)");
-    let timeout = optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
-    match unsafe { value_ref(stream) } {
-        Value::UnixStream(stream) => {
-            match stream.write_all(&text, timeout, Some(&current_cancellation())) {
-                Ok(()) => boxed_value(result_ok(Value::Unit)),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let text = expect_string_value(&unsafe { value_ref(text) }, "write_all(...)");
+        let timeout = optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
+        match unsafe { value_ref(stream) } {
+            Value::UnixStream(stream) => {
+                match stream.write_all(&text, timeout, Some(&current_cancellation())) {
+                    Ok(()) => boxed_value(result_ok(Value::Unit)),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.UnixStream`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.UnixStream`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_unix_stream_close(stream: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(stream) } {
+pub extern "C-unwind" fn aurora_direct_unix_stream_close(
+    stream: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(stream) } {
         Value::UnixStream(stream) => {
             stream.close();
             boxed_value(Value::Unit)
@@ -5440,34 +5997,36 @@ pub extern "C" fn aurora_direct_unix_stream_close(stream: *mut OpaqueValue) -> *
             "expected `net.UnixStream`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tls_listener_accept(
+pub extern "C-unwind" fn aurora_direct_tls_listener_accept(
     listener: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
-    match unsafe { value_ref(listener) } {
-        Value::TlsListener(listener) => {
-            match listener.accept(timeout, Some(&current_cancellation())) {
-                Ok(stream) => boxed_value(result_ok(Value::TlsStream(stream))),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "accept(timeout=...)");
+        match unsafe { value_ref(listener) } {
+            Value::TlsListener(listener) => {
+                match listener.accept(timeout, Some(&current_cancellation())) {
+                    Ok(stream) => boxed_value(result_ok(Value::TlsStream(stream))),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.TlsListener`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.TlsListener`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tls_listener_local_addr(
+pub extern "C-unwind" fn aurora_direct_tls_listener_local_addr(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    match unsafe { value_ref(listener) } {
+    task_runtime_boundary(|| match unsafe { value_ref(listener) } {
         Value::TlsListener(listener) => match listener.local_addr() {
             Ok(address) => boxed_value(result_ok(Value::String(address))),
             Err(error) => boxed_value(result_err(io_error(error))),
@@ -5476,12 +6035,14 @@ pub extern "C" fn aurora_direct_tls_listener_local_addr(
             "expected `net.TlsListener`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tls_listener_close(listener: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(listener) } {
+pub extern "C-unwind" fn aurora_direct_tls_listener_close(
+    listener: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(listener) } {
         Value::TlsListener(listener) => {
             listener.close();
             boxed_value(Value::Unit)
@@ -5490,79 +6051,87 @@ pub extern "C" fn aurora_direct_tls_listener_close(listener: *mut OpaqueValue) -
             "expected `net.TlsListener`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tls_stream_read_line(
+pub extern "C-unwind" fn aurora_direct_tls_stream_read_line(
     stream: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let timeout = optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
-    match unsafe { value_ref(stream) } {
-        Value::TlsStream(stream) => {
-            match stream.read_line(timeout, Some(&current_cancellation())) {
-                Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
-                Ok(None) => boxed_value(result_ok(option_none())),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let timeout = optional_timeout_from_ptr(timeout, "read_line(timeout=...)");
+        match unsafe { value_ref(stream) } {
+            Value::TlsStream(stream) => {
+                match stream.read_line(timeout, Some(&current_cancellation())) {
+                    Ok(Some(text)) => boxed_value(result_ok(option_some(Value::String(text)))),
+                    Ok(None) => boxed_value(result_ok(option_none())),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.TlsStream`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.TlsStream`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tls_stream_read_exact(
+pub extern "C-unwind" fn aurora_direct_tls_stream_read_exact(
     stream: *mut OpaqueValue,
     count: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let count = expect_i32_value(&unsafe { value_ref(count) }, "read_exact(...)");
-    let count = usize::try_from(count)
-        .unwrap_or_else(|_| runtime_error("`read_exact(...)` requires a non-negative count"));
-    let timeout = optional_timeout_from_ptr(timeout, "read_exact(timeout=...)");
-    match unsafe { value_ref(stream) } {
-        Value::TlsStream(stream) => {
-            match stream.read_exact(count, timeout, Some(&current_cancellation())) {
-                Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let count = expect_i32_value(&unsafe { value_ref(count) }, "read_exact(...)");
+        let count = usize::try_from(count)
+            .unwrap_or_else(|_| runtime_error("`read_exact(...)` requires a non-negative count"));
+        let timeout = optional_timeout_from_ptr(timeout, "read_exact(timeout=...)");
+        match unsafe { value_ref(stream) } {
+            Value::TlsStream(stream) => {
+                match stream.read_exact(count, timeout, Some(&current_cancellation())) {
+                    Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.TlsStream`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.TlsStream`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tls_stream_write_all(
+pub extern "C-unwind" fn aurora_direct_tls_stream_write_all(
     stream: *mut OpaqueValue,
     text: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let text = expect_string_value(&unsafe { value_ref(text) }, "write_all(...)");
-    let timeout = optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
-    match unsafe { value_ref(stream) } {
-        Value::TlsStream(stream) => {
-            match stream.write_all(&text, timeout, Some(&current_cancellation())) {
-                Ok(()) => boxed_value(result_ok(Value::Unit)),
-                Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| {
+        let text = expect_string_value(&unsafe { value_ref(text) }, "write_all(...)");
+        let timeout = optional_timeout_from_ptr(timeout, "write_all(timeout=...)");
+        match unsafe { value_ref(stream) } {
+            Value::TlsStream(stream) => {
+                match stream.write_all(&text, timeout, Some(&current_cancellation())) {
+                    Ok(()) => boxed_value(result_ok(Value::Unit)),
+                    Err(error) => boxed_value(result_err(io_error(error))),
+                }
             }
+            other => runtime_error(format!(
+                "expected `net.TlsStream`, found `{}`",
+                value_type_name(other)
+            )),
         }
-        other => runtime_error(format!(
-            "expected `net.TlsStream`, found `{}`",
-            value_type_name(other)
-        )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_tls_stream_close(stream: *mut OpaqueValue) -> *mut OpaqueValue {
-    match unsafe { value_ref(stream) } {
+pub extern "C-unwind" fn aurora_direct_tls_stream_close(
+    stream: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(stream) } {
         Value::TlsStream(stream) => {
             stream.close();
             boxed_value(Value::Unit)
@@ -5571,113 +6140,115 @@ pub extern "C" fn aurora_direct_tls_stream_close(stream: *mut OpaqueValue) -> *m
             "expected `net.TlsStream`, found `{}`",
             value_type_name(other)
         )),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_sleep_ms(duration: i64) {
-    let millis = match u64::try_from(duration) {
-        Ok(millis) => millis,
-        Err(_) => runtime_error("invalid sleep duration"),
-    };
-    if matches!(
-        sleep_with_runtime_scheduler(
+pub extern "C-unwind" fn aurora_direct_sleep_ms(duration: i64) {
+    task_runtime_boundary(|| {
+        let millis = match u64::try_from(duration) {
+            Ok(millis) => millis,
+            Err(_) => runtime_error("invalid sleep duration"),
+        };
+        let _ = sleep_with_runtime_scheduler(
             StdDuration::from_millis(millis),
             Some(&current_cancellation()),
-        ),
-        RuntimeSchedulerWakeReason::Cancelled
-    ) {
-        cancel_current_lightweight_task();
-    }
+        );
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_sleep_value(duration: *mut OpaqueValue) -> *mut OpaqueValue {
-    let millis = extract_duration_millis(unsafe { value_ref(duration) });
-    let millis = match u64::try_from(millis) {
-        Ok(millis) => millis,
-        Err(_) => runtime_error("invalid sleep duration"),
-    };
-    if matches!(
-        sleep_with_runtime_scheduler(
+pub extern "C-unwind" fn aurora_direct_sleep_value(duration: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let millis = extract_duration_millis(unsafe { value_ref(duration) });
+        let millis = match u64::try_from(millis) {
+            Ok(millis) => millis,
+            Err(_) => runtime_error("invalid sleep duration"),
+        };
+        let _ = sleep_with_runtime_scheduler(
             StdDuration::from_millis(millis),
             Some(&current_cancellation()),
-        ),
-        RuntimeSchedulerWakeReason::Cancelled
-    ) {
-        cancel_current_lightweight_task();
-    }
-    boxed_value(Value::Unit)
+        );
+        boxed_value(Value::Unit)
+    })
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn aurora_direct_start_task_call(
+pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
     thunk_ptr: i64,
     args_ptr: *const i64,
     arg_count: i64,
     returns_handle: i64,
     task_group: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
-    let arg_count = match usize::try_from(arg_count) {
-        Ok(arg_count) => arg_count,
-        Err(_) => runtime_error("invalid task-start arg count"),
-    };
-    let args = unsafe {
-        let boxed = Box::from_raw(std::ptr::slice_from_raw_parts_mut(
-            args_ptr as *mut i64,
-            arg_count,
-        ));
-        boxed.into_vec()
-    };
-    let group = if task_group.is_null() {
-        runtime_error("task starting requires a `TaskGroup`")
-    } else {
-        match unsafe { value_ref(task_group) } {
-            Value::TaskGroup(group) => group.clone(),
-            other => runtime_error(format!(
-                "expected `TaskGroup`, found `{}`",
-                value_type_name(other)
-            )),
-        }
-    };
-    let cancellation = group.child_cancellation();
-    let task = spawn_lightweight_task_with_cancellation(cancellation.clone(), move || {
-        with_cancellation_scope(cancellation, || {
-            let result_ptr = unsafe { thunk(args.as_ptr(), args.len()) };
-            Ok(unsafe { consume_value(result_ptr) })
+    task_runtime_boundary(|| {
+        let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
+        let arg_count = match usize::try_from(arg_count) {
+            Ok(arg_count) => arg_count,
+            Err(_) => runtime_error("invalid task-start arg count"),
+        };
+        let args = unsafe {
+            let boxed = Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                args_ptr as *mut i64,
+                arg_count,
+            ));
+            boxed.into_vec()
+        };
+        let group = if task_group.is_null() {
+            runtime_error("task starting requires a `TaskGroup`")
+        } else {
+            match unsafe { value_ref(task_group) } {
+                Value::TaskGroup(group) => group.clone(),
+                other => runtime_error(format!(
+                    "expected `TaskGroup`, found `{}`",
+                    value_type_name(other)
+                )),
+            }
+        };
+        let cancellation = group.child_cancellation();
+        let task = spawn_lightweight_task_with_cancellation(cancellation, move || {
+            Ok(with_task_runtime_error_capture(|| {
+                let result_ptr = unsafe { thunk(args.as_ptr(), args.len()) };
+                unsafe { consume_value(result_ptr) }
+            }))
         })
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+
+        group.register_task(task.clone());
+
+        if returns_handle == 0 {
+            return boxed_value(Value::Unit);
+        }
+        boxed_value(Value::Task(task))
     })
-    .unwrap_or_else(|error| runtime_diagnostic_error(error));
-
-    group.register_task(task.clone());
-
-    if returns_handle == 0 {
-        return boxed_value(Value::Unit);
-    }
-    boxed_value(Value::Task(task))
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_sqrt_f64(value: f64) -> f64 {
-    value.sqrt()
+pub extern "C-unwind" fn aurora_direct_sqrt_f64(value: f64) -> f64 {
+    task_runtime_boundary(|| value.sqrt())
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fail_division_by_zero(line: i64, column: i64) -> ! {
-    match runtime_span(line, column) {
+pub extern "C-unwind" fn aurora_direct_fail_division_by_zero(line: i64, column: i64) -> ! {
+    task_runtime_boundary(|| match runtime_span(line, column) {
         Some(span) => runtime_error_at(span, "division by zero"),
         None => runtime_error("division by zero"),
-    }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn aurora_direct_fail_int32_overflow(value: i64, line: i64, column: i64) -> ! {
-    let message = int32_overflow_message(value);
-    match runtime_span(line, column) {
-        Some(span) => runtime_error_at(span, message),
-        None => runtime_error(message),
-    }
+pub extern "C-unwind" fn aurora_direct_fail_int32_overflow(
+    value: i64,
+    line: i64,
+    column: i64,
+) -> ! {
+    task_runtime_boundary(|| {
+        let message = int32_overflow_message(value);
+        match runtime_span(line, column) {
+            Some(span) => runtime_error_at(span, message),
+            None => runtime_error(message),
+        }
+    })
 }
 
 #[cfg(test)]

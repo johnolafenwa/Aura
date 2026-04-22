@@ -1,0 +1,14 @@
+class Resource:
+    value: int32
+
+    def close(borrow mut self):
+        pass
+
+def main() -> int32:
+    text = "hello"
+    with Resource(value=1) as resource:
+        alias = text
+        print(alias)
+        print(resource.value)
+    print(text)
+    return 0

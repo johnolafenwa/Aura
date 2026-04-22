@@ -1,0 +1,24 @@
+def consume(text: String) -> None:
+    pass
+
+def allow_if_fallthrough(flag: bool) -> None:
+    text = "if"
+    if flag:
+        consume(text)
+        return
+    print(text)
+
+def allow_match_fallthrough(flag: bool) -> None:
+    text = "match"
+    match flag:
+        case true:
+            consume(text)
+            return
+        case false:
+            pass
+    print(text)
+
+def main() -> int32:
+    allow_if_fallthrough(false)
+    allow_match_fallthrough(false)
+    return 0

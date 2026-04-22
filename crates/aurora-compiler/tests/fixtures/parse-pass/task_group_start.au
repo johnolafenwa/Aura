@@ -23,6 +23,8 @@ def main() -> int32:
         match task.result():
             case TaskResult.Ready(total):
                 print(total)
+            case TaskResult.Error(_message):
+                return 1
             case TaskResult.Cancelled:
                 return 1
             case TaskResult.TimedOut:

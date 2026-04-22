@@ -260,6 +260,7 @@ struct TaskState {
     handle: Mutex<TaskHandle>,
     ready: Condvar,
     lightweight: bool,
+    observed_failure: AtomicBool,
 }
 
 struct TaskGroupState {
@@ -438,6 +439,8 @@ pub(crate) enum TaskExecutionResult {
     Cancelled,
 }
 
+pub(crate) struct LightweightTaskFailureSignal(pub(crate) Diagnostic);
+
 enum TaskHandle {
     Running { waiters: Vec<u64> },
     Completed(TaskExecutionResult),
@@ -452,6 +455,7 @@ enum TaskYield {
     Wait(TaskWaitRegistration),
     Park,
     YieldNow,
+    Exit,
 }
 
 #[derive(Clone)]
@@ -1257,6 +1261,8 @@ thread_local! {
         const { Cell::new(std::ptr::null()) };
     static CURRENT_LIGHTWEIGHT_TASK_CANCELLATION: std::cell::RefCell<Option<CancellationContext>> =
         const { std::cell::RefCell::new(None) };
+    static CURRENT_LIGHTWEIGHT_TASK_EXIT: std::cell::RefCell<Option<TaskExecutionResult>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 static LIGHTWEIGHT_TASK_PANIC_HOOK: Once = Once::new();
@@ -1310,7 +1316,7 @@ pub(crate) fn current_lightweight_task_cancellation() -> Option<CancellationCont
 }
 
 #[derive(Debug)]
-struct TaskCancelledSignal;
+pub(crate) struct TaskCancelledSignal;
 
 pub(crate) fn cancel_current_lightweight_task() -> ! {
     panic::panic_any(TaskCancelledSignal);
@@ -1330,7 +1336,9 @@ fn install_lightweight_task_panic_hook() {
     LIGHTWEIGHT_TASK_PANIC_HOOK.call_once(|| {
         let previous = panic::take_hook();
         panic::set_hook(Box::new(move |info| {
-            if info.payload().is::<TaskCancelledSignal>() {
+            if info.payload().is::<TaskCancelledSignal>()
+                || info.payload().is::<LightweightTaskFailureSignal>()
+            {
                 return;
             }
             previous(info);
@@ -1345,10 +1353,13 @@ where
     match panic::catch_unwind(AssertUnwindSafe(entry)) {
         Ok(result) => TaskExecutionResult::Ready(result),
         Err(payload) if payload.is::<TaskCancelledSignal>() => TaskExecutionResult::Cancelled,
-        Err(payload) => TaskExecutionResult::Ready(Err(Diagnostic::new(format!(
-            "internal error: Aurora task panicked: {}",
-            task_panic_message(&*payload)
-        )))),
+        Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
+            Ok(signal) => TaskExecutionResult::Ready(Err(signal.0)),
+            Err(payload) => TaskExecutionResult::Ready(Err(Diagnostic::new(format!(
+                "internal error: Aurora task panicked: {}",
+                task_panic_message(&*payload)
+            )))),
+        },
     }
 }
 
@@ -1422,6 +1433,20 @@ fn yield_now_current_lightweight_task() -> Option<RuntimeSchedulerWakeReason> {
     yield_current_lightweight_task(TaskYield::YieldNow)
 }
 
+fn exit_current_lightweight_task(result: TaskExecutionResult) -> ! {
+    CURRENT_LIGHTWEIGHT_TASK_EXIT.with(|slot| *slot.borrow_mut() = Some(result));
+    let _ = yield_current_lightweight_task(TaskYield::Exit);
+    std::process::abort()
+}
+
+pub(crate) fn fail_current_lightweight_task(diagnostic: Diagnostic) -> ! {
+    exit_current_lightweight_task(TaskExecutionResult::Ready(Err(diagnostic)))
+}
+
+pub(crate) fn cancel_current_lightweight_task_boundary() -> ! {
+    exit_current_lightweight_task(TaskExecutionResult::Cancelled)
+}
+
 impl TaskWaitRegistration {
     fn ready_reason(&self, fd_ready: bool) -> Option<RuntimeSchedulerWakeReason> {
         if self
@@ -1486,6 +1511,7 @@ impl LightweightTaskScheduler {
             }),
             ready: Condvar::new(),
             lightweight: true,
+            observed_failure: AtomicBool::new(false),
         });
         let context = Box::new(LightweightTaskContext {
             scheduler: self as *mut _,
@@ -1559,6 +1585,23 @@ impl LightweightTaskScheduler {
                 self.tasks.insert(task_id, record);
                 self.ready
                     .push_back((task_id, RuntimeSchedulerWakeReason::Ready));
+            }
+            CoroutineResult::Yield(TaskYield::Exit) => {
+                let result = CURRENT_LIGHTWEIGHT_TASK_EXIT
+                    .with(|slot| slot.borrow_mut().take())
+                    .unwrap_or_else(|| {
+                        TaskExecutionResult::Ready(Err(Diagnostic::new(
+                            "internal error: lightweight task exited without a result",
+                        )))
+                    });
+                // `fail_current_lightweight_task(...)` is only reached from direct-runtime
+                // export boundaries after their inner Rust frames have been unwound. Reset the
+                // coroutine instead of dropping a suspended stack so the task can surface a
+                // diagnostic without aborting the whole process.
+                unsafe {
+                    record.coroutine.force_reset();
+                }
+                self.complete_task(task_id, &record.state, result);
             }
             CoroutineResult::Return(result) => {
                 self.complete_task(task_id, &record.state, result);
@@ -1671,6 +1714,10 @@ impl LightweightTaskScheduler {
                 };
             }
 
+            // Keep timed sleeps, cancellations, and completed child tasks from starving behind a
+            // CPU-bound task that repeatedly yields with `cancelled()`.
+            self.promote_ready_waiters(None);
+
             if let Some((task_id, reason)) = self.ready.pop_front() {
                 self.resume_task(task_id, reason);
                 continue;
@@ -1678,6 +1725,18 @@ impl LightweightTaskScheduler {
 
             self.wait_for_external_events();
         }
+    }
+
+    fn task_wait_is_unbounded(&self, task: &TaskValue) -> bool {
+        for (task_id, record) in &self.tasks {
+            if Arc::ptr_eq(&record.state, &task.inner) {
+                return self
+                    .waiting
+                    .get(task_id)
+                    .is_some_and(|wait| wait.deadline.is_none());
+            }
+        }
+        false
     }
 }
 
@@ -6128,9 +6187,23 @@ pub(crate) fn io_read_line() -> io::Result<Option<String>> {
 }
 
 impl CancellationContext {
+    pub(crate) fn merged(&self, other: &CancellationContext) -> CancellationContext {
+        let mut flags = self.flags.clone();
+        flags.extend(other.flags.iter().cloned());
+        CancellationContext { flags }
+    }
+
     pub(crate) fn is_cancelled(&self) -> bool {
         self.flags.iter().any(|flag| flag.load(Ordering::SeqCst))
     }
+}
+
+pub(crate) fn poll_cancellation(cancellation: &CancellationContext) -> bool {
+    if cancellation.is_cancelled() {
+        return true;
+    }
+    let _ = yield_now_current_lightweight_task();
+    cancellation.is_cancelled()
 }
 
 impl TaskGroupValue {
@@ -6169,12 +6242,24 @@ impl TaskGroupValue {
 }
 
 impl TaskValue {
+    fn observe_result(&self, result: &TaskExecutionResult) {
+        if matches!(result, TaskExecutionResult::Ready(Err(_))) {
+            self.inner.observed_failure.store(true, Ordering::SeqCst);
+        }
+    }
+
     pub(crate) fn completed_result(&self) -> Option<TaskExecutionResult> {
         let state = lock_mutex(&self.inner.handle);
         match &*state {
             TaskHandle::Completed(result) => Some(result.clone()),
             TaskHandle::Running { .. } => None,
         }
+    }
+
+    pub(crate) fn completed_result_observed(&self) -> Option<TaskExecutionResult> {
+        let result = self.completed_result()?;
+        self.observe_result(&result);
+        Some(result)
     }
 
     #[cfg(test)]
@@ -6187,6 +6272,7 @@ impl TaskValue {
             }),
             ready: Condvar::new(),
             lightweight: false,
+            observed_failure: AtomicBool::new(false),
         });
         let state = inner.clone();
         thread::spawn(move || {
@@ -6205,6 +6291,7 @@ impl TaskValue {
     pub(crate) fn join_result(&self) -> TaskExecutionResult {
         loop {
             if let Some(result) = self.completed_result() {
+                self.observe_result(&result);
                 return result;
             }
 
@@ -6215,7 +6302,12 @@ impl TaskValue {
                     {
                         let mut state = lock_mutex(&self.inner.handle);
                         match &mut *state {
-                            TaskHandle::Completed(result) => return result.clone(),
+                            TaskHandle::Completed(result) => {
+                                let result = result.clone();
+                                drop(state);
+                                self.observe_result(&result);
+                                return result;
+                            }
                             TaskHandle::Running { waiters } => {
                                 if !waiters.contains(&task_id) {
                                     waiters.push(task_id);
@@ -6231,7 +6323,12 @@ impl TaskValue {
             let mut state = lock_mutex(&self.inner.handle);
             loop {
                 match &*state {
-                    TaskHandle::Completed(result) => return result.clone(),
+                    TaskHandle::Completed(result) => {
+                        let result = result.clone();
+                        drop(state);
+                        self.observe_result(&result);
+                        return result;
+                    }
                     TaskHandle::Running { .. } => {
                         state = wait_condvar(&self.inner.ready, state);
                     }
@@ -6267,6 +6364,39 @@ impl TaskValue {
                 RuntimeSchedulerWakeReason::Cancelled => return TaskWaitStatus::Cancelled,
             }
         }
+    }
+
+    pub(crate) fn wait_result_with_cancellation_observed(
+        &self,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> TaskWaitStatus {
+        let status = self.wait_result_with_cancellation(timeout, cancellation);
+        if let TaskWaitStatus::Ready(result) = &status {
+            self.observe_result(&TaskExecutionResult::Ready(result.clone()));
+        }
+        status
+    }
+
+    pub(crate) fn unobserved_error(&self) -> Option<Diagnostic> {
+        if self.inner.observed_failure.load(Ordering::SeqCst) {
+            return None;
+        }
+        match self.completed_result() {
+            Some(TaskExecutionResult::Ready(Err(error))) => Some(error),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn waits_without_deadline(&self) -> bool {
+        if self.completed_result().is_some() || !self.inner.lightweight {
+            return false;
+        }
+        with_current_lightweight_task_context(|context| {
+            let scheduler = unsafe { &*context.scheduler };
+            scheduler.task_wait_is_unbounded(self)
+        })
+        .unwrap_or(false)
     }
 }
 
@@ -6374,6 +6504,14 @@ pub(crate) fn task_result_ready(value: Value) -> Value {
     })
 }
 
+pub(crate) fn task_result_error(message: String) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "TaskResult".to_string(),
+        variant_name: "Error".to_string(),
+        payloads: vec![Value::String(message)],
+    })
+}
+
 pub(crate) fn task_result_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "TaskResult".to_string(),
@@ -6395,6 +6533,17 @@ pub(crate) fn wait_any_ready(index: i32, value: Value) -> Value {
         enum_name: "WaitAny".to_string(),
         variant_name: "Ready".to_string(),
         payloads: vec![Value::Int(IntegerValue::from_signed(index as i128)), value],
+    })
+}
+
+pub(crate) fn wait_any_error(index: i32, message: String) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "WaitAny".to_string(),
+        variant_name: "Error".to_string(),
+        payloads: vec![
+            Value::Int(IntegerValue::from_signed(index as i128)),
+            Value::String(message),
+        ],
     })
 }
 
@@ -6422,6 +6571,17 @@ pub(crate) fn wait_all_ready(values: Vec<Value>) -> Value {
             element_type: Type::named("Unknown"),
             elements: values,
         })],
+    })
+}
+
+pub(crate) fn wait_all_error(index: i32, message: String) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "WaitAll".to_string(),
+        variant_name: "Error".to_string(),
+        payloads: vec![
+            Value::Int(IntegerValue::from_signed(index as i128)),
+            Value::String(message),
+        ],
     })
 }
 

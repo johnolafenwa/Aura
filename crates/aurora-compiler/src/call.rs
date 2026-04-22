@@ -365,10 +365,10 @@ impl BuiltinFunction {
             Self::Cancelled => "Returns true when the current task has been cancelled.",
             Self::Sleep => "Blocks the current task for the requested duration.",
             Self::WaitAny => {
-                "Waits for the first task to complete and reports either the ready index/value pair, a timeout, or cancellation."
+                "Waits for the first task to complete and reports either the ready index/value pair, the failing task index/error message, a timeout, or cancellation."
             }
             Self::WaitAll => {
-                "Waits for every task to complete and reports either the collected results, a timeout, or cancellation."
+                "Waits for every task to complete and reports either the collected results, the failing task index/error message, a timeout, or cancellation."
             }
             Self::Abs => "Returns the absolute value of an integer or float.",
             Self::Min => "Returns the smaller of two numeric values of the same type.",
@@ -1186,10 +1186,10 @@ impl BuiltinMember {
                 "Returns the element at `index`, or `Option.None` when the index is out of bounds."
             }
             Self::VecSet => {
-                "Replaces the element at `index` and returns the previous element, or `Option.None` when the index is out of bounds."
+                "Replaces the element at `index` and returns the previous element. Out-of-bounds indices raise a runtime error."
             }
             Self::VecRemove => {
-                "Removes the element at `index` and returns it, or `Option.None` when the index is out of bounds."
+                "Removes the element at `index` and returns it. Out-of-bounds indices raise a runtime error."
             }
             Self::VecSwap => {
                 "Swaps the elements at `first` and `second`, returning `false` when either index is out of bounds."
@@ -1244,13 +1244,13 @@ impl BuiltinMember {
             }
             Self::QueueClose => "Closes the queue and wakes blocked receivers.",
             Self::TaskResult => {
-                "Waits for the task to finish and reports `TaskResult.Ready(value)`, `TaskResult.TimedOut`, or `TaskResult.Cancelled`."
+                "Waits for the task to finish and reports `TaskResult.Ready(value)`, `TaskResult.Error(message)`, `TaskResult.TimedOut`, or `TaskResult.Cancelled`."
             }
             Self::TaskResultOrNone => {
-                "Waits for the task result and returns `Option.Some(value)`, or `Option.None` when the timeout expires or cancellation interrupts the wait."
+                "Waits for the task result and returns `Option.Some(value)`, or `Option.None` when the task fails, the timeout expires, or cancellation interrupts the wait."
             }
             Self::TaskResultOr => {
-                "Waits for the task result or returns `default` when the timeout expires or cancellation interrupts the wait."
+                "Waits for the task result or returns `default` when the task fails, the timeout expires, or cancellation interrupts the wait."
             }
             Self::TaskGroupStart => "Starts a child task in the current task group.",
             Self::TaskGroupStartSoon => {

@@ -6,7 +6,7 @@ def main() -> int32:
     with TaskGroup() as group:
         task = group.start(Worker.run, 4)
         other = group.start(Worker.run, 6)
-        print(task.result_or(-1))
-        print(other.result_or(-1))
+        print(task.result_or(-1, timeout=50ms))
+        print(other.result_or(-1, timeout=50ms))
 
     return 0

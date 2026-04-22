@@ -1,0 +1,5 @@
+error: use of moved value `text`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/with_move_persists.au:13:11
+   |
+13 |     print(text)
+   |           ^

@@ -33,6 +33,8 @@ def run() -> Result[None, io.Error]:
                         print(text)
                     case Result.Err(error):
                         return Result.Err(error)
+            case TaskResult.Error(_message):
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 return Result.Ok(None)
             case TaskResult.TimedOut:

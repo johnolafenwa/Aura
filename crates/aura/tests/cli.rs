@@ -242,6 +242,49 @@ fn assert_run_and_direct_source_stdout(prefix: &str, source: &str, expected_stdo
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected_stdout);
 }
 
+fn assert_run_and_direct_source_stdout_with_timeout(
+    prefix: &str,
+    source: &str,
+    timeout: std::time::Duration,
+    expected_stdout: &str,
+) {
+    let (_temp, _source_path, mut run_child) =
+        run_aura_source_with_timeout(prefix, source, timeout);
+    let run_status = wait_with_timeout(&mut run_child, timeout).unwrap_or_else(|| {
+        run_child
+            .kill()
+            .expect("failed to kill timed out aura run process");
+        panic!("aura run timed out after {:?}", timeout);
+    });
+    let run = run_child
+        .wait_with_output()
+        .expect("failed to collect aura run output");
+    assert!(
+        run_status.success(),
+        "aura run should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected_stdout);
+
+    let (_temp, _source_path, mut direct_child) =
+        build_direct_source_with_timeout(&format!("{prefix}-direct"), source, timeout);
+    let direct_status = wait_with_timeout(&mut direct_child, timeout).unwrap_or_else(|| {
+        direct_child
+            .kill()
+            .expect("failed to kill timed out direct-backend process");
+        panic!("direct-backend run timed out after {:?}", timeout);
+    });
+    let direct = direct_child
+        .wait_with_output()
+        .expect("failed to collect direct-backend output");
+    assert!(
+        direct_status.success(),
+        "direct-backend binary should exit successfully, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected_stdout);
+}
+
 fn run_aura_source_with_timeout(
     prefix: &str,
     source: &str,
@@ -255,6 +298,39 @@ fn run_aura_source_with_timeout(
         .stderr(Stdio::piped())
         .spawn()
         .unwrap_or_else(|error| panic!("failed to spawn aura run: {error}"));
+    assert!(
+        timeout > std::time::Duration::ZERO,
+        "timeout should be positive"
+    );
+    (temp, source_path, child)
+}
+
+fn build_direct_source_with_timeout(
+    prefix: &str,
+    source: &str,
+    timeout: std::time::Duration,
+) -> (TempDir, PathBuf, std::process::Child) {
+    let (temp, source_path) = write_temp_source(prefix, source);
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build --backend direct");
+    assert!(
+        build.status.success(),
+        "direct backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let child = Command::new(&output_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("failed to spawn direct-backend binary: {error}"));
     assert!(
         timeout > std::time::Duration::ZERO,
         "timeout should be positive"
@@ -331,6 +407,23 @@ def main() -> int32:
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "cancelled\ndone\n");
+
+    let (_temp, _source_path, mut direct_child) = build_direct_source_with_timeout(
+        "aurora-task-group-close-direct",
+        source,
+        std::time::Duration::from_secs(5),
+    );
+    let status = wait_with_timeout(&mut direct_child, std::time::Duration::from_secs(5))
+        .expect("direct task-group scope exit should not hang indefinitely");
+    let output = direct_child
+        .wait_with_output()
+        .expect("failed to collect direct-backend output");
+    assert!(
+        status.success(),
+        "direct task-group scope exit should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "cancelled\ndone\n");
 }
 
 #[test]
@@ -359,10 +452,10 @@ def main() -> int32:
             i += 1
         q.close()
 
-        print(c1.result_or(-1))
-        print(c2.result_or(-1))
-        print(c3.result_or(-1))
-        print(c4.result_or(-1))
+        print(c1.result_or(-1, timeout=5s))
+        print(c2.result_or(-1, timeout=5s))
+        print(c3.result_or(-1, timeout=5s))
+        print(c4.result_or(-1, timeout=5s))
     return 0
 "#;
 
@@ -398,9 +491,13 @@ def main() -> int32:
 }
 
 #[test]
-fn cancelled_sleeping_children_stop_without_leaking_scheduler_panics() {
+fn cancelled_sleeping_children_resume_and_can_observe_cancellation() {
     let source = r#"def long_sleeper() -> int32:
     sleep(5s)
+    print("after-sleep")
+    if cancelled():
+        print("observed-cancel")
+        return 7
     return 99
 
 def main() -> int32:
@@ -408,27 +505,22 @@ def main() -> int32:
         task = group.start(long_sleeper)
         sleep(20ms)
         group.cancel()
-        print(task.result_or(-99))
+        match task.result(timeout=1s):
+            case TaskResult.Ready(value):
+                print(value)
+            case TaskResult.Error(message):
+                print(message)
+            case TaskResult.TimedOut:
+                print("timedout")
+            case TaskResult.Cancelled:
+                print("cancelled")
     return 0
 "#;
 
-    let (_temp, source_path) = write_temp_source("aurora-sleep-cancel", source);
-    let output = Command::new(aura_bin())
-        .arg("run")
-        .arg(&source_path)
-        .output()
-        .expect("failed to run sleep cancellation source");
-
-    assert!(
-        output.status.success(),
-        "sleep cancellation source should succeed, stderr was:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "-99\n");
-    assert!(
-        !String::from_utf8_lossy(&output.stderr).contains("panicked at"),
-        "sleep cancellation should not leak internal panic output, stderr was:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+    assert_run_and_direct_source_stdout(
+        "aurora-sleep-cancel-observed",
+        source,
+        "after-sleep\nobserved-cancel\n7\n",
     );
 }
 
@@ -1805,6 +1897,67 @@ def main() -> int32:
 }
 
 #[test]
+fn run_and_direct_backend_preserve_bare_none_in_collection_paths_and_nested_options() {
+    let source = r#"class Wrap:
+    value: Option[Option[int32]]
+
+def print_opt(value: Option[int32]):
+    match value:
+        case Some(v):
+            print(v)
+        case None:
+            print(-1)
+
+def print_nested(value: Option[Option[int32]]):
+    match value:
+        case Some(inner):
+            match inner:
+                case Some(v):
+                    print(v)
+                case None:
+                    print(-2)
+        case None:
+            print(-3)
+
+def main() -> int32:
+    mut pushed = Vec[Option[int32]]()
+    pushed.push(None)
+    print_opt(pushed[0])
+
+    literal: Vec[Option[int32]] = [None]
+    print_opt(literal[0])
+
+    mut values: Vec[Option[int32]] = [Option.Some(7)]
+    print_nested(values.set(index=0, value=None))
+    print_opt(values[0])
+
+    mut counts: Map[String, Option[int32]] = {"a": Option.Some(1)}
+    print_nested(counts.set(key="a", value=None))
+    print_opt(counts["a"])
+
+    mut seen: Set[Option[int32]] = Set{}
+    seen.insert(None)
+    for value in seen:
+        print_opt(value)
+
+    jobs = Queue[Option[int32]]()
+    jobs.put(None)
+    print_opt(jobs.get_or(Option.Some(99)))
+
+    item = Wrap(value=Option.Some(None))
+    print_nested(item.value)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-bare-none-collections-and-nested-option",
+        source,
+        std::time::Duration::from_secs(5),
+        "-1\n-1\n7\n-1\n1\n-1\n-1\n-1\n-2\n",
+    );
+}
+
+#[test]
 fn check_rejects_match_borrow_mut_binding_use_after_scrutinee_reassign() {
     let source = "enum Opt:\n    Some(int32)\n    None\n\ndef main() -> int32:\n    mut x: Opt = Opt.Some(10)\n    match borrow mut x:\n        case Some(v):\n            x = Opt.Some(v)\n            v = v + 1\n        case None:\n            pass\n    return 0\n";
     let (_temp, source_path) = write_temp_source("aurora-stale-match-binding", source);
@@ -2157,7 +2310,7 @@ fn build_with_direct_backend_supports_vec_polish_example() {
     assert_direct_backend_example_runs(
         "examples/collections/vec_polish.au",
         "vec-polish-direct",
-        "Ada\nGrace\ntrue\nfalse\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
+        "Ada\nGrace\ntrue\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
     );
 }
 
@@ -2367,7 +2520,7 @@ fn default_build_supports_vec_polish_example() {
     assert_default_backend_example_runs(
         "examples/collections/vec_polish.au",
         "vec-polish-auto",
-        "Ada\nGrace\ntrue\nfalse\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
+        "Ada\nGrace\ntrue\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n",
     );
 }
 
@@ -2772,7 +2925,7 @@ fn build_runs_indirect_recursive_example() {
 fn build_with_direct_backend_supports_task_result_returning_plain_classes() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-task-result-class",
-        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        task = group.start(make_box)\n        match task.result():\n            case TaskResult.Ready(box):\n                print(box.value)\n            case TaskResult.TimedOut:\n                print(0)\n            case TaskResult.Cancelled:\n                print(0)\n    return 0\n",
+        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        task = group.start(make_box)\n        match task.result():\n            case TaskResult.Ready(box):\n                print(box.value)\n            case TaskResult.Error(_message):\n                print(0)\n            case TaskResult.TimedOut:\n                print(0)\n            case TaskResult.Cancelled:\n                print(0)\n    return 0\n",
     );
 
     assert!(
@@ -2787,7 +2940,7 @@ fn build_with_direct_backend_supports_task_result_returning_plain_classes() {
 fn build_supports_task_result_returning_plain_classes() {
     let (temp, source_path) = write_temp_source(
         "aurora-build-default-task-result-class",
-        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        task = group.start(make_box)\n        match task.result():\n            case TaskResult.Ready(box):\n                print(box.value)\n            case TaskResult.TimedOut:\n                print(0)\n            case TaskResult.Cancelled:\n                print(0)\n    return 0\n",
+        "class Box:\n    value: int32\n\ndef make_box() -> Box:\n    return Box(value=7)\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        task = group.start(make_box)\n        match task.result():\n            case TaskResult.Ready(box):\n                print(box.value)\n            case TaskResult.Error(_message):\n                print(0)\n            case TaskResult.TimedOut:\n                print(0)\n            case TaskResult.Cancelled:\n                print(0)\n    return 0\n",
     );
     let output_path = temp.path().join("out");
 
@@ -3142,7 +3295,7 @@ fn run_executes_vec_polish_example() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "Ada\nGrace\ntrue\nfalse\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n"
+        "Ada\nGrace\ntrue\n4\n1\n14\n13\n12\n11\ntrue\n100\ntrue\ntrue\n"
     );
 }
 
@@ -3582,7 +3735,7 @@ fn module_qualified_spawn_target_runs_across_commands() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "import pkg.helpers\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        task = group.start(pkg.helpers.work)\n        match task.result():\n            case TaskResult.Ready(value):\n                print(value)\n            case TaskResult.TimedOut:\n                print(0)\n            case TaskResult.Cancelled:\n                print(0)\n    return 0\n",
+        "import pkg.helpers\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        task = group.start(pkg.helpers.work)\n        match task.result():\n            case TaskResult.Ready(value):\n                print(value)\n            case TaskResult.Error(_message):\n                print(0)\n            case TaskResult.TimedOut:\n                print(0)\n            case TaskResult.Cancelled:\n                print(0)\n    return 0\n",
     )
     .expect("failed to write main module");
 
@@ -3953,6 +4106,8 @@ def run() -> Result[None, io.Error]:
                         print(text)
                     case Result.Err(error):
                         return Result.Err(error)
+            case TaskResult.Error(_message):
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 return Result.Ok(None)
             case TaskResult.TimedOut:
@@ -3969,6 +4124,8 @@ def run() -> Result[None, io.Error]:
         match http_task.result():
             case TaskResult.Ready(result):
                 try result
+            case TaskResult.Error(_message):
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 return Result.Ok(None)
             case TaskResult.TimedOut:
@@ -3988,6 +4145,8 @@ def run() -> Result[None, io.Error]:
         match ws_task.result():
             case TaskResult.Ready(result):
                 try result
+            case TaskResult.Error(_message):
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 return Result.Ok(None)
             case TaskResult.TimedOut:
@@ -4016,6 +4175,633 @@ def main() -> int32:
         String::from_utf8_lossy(&run.stdout),
         "4\n65\n67\nudp:ping\nping\n200\nPOST:/hello:body:ok\nws:hi\n"
     );
+}
+
+#[test]
+fn run_and_direct_backend_match_unannotated_get_or_none_and_result_or_none() {
+    let source = r#"
+def worker() -> int32:
+    return 7
+
+def main() -> int32:
+    jobs = Queue[int32]()
+    jobs.put(5)
+    queue_opt = jobs.get_or_none()
+    match queue_opt:
+        case Some(value):
+            print(value)
+        case None:
+            print(-1)
+
+    with TaskGroup() as group:
+        task = group.start(worker)
+        task_opt = task.result_or_none(timeout=50ms)
+        match task_opt:
+            case Some(value):
+                print(value)
+            case None:
+                print(-2)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-unannotated-option-match-lowering",
+        source,
+        "5\n7\n",
+    );
+}
+
+#[test]
+fn run_and_direct_backend_match_bare_none_in_indirect_option_field() {
+    let source = r#"
+class Node:
+    value: int32
+    next: indirect Node?
+
+def main() -> int32:
+    tail = Node(value=2, next=None)
+    match tail.next:
+        case Some(next):
+            print(next.value)
+        case None:
+            print(-1)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout("aurora-indirect-option-none-match", source, "-1\n");
+}
+
+#[test]
+fn run_and_direct_backend_allow_match_expression_value_scrutinee_first_use() {
+    let source = r#"
+class Box:
+    value: int32
+
+def take(b: Box) -> int32:
+    return b.value
+
+def main() -> int32:
+    b = Box(value=5)
+    n = match take(b):
+        case 1:
+            10
+        case _:
+            20
+    print(n)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout("aurora-match-expr-value-scrutinee", source, "20\n");
+}
+
+#[test]
+fn run_preserves_buffered_stdout_on_runtime_error() {
+    let source = r#"
+def main() -> int32:
+    print("first")
+    print("second")
+    values = [1, 2]
+    print(values[99])
+    return 0
+"#;
+    let (_temp, source_path) = write_temp_source("aurora-run-buffered-stdout-error", source);
+
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run on buffered stdout error source");
+
+    assert!(
+        !output.status.success(),
+        "run should fail for the runtime error source"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "first\nsecond\n");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("out of bounds"),
+        "runtime error should mention the out-of-bounds access, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn with_task_group_joins_start_soon_before_scope_exit() {
+    let source = r#"
+def producer(jobs: Queue[int32]) -> None:
+    sleep(20ms)
+    jobs.put(9)
+
+def main() -> int32:
+    jobs = Queue[int32]()
+    with TaskGroup() as group:
+        group.start_soon(producer, jobs)
+        print("scope")
+    print(jobs.get_or(-1))
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout("aurora-task-group-start-soon-join", source, "scope\n9\n");
+}
+
+#[test]
+fn task_results_surface_errors_without_aborting_the_program() {
+    let source = r#"
+def bad() -> int32:
+    values = [1, 2]
+    return values[7]
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(bad)
+        match task.result(timeout=100ms):
+            case TaskResult.Ready(value):
+                print(value)
+            case TaskResult.Error(message):
+                print(message.contains("out of bounds"))
+            case TaskResult.TimedOut:
+                print(false)
+            case TaskResult.Cancelled:
+                print(false)
+
+        print(task.result_or(-1))
+
+        maybe = task.result_or_none(timeout=100ms)
+        match maybe:
+            case Some(value):
+                print(value)
+            case None:
+                print(-1)
+    print("after")
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-task-result-error-surface",
+        source,
+        "true\n-1\n-1\nafter\n",
+    );
+}
+
+#[test]
+fn unread_task_failures_abort_task_group_scope() {
+    let source = r#"
+def boom() -> int32:
+    values = [1, 2]
+    return values[7]
+
+def main() -> int32:
+    print("before")
+    with TaskGroup() as group:
+        group.start(boom)
+    print("after")
+    return 0
+"#;
+    let (temp, source_path) = write_temp_source("aurora-task-group-unread-failure", source);
+
+    let run = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run on unread task failure source");
+    assert!(
+        !run.status.success(),
+        "run should fail when a task group scope exits with an unread task failure"
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "before\n");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("out of bounds"),
+        "run stderr should surface the unread task failure, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build unread task failure source");
+    assert!(
+        build.status.success(),
+        "direct backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let direct = Command::new(&output_path)
+        .output()
+        .expect("failed to run direct unread task failure binary");
+    assert!(
+        !direct.status.success(),
+        "direct binary should fail when a task group scope exits with an unread task failure"
+    );
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), "before\n");
+    assert!(
+        String::from_utf8_lossy(&direct.stderr).contains("out of bounds"),
+        "direct stderr should surface the unread task failure, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+}
+
+#[test]
+fn cancelled_yields_for_cpu_bound_lightweight_tasks() {
+    let source = r#"
+def worker() -> int32:
+    mut n = 0
+    while n < 1000000:
+        if cancelled():
+            return 9999
+        n += 1
+    return n
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(worker)
+        sleep(1ms)
+        group.cancel()
+        match task.result(timeout=10s):
+            case TaskResult.Ready(value):
+                print(value)
+            case TaskResult.Error(_message):
+                print(-1)
+            case TaskResult.TimedOut:
+                print(-2)
+            case TaskResult.Cancelled:
+                print(-3)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout("aurora-cancelled-yields", source, "9999\n");
+}
+
+#[test]
+fn self_receiver_method_result_can_bind_to_a_name() {
+    let source = r#"
+class Box:
+    value: int32
+
+    def take(self) -> int32:
+        return self.value
+
+def main() -> int32:
+    b = Box(value=7)
+    x = b.take()
+    print(x)
+    return 0
+"#;
+
+    let (_temp, source_path) = write_temp_source("aurora-value-receiver-binding", source);
+    let check = Command::new(aura_bin())
+        .arg("check")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura check on value receiver binding source");
+
+    assert!(
+        check.status.success(),
+        "check should accept binding a value-receiver result, stderr was:\n{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    assert_run_and_direct_source_stdout("aurora-value-receiver-binding", source, "7\n");
+}
+
+#[test]
+fn vec_insert_out_of_bounds_is_a_runtime_error() {
+    let source = r#"
+def main() -> int32:
+    mut values = [1, 2, 3]
+    print("before")
+    print(values.insert(index=99, value=7))
+    print("after")
+    return 0
+"#;
+    let (temp, source_path) = write_temp_source("aurora-vec-insert-oob", source);
+
+    let run = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run on vec insert source");
+    assert!(!run.status.success(), "run should fail for vec insert OOB");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "before\n");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("out of bounds"),
+        "run stderr should mention the out-of-bounds insert, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build direct vec insert source");
+    assert!(
+        build.status.success(),
+        "direct backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let direct = Command::new(&output_path)
+        .output()
+        .expect("failed to run direct vec insert binary");
+    assert!(
+        !direct.status.success(),
+        "direct binary should fail for vec insert OOB"
+    );
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), "before\n");
+    assert!(
+        String::from_utf8_lossy(&direct.stderr).contains("out of bounds"),
+        "direct stderr should mention the out-of-bounds insert, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+}
+
+#[test]
+fn vec_set_out_of_bounds_is_a_runtime_error() {
+    let source = r#"
+def main() -> int32:
+    mut values = [1, 2, 3]
+    print("before")
+    print(values.set(index=99, value=7))
+    print("after")
+    return 0
+"#;
+    let (temp, source_path) = write_temp_source("aurora-vec-set-oob", source);
+
+    let run = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run on vec set source");
+    assert!(!run.status.success(), "run should fail for vec set OOB");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "before\n");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("out of bounds"),
+        "run stderr should mention the out-of-bounds set, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build direct vec set source");
+    assert!(
+        build.status.success(),
+        "direct backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let direct = Command::new(&output_path)
+        .output()
+        .expect("failed to run direct vec set binary");
+    assert!(
+        !direct.status.success(),
+        "direct binary should fail for vec set OOB"
+    );
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), "before\n");
+    assert!(
+        String::from_utf8_lossy(&direct.stderr).contains("out of bounds"),
+        "direct stderr should mention the out-of-bounds set, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+}
+
+#[test]
+fn vec_remove_out_of_bounds_is_a_runtime_error() {
+    let source = r#"
+def main() -> int32:
+    mut values = [1, 2, 3]
+    print("before")
+    print(values.remove(index=99))
+    print("after")
+    return 0
+"#;
+    let (temp, source_path) = write_temp_source("aurora-vec-remove-oob", source);
+
+    let run = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run on vec remove source");
+    assert!(!run.status.success(), "run should fail for vec remove OOB");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "before\n");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("out of bounds"),
+        "run stderr should mention the out-of-bounds remove, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build direct vec remove source");
+    assert!(
+        build.status.success(),
+        "direct backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let direct = Command::new(&output_path)
+        .output()
+        .expect("failed to run direct vec remove binary");
+    assert!(
+        !direct.status.success(),
+        "direct binary should fail for vec remove OOB"
+    );
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), "before\n");
+    assert!(
+        String::from_utf8_lossy(&direct.stderr).contains("out of bounds"),
+        "direct stderr should mention the out-of-bounds remove, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+}
+
+#[test]
+fn vec_swap_out_of_bounds_is_a_runtime_error() {
+    let source = r#"
+def main() -> int32:
+    mut values = [1, 2, 3]
+    print("before")
+    print(values.swap(first=0, second=99))
+    print("after")
+    return 0
+"#;
+    let (temp, source_path) = write_temp_source("aurora-vec-swap-oob", source);
+
+    let run = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run on vec swap source");
+    assert!(!run.status.success(), "run should fail for vec swap OOB");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "before\n");
+    assert!(
+        String::from_utf8_lossy(&run.stderr)
+            .contains("vector swap indices `0` and `99` are out of bounds for length `3`"),
+        "run stderr should mention both out-of-bounds swap indices, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build direct vec swap source");
+    assert!(
+        build.status.success(),
+        "direct backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let direct = Command::new(&output_path)
+        .output()
+        .expect("failed to run direct vec swap binary");
+    assert!(
+        !direct.status.success(),
+        "direct binary should fail for vec swap OOB"
+    );
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), "before\n");
+    assert!(
+        String::from_utf8_lossy(&direct.stderr)
+            .contains("vector swap indices `0` and `99` are out of bounds for length `3`"),
+        "direct stderr should mention both out-of-bounds swap indices, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+}
+
+#[test]
+fn queue_iteration_exits_when_task_group_is_cancelled() {
+    let source = r#"
+def worker(q: Queue[int32]):
+    sleep(10s)
+
+def main() -> int32:
+    q: Queue[int32] = Queue[int32]()
+    with TaskGroup() as g:
+        g.start_soon(worker, q)
+        sleep(50ms)
+        print("about to cancel")
+        g.cancel()
+        print("about to iterate")
+        for v in q:
+            print(v)
+        print("loop done")
+    print("scope done")
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-queue-iteration-cancel",
+        source,
+        std::time::Duration::from_secs(5),
+        "about to cancel\nabout to iterate\nloop done\nscope done\n",
+    );
+}
+
+#[test]
+fn wait_any_without_tasks_times_out_immediately() {
+    let source = r#"def main() -> int32:
+    tasks = Vec[Task[int32]]()
+    match wait_any(tasks):
+        case WaitAny.Ready(index, value):
+            print(index)
+            print(value)
+        case WaitAny.Error(index, message):
+            print(index)
+            print(message)
+        case WaitAny.TimedOut:
+            print("timedout")
+        case WaitAny.Cancelled:
+            print("cancelled")
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-wait-any-empty",
+        source,
+        std::time::Duration::from_secs(5),
+        "timedout\n",
+    );
+}
+
+#[test]
+fn queue_get_or_without_timeout_returns_default_immediately() {
+    let source = r#"def main() -> int32:
+    jobs = Queue[int32]()
+    print("before")
+    print(jobs.get_or(7))
+    print("after")
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-queue-get-or-no-timeout",
+        source,
+        std::time::Duration::from_secs(5),
+        "before\n7\nafter\n",
+    );
+}
+
+#[test]
+fn task_result_or_without_timeout_returns_fallback_immediately() {
+    let source = r#"def slow() -> int32:
+    sleep(100ms)
+    return 5
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(slow)
+        print(task.result_or(-1))
+        match task.result_or_none():
+            case Some(value):
+                print(value)
+            case None:
+                print(-2)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-task-result-or-no-timeout",
+        source,
+        std::time::Duration::from_secs(5),
+        "-1\n-2\n",
+    );
+}
+
+#[test]
+fn fs_write_bytes_accepts_empty_lists_in_run_and_direct_backend() {
+    let source = r#"import fs
+
+def main() -> int32:
+    match fs.write_bytes("/tmp/aurora-empty-bytes.bin", []):
+        case Result.Ok(_):
+            print("ok")
+        case Result.Err(error):
+            print(error)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout("aurora-fs-write-empty-bytes", source, "ok\n");
 }
 
 #[test]
@@ -4158,6 +4944,8 @@ def run() -> Result[None, io.Error]:
         match unix_task.result():
             case TaskResult.Ready(result):
                 try result
+            case TaskResult.Error(_message):
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 return Result.Ok(None)
             case TaskResult.TimedOut:
@@ -4174,6 +4962,8 @@ def run() -> Result[None, io.Error]:
         match tls_task.result():
             case TaskResult.Ready(result):
                 try result
+            case TaskResult.Error(_message):
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 return Result.Ok(None)
             case TaskResult.TimedOut:

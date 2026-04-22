@@ -25,6 +25,9 @@ def print_any(value: WaitAny[int32]):
         case WaitAny.Ready(index, result):
             print(index)
             print(result)
+        case WaitAny.Error(index, message):
+            print(index)
+            print(message)
         case WaitAny.TimedOut:
             print("timedout")
         case WaitAny.Cancelled:
@@ -35,6 +38,9 @@ def print_all(value: WaitAll[int32]):
         case WaitAll.Ready(results):
             for result in results:
                 print(result)
+        case WaitAll.Error(index, message):
+            print(index)
+            print(message)
         case WaitAll.TimedOut:
             print("timedout")
         case WaitAll.Cancelled:
@@ -44,6 +50,8 @@ def print_task_result(value: TaskResult[int32]):
     match value:
         case TaskResult.Ready(result):
             print(result)
+        case TaskResult.Error(message):
+            print(message)
         case TaskResult.TimedOut:
             print("timedout")
         case TaskResult.Cancelled:
@@ -78,7 +86,7 @@ def main() -> int32:
 
     with TaskGroup() as group:
         group.start_soon(announce, started)
-        task_list = Vec[Task[int32]]()
+        mut task_list = Vec[Task[int32]]()
         task_list.push(group.start(worker_slow, 4))
         task_list.push(group.start(worker_fast, 3))
         print_string_receive(started.get(timeout=20ms))

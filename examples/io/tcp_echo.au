@@ -51,6 +51,8 @@ def main() -> int32:
                                         return 0
                                     case Result.Err(_):
                                         return 1
+                            case TaskResult.Error(_message):
+                                return 1
                             case TaskResult.Cancelled:
                                 return 1
                             case TaskResult.TimedOut:

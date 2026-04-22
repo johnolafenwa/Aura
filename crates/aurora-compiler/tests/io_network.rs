@@ -103,6 +103,9 @@ def run() -> Result[None, io.Error]:
         match server.result():
             case TaskResult.Ready(result):
                 try result
+            case TaskResult.Error(_message):
+                print("server task failed")
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 print("server task cancelled")
                 return Result.Ok(None)
@@ -319,6 +322,9 @@ def run() -> Result[None, io.Error]:
         match udp_task.result():
             case TaskResult.Ready(result):
                 print(try result)
+            case TaskResult.Error(_message):
+                print("udp task failed")
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 print("udp task cancelled")
                 return Result.Ok(None)
@@ -337,6 +343,9 @@ def run() -> Result[None, io.Error]:
         match http_task.result():
             case TaskResult.Ready(result):
                 try result
+            case TaskResult.Error(_message):
+                print("http task failed")
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 print("http task cancelled")
                 return Result.Ok(None)
@@ -358,6 +367,9 @@ def run() -> Result[None, io.Error]:
         match ws_task.result():
             case TaskResult.Ready(result):
                 try result
+            case TaskResult.Error(_message):
+                print("websocket task failed")
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 print("websocket task cancelled")
                 return Result.Ok(None)
@@ -448,6 +460,9 @@ def run() -> Result[None, io.Error]:
         match unix_task.result():
             case TaskResult.Ready(result):
                 try result
+            case TaskResult.Error(_message):
+                print("unix task failed")
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 print("unix task cancelled")
                 return Result.Ok(None)
@@ -466,6 +481,9 @@ def run() -> Result[None, io.Error]:
         match tls_task.result():
             case TaskResult.Ready(result):
                 try result
+            case TaskResult.Error(_message):
+                print("tls task failed")
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 print("tls task cancelled")
                 return Result.Ok(None)

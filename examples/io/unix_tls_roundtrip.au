@@ -80,6 +80,8 @@ def run() -> Result[None, io.Error]:
         match unix_task.result():
             case TaskResult.Ready(result):
                 try result
+            case TaskResult.Error(_message):
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 return Result.Ok(None)
             case TaskResult.TimedOut:
@@ -96,6 +98,8 @@ def run() -> Result[None, io.Error]:
         match tls_task.result():
             case TaskResult.Ready(result):
                 try result
+            case TaskResult.Error(_message):
+                return Result.Ok(None)
             case TaskResult.Cancelled:
                 return Result.Ok(None)
             case TaskResult.TimedOut:

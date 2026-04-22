@@ -1767,6 +1767,9 @@ def main() -> int32:
             case WaitAny.Ready(index, result):
                 print(index)
                 print(result)
+            case WaitAny.Error(index, message):
+                print(index)
+                print(message)
             case WaitAny.TimedOut:
                 print("timedout")
             case WaitAny.Cancelled:
@@ -1774,6 +1777,9 @@ def main() -> int32:
         match all:
             case WaitAll.Ready(_):
                 print("ready")
+            case WaitAll.Error(index, message):
+                print(index)
+                print(message)
             case WaitAll.TimedOut:
                 print("timedout")
             case WaitAll.Cancelled:
@@ -1802,6 +1808,8 @@ def main() -> int32:
         match task.result():
             case TaskResult.Ready(box):
                 print(box.value)
+            case TaskResult.Error(_message):
+                print(0)
             case TaskResult.TimedOut:
                 print(0)
             case TaskResult.Cancelled:
@@ -2155,6 +2163,8 @@ def main() -> int32:
         match task.result():
             case TaskResult.Ready(value):
                 return value
+            case TaskResult.Error(_message):
+                return 0
             case TaskResult.TimedOut:
                 return 0
             case TaskResult.Cancelled:
@@ -3855,6 +3865,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         infer_rvalue_type(
             &Rvalue::VariantPayload {
                 scrutinee: Operand::Place("maybe".to_string()),
+                variant_name: "Some".to_string(),
                 index: 0,
             },
             &variable_types,

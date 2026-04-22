@@ -4025,6 +4025,14 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
 }
 
 #[test]
+fn vec_literal_consumes_non_copy_elements_only_once() {
+    crate::check_source(
+        "class Box:\n    value: int32\n\ndef main() -> int32:\n    b = Box(value=1)\n    values: Vec[Box] = [b]\n    return 0\n",
+    )
+    .expect("Vec literals should accept the first move of a non-copy element");
+}
+
+#[test]
 fn namespace_and_type_parameter_helpers_cover_registration_lookup_and_collection() {
     let mut child = namespace("pkg.inner");
     child.classes.insert(

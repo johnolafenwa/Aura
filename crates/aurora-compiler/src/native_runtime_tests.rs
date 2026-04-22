@@ -109,6 +109,23 @@ fn expect_task_result_ready_int(ptr: *mut OpaqueValue) -> i128 {
     }
 }
 
+fn expect_task_result_error_message(ptr: *mut OpaqueValue) -> String {
+    match unsafe { take_value(ptr) } {
+        Value::EnumVariant(variant)
+            if variant.enum_name == "TaskResult" && variant.variant_name == "Error" =>
+        {
+            match variant
+                .single_payload()
+                .expect("expected task result payload")
+            {
+                Value::String(text) => text.clone(),
+                other => panic!("expected string payload, found {:?}", other),
+            }
+        }
+        other => panic!("expected TaskResult.Error(String), found {:?}", other),
+    }
+}
+
 fn expect_float(ptr: *mut OpaqueValue) -> f64 {
     match unsafe { take_value(ptr) } {
         Value::Float(value) => value,
@@ -1135,6 +1152,19 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
     .expect("task start should run inside lightweight scheduler");
     assert_eq!(expect_task_result_ready_int(boxed_value(started_sum)), 42);
 
+    let join_error = run_lightweight_root_task(move || {
+        Ok(unsafe {
+            take_value(super::aurora_direct_task_join(boxed_value(Value::Task(
+                TaskValue::from_handle(thread::spawn(|| Err(Diagnostic::new("boom")))),
+            ))))
+        })
+    })
+    .expect("task join error should run inside lightweight scheduler");
+    assert_eq!(
+        expect_task_result_error_message(boxed_value(join_error)),
+        "boom"
+    );
+
     let channel = super::aurora_direct_channel_new(std::ptr::null_mut());
     let send_ok = unsafe { take_value(super::aurora_direct_channel_send(channel, int_value(9))) };
     match send_ok {
@@ -1555,7 +1585,9 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                 let task = boxed_value(Value::Task(TaskValue::from_handle(thread::spawn(|| {
                     Err(Diagnostic::new("boom"))
                 }))));
-                super::aurora_direct_task_join(task);
+                let joined = super::aurora_direct_task_join(task);
+                assert_eq!(expect_task_result_error_message(joined), "boom");
+                return;
             }
             other => panic!("unexpected runtime helper case: {other}"),
         }
@@ -1709,7 +1741,6 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "cast-at-span",
             "casts are only supported between numeric types, found `String` and `int32`",
         ),
-        ("task-join-error", "boom"),
     ] {
         let output = Command::new(std::env::current_exe().expect("test binary should exist"))
             .arg("--exact")

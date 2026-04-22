@@ -32,6 +32,7 @@ const INTERNAL_VEC_INDEX_OPTION_FIELD: &str = "__index_option";
 const INTERNAL_VEC_SET_INDEX_FIELD: &str = "__set_index";
 const INTERNAL_MAP_INDEX_FIELD: &str = "__index";
 const INTERNAL_MAP_SET_INDEX_FIELD: &str = "__set_index";
+const INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD: &str = "__get_in_task_group";
 
 fn is_builtin_unary_operator(op: UnaryOp, ty: &Type) -> bool {
     match op {
@@ -294,6 +295,7 @@ pub enum Rvalue {
     },
     VariantPayload {
         scrutinee: Operand,
+        variant_name: String,
         index: usize,
     },
     Member {
@@ -1441,7 +1443,7 @@ impl<'a> Lowerer<'a> {
 
         let value = self.lower_expr(&assign.value);
         if let (Some(target_ty), Operand::Place(place)) = (target_ty, &value) {
-            self.local_types.entry(place.clone()).or_insert(target_ty);
+            self.local_types.insert(place.clone(), target_ty);
         }
         self.emit(Instruction::Assign {
             target,
@@ -1689,6 +1691,7 @@ impl<'a> Lowerer<'a> {
                         target: payload_target.clone(),
                         value: Rvalue::VariantPayload {
                             scrutinee: scrutinee.clone(),
+                            variant_name: pattern.variant_name.clone(),
                             index,
                         },
                     });
@@ -1803,6 +1806,18 @@ impl<'a> Lowerer<'a> {
                 ));
                 self.local_types
                     .insert(for_stmt.binding.clone(), element_ty);
+                let (field, args) = if let Some(task_group_place) = self.active_task_group_place() {
+                    (
+                        INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD.to_string(),
+                        vec![MirArg {
+                            name: None,
+                            value: Operand::Place(task_group_place),
+                            writeback_place: None,
+                        }],
+                    )
+                } else {
+                    ("get".to_string(), Vec::new())
+                };
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
                 self.switch_to(dispatch_block);
                 self.emit(Instruction::Assign {
@@ -1810,10 +1825,10 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: CallTarget::Member {
                             object: iterable.clone(),
-                            field: "get".to_string(),
+                            field,
                             receiver_place: self.render_place_expr_option(&for_stmt.iterable),
                         },
-                        args: Vec::new(),
+                        args,
                     },
                 });
                 self.terminate(Terminator::Match {
@@ -1845,6 +1860,7 @@ impl<'a> Lowerer<'a> {
                     target: for_stmt.binding.clone(),
                     value: Rvalue::VariantPayload {
                         scrutinee: Operand::Place(next_value),
+                        variant_name: "Item".to_string(),
                         index: 0,
                     },
                 });
@@ -1900,6 +1916,7 @@ impl<'a> Lowerer<'a> {
                     target: for_stmt.binding.clone(),
                     value: Rvalue::VariantPayload {
                         scrutinee: Operand::Place(next_value),
+                        variant_name: "Some".to_string(),
                         index: 0,
                     },
                 });
@@ -2042,6 +2059,7 @@ impl<'a> Lowerer<'a> {
                     target: for_stmt.binding.clone(),
                     value: Rvalue::VariantPayload {
                         scrutinee: Operand::Place(next_value),
+                        variant_name: "Some".to_string(),
                         index: 0,
                     },
                 });
@@ -2705,7 +2723,16 @@ impl<'a> Lowerer<'a> {
                         next_positional_field += 1;
                         field_name
                     };
-                    provided.insert(field_name, self.lower_expr(&argument.value));
+                    let value = self.lower_expr(&argument.value);
+                    if let Some(field_decl) = class
+                        .decl
+                        .fields
+                        .iter()
+                        .find(|field| field.name == field_name)
+                    {
+                        self.retarget_operand_place(&value, &lower_type_ref(&field_decl.ty));
+                    }
+                    provided.insert(field_name, value);
                 }
                 let fields = class
                     .decl
@@ -2718,9 +2745,13 @@ impl<'a> Lowerer<'a> {
                                 value: value.clone(),
                             })
                         } else {
-                            field.default.as_ref().map(|default| MirFieldInit {
-                                name: field.name.clone(),
-                                value: self.lower_expr(default),
+                            field.default.as_ref().map(|default| {
+                                let value = self.lower_expr(default);
+                                self.retarget_operand_place(&value, &lower_type_ref(&field.ty));
+                                MirFieldInit {
+                                    name: field.name.clone(),
+                                    value,
+                                }
                             })
                         }
                     })
@@ -2933,7 +2964,19 @@ impl<'a> Lowerer<'a> {
                                     next_positional_field += 1;
                                     field_name
                                 };
-                                provided.insert(field_name, self.lower_expr(&argument.value));
+                                let value = self.lower_expr(&argument.value);
+                                if let Some(field_decl) = class
+                                    .decl
+                                    .fields
+                                    .iter()
+                                    .find(|field_decl| field_decl.name == field_name)
+                                {
+                                    self.retarget_operand_place(
+                                        &value,
+                                        &lower_type_ref(&field_decl.ty),
+                                    );
+                                }
+                                provided.insert(field_name, value);
                             }
                             let fields = class
                                 .decl
@@ -2946,9 +2989,16 @@ impl<'a> Lowerer<'a> {
                                             value: value.clone(),
                                         })
                                     } else {
-                                        field_decl.default.as_ref().map(|default| MirFieldInit {
-                                            name: field_decl.name.clone(),
-                                            value: self.lower_expr(default),
+                                        field_decl.default.as_ref().map(|default| {
+                                            let value = self.lower_expr(default);
+                                            self.retarget_operand_place(
+                                                &value,
+                                                &lower_type_ref(&field_decl.ty),
+                                            );
+                                            MirFieldInit {
+                                                name: field_decl.name.clone(),
+                                                value,
+                                            }
                                         })
                                     }
                                 })
@@ -3220,6 +3270,12 @@ impl<'a> Lowerer<'a> {
             .collect()
     }
 
+    fn retarget_operand_place(&mut self, operand: &Operand, ty: &Type) {
+        if let Operand::Place(place) = operand {
+            self.local_types.insert(place.clone(), ty.clone());
+        }
+    }
+
     fn builtin_enum_variant_type(&self, receiver_type: &Type, field: &str) -> Option<Type> {
         match receiver_type {
             Type::Named(name, args) if name == "Option" && args.len() == 1 => {
@@ -3233,6 +3289,16 @@ impl<'a> Lowerer<'a> {
             }
             _ => None,
         }
+    }
+
+    fn infer_option_some_call_type(&self, value: &Expr) -> Option<Type> {
+        let inner = self.infer_expr_type(value)?;
+        let payload = if inner == Type::Unit {
+            Type::Named("Option".to_string(), vec![Type::named("Unknown")])
+        } else {
+            inner
+        };
+        Some(Type::Named("Option".to_string(), vec![payload]))
     }
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
@@ -3447,13 +3513,8 @@ impl<'a> Lowerer<'a> {
                                 )
                             });
                         }
-                        if name == "Map" {
-                            return explicit_type_args.map(|type_args| {
-                                Type::Named(
-                                    "Map".to_string(),
-                                    type_args.iter().map(lower_type_ref).collect(),
-                                )
-                            });
+                        if name == "Some" && args.len() == 1 {
+                            return self.infer_option_some_call_type(&args[0].value);
                         }
                         if self.resolve_class_info(name).is_some() {
                             return self.infer_class_constructor_type(
@@ -3560,9 +3621,7 @@ impl<'a> Lowerer<'a> {
                         }
                         if let ExprKind::Name(enum_name) = &object.kind {
                             if enum_name == "Option" && field == "Some" && args.len() == 1 {
-                                return self
-                                    .infer_expr_type(&args[0].value)
-                                    .map(|inner| Type::Named("Option".to_string(), vec![inner]));
+                                return self.infer_option_some_call_type(&args[0].value);
                             }
                         }
                         let receiver_type = receiver_type?;
@@ -4039,6 +4098,7 @@ impl<'a> Lowerer<'a> {
                 Type::Named(name, args) if name == "TaskResult" && args.len() == 1 => {
                     return Some(match variant_name {
                         "Ready" => vec![args[0].clone()],
+                        "Error" => vec![Type::named("String")],
                         "TimedOut" | "Cancelled" => Vec::new(),
                         _ => return None,
                     });
@@ -4046,6 +4106,7 @@ impl<'a> Lowerer<'a> {
                 Type::Named(name, args) if name == "WaitAny" && args.len() == 1 => {
                     return Some(match variant_name {
                         "Ready" => vec![Type::named("int32"), args[0].clone()],
+                        "Error" => vec![Type::named("int32"), Type::named("String")],
                         "TimedOut" | "Cancelled" => Vec::new(),
                         _ => return None,
                     });
@@ -4053,6 +4114,7 @@ impl<'a> Lowerer<'a> {
                 Type::Named(name, args) if name == "WaitAll" && args.len() == 1 => {
                     return Some(match variant_name {
                         "Ready" => vec![Type::Named("Vec".to_string(), vec![args[0].clone()])],
+                        "Error" => vec![Type::named("int32"), Type::named("String")],
                         "TimedOut" | "Cancelled" => Vec::new(),
                         _ => return None,
                     });
@@ -4209,6 +4271,13 @@ impl<'a> Lowerer<'a> {
                     .cloned()
                     .unwrap_or_else(|| Type::named("Unknown"))],
             )),
+            ("Queue", "get_or_none") => Some(Type::Named(
+                "Option".to_string(),
+                vec![args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Type::named("Unknown"))],
+            )),
             ("Queue", "put") => Some(Type::Named(
                 "Result".to_string(),
                 vec![
@@ -4240,6 +4309,10 @@ impl<'a> Lowerer<'a> {
             }
             ("Task", "result") => Some(Type::Named(
                 "TaskResult".to_string(),
+                vec![args.first().cloned().unwrap_or(Type::Unit)],
+            )),
+            ("Task", "result_or_none") => Some(Type::Named(
+                "Option".to_string(),
                 vec![args.first().cloned().unwrap_or(Type::Unit)],
             )),
             ("TaskGroup", "start") => Some(Type::Named(
@@ -4569,6 +4642,16 @@ impl<'a> Lowerer<'a> {
                 cancel_before_cleanup,
             });
         }
+    }
+
+    fn active_task_group_place(&self) -> Option<String> {
+        self.with_stack.iter().rev().find_map(|place| {
+            matches!(
+                self.local_types.get(place),
+                Some(Type::Named(name, args)) if name == "TaskGroup" && args.is_empty()
+            )
+            .then(|| place.clone())
+        })
     }
 
     fn terminate(&mut self, terminator: Terminator) {
