@@ -4,6 +4,7 @@ def run_echo() -> Result[None, process.Error]:
     completed = try process.run(["/bin/echo", "aurora process"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)
     try completed.check()
     print(completed.stdout().trim())
+    print(completed.stdout_bytes().len())
     print(completed.stderr().len())
     print(completed.status())
     return Result.Ok(None)

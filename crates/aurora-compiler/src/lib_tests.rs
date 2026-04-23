@@ -1692,7 +1692,7 @@ fn categorized_examples_run_with_expected_output() {
             (
                 "examples/io/process_run.au",
                 EXAMPLE_CASES[45].1,
-                "aurora process\n0\nExitStatus.Exited(0)\n",
+                "aurora process\n15\n0\nExitStatus.Exited(0)\n",
             ),
             (
                 "examples/io/process_pipes.au",

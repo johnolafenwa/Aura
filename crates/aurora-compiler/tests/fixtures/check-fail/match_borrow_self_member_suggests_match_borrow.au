@@ -1,0 +1,13 @@
+class EntryList:
+    entries: Vec[String]
+
+    def has_entries(borrow self) -> bool:
+        match self.entries:
+            case _:
+                return true
+        return false
+
+def main() -> int32:
+    values = EntryList(entries=["a"])
+    print(values.has_entries())
+    return 0

@@ -381,9 +381,10 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
     - `5`
     - `68`
 - `process_run.au`
-  - shell-free `process.run(..., group=true)`, captured stdout/stderr, and `process.Completed.check()`
+  - shell-free `process.run(..., group=true)`, UTF-8/raw captured stdout/stderr, and `process.Completed.check()`
   - prints:
     - `aurora process`
+    - `15`
     - `0`
     - `ExitStatus.Exited(0)`
 - `process_pipes.au`

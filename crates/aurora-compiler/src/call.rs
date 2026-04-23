@@ -628,7 +628,9 @@ pub enum BuiltinMember {
     ProcessCompletedStatus,
     ProcessCompletedSuccess,
     ProcessCompletedStdout,
+    ProcessCompletedStdoutBytes,
     ProcessCompletedStderr,
+    ProcessCompletedStderrBytes,
     ProcessCompletedCheck,
     ProcessSupervisorStart,
     ProcessSupervisorWait,
@@ -801,7 +803,9 @@ impl BuiltinMember {
             ("process.Completed", "status") => Some(Self::ProcessCompletedStatus),
             ("process.Completed", "success") => Some(Self::ProcessCompletedSuccess),
             ("process.Completed", "stdout") => Some(Self::ProcessCompletedStdout),
+            ("process.Completed", "stdout_bytes") => Some(Self::ProcessCompletedStdoutBytes),
             ("process.Completed", "stderr") => Some(Self::ProcessCompletedStderr),
+            ("process.Completed", "stderr_bytes") => Some(Self::ProcessCompletedStderrBytes),
             ("process.Completed", "check") => Some(Self::ProcessCompletedCheck),
             ("process.Supervisor", "start") => Some(Self::ProcessSupervisorStart),
             ("process.Supervisor", "wait") => Some(Self::ProcessSupervisorWait),
@@ -959,7 +963,9 @@ impl BuiltinMember {
             Self::ProcessCompletedStatus => "status",
             Self::ProcessCompletedSuccess => "success",
             Self::ProcessCompletedStdout => "stdout",
+            Self::ProcessCompletedStdoutBytes => "stdout_bytes",
             Self::ProcessCompletedStderr => "stderr",
+            Self::ProcessCompletedStderrBytes => "stderr_bytes",
             Self::ProcessCompletedCheck => "check",
             Self::ProcessSupervisorStart => "start",
             Self::ProcessSupervisorWait => "wait",
@@ -1130,7 +1136,9 @@ impl BuiltinMember {
             Self::ProcessCompletedStatus => "status() -> process.ExitStatus",
             Self::ProcessCompletedSuccess => "success() -> bool",
             Self::ProcessCompletedStdout => "stdout() -> String",
+            Self::ProcessCompletedStdoutBytes => "stdout_bytes() -> Vec[uint8]",
             Self::ProcessCompletedStderr => "stderr() -> String",
+            Self::ProcessCompletedStderrBytes => "stderr_bytes() -> Vec[uint8]",
             Self::ProcessCompletedCheck => "check() -> Result[None, process.Error]",
             Self::ProcessSupervisorStart => "start(name: String, command: Vec[String], cwd: Option[String] = ..., env: Map[String, String] = ..., stdin: process.Stdio = ..., stdout: process.Stdio = ..., stderr: process.Stdio = ..., restart: process.RestartPolicy = ..., backoff: Duration = ..., max_restarts: int32 = ..., group: bool = ...) -> Result[None, process.Error]",
             Self::ProcessSupervisorWait => {
@@ -1348,8 +1356,10 @@ impl BuiltinMember {
             Self::ProcessPipeClose => "Closes the process pipe handle.",
             Self::ProcessCompletedStatus => "Returns the process exit status captured by `process.run(...)`.",
             Self::ProcessCompletedSuccess => "Returns true when the completed process exited with code 0.",
-            Self::ProcessCompletedStdout => "Returns the stdout captured by `process.run(...)`.",
-            Self::ProcessCompletedStderr => "Returns the stderr captured by `process.run(...)`.",
+            Self::ProcessCompletedStdout => "Returns the UTF-8 stdout captured by `process.run(...)`.",
+            Self::ProcessCompletedStdoutBytes => "Returns the raw stdout bytes captured by `process.run(...)`.",
+            Self::ProcessCompletedStderr => "Returns the UTF-8 stderr captured by `process.run(...)`.",
+            Self::ProcessCompletedStderrBytes => "Returns the raw stderr bytes captured by `process.run(...)`.",
             Self::ProcessCompletedCheck => {
                 "Returns `Result.Ok(None)` when the completed process exited successfully, or `Result.Err(process.Error)` for abnormal exits."
             }
@@ -1740,7 +1750,9 @@ impl BuiltinMember {
             | Self::ProcessCompletedStatus
             | Self::ProcessCompletedSuccess
             | Self::ProcessCompletedStdout
+            | Self::ProcessCompletedStdoutBytes
             | Self::ProcessCompletedStderr
+            | Self::ProcessCompletedStderrBytes
             | Self::ProcessCompletedCheck
             | Self::ProcessSupervisorStop
             | Self::ProcessSupervisorIsEmpty

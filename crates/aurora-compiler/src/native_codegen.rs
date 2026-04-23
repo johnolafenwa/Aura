@@ -334,6 +334,8 @@ struct NativeCodegen<'a> {
     process_completed_success: FuncId,
     process_completed_stdout: FuncId,
     process_completed_stderr: FuncId,
+    process_completed_stdout_bytes: FuncId,
+    process_completed_stderr_bytes: FuncId,
     process_completed_check: FuncId,
     process_supervisor_start: FuncId,
     process_supervisor_wait: FuncId,
@@ -570,7 +572,7 @@ impl<'a> NativeCodegen<'a> {
             &mut object,
             runtime_init => ("aurora_direct_runtime_init", [types::I64, types::I64, types::I64, types::I64], None),
             run_root => ("aurora_direct_run_root", [types::I64], Some(types::I32)),
-            enter_call => ("aurora_direct_enter_call", [], None),
+            enter_call => ("aurora_direct_enter_call", [types::I64, types::I64, types::I64, types::I64], None),
             exit_call => ("aurora_direct_exit_call", [], None),
             print_i64 => ("aurora_direct_print_i64", [types::I64], None),
             print_f64 => ("aurora_direct_print_f64", [types::F64], None),
@@ -741,6 +743,8 @@ impl<'a> NativeCodegen<'a> {
             process_completed_success => ("aurora_direct_process_completed_success", [types::I64], Some(types::I64)),
             process_completed_stdout => ("aurora_direct_process_completed_stdout", [types::I64], Some(types::I64)),
             process_completed_stderr => ("aurora_direct_process_completed_stderr", [types::I64], Some(types::I64)),
+            process_completed_stdout_bytes => ("aurora_direct_process_completed_stdout_bytes", [types::I64], Some(types::I64)),
+            process_completed_stderr_bytes => ("aurora_direct_process_completed_stderr_bytes", [types::I64], Some(types::I64)),
             process_completed_check => ("aurora_direct_process_completed_check", [types::I64], Some(types::I64)),
             process_supervisor_start => ("aurora_direct_process_supervisor_start", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             process_supervisor_wait => ("aurora_direct_process_supervisor_wait", [types::I64, types::I64], Some(types::I64)),
@@ -1076,6 +1080,8 @@ impl<'a> NativeCodegen<'a> {
             process_completed_success,
             process_completed_stdout,
             process_completed_stderr,
+            process_completed_stdout_bytes,
+            process_completed_stderr_bytes,
             process_completed_check,
             process_supervisor_start,
             process_supervisor_wait,
@@ -1230,7 +1236,19 @@ impl<'a> NativeCodegen<'a> {
         let exit_call = self
             .object
             .declare_func_in_func(self.exit_call, builder.func);
-        builder.ins().call(enter_call, &[]);
+        let line = builder.ins().iconst(types::I64, function.span.line as i64);
+        let column = builder
+            .ins()
+            .iconst(types::I64, function.span.column as i64);
+        let (function_ptr, function_len) = declare_string_constant(
+            &mut self.object,
+            &mut self.string_data,
+            &mut builder,
+            function.name.as_bytes(),
+        )?;
+        builder
+            .ins()
+            .call(enter_call, &[line, column, function_ptr, function_len]);
 
         let mut variable_index = 0usize;
         let mut variables = HashMap::new();
@@ -1880,6 +1898,12 @@ impl<'a> NativeCodegen<'a> {
         let process_completed_stderr = self
             .object
             .declare_func_in_func(self.process_completed_stderr, builder.func);
+        let process_completed_stdout_bytes = self
+            .object
+            .declare_func_in_func(self.process_completed_stdout_bytes, builder.func);
+        let process_completed_stderr_bytes = self
+            .object
+            .declare_func_in_func(self.process_completed_stderr_bytes, builder.func);
         let process_completed_check = self
             .object
             .declare_func_in_func(self.process_completed_check, builder.func);
@@ -2337,6 +2361,8 @@ impl<'a> NativeCodegen<'a> {
             process_completed_success,
             process_completed_stdout,
             process_completed_stderr,
+            process_completed_stdout_bytes,
+            process_completed_stderr_bytes,
             process_completed_check,
             process_supervisor_start,
             process_supervisor_wait,
@@ -2805,6 +2831,8 @@ struct FunctionCompiler<'a> {
     process_completed_success: cranelift_codegen::ir::FuncRef,
     process_completed_stdout: cranelift_codegen::ir::FuncRef,
     process_completed_stderr: cranelift_codegen::ir::FuncRef,
+    process_completed_stdout_bytes: cranelift_codegen::ir::FuncRef,
+    process_completed_stderr_bytes: cranelift_codegen::ir::FuncRef,
     process_completed_check: cranelift_codegen::ir::FuncRef,
     process_supervisor_start: cranelift_codegen::ir::FuncRef,
     process_supervisor_wait: cranelift_codegen::ir::FuncRef,
@@ -3435,7 +3463,7 @@ impl<'a> FunctionCompiler<'a> {
                 .fcvt_from_sint(target_kind.signature_type(), source),
             (kind, ScalarKind::Int32) if kind.is_float() => {
                 let converted = self.builder.ins().fcvt_to_sint_sat(types::I64, source);
-                self.emit_int32_bounds_check(converted, span);
+                self.emit_int32_bounds_check(converted, span)?;
                 converted
             }
             (lhs, rhs) if lhs.is_float() && rhs.is_float() => source,
@@ -3515,14 +3543,14 @@ impl<'a> FunctionCompiler<'a> {
                 ty,
             },
             BinaryOp::Div => {
-                self.emit_int_division_guard(right, span);
+                self.emit_int_division_guard(right, span)?;
                 ValueRef {
                     values: vec![self.builder.ins().sdiv(left, right)],
                     ty,
                 }
             }
             BinaryOp::Mod => {
-                self.emit_int_division_guard(right, span);
+                self.emit_int_division_guard(right, span)?;
                 ValueRef {
                     values: vec![self.builder.ins().srem(left, right)],
                     ty,
@@ -3545,7 +3573,7 @@ impl<'a> FunctionCompiler<'a> {
         };
 
         if matches!(value.ty.scalar_kind(), Some(ScalarKind::Int32)) {
-            self.emit_int32_bounds_check(value.values[0], span);
+            self.emit_int32_bounds_check(value.values[0], span)?;
         }
         Ok(value)
     }
@@ -3573,7 +3601,7 @@ impl<'a> FunctionCompiler<'a> {
                 ty,
             }),
             BinaryOp::Div => {
-                self.emit_float_division_guard(right, span);
+                self.emit_float_division_guard(right, span)?;
                 Ok(ValueRef {
                     values: vec![self.builder.ins().fdiv(left, right)],
                     ty,
@@ -3653,25 +3681,38 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn emit_int_division_guard(&mut self, divisor: Value, span: Option<Span>) {
+    fn emit_int_division_guard(
+        &mut self,
+        divisor: Value,
+        span: Option<Span>,
+    ) -> std::result::Result<(), String> {
         let zero = self.builder.ins().iconst(types::I64, 0);
         let is_zero = self.builder.ins().icmp(IntCC::Equal, divisor, zero);
-        self.emit_division_failure_branch(is_zero, span);
+        self.emit_division_failure_branch(is_zero, span)
     }
 
-    fn emit_float_division_guard(&mut self, divisor: Value, span: Option<Span>) {
+    fn emit_float_division_guard(
+        &mut self,
+        divisor: Value,
+        span: Option<Span>,
+    ) -> std::result::Result<(), String> {
         let zero = self.builder.ins().f64const(Ieee64::with_float(0.0));
         let is_zero = self.builder.ins().fcmp(FloatCC::Equal, divisor, zero);
-        self.emit_division_failure_branch(is_zero, span);
+        self.emit_division_failure_branch(is_zero, span)
     }
 
-    fn emit_division_failure_branch(&mut self, is_zero: Value, span: Option<Span>) {
+    fn emit_division_failure_branch(
+        &mut self,
+        is_zero: Value,
+        span: Option<Span>,
+    ) -> std::result::Result<(), String> {
         let fail_block = self.builder.create_block();
         let continue_block = self.builder.create_block();
         self.builder
             .ins()
             .brif(is_zero, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
+        self.emit_pending_cleanups(true)?;
         let (line, column) = self.span_values(span);
         self.builder
             .ins()
@@ -3680,6 +3721,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
         self.builder.seal_block(continue_block);
+        Ok(())
     }
 
     fn compile_call(
@@ -4870,7 +4912,7 @@ impl<'a> FunctionCompiler<'a> {
         if &value.ty == target {
             let value = self.normalize_scalar_value(value)?;
             if matches!(target.scalar_kind(), Some(ScalarKind::Int32)) {
-                self.emit_int32_bounds_check(value.values[0], None);
+                self.emit_int32_bounds_check(value.values[0], None)?;
             }
             return Ok(value);
         }
@@ -4953,7 +4995,7 @@ impl<'a> FunctionCompiler<'a> {
                 DirectType::Opaque(_) => unreachable!("opaque target handled earlier"),
             };
             if matches!(target.scalar_kind(), Some(ScalarKind::Int32)) {
-                self.emit_int32_bounds_check(result.values[0], None);
+                self.emit_int32_bounds_check(result.values[0], None)?;
             }
             return Ok(result);
         }
@@ -4998,7 +5040,11 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn emit_int32_bounds_check(&mut self, value: Value, span: Option<Span>) {
+    fn emit_int32_bounds_check(
+        &mut self,
+        value: Value,
+        span: Option<Span>,
+    ) -> std::result::Result<(), String> {
         let min = self.builder.ins().iconst(types::I64, i32::MIN as i64);
         let max = self.builder.ins().iconst(types::I64, i32::MAX as i64);
         let below = self.builder.ins().icmp(IntCC::SignedLessThan, value, min);
@@ -5013,6 +5059,7 @@ impl<'a> FunctionCompiler<'a> {
             .ins()
             .brif(overflow, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
+        self.emit_pending_cleanups(true)?;
         let (line, column) = self.span_values(span);
         self.builder
             .ins()
@@ -5021,6 +5068,40 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
         self.builder.seal_block(continue_block);
+        Ok(())
+    }
+
+    fn emit_vec_index_failure_guard(
+        &mut self,
+        object: Value,
+        index: Value,
+        line: Value,
+        column: Value,
+    ) -> std::result::Result<(), String> {
+        let len_inst = self.builder.ins().call(self.vec_len, &[object]);
+        let len = self.builder.inst_results(len_inst)[0];
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let below = self.builder.ins().icmp(IntCC::SignedLessThan, index, zero);
+        let above = self
+            .builder
+            .ins()
+            .icmp(IntCC::SignedGreaterThanOrEqual, index, len);
+        let out_of_bounds = self.builder.ins().bor(below, above);
+        let fail_block = self.builder.create_block();
+        let continue_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(out_of_bounds, fail_block, &[], continue_block, &[]);
+        self.builder.switch_to_block(fail_block);
+        self.emit_pending_cleanups(true)?;
+        self.builder
+            .ins()
+            .call(self.vec_index, &[object, index, line, column]);
+        self.builder.ins().trap(TrapCode::unwrap_user(2));
+        self.builder.seal_block(fail_block);
+        self.builder.switch_to_block(continue_block);
+        self.builder.seal_block(continue_block);
+        Ok(())
     }
 
     fn as_bool_value(&mut self, value: ValueRef) -> std::result::Result<Value, String> {
@@ -5686,7 +5767,7 @@ impl<'a> FunctionCompiler<'a> {
                             .ins()
                             .call(self.string_len, &[object.values[0]]);
                         let len = self.builder.inst_results(inst)[0];
-                        self.emit_int32_bounds_check(len, None);
+                        self.emit_int32_bounds_check(len, None)?;
                         Ok(ValueRef {
                             values: vec![len],
                             ty: DirectType::Scalar(ScalarKind::Int32),
@@ -5886,7 +5967,7 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         let inst = self.builder.ins().call(self.vec_len, &[object.values[0]]);
                         let len = self.builder.inst_results(inst)[0];
-                        self.emit_int32_bounds_check(len, None);
+                        self.emit_int32_bounds_check(len, None)?;
                         Ok(ValueRef {
                             values: vec![len],
                             ty: DirectType::Scalar(ScalarKind::Int32),
@@ -6008,6 +6089,12 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_column = self.load_operand(&column_arg.value)?;
                         let column = self
                             .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
+                        self.emit_vec_index_failure_guard(
+                            object.values[0],
+                            index.values[0],
+                            line.values[0],
+                            column.values[0],
+                        )?;
                         let inst = self.builder.ins().call(
                             self.vec_index,
                             &[
@@ -6071,6 +6158,12 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_column = self.load_operand(&column_arg.value)?;
                         let column = self
                             .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
+                        self.emit_vec_index_failure_guard(
+                            object.values[0],
+                            index.values[0],
+                            line.values[0],
+                            column.values[0],
+                        )?;
                         let _ = self.builder.ins().call(
                             self.vec_set_index_in_place,
                             &[
@@ -6254,7 +6347,7 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         let inst = self.builder.ins().call(self.map_len, &[object.values[0]]);
                         let len = self.builder.inst_results(inst)[0];
-                        self.emit_int32_bounds_check(len, None);
+                        self.emit_int32_bounds_check(len, None)?;
                         Ok(ValueRef {
                             values: vec![len],
                             ty: DirectType::Scalar(ScalarKind::Int32),
@@ -6521,7 +6614,7 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         let inst = self.builder.ins().call(self.set_len, &[object.values[0]]);
                         let len = self.builder.inst_results(inst)[0];
-                        self.emit_int32_bounds_check(len, None);
+                        self.emit_int32_bounds_check(len, None)?;
                         Ok(ValueRef {
                             values: vec![len],
                             ty: DirectType::Scalar(ScalarKind::Int32),
@@ -7143,6 +7236,38 @@ impl<'a> FunctionCompiler<'a> {
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::named("String"),
+                        ))
+                    }
+                    "stdout_bytes" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `stdout_bytes()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_completed_stdout_bytes, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                        ))
+                    }
+                    "stderr_bytes" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected `stderr_bytes()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.process_completed_stderr_bytes, &[object.values[0]]);
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
                         ))
                     }
                     "check" => {
@@ -8125,7 +8250,7 @@ impl<'a> FunctionCompiler<'a> {
                             .ins()
                             .call(self.http_response_status, &[object.values[0]]);
                         let status = self.builder.inst_results(inst)[0];
-                        self.emit_int32_bounds_check(status, None);
+                        self.emit_int32_bounds_check(status, None)?;
                         Ok(ValueRef {
                             values: vec![status],
                             ty: DirectType::Scalar(ScalarKind::Int32),
@@ -9015,6 +9140,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         if let Some(else_block) = current_fallthrough {
             self.builder.switch_to_block(else_block);
+            self.emit_pending_cleanups(true)?;
             self.builder.ins().trap(TrapCode::unwrap_user(1));
             self.builder.seal_block(else_block);
         }
@@ -10522,6 +10648,12 @@ fn builtin_opaque_member_return_type(
         ("process.Completed", "success") => Some(DirectType::Scalar(ScalarKind::Bool)),
         ("process.Completed", "stdout") | ("process.Completed", "stderr") => {
             direct_type(&Type::named("String"), classes)
+        }
+        ("process.Completed", "stdout_bytes") | ("process.Completed", "stderr_bytes") => {
+            direct_type(
+                &Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                classes,
+            )
         }
         ("process.Supervisor", "start") | ("process.Supervisor", "stop") => direct_type(
             &Type::Named(

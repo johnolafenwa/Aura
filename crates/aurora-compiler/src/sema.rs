@@ -2759,6 +2759,35 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn consume_match_scrutinee_expr(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let ungrouped = match &expr.kind {
+            ExprKind::Group(inner) => inner.as_ref(),
+            _ => expr,
+        };
+        if let ExprKind::Member { object, field } = &ungrouped.kind {
+            let object_ty = self.type_of_member_object_expr(object, locals)?;
+            let member_ty = self.resolve_member_type(&object_ty, field, ungrouped.span)?;
+            if !self.is_copy_type(&member_ty) {
+                if let Some(root) = self.borrowed_root_binding_name(object, locals) {
+                    return Err(Diagnostic::at(
+                        ungrouped.span,
+                        format!(
+                            "cannot move non-copy field `{}` out of borrowed value `{}` in match scrutinee; use `match borrow {}:` to inspect it by shared borrow",
+                            field,
+                            root,
+                            self.render_place_expr(ungrouped)
+                        ),
+                    ));
+                }
+            }
+        }
+        self.consume_value_expr(expr, locals)
+    }
+
     fn merge_control_flow_moves(
         &self,
         locals: &mut HashMap<String, LocalBinding>,
@@ -4260,6 +4289,13 @@ impl<'a> FunctionChecker<'a> {
                 Ok(Type::Named("Set".to_string(), vec![element_ty]))
             }
             ExprKind::Map(entries) => {
+                if entries.is_empty() {
+                    if let Some(Type::Named(name, args)) = expected {
+                        if name == "Set" && args.len() == 1 {
+                            return Ok(Type::Named("Set".to_string(), vec![args[0].clone()]));
+                        }
+                    }
+                }
                 let mut key_ty = expected
                     .and_then(map_key_value_types)
                     .map(|(key_ty, _)| key_ty.clone());
@@ -7555,6 +7591,10 @@ impl<'a> FunctionChecker<'a> {
                                 | BuiltinMember::ProcessCompletedStderr => {
                                     Ok(Type::named("String"))
                                 }
+                                BuiltinMember::ProcessCompletedStdoutBytes
+                                | BuiltinMember::ProcessCompletedStderrBytes => {
+                                    Ok(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
+                                }
                                 BuiltinMember::ProcessCompletedCheck => Ok(Type::Named(
                                     "Result".to_string(),
                                     vec![Type::Unit, crate::builtin_modules::process_error_type()],
@@ -8790,7 +8830,7 @@ impl<'a> FunctionChecker<'a> {
         let result = (|| {
             let scrutinee_ty = self.type_of_expr(&match_stmt.scrutinee, locals)?;
             if match_stmt.borrow_mode.is_none() && !self.is_copy_type(&scrutinee_ty) {
-                self.consume_value_expr(&match_stmt.scrutinee, locals)?;
+                self.consume_match_scrutinee_expr(&match_stmt.scrutinee, locals)?;
             }
 
             if match_stmt.arms.is_empty() {
@@ -9302,7 +9342,7 @@ impl<'a> FunctionChecker<'a> {
         let result = (|| {
             let scrutinee_ty = self.type_of_expr(scrutinee, locals)?;
             if borrow_mode.is_none() && !self.is_copy_type(&scrutinee_ty) {
-                self.consume_value_expr(scrutinee, locals)?;
+                self.consume_match_scrutinee_expr(scrutinee, locals)?;
             }
             if arms.is_empty() {
                 return Err(Diagnostic::at(

@@ -1251,6 +1251,8 @@ test("compiler bridge includes builtin process module and resource members", asy
     assert.ok(completedNames.has("success"));
     assert.ok(completedNames.has("stdout"));
     assert.ok(completedNames.has("stderr"));
+    assert.ok(completedNames.has("stdout_bytes"));
+    assert.ok(completedNames.has("stderr_bytes"));
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

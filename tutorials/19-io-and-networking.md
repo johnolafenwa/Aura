@@ -158,8 +158,10 @@ When `group=true`, Aurora starts the child in its own process group and applies 
 
 - `status()`
 - `success()`
-- `stdout()`
-- `stderr()`
+- `stdout()` for UTF-8 text
+- `stderr()` for UTF-8 text
+- `stdout_bytes()` for raw bytes
+- `stderr_bytes()` for raw bytes
 - `check()`
 
 `process.supervisor()` returns `process.Supervisor`. `process.Supervisor` works with `with` and exposes:
@@ -191,6 +193,7 @@ def run_echo() -> Result[None, process.Error]:
     completed = try process.run(["/bin/echo", "aurora process"], stdout=process.pipe(), stderr=process.pipe(), timeout=1s, group=true)
     try completed.check()
     print(completed.stdout().trim())
+    print(completed.stdout_bytes().len())
     return Result.Ok(None)
 ```
 

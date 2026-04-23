@@ -4896,6 +4896,151 @@ def main() -> int32:
 }
 
 #[test]
+fn queue_iteration_exits_when_task_group_producers_return_cleanly() {
+    let source = r#"
+def producer(q: Queue[int32]):
+    q.put(1)
+    q.put(2)
+
+def main() -> int32:
+    q: Queue[int32] = Queue[int32]()
+    with TaskGroup() as g:
+        g.start_soon(producer, q)
+        for v in q:
+            print(v)
+        print("loop done")
+    print("scope done")
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-queue-iteration-clean-return",
+        source,
+        std::time::Duration::from_secs(15),
+        "1\n2\nloop done\nscope done\n",
+    );
+}
+
+#[test]
+fn direct_backend_unwinds_with_resources_before_runtime_trap() {
+    let source = r#"
+class Resource:
+    name: String
+
+    def close(borrow mut self):
+        print("close " + self.name)
+
+def main() -> int32:
+    with a = Resource(name="A"):
+        with b = Resource(name="B"):
+            values: Vec[int32] = []
+            print(values[5])
+    return 0
+"#;
+
+    let (_, run) = build_and_run_direct_source("aurora-direct-with-trap-cleanup", source);
+    assert!(
+        !run.status.success(),
+        "direct binary should fail on vector OOB"
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "close B\nclose A\n");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("vector index `5` is out of bounds"),
+        "stderr should include vector OOB diagnostic, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
+fn direct_backend_recursion_limit_uses_source_diagnostic() {
+    let source = r#"
+def recurse(value: int32) -> int32:
+    return recurse(value + 1)
+
+def main() -> int32:
+    return recurse(0)
+"#;
+
+    let (_, run) = build_and_run_direct_source("aurora-direct-recursion-diagnostic", source);
+    assert!(
+        !run.status.success(),
+        "direct binary should fail on recursion limit"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("maximum call depth") && stderr.contains("while calling `recurse`"),
+        "stderr should describe the Aurora recursion limit, stderr was:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("-->") && !stderr.contains("direct backend"),
+        "stderr should render with source context and avoid backend-specific wording, stderr was:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn run_flushes_stdout_before_sigkill() {
+    let source = r#"
+def main() -> int32:
+    print("before")
+    while true:
+        sleep(1s)
+    return 0
+"#;
+
+    let (temp, source_path) = write_temp_source("aurora-run-sigkill-flush", source);
+    let mut child = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura run");
+
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    child.kill().expect("failed to kill hung aura run");
+    let output = child
+        .wait_with_output()
+        .expect("failed to collect killed aura run output");
+    drop(temp);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("before\n"),
+        "aura run should flush stdout as prints happen, stdout was:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn process_completed_exposes_binary_stdout_bytes_in_run_and_direct_backend() {
+    let source = r#"import process
+
+def run_binary_stdout() -> Result[None, process.Error]:
+    completed = try process.run(["/usr/bin/env", "python3", "-c", "import sys; sys.stdout.buffer.write(bytes([255, 0, 65]))"], stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
+    bytes = completed.stdout_bytes()
+    print(bytes.len())
+    print(bytes[0])
+    print(bytes[1])
+    print(bytes[2])
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run_binary_stdout():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-process-completed-stdout-bytes",
+        source,
+        "3\n255\n0\n65\n",
+    );
+}
+
+#[test]
 fn wait_any_without_tasks_times_out_immediately() {
     let source = r#"def main() -> int32:
     tasks = Vec[Task[int32]]()

@@ -40,7 +40,16 @@ use crate::runtime_value::{
 };
 use crate::sema::{substitute_type, Type};
 
+pub type StdoutSink = Arc<dyn Fn(&str) + Send + Sync + 'static>;
+
 pub fn run(module: &MirModule) -> Result<RunOutput> {
+    run_with_stdout_sink(module, None)
+}
+
+pub fn run_with_stdout_sink(
+    module: &MirModule,
+    stdout_sink: Option<StdoutSink>,
+) -> Result<RunOutput> {
     let module = module.clone();
     thread::Builder::new()
         .stack_size(MIR_RUNTIME_STACK_SIZE)
@@ -48,15 +57,24 @@ pub fn run(module: &MirModule) -> Result<RunOutput> {
             let result = panic::catch_unwind(AssertUnwindSafe(move || {
                 let stdout = Arc::new(Mutex::new(String::new()));
                 let task_stdout = stdout.clone();
+                let task_stdout_sink = stdout_sink.clone();
                 let value_result = if module_uses_lightweight_tasks(&module) {
                     run_lightweight_root_task(move || {
-                        let mut runtime =
-                            MirRuntime::new(module, task_stdout, CancellationContext::default());
+                        let mut runtime = MirRuntime::new_with_stdout_sink(
+                            module,
+                            task_stdout,
+                            task_stdout_sink,
+                            CancellationContext::default(),
+                        );
                         runtime.run_main()
                     })
                 } else {
-                    let mut runtime =
-                        MirRuntime::new(module, task_stdout, CancellationContext::default());
+                    let mut runtime = MirRuntime::new_with_stdout_sink(
+                        module,
+                        task_stdout,
+                        task_stdout_sink,
+                        CancellationContext::default(),
+                    );
                     runtime.run_main()
                 };
                 let rendered_stdout = lock_stdout(&stdout).clone();
@@ -327,6 +345,7 @@ struct MirRuntime {
     classes: HashMap<String, MirClass>,
     trait_impls: Vec<MirTraitImpl>,
     stdout: Arc<Mutex<String>>,
+    stdout_sink: Option<StdoutSink>,
     cancellation: CancellationContext,
     call_depth: usize,
     return_type_stack: Vec<Type>,
@@ -527,9 +546,19 @@ fn write_nested_place(
 }
 
 impl MirRuntime {
+    #[cfg(test)]
     fn new(
         module: MirModule,
         stdout: Arc<Mutex<String>>,
+        cancellation: CancellationContext,
+    ) -> Self {
+        Self::new_with_stdout_sink(module, stdout, None, cancellation)
+    }
+
+    fn new_with_stdout_sink(
+        module: MirModule,
+        stdout: Arc<Mutex<String>>,
+        stdout_sink: Option<StdoutSink>,
         cancellation: CancellationContext,
     ) -> Self {
         let mut functions = HashMap::new();
@@ -547,6 +576,7 @@ impl MirRuntime {
             classes,
             trait_impls,
             stdout,
+            stdout_sink,
             cancellation,
             call_depth: 0,
             return_type_stack: Vec::new(),
@@ -1587,10 +1617,13 @@ impl MirRuntime {
                 if name == "print" {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(&["value"], values)?;
-                    let rendered = bound[0].value.render();
+                    let rendered = format!("{}\n", bound[0].value.render());
                     let mut stdout = lock_stdout(&self.stdout);
                     stdout.push_str(&rendered);
-                    stdout.push('\n');
+                    drop(stdout);
+                    if let Some(sink) = &self.stdout_sink {
+                        sink(&rendered);
+                    }
                     return Ok(Value::Unit);
                 }
 
@@ -2266,9 +2299,11 @@ impl MirRuntime {
 
         let module = (*self.module).clone();
         let stdout = self.stdout.clone();
+        let stdout_sink = self.stdout_sink.clone();
         let function_for_task = function.clone();
         let task = spawn_lightweight_task(move || {
-            let mut runtime = MirRuntime::new(module, stdout, cancellation);
+            let mut runtime =
+                MirRuntime::new_with_stdout_sink(module, stdout, stdout_sink, cancellation);
             runtime
                 .call_function(&function_for_task, None, bound_args)
                 .map(|outcome| outcome.value)
@@ -3434,12 +3469,14 @@ impl MirRuntime {
                     .stdout()
                     .map(|pipe| {
                         let cancellation = self.cancellation.clone();
-                        spawn_lightweight_task(move || match pipe.read_all(Some(&cancellation)) {
-                            Ok(text) => Ok(Value::String(text)),
-                            Err(error) => Err(Diagnostic::new(format!(
-                                "process stdout capture failed: {}",
-                                error
-                            ))),
+                        spawn_lightweight_task(move || {
+                            match pipe.read_all_bytes(Some(&cancellation)) {
+                                Ok(bytes) => Ok(bytes_vec_value(bytes)),
+                                Err(error) => Err(Diagnostic::new(format!(
+                                    "process stdout capture failed: {}",
+                                    error
+                                ))),
+                            }
                         })
                     })
                     .transpose()?;
@@ -3447,12 +3484,14 @@ impl MirRuntime {
                     .stderr()
                     .map(|pipe| {
                         let cancellation = self.cancellation.clone();
-                        spawn_lightweight_task(move || match pipe.read_all(Some(&cancellation)) {
-                            Ok(text) => Ok(Value::String(text)),
-                            Err(error) => Err(Diagnostic::new(format!(
-                                "process stderr capture failed: {}",
-                                error
-                            ))),
+                        spawn_lightweight_task(move || {
+                            match pipe.read_all_bytes(Some(&cancellation)) {
+                                Ok(bytes) => Ok(bytes_vec_value(bytes)),
+                                Err(error) => Err(Diagnostic::new(format!(
+                                    "process stderr capture failed: {}",
+                                    error
+                                ))),
+                            }
                         })
                     })
                     .transpose()?;
@@ -3861,14 +3900,37 @@ impl MirRuntime {
         }
     }
 
-    fn await_process_capture_task(&self, task: Option<TaskValue>, label: &str) -> Result<String> {
+    fn await_process_capture_task(&self, task: Option<TaskValue>, label: &str) -> Result<Vec<u8>> {
         let Some(task) = task else {
-            return Ok(String::new());
+            return Ok(Vec::new());
         };
         match task.wait_result_with_cancellation(None, Some(&self.cancellation)) {
-            TaskWaitStatus::Ready(Ok(Value::String(text))) => Ok(text),
+            TaskWaitStatus::Ready(Ok(Value::Vec(vector)))
+                if vector.element_type == Type::named("uint8") =>
+            {
+                vector
+                    .elements
+                    .into_iter()
+                    .map(|value| match value {
+                        Value::Int(value) => value
+                            .as_i128()
+                            .and_then(|value| u8::try_from(value).ok())
+                            .ok_or_else(|| {
+                                Diagnostic::new(format!(
+                                    "process {} capture returned a non-byte integer",
+                                    label
+                                ))
+                            }),
+                        other => Err(Diagnostic::new(format!(
+                            "process {} capture returned `{}` inside `Vec[uint8]`",
+                            label,
+                            other.render()
+                        ))),
+                    })
+                    .collect()
+            }
             TaskWaitStatus::Ready(Ok(other)) => Err(Diagnostic::new(format!(
-                "process {} capture returned `{}` instead of `String`",
+                "process {} capture returned `{}` instead of `Vec[uint8]`",
                 label,
                 other.render()
             ))),
@@ -4135,11 +4197,25 @@ impl MirRuntime {
             }
             "stdout" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
-                Ok(Value::String(completed.stdout()))
+                completed
+                    .stdout()
+                    .map(Value::String)
+                    .map_err(|error| Diagnostic::new(error.to_string()))
             }
             "stderr" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
-                Ok(Value::String(completed.stderr()))
+                completed
+                    .stderr()
+                    .map(Value::String)
+                    .map_err(|error| Diagnostic::new(error.to_string()))
+            }
+            "stdout_bytes" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(bytes_vec_value(completed.stdout_bytes()))
+            }
+            "stderr_bytes" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                Ok(bytes_vec_value(completed.stderr_bytes()))
             }
             "check" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;

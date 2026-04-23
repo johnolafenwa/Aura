@@ -1769,6 +1769,10 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::ProcessCompletedStdout | BuiltinMember::ProcessCompletedStderr => {
                     Some(Type::named("String"))
                 }
+                BuiltinMember::ProcessCompletedStdoutBytes
+                | BuiltinMember::ProcessCompletedStderrBytes => {
+                    Some(Type::Named("Vec".to_string(), vec![Type::named("uint8")]))
+                }
                 BuiltinMember::ProcessCompletedCheck => Some(Type::Named(
                     "Result".to_string(),
                     vec![
@@ -3311,7 +3315,9 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::ProcessCompletedStatus,
         BuiltinMember::ProcessCompletedSuccess,
         BuiltinMember::ProcessCompletedStdout,
+        BuiltinMember::ProcessCompletedStdoutBytes,
         BuiltinMember::ProcessCompletedStderr,
+        BuiltinMember::ProcessCompletedStderrBytes,
         BuiltinMember::ProcessCompletedCheck,
         BuiltinMember::FloatSqrt,
         BuiltinMember::StringLen,

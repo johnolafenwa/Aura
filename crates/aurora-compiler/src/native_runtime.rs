@@ -528,14 +528,37 @@ fn process_error_from_io(error: io::Error) -> Value {
     }
 }
 
-fn await_process_capture_task(task: Option<TaskValue>, label: &str) -> String {
+fn await_process_capture_task(task: Option<TaskValue>, label: &str) -> Vec<u8> {
     let Some(task) = task else {
-        return String::new();
+        return Vec::new();
     };
     match task.wait_result_with_cancellation_observed(None, Some(&current_cancellation())) {
-        TaskWaitStatus::Ready(Ok(Value::String(text))) => text,
+        TaskWaitStatus::Ready(Ok(Value::Vec(vector)))
+            if vector.element_type == Type::named("uint8") =>
+        {
+            vector
+                .elements
+                .into_iter()
+                .map(|value| match value {
+                    Value::Int(value) => value
+                        .as_i128()
+                        .and_then(|value| u8::try_from(value).ok())
+                        .unwrap_or_else(|| {
+                            runtime_error(format!(
+                                "process {} capture returned a non-byte integer",
+                                label
+                            ))
+                        }),
+                    other => runtime_error(format!(
+                        "process {} capture returned `{}` inside `Vec[uint8]`",
+                        label,
+                        other.render()
+                    )),
+                })
+                .collect()
+        }
         TaskWaitStatus::Ready(Ok(other)) => runtime_error(format!(
-            "process {} capture returned `{}` instead of `String`",
+            "process {} capture returned `{}` instead of `Vec[uint8]`",
             label,
             other.render()
         )),
@@ -926,15 +949,25 @@ pub unsafe extern "C-unwind" fn aurora_direct_run_root(thunk_ptr: i64) -> i32 {
 }
 
 #[no_mangle]
-pub unsafe extern "C-unwind" fn aurora_direct_enter_call() {
+pub unsafe extern "C-unwind" fn aurora_direct_enter_call(
+    line: i64,
+    column: i64,
+    function_ptr: *const u8,
+    function_len: usize,
+) {
     task_runtime_boundary(|| {
         DIRECT_CALL_DEPTH.with(|slot| {
             let depth = slot.get();
             if depth >= DIRECT_MAX_CALL_DEPTH {
-                runtime_error(format!(
-                    "maximum call depth of {} exceeded in the direct backend",
-                    DIRECT_MAX_CALL_DEPTH
-                ));
+                let function = decode_bytes(function_ptr, function_len);
+                let message = format!(
+                    "maximum call depth of {} exceeded while calling `{}`",
+                    DIRECT_MAX_CALL_DEPTH, function
+                );
+                if line > 0 && column > 0 {
+                    runtime_error_at(Span::new(line as usize, column as usize), message);
+                }
+                runtime_error(message);
             }
             slot.set(depth + 1);
         });
@@ -3971,8 +4004,8 @@ pub extern "C-unwind" fn aurora_direct_process_run(
             .map(|pipe| {
                 let capture_cancellation = cancellation.clone();
                 spawn_lightweight_task_with_cancellation(capture_cancellation.clone(), move || {
-                    match pipe.read_all(Some(&capture_cancellation)) {
-                        Ok(text) => Ok(Value::String(text)),
+                    match pipe.read_all_bytes(Some(&capture_cancellation)) {
+                        Ok(bytes) => Ok(bytes_vec_value(bytes)),
                         Err(error) => Err(Diagnostic::new(format!(
                             "process stdout capture failed: {}",
                             error
@@ -3987,8 +4020,8 @@ pub extern "C-unwind" fn aurora_direct_process_run(
             .map(|pipe| {
                 let capture_cancellation = cancellation.clone();
                 spawn_lightweight_task_with_cancellation(capture_cancellation.clone(), move || {
-                    match pipe.read_all(Some(&capture_cancellation)) {
-                        Ok(text) => Ok(Value::String(text)),
+                    match pipe.read_all_bytes(Some(&capture_cancellation)) {
+                        Ok(bytes) => Ok(bytes_vec_value(bytes)),
                         Err(error) => Err(Diagnostic::new(format!(
                             "process stderr capture failed: {}",
                             error
@@ -4382,7 +4415,10 @@ pub extern "C-unwind" fn aurora_direct_process_completed_stdout(
     completed: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(completed) } {
-        Value::ProcessCompleted(completed) => boxed_value(Value::String(completed.stdout())),
+        Value::ProcessCompleted(completed) => match completed.stdout() {
+            Ok(stdout) => boxed_value(Value::String(stdout)),
+            Err(error) => runtime_error(error.to_string()),
+        },
         other => runtime_error(format!(
             "expected `process.Completed`, found `{}`",
             value_type_name(other)
@@ -4395,7 +4431,40 @@ pub extern "C-unwind" fn aurora_direct_process_completed_stderr(
     completed: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(completed) } {
-        Value::ProcessCompleted(completed) => boxed_value(Value::String(completed.stderr())),
+        Value::ProcessCompleted(completed) => match completed.stderr() {
+            Ok(stderr) => boxed_value(Value::String(stderr)),
+            Err(error) => runtime_error(error.to_string()),
+        },
+        other => runtime_error(format!(
+            "expected `process.Completed`, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_process_completed_stdout_bytes(
+    completed: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(completed) } {
+        Value::ProcessCompleted(completed) => {
+            boxed_value(bytes_vec_value(completed.stdout_bytes()))
+        }
+        other => runtime_error(format!(
+            "expected `process.Completed`, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_process_completed_stderr_bytes(
+    completed: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(completed) } {
+        Value::ProcessCompleted(completed) => {
+            boxed_value(bytes_vec_value(completed.stderr_bytes()))
+        }
         other => runtime_error(format!(
             "expected `process.Completed`, found `{}`",
             value_type_name(other)

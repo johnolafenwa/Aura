@@ -7,8 +7,8 @@ use std::process::{self, Command};
 use aurora_compiler::{
     analyze_path_source, check_path, check_path_with_source, complete_path_source,
     emit_host_native_object_with_metadata, lower_path_to_mir, lower_path_with_source_to_mir,
-    parse_source, run_path, run_path_with_source, update_git_dependencies_in_working_dir,
-    Diagnostic, MirModule, Value,
+    parse_source, run_path_with_source_and_stdout_sink, run_path_with_stdout_sink,
+    update_git_dependencies_in_working_dir, Diagnostic, MirModule, Value,
 };
 use serde_json::Value as JsonValue;
 
@@ -55,22 +55,23 @@ fn main() {
         }
         "run" => {
             let input = read_input(&mut args);
+            let stdout_sink = std::sync::Arc::new(|chunk: &str| write_stdout(chunk));
             let result = if input.from_stdin {
-                run_path_with_source(Path::new(&input.path), &input.source)
+                run_path_with_source_and_stdout_sink(
+                    Path::new(&input.path),
+                    &input.source,
+                    stdout_sink,
+                )
             } else {
-                run_path(Path::new(&input.path))
+                run_path_with_stdout_sink(Path::new(&input.path), stdout_sink)
             };
             match result {
                 Ok(output) => {
-                    write_stdout(&output.stdout);
                     if let Value::Int(code) = output.value {
                         process::exit(code.as_i128().unwrap_or(1) as i32);
                     }
                 }
                 Err(error) => {
-                    if let Some(stdout) = error.partial_stdout() {
-                        write_stdout(stdout);
-                    }
                     eprintln!("{}", render_error(&input.path, &input.source, &error));
                     process::exit(1);
                 }

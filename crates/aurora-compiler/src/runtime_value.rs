@@ -262,12 +262,14 @@ struct TaskState {
     lightweight: bool,
     observed_failure: AtomicBool,
     group_failure_wake_flags: Mutex<Vec<Arc<AtomicBool>>>,
+    group_completion_wake_flags: Mutex<Vec<Arc<AtomicBool>>>,
 }
 
 struct TaskGroupState {
     tasks: Mutex<Vec<TaskValue>>,
     cancel_flag: Arc<AtomicBool>,
     failure_wake_flag: Arc<AtomicBool>,
+    completion_wake_flag: Arc<AtomicBool>,
     parent_flags: Vec<Arc<AtomicBool>>,
 }
 
@@ -333,8 +335,8 @@ struct ProcessPipeState {
 
 struct ProcessCompletedState {
     status: Value,
-    stdout: String,
-    stderr: String,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 
 struct ProcessSupervisorState {
@@ -1517,6 +1519,7 @@ impl LightweightTaskScheduler {
             lightweight: true,
             observed_failure: AtomicBool::new(false),
             group_failure_wake_flags: Mutex::new(Vec::new()),
+            group_completion_wake_flags: Mutex::new(Vec::new()),
         });
         let context = Box::new(LightweightTaskContext {
             scheduler: self as *mut _,
@@ -1565,6 +1568,7 @@ impl LightweightTaskScheduler {
             waiters
         };
         notify_group_failure_wake_flags(task_state, &result);
+        notify_group_completion_wake_flags(task_state);
         for waiter in waiters {
             self.waiting.remove(&waiter);
             self.ready
@@ -1768,6 +1772,17 @@ fn notify_group_failure_wake_flags(task_state: &TaskState, result: &TaskExecutio
         return;
     }
     let flags = lock_mutex(&task_state.group_failure_wake_flags).clone();
+    if flags.is_empty() {
+        return;
+    }
+    for flag in flags {
+        flag.store(true, Ordering::SeqCst);
+    }
+    runtime_scheduler().notify();
+}
+
+fn notify_group_completion_wake_flags(task_state: &TaskState) {
+    let flags = lock_mutex(&task_state.group_completion_wake_flags).clone();
     if flags.is_empty() {
         return;
     }
@@ -3857,6 +3872,14 @@ impl ProcessPipeValue {
         &self,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<String> {
+        let bytes = self.read_all_bytes(cancellation)?;
+        io_decode_utf8(&bytes)
+    }
+
+    pub(crate) fn read_all_bytes(
+        &self,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<Vec<u8>> {
         let mut pipe = lock_mutex(&self.inner.pipe);
         let Some(pipe) = pipe.as_mut() else {
             return Err(closed_resource_error());
@@ -3887,7 +3910,7 @@ impl ProcessPipeValue {
                 ))
             }
         };
-        io_decode_utf8(&bytes)
+        Ok(bytes)
     }
 
     pub(crate) fn read_line(
@@ -4026,7 +4049,7 @@ impl ProcessPipeValue {
 }
 
 impl ProcessCompletedValue {
-    pub(crate) fn new(status: Value, stdout: String, stderr: String) -> Self {
+    pub(crate) fn new(status: Value, stdout: Vec<u8>, stderr: Vec<u8>) -> Self {
         Self {
             inner: Arc::new(ProcessCompletedState {
                 status,
@@ -4040,11 +4063,19 @@ impl ProcessCompletedValue {
         self.inner.status.clone()
     }
 
-    pub(crate) fn stdout(&self) -> String {
+    pub(crate) fn stdout(&self) -> io::Result<String> {
+        io_decode_utf8(&self.inner.stdout)
+    }
+
+    pub(crate) fn stderr(&self) -> io::Result<String> {
+        io_decode_utf8(&self.inner.stderr)
+    }
+
+    pub(crate) fn stdout_bytes(&self) -> Vec<u8> {
         self.inner.stdout.clone()
     }
 
-    pub(crate) fn stderr(&self) -> String {
+    pub(crate) fn stderr_bytes(&self) -> Vec<u8> {
         self.inner.stderr.clone()
     }
 
@@ -4785,9 +4816,7 @@ impl TcpStreamValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<String> {
-        Ok(io_decode_utf8(
-            &self.read_bytes_all(timeout, cancellation)?,
-        )?)
+        io_decode_utf8(&self.read_bytes_all(timeout, cancellation)?)
     }
 
     pub(crate) fn read_bytes_all(
@@ -6284,6 +6313,7 @@ impl TaskGroupValue {
                 tasks: Mutex::new(Vec::new()),
                 cancel_flag: Arc::new(AtomicBool::new(false)),
                 failure_wake_flag: Arc::new(AtomicBool::new(false)),
+                completion_wake_flag: Arc::new(AtomicBool::new(false)),
                 parent_flags: parent.flags.clone(),
             }),
         }
@@ -6300,6 +6330,7 @@ impl TaskGroupValue {
             flags: vec![
                 self.inner.cancel_flag.clone(),
                 self.inner.failure_wake_flag.clone(),
+                self.inner.completion_wake_flag.clone(),
             ],
         }
     }
@@ -6308,6 +6339,7 @@ impl TaskGroupValue {
     // drain sees the complete task set.
     pub(crate) fn register_task(&self, task: TaskValue) {
         task.register_group_failure_wake_flag(self.inner.failure_wake_flag.clone());
+        task.register_group_completion_wake_flag(self.inner.completion_wake_flag.clone());
         lock_mutex(&self.inner.tasks).push(task);
     }
 
@@ -6332,6 +6364,19 @@ impl TaskGroupValue {
         }
     }
 
+    pub(crate) fn all_registered_tasks_completed(&self) -> bool {
+        let tasks = lock_mutex(&self.inner.tasks);
+        !tasks.is_empty() && tasks.iter().all(|task| task.completed_result().is_some())
+    }
+
+    pub(crate) fn clear_completion_wake_if_tasks_still_running(&self) {
+        if !self.all_registered_tasks_completed() {
+            self.inner
+                .completion_wake_flag
+                .store(false, Ordering::SeqCst);
+        }
+    }
+
     // Invariant: callers drain only after they have finished registering tasks for the group.
     pub(crate) fn drain_tasks(&self) -> Vec<TaskValue> {
         let mut tasks = lock_mutex(&self.inner.tasks);
@@ -6347,6 +6392,18 @@ impl TaskValue {
         }
         drop(flags);
         if self.unobserved_error().is_some() {
+            flag.store(true, Ordering::SeqCst);
+            runtime_scheduler().notify();
+        }
+    }
+
+    fn register_group_completion_wake_flag(&self, flag: Arc<AtomicBool>) {
+        let mut flags = lock_mutex(&self.inner.group_completion_wake_flags);
+        if !flags.iter().any(|existing| Arc::ptr_eq(existing, &flag)) {
+            flags.push(flag.clone());
+        }
+        drop(flags);
+        if self.completed_result().is_some() {
             flag.store(true, Ordering::SeqCst);
             runtime_scheduler().notify();
         }
@@ -6384,6 +6441,7 @@ impl TaskValue {
             lightweight: false,
             observed_failure: AtomicBool::new(false),
             group_failure_wake_flags: Mutex::new(Vec::new()),
+            group_completion_wake_flags: Mutex::new(Vec::new()),
         });
         let state = inner.clone();
         thread::spawn(move || {
@@ -6395,6 +6453,7 @@ impl TaskValue {
             *task_state = TaskHandle::Completed(result.clone());
             drop(task_state);
             notify_group_failure_wake_flags(&state, &result);
+            notify_group_completion_wake_flags(&state);
             state.ready.notify_all();
             runtime_scheduler().notify();
         });
@@ -6527,12 +6586,33 @@ pub(crate) fn recv_for_task_group_iteration(
     group: &TaskGroupValue,
 ) -> RecvValueResult {
     loop {
+        match channel.try_recv() {
+            TryRecvResult::Value(value) => {
+                if channel.has_pending_values() {
+                    let _ = yield_now_current_lightweight_task();
+                }
+                return RecvValueResult::Value(value);
+            }
+            TryRecvResult::Closed => return RecvValueResult::Closed,
+            TryRecvResult::Empty => {}
+        }
         if group.has_unobserved_error() {
             return RecvValueResult::Cancelled;
         }
+        if group.all_registered_tasks_completed() {
+            return RecvValueResult::Closed;
+        }
         let wait_cancellation = cancellation.merged(&group.queue_iteration_signal());
-        match channel.recv_result_with_cancellation(None, Some(&wait_cancellation)) {
-            RecvValueResult::Cancelled => {
+        match wait_for_runtime_scheduler(
+            vec![channel.clone()],
+            false,
+            Vec::new(),
+            Vec::new(),
+            None,
+            Some(&wait_cancellation),
+        ) {
+            RuntimeSchedulerWakeReason::Ready => {}
+            RuntimeSchedulerWakeReason::Cancelled => {
                 if cancellation.is_cancelled()
                     || group.is_cancelled()
                     || group.has_unobserved_error()
@@ -6540,8 +6620,9 @@ pub(crate) fn recv_for_task_group_iteration(
                     return RecvValueResult::Cancelled;
                 }
                 group.clear_failure_wake_if_no_unobserved_error();
+                group.clear_completion_wake_if_tasks_still_running();
             }
-            other => return other,
+            RuntimeSchedulerWakeReason::TimedOut => return RecvValueResult::TimedOut,
         }
     }
 }

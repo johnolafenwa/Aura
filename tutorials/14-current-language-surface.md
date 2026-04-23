@@ -404,8 +404,10 @@ Current builtin I/O, networking, and process surface:
 - `process.Pipe.close()`
 - `process.Completed.status()`
 - `process.Completed.success()`
-- `process.Completed.stdout()`
-- `process.Completed.stderr()`
+- `process.Completed.stdout()` for UTF-8 text
+- `process.Completed.stderr()` for UTF-8 text
+- `process.Completed.stdout_bytes()`
+- `process.Completed.stderr_bytes()`
 - `process.Completed.check()`
 - `process.Supervisor.start(...)`
 - `process.Supervisor.wait(timeout=...)`

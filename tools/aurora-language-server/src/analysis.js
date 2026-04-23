@@ -780,13 +780,25 @@ const BUILTIN_MEMBERS = {
       name: "stdout",
       kind: "method",
       detail: "stdout() -> String",
-      documentation: "Returns the captured stdout text."
+      documentation: "Returns the captured stdout text, decoding it as UTF-8."
     },
     {
       name: "stderr",
       kind: "method",
       detail: "stderr() -> String",
-      documentation: "Returns the captured stderr text."
+      documentation: "Returns the captured stderr text, decoding it as UTF-8."
+    },
+    {
+      name: "stdout_bytes",
+      kind: "method",
+      detail: "stdout_bytes() -> Vec[uint8]",
+      documentation: "Returns the raw captured stdout bytes."
+    },
+    {
+      name: "stderr_bytes",
+      kind: "method",
+      detail: "stderr_bytes() -> Vec[uint8]",
+      documentation: "Returns the raw captured stderr bytes."
     },
     {
       name: "check",

@@ -25,7 +25,10 @@ pub use analysis::{
 };
 pub use diag::{Diagnostic, Result, Span};
 pub use mir::{lower as lower_to_mir, MirModule};
-pub use mir_runtime::{run as run_mir, run_serialized_mir};
+pub use mir_runtime::{
+    run as run_mir, run_serialized_mir, run_with_stdout_sink as run_mir_with_stdout_sink,
+    StdoutSink,
+};
 pub use native_codegen::{
     emit_host_object as emit_host_native_object,
     emit_host_object_with_metadata as emit_host_native_object_with_metadata,
@@ -51,10 +54,26 @@ pub fn run_source(source: &str) -> Result<RunOutput> {
     run_mir(&mir)
 }
 
+pub fn run_source_with_stdout_sink(source: &str, stdout_sink: StdoutSink) -> Result<RunOutput> {
+    let program = check_source(source)?;
+    let mir = lower_to_mir(&program);
+    run_mir_with_stdout_sink(&mir, Some(stdout_sink))
+}
+
 pub fn run_path_with_source(path: &Path, source: &str) -> Result<RunOutput> {
     let program = check_path_with_source(path, source)?;
     let mir = lower_to_mir(&program);
     run_mir(&mir)
+}
+
+pub fn run_path_with_source_and_stdout_sink(
+    path: &Path,
+    source: &str,
+    stdout_sink: StdoutSink,
+) -> Result<RunOutput> {
+    let program = check_path_with_source(path, source)?;
+    let mir = lower_to_mir(&program);
+    run_mir_with_stdout_sink(&mir, Some(stdout_sink))
 }
 
 pub fn lower_source_to_mir(source: &str) -> Result<MirModule> {
@@ -151,6 +170,12 @@ pub fn run_path(path: &Path) -> Result<RunOutput> {
     let program = check_path(path)?;
     let mir = lower_to_mir(&program);
     run_mir(&mir)
+}
+
+pub fn run_path_with_stdout_sink(path: &Path, stdout_sink: StdoutSink) -> Result<RunOutput> {
+    let program = check_path(path)?;
+    let mir = lower_to_mir(&program);
+    run_mir_with_stdout_sink(&mir, Some(stdout_sink))
 }
 
 pub fn lower_path_to_mir(path: &Path) -> Result<MirModule> {

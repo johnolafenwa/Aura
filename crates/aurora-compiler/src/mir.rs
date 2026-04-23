@@ -1483,6 +1483,14 @@ impl<'a> Lowerer<'a> {
                 })
             }
             (ExprKind::Map(entries), Type::Named(name, args))
+                if entries.is_empty() && name == "Set" && args.len() == 1 =>
+            {
+                Some(Rvalue::SetLiteral {
+                    elements: Vec::new(),
+                    element_type: args[0].clone(),
+                })
+            }
+            (ExprKind::Map(entries), Type::Named(name, args))
                 if name == "Map" && args.len() == 2 =>
             {
                 Some(Rvalue::MapLiteral {

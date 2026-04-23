@@ -1459,6 +1459,13 @@ test("fallback analysis helper specializes builtin member return types and unres
     "Result[None, process.Error]"
   );
   assert.equal(
+    _testing.specializeMemberReturnType(
+      "process.Completed",
+      processCompletedMembers.get("stdout_bytes")
+    ),
+    "Vec[uint8]"
+  );
+  assert.equal(
     _testing.specializeMemberReturnType("process.Supervisor", processSupervisorMembers.get("start")),
     "Result[None, process.Error]"
   );
