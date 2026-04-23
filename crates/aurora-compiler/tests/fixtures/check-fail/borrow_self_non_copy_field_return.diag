@@ -1,0 +1,5 @@
+error: cannot move non-copy field `value` out of borrowed value `self`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/borrow_self_non_copy_field_return.au:5:21
+  |
+5 |         return self.value
+  |                     ^

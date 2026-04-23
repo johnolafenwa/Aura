@@ -48,6 +48,34 @@ test("syntax grammar treats boolean operators as Aurora keywords", () => {
   assert.match(keywordRule.match, /pass/);
 });
 
+test("syntax grammar tracks maintained builtin types", () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const grammarPath = path.join(extensionRoot, "syntaxes", "aurora.tmLanguage.json");
+  const grammar = JSON.parse(fs.readFileSync(grammarPath, "utf8"));
+  const typeRule = grammar.repository.types.patterns.find(
+    (pattern) => pattern.name === "support.type.primitive.aurora"
+  );
+
+  assert.ok(typeRule);
+  const typePattern = new RegExp(typeRule.match);
+  for (const typeName of [
+    "Queue",
+    "QueueReceive",
+    "TaskResult",
+    "WaitAny",
+    "WaitAll",
+    "Map",
+    "MapEntry",
+    "Set",
+    "process.Child",
+    "fs.File",
+    "net.TcpStream"
+  ]) {
+    assert.equal(typePattern.test(typeName), true, `${typeName} should be highlighted as a type`);
+  }
+  assert.doesNotMatch(typeRule.match, /Channel/);
+});
+
 test("Aurora newline indentation inherits the current block indent", () => {
   assert.equal(computeAuroraNewlineIndent("def main():", "def main():".length, "    "), "    ");
   assert.equal(computeAuroraNewlineIndent("    total = 1", "    total = 1".length, "    "), "    ");

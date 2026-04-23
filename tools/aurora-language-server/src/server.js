@@ -315,6 +315,8 @@ function symbolKind(kind) {
       return SymbolKind.Method;
     case "field":
       return SymbolKind.Field;
+    case "trait":
+      return SymbolKind.Interface;
     default:
       return SymbolKind.Variable;
   }

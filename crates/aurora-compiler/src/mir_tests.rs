@@ -158,7 +158,7 @@ class User:
 
 impl Named for User:
     def name(borrow self) -> String:
-        return self.label
+        return self.label.clone()
 "#;
     let program = Box::leak(Box::new(checked_program(source)));
     Lowerer::new(
@@ -596,7 +596,7 @@ class User:
 
 impl Named for User:
     def name(borrow self) -> String:
-        return self.label
+        return self.label.clone()
 
 class Resource:
     closed: bool = false

@@ -123,6 +123,14 @@ const queueIterationSource = fs.readFileSync(
   path.join(__dirname, "../../../examples/concurrency/queue_iteration.au"),
   "utf8"
 );
+const greeterSource = fs.readFileSync(
+  path.join(__dirname, "../../../examples/traits/greeter.au"),
+  "utf8"
+);
+const simpleImportSource = fs.readFileSync(
+  path.join(__dirname, "../../../examples/modules/simple_import.au"),
+  "utf8"
+);
 
 test("analyzeDocument finds classes and functions", () => {
   const moduleInfo = analyzeDocument(pointSource);
@@ -832,7 +840,7 @@ test("queue and task builtins appear in completions and diagnostics", () => {
 
   const channelLine = concurrencySource
     .split("\n")
-    .findIndex((line) => line.includes("match jobs.get_or_none():"));
+    .findIndex((line) => line.includes("match jobs.get_or_none(timeout=50ms):"));
   const channelText = concurrencySource.split("\n")[channelLine];
   const channelCharacter = channelText.indexOf(".") + 1;
   const channelItems = completionsForDocument(concurrencySource, channelLine, channelCharacter, ".");
@@ -845,7 +853,7 @@ test("queue and task builtins appear in completions and diagnostics", () => {
 
   const taskLine = concurrencySource
     .split("\n")
-    .findIndex((line) => line.includes("task.result_or(-1)"));
+    .findIndex((line) => line.includes("task.result_or(-1, timeout=50ms)"));
   const taskText = concurrencySource.split("\n")[taskLine];
   const taskCharacter = taskText.indexOf(".") + 1;
   const taskItems = completionsForDocument(concurrencySource, taskLine, taskCharacter, ".");
@@ -1046,6 +1054,17 @@ test("fallback analysis accepts f-strings, copy classes, borrowed match, and que
   assert.equal(diagnosticsForDocument(copyClassSource).length, 0);
   assert.equal(diagnosticsForDocument(matchBorrowSource).length, 0);
   assert.equal(diagnosticsForDocument(queueIterationSource).length, 0);
+});
+
+test("fallback analysis tolerates maintained traits and local imports", () => {
+  const traitDiagnostics = diagnosticsForDocument(greeterSource);
+  assert.ok(!traitDiagnostics.some((diagnostic) => /unknown name `Greeter`/.test(diagnostic.message)));
+  assert.ok(!traitDiagnostics.some((diagnostic) => /unknown name `impl`/.test(diagnostic.message)));
+  assert.ok(!traitDiagnostics.some((diagnostic) => /unknown name `self`/.test(diagnostic.message)));
+
+  const importDiagnostics = diagnosticsForDocument(simpleImportSource);
+  assert.ok(!importDiagnostics.some((diagnostic) => /unknown name `helpers`/.test(diagnostic.message)));
+  assert.ok(!importDiagnostics.some((diagnostic) => /unknown name `Counter`/.test(diagnostic.message)));
 });
 
 test("fallback analysis helpers split top-level colons through nested delimiters", () => {

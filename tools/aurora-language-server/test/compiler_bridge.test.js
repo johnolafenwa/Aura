@@ -124,6 +124,15 @@ test("compiler bridge helper conversions cover diagnostics, symbols, and definit
         ]
       },
       {
+        name: "Greeter",
+        kind: "trait",
+        detail: "trait Greeter",
+        line: 8,
+        start_character: 0,
+        end_character: 7,
+        children: []
+      },
+      {
         name: "mystery",
         kind: "unknown",
         detail: undefined,
@@ -140,7 +149,8 @@ test("compiler bridge helper conversions cover diagnostics, symbols, and definit
   assert.equal(symbols[2].kind, 6);
   assert.equal(symbols[3].kind, 10);
   assert.equal(symbols[3].children[0].kind, 22);
-  assert.equal(symbols[4].kind, 13);
+  assert.equal(symbols[4].kind, 11);
+  assert.equal(symbols[5].kind, 13);
 
   assert.equal(
     findOccurrence(
@@ -608,7 +618,7 @@ test("compiler bridge includes imported trait methods in completions", async () 
     );
     fs.writeFileSync(
       path.join(tempRoot, "pkg/user.au"),
-      "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.label\n"
+      "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.label.clone()\n"
     );
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
@@ -655,7 +665,7 @@ test("compiler bridge preserves cross-file definitions for imported function, fi
     );
     fs.writeFileSync(
       userPath,
-      "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.label\n"
+      "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.label.clone()\n"
     );
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;

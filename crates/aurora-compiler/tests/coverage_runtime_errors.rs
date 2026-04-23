@@ -92,6 +92,30 @@ def main() -> int32:
 }
 
 #[test]
+fn runtime_errors_unwind_with_resource_cleanups() {
+    let source = r#"
+class Resource:
+    name: String
+
+    def close(borrow mut self):
+        print("closed " + self.name)
+
+def main() -> int32:
+    with Resource(name="r1") as resource:
+        print("inside")
+        return 1 / 0
+"#;
+
+    let error = run_source(source).expect_err("division by zero should fail at runtime");
+    assert!(
+        error.message.contains("division by zero"),
+        "unexpected runtime error: {}",
+        error.message
+    );
+    assert_eq!(error.partial_stdout(), Some("inside\nclosed r1\n"));
+}
+
+#[test]
 fn path_with_source_public_wrappers_cover_success_and_error_paths() {
     let temp = TempDir::new("aurora-path-with-source");
     temp.write(

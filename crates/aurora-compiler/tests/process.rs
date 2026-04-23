@@ -62,6 +62,13 @@ fn process_alive(pid: i32) -> bool {
     }
 }
 
+#[cfg(unix)]
+fn kill_process_group(pid: i32) {
+    unsafe {
+        libc::kill(-pid, libc::SIGKILL);
+    }
+}
+
 #[test]
 fn builtin_process_module_type_checks_from_path_context() {
     let temp = TempDir::new("aurora-process-check");
@@ -366,5 +373,58 @@ def main() -> int32:
     assert!(
         !process_alive(pid),
         "grouped child close should terminate descendants in the same process group"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn supervisor_duplicate_name_does_not_leave_unmanaged_child_running() {
+    let temp = TempDir::new("aurora-supervisor-duplicate");
+    let entry = temp.path().join("main.au");
+    let first_pid_file = temp.path().join("first.pid");
+    let second_pid_file = temp.path().join("second.pid");
+
+    let source = format!(
+        r#"import process
+
+def run_duplicate(first_pid: String, second_pid: String) -> Result[None, process.Error]:
+    with supervisor = process.supervisor():
+        try supervisor.start(name="dup", command=["/bin/sh", "-c", "echo $$ > " + first_pid + "; sleep 30"], stdout=process.null(), stderr=process.null(), group=true)
+        match supervisor.start(name="dup", command=["/bin/sh", "-c", "echo $$ > " + second_pid + "; sleep 30"], stdout=process.null(), stderr=process.null(), group=true):
+            case Result.Ok(_):
+                print("unexpected duplicate success")
+            case Result.Err(_):
+                print("duplicate rejected")
+        try supervisor.stop()
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run_duplicate("{first_pid}", "{second_pid}"):
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#,
+        first_pid = first_pid_file.display(),
+        second_pid = second_pid_file.display(),
+    );
+
+    let output = run_path_with_source(&entry, &source)
+        .expect("duplicate supervisor program should complete");
+    assert_eq!(output.stdout, "duplicate rejected\n");
+
+    let second_pid = fs::read_to_string(&second_pid_file)
+        .ok()
+        .and_then(|text| text.trim().parse::<i32>().ok());
+    let second_alive = second_pid.map(process_alive).unwrap_or(false);
+    if second_alive {
+        if let Some(pid) = second_pid {
+            kill_process_group(pid);
+        }
+    }
+    assert!(
+        !second_alive,
+        "duplicate-name supervisor error should not leave the rejected child running"
     );
 }

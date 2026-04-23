@@ -2598,6 +2598,30 @@ pub(crate) fn read_all_limit_error(label: &str) -> io::Error {
     )
 }
 
+fn requested_read_limit_error(label: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "{} exceeds the supported read limit of {} bytes",
+            label, MAX_READ_ALL_BYTES
+        ),
+    )
+}
+
+fn validate_requested_read_size(label: &str, count: usize) -> io::Result<usize> {
+    if count > MAX_READ_ALL_BYTES {
+        return Err(requested_read_limit_error(label));
+    }
+    Ok(count)
+}
+
+fn validate_read_line_capacity(buffer_len: usize) -> io::Result<()> {
+    if buffer_len >= MAX_READ_ALL_BYTES {
+        return Err(read_all_limit_error("network read_line"));
+    }
+    Ok(())
+}
+
 fn push_limited_bytes(contents: &mut Vec<u8>, chunk: &[u8], label: &str) -> io::Result<()> {
     if contents.len().saturating_add(chunk.len()) > MAX_READ_ALL_BYTES {
         return Err(read_all_limit_error(label));
@@ -2675,6 +2699,8 @@ where
 {
     let mut buffer = Vec::new();
     loop {
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        validate_read_line_capacity(buffer.len())?;
         let mut byte = [0u8; 1];
         match reader.read(&mut byte) {
             Ok(0) if buffer.is_empty() => return Ok(None),
@@ -2724,6 +2750,8 @@ where
 {
     let mut buffer = Vec::new();
     loop {
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        validate_read_line_capacity(buffer.len())?;
         reader.set_read_timeout_value(next_wait_slice(deadline, cancellation)?)?;
         let mut byte = [0u8; 1];
         match reader.read(&mut byte) {
@@ -2755,9 +2783,11 @@ fn read_exact_with_fd_deadline<R>(
 where
     R: Read,
 {
+    validate_requested_read_size("read_exact(...)", count)?;
     let mut buffer = vec![0u8; count];
     let mut offset = 0;
     while offset < count {
+        check_deadline_and_cancellation(deadline, cancellation)?;
         match reader.read(&mut buffer[offset..]) {
             Ok(0) => {
                 return Err(io::Error::new(
@@ -2805,9 +2835,11 @@ fn read_exact_with_deadline<R>(
 where
     R: ReadTimeoutStream,
 {
+    validate_requested_read_size("read_exact(...)", count)?;
     let mut buffer = vec![0u8; count];
     let mut offset = 0;
     while offset < count {
+        check_deadline_and_cancellation(deadline, cancellation)?;
         reader.set_read_timeout_value(next_wait_slice(deadline, cancellation)?)?;
         match reader.read(&mut buffer[offset..]) {
             Ok(0) => {
@@ -2836,8 +2868,10 @@ fn read_some_with_fd_deadline<R>(
 where
     R: Read,
 {
+    let max_bytes = validate_requested_read_size("read_bytes(...)", max_bytes)?;
     let mut buffer = vec![0u8; max_bytes.max(1)];
     loop {
+        check_deadline_and_cancellation(deadline, cancellation)?;
         match reader.read(&mut buffer) {
             Ok(0) => return Ok(None),
             Ok(bytes) => {
@@ -2882,8 +2916,10 @@ fn read_some_with_deadline<R>(
 where
     R: ReadTimeoutStream,
 {
+    let max_bytes = validate_requested_read_size("read_bytes(...)", max_bytes)?;
     let mut buffer = vec![0u8; max_bytes.max(1)];
     loop {
+        check_deadline_and_cancellation(deadline, cancellation)?;
         reader.set_read_timeout_value(next_wait_slice(deadline, cancellation)?)?;
         match reader.read(&mut buffer) {
             Ok(0) => return Ok(None),
@@ -4075,6 +4111,16 @@ impl ProcessSupervisorValue {
             )));
         }
 
+        {
+            let services = lock_mutex(&self.inner.services);
+            if services.contains_key(&name) {
+                return Err(process_error_other(format!(
+                    "supervisor already manages a child named `{}`",
+                    name
+                )));
+            }
+        }
+
         let child = ProcessChildValue::spawn(
             command.clone(),
             cwd.clone(),
@@ -4088,6 +4134,7 @@ impl ProcessSupervisorValue {
 
         let mut services = lock_mutex(&self.inner.services);
         if services.contains_key(&name) {
+            child.close();
             return Err(process_error_other(format!(
                 "supervisor already manages a child named `{}`",
                 name

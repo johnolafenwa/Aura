@@ -1,0 +1,2 @@
+def main() -> uint64:
+    return 4294967295

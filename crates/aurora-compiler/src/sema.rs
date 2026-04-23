@@ -1306,6 +1306,14 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 "`main` must not take parameters in the bootstrap runtime",
             ));
         }
+        if main.signature.return_type != Type::Unit
+            && main.signature.return_type != Type::named("int32")
+        {
+            return Err(Diagnostic::at(
+                main.decl.span,
+                "`main` must return `int32` or `None` in the bootstrap runtime",
+            ));
+        }
     }
 
     let checker = FunctionChecker::new(
@@ -10943,7 +10951,7 @@ impl<'a> FunctionChecker<'a> {
         match &expr.kind {
             ExprKind::Name(name) => locals
                 .get(name)
-                .filter(|binding| binding.passing != ReceiverKind::Value && name != "self")
+                .filter(|binding| binding.passing != ReceiverKind::Value)
                 .map(|_| name.clone()),
             ExprKind::Group(inner) => self.borrowed_root_binding_name(inner, locals),
             ExprKind::Member { object, .. } => self.borrowed_root_binding_name(object, locals),

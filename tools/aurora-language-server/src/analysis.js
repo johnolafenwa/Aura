@@ -25,6 +25,7 @@ const KEYWORDS = [
   "borrow",
   "indirect",
   "copy",
+  "impl",
   "break",
   "continue",
   "pass"
@@ -2020,9 +2021,12 @@ function analyzeDocument(text) {
   const moduleInfo = {
     classes: new Map(),
     enums: new Map(),
+    traits: new Map(),
     functions: new Map(),
     methods: [],
     topLevelBindings: new Map(),
+    importedModules: new Set(),
+    implBlocks: [],
     diagnostics: [],
     lines
   };
@@ -2056,6 +2060,21 @@ function analyzeDocument(text) {
       const parsed = parseEnum(lines, i, indent, moduleInfo);
       registerTopLevelSymbol(moduleInfo, moduleInfo.enums, parsed.enumInfo, "enum");
       i = parsed.endLine;
+      continue;
+    }
+
+    const traitMatch = trimmed.match(/^(?:public\s+)?trait\s+([A-Z][A-Za-z0-9_]*)(?:\[[^\]]+\])?\s*:/);
+    if (traitMatch) {
+      const parsed = parseTrait(lines, i, indent, moduleInfo);
+      registerTopLevelSymbol(moduleInfo, moduleInfo.traits, parsed.traitInfo, "trait");
+      i = parsed.endLine;
+      continue;
+    }
+
+    if (/^impl\b.*:\s*$/.test(trimmed)) {
+      const endLine = findBlockEnd(lines, i, indent);
+      moduleInfo.implBlocks.push({ line: i, endLine });
+      i = endLine;
       continue;
     }
 
@@ -2094,27 +2113,36 @@ function registerTopLevelSymbol(moduleInfo, registry, symbol, kind) {
 
 function registerBuiltinImport(moduleInfo, rawLine, trimmed, line) {
   const importMatch = trimmed.match(/^import\s+([a-z][A-Za-z0-9_.]*)$/);
-  if (importMatch && BUILTIN_MODULE_NAMES.has(importMatch[1])) {
+  if (importMatch) {
     const name = importMatch[1];
-    moduleInfo.topLevelBindings.set(name, {
-      kind: "module",
-      name,
-      type: name,
-      detail: `module ${name}`,
-      moduleScoped: true,
-      line,
-      startCharacter: rawLine.indexOf(name),
-      endCharacter: rawLine.indexOf(name) + name.length
-    });
+    if (BUILTIN_MODULE_NAMES.has(name)) {
+      moduleInfo.topLevelBindings.set(name, {
+        kind: "module",
+        name,
+        type: name,
+        detail: `module ${name}`,
+        moduleScoped: true,
+        line,
+        startCharacter: rawLine.indexOf(name),
+        endCharacter: rawLine.indexOf(name) + name.length
+      });
+    } else {
+      registerLocalModuleImport(moduleInfo, rawLine, name, line);
+    }
     return true;
   }
 
   const fromImportMatch = trimmed.match(/^from\s+([a-z][A-Za-z0-9_.]*)\s+import\s+(.+)$/);
-  if (!fromImportMatch || !BUILTIN_MODULE_NAMES.has(fromImportMatch[1])) {
+  if (!fromImportMatch) {
     return false;
   }
 
   const moduleName = fromImportMatch[1];
+  if (!BUILTIN_MODULE_NAMES.has(moduleName)) {
+    registerLocalFromImport(moduleInfo, rawLine, moduleName, fromImportMatch[2], line);
+    return true;
+  }
+
   const names = splitTopLevelCommaSeparated(fromImportMatch[2]);
   for (const importedName of names) {
     const name = importedName.trim();
@@ -2152,6 +2180,63 @@ function registerBuiltinImport(moduleInfo, rawLine, trimmed, line) {
     });
   }
   return true;
+}
+
+function registerLocalModuleImport(moduleInfo, rawLine, modulePath, line) {
+  const parts = modulePath.split(".");
+  for (let i = 1; i <= parts.length; i += 1) {
+    moduleInfo.importedModules.add(parts.slice(0, i).join("."));
+  }
+
+  const root = parts[0];
+  if (!root || moduleInfo.topLevelBindings.has(root)) {
+    return;
+  }
+
+  const startCharacter = rawLine.indexOf(root);
+  moduleInfo.topLevelBindings.set(root, {
+    kind: "module",
+    name: root,
+    type: root,
+    detail: `module ${root}`,
+    moduleScoped: true,
+    imported: true,
+    line,
+    startCharacter,
+    endCharacter: startCharacter + root.length
+  });
+}
+
+function registerLocalFromImport(moduleInfo, rawLine, modulePath, rawNames, line) {
+  registerImportedModulePath(moduleInfo, modulePath);
+  for (const importedName of splitTopLevelCommaSeparated(rawNames)) {
+    const match = importedName.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?$/);
+    if (!match) {
+      continue;
+    }
+
+    const name = match[2] || match[1];
+    const startCharacter = rawLine.indexOf(name);
+    const isType = /^[A-Z]/.test(name);
+    moduleInfo.topLevelBindings.set(name, {
+      kind: isType ? "class" : "binding",
+      name,
+      type: isType ? name : "Unknown",
+      detail: isType ? `imported class ${name}` : `imported ${name}`,
+      moduleScoped: true,
+      imported: true,
+      line,
+      startCharacter,
+      endCharacter: startCharacter + name.length
+    });
+  }
+}
+
+function registerImportedModulePath(moduleInfo, modulePath) {
+  const parts = modulePath.split(".");
+  for (let i = 1; i <= parts.length; i += 1) {
+    moduleInfo.importedModules.add(parts.slice(0, i).join("."));
+  }
 }
 
 function parseClass(lines, startLine, indent, moduleInfo) {
@@ -2291,6 +2376,86 @@ function parseEnum(lines, startLine, indent, moduleInfo) {
   }
 
   return { enumInfo, endLine: i - 1 };
+}
+
+function parseTrait(lines, startLine, indent, moduleInfo) {
+  const rawLine = lines[startLine];
+  const trimmed = rawLine.trim();
+  const headerMatch = trimmed.match(/^(?:public\s+)?trait\s+([A-Z][A-Za-z0-9_]*)(?:\[[^\]]+\])?\s*:/);
+  const name = headerMatch[1];
+  const startCharacter = rawLine.indexOf(name);
+  const traitInfo = {
+    kind: "trait",
+    name,
+    line: startLine,
+    startCharacter,
+    endCharacter: startCharacter + name.length,
+    endLine: startLine,
+    methods: [],
+    members: new Map()
+  };
+
+  let i = startLine + 1;
+  for (; i < lines.length; i += 1) {
+    const raw = lines[i];
+    const currentTrimmed = raw.trim();
+    if (!currentTrimmed || currentTrimmed.startsWith("#")) {
+      continue;
+    }
+
+    const currentIndent = countIndent(raw);
+    if (currentIndent <= indent) {
+      break;
+    }
+
+    if (currentIndent !== indent + 4) {
+      continue;
+    }
+
+    const methodMatch = currentTrimmed.match(
+      /^def\s+([a-zA-Z_][A-Za-z0-9_]*)\s*\((.*)\)(?:\s*->\s*([^:]+))?\s*:?\s*$/
+    );
+    if (!methodMatch) {
+      continue;
+    }
+
+    const methodName = methodMatch[1];
+    const params = parseCallableParams(raw, methodMatch[2], i, name);
+    const explicitParams = params.filter((param) => param.name !== "self");
+    const returnType = normalizeType(methodMatch[3] || "None");
+    const methodSymbol = {
+      kind: "method",
+      owner: name,
+      name: methodName,
+      returnType,
+      detail: formatFunctionDetail(methodName, explicitParams.map((param) => param.type), returnType),
+      line: i,
+      startCharacter: raw.indexOf(methodName),
+      endCharacter: raw.indexOf(methodName) + methodName.length
+    };
+    registerTraitMember(moduleInfo, traitInfo, methodSymbol);
+  }
+
+  traitInfo.endLine = i - 1;
+  return { traitInfo, endLine: i - 1 };
+}
+
+function registerTraitMember(moduleInfo, traitInfo, symbol) {
+  const existing = traitInfo.members.get(symbol.name);
+  if (existing) {
+    moduleInfo.diagnostics.push(
+      makeDiagnostic(
+        symbol.line,
+        symbol.startCharacter,
+        symbol.endCharacter,
+        `duplicate member \`${symbol.name}\` in trait \`${traitInfo.name}\``
+      )
+    );
+    return;
+  }
+
+  traitInfo.members.set(symbol.name, symbol);
+  traitInfo.methods.push(symbol);
 }
 
 function registerMember(moduleInfo, classInfo, symbol) {
@@ -2712,6 +2877,16 @@ function collectTopLevelStatementRanges(moduleInfo) {
       occupiedLines.add(variant.line);
     }
   }
+  for (const traitInfo of moduleInfo.traits.values()) {
+    for (let line = traitInfo.line; line <= traitInfo.endLine; line += 1) {
+      occupiedLines.add(line);
+    }
+  }
+  for (const implBlock of moduleInfo.implBlocks) {
+    for (let line = implBlock.line; line <= implBlock.endLine; line += 1) {
+      occupiedLines.add(line);
+    }
+  }
   for (const functionInfo of moduleInfo.functions.values()) {
     for (let line = functionInfo.line; line <= functionInfo.endLine; line += 1) {
       occupiedLines.add(line);
@@ -2765,7 +2940,9 @@ function extractExpressionSegments(rawLine) {
   if (
     /^(?:copy\s+)?class\b/.test(trimmed) ||
     /^enum\b/.test(trimmed) ||
+    /^(?:public\s+)?trait\b/.test(trimmed) ||
     /^def\b/.test(trimmed) ||
+    /^impl\b/.test(trimmed) ||
     /^import\b/.test(trimmed) ||
     /^from\b/.test(trimmed)
   ) {
@@ -3113,6 +3290,13 @@ function completionsForDocument(text, line, character, triggerCharacter) {
       detail: "Aurora enum"
     });
   }
+  for (const traitInfo of moduleInfo.traits.values()) {
+    completions.push({
+      name: traitInfo.name,
+      kind: "trait",
+      detail: "Aurora trait"
+    });
+  }
   for (const builtinEnum of BUILTIN_ENUMS.values()) {
     completions.push({
       name: builtinEnum.name,
@@ -3237,6 +3421,23 @@ function documentSymbols(text) {
         line: variant.line,
         startCharacter: variant.startCharacter,
         endCharacter: variant.endCharacter
+      }))
+    });
+  }
+
+  for (const traitInfo of moduleInfo.traits.values()) {
+    symbols.push({
+      name: traitInfo.name,
+      kind: "trait",
+      line: traitInfo.line,
+      startCharacter: traitInfo.startCharacter,
+      endCharacter: traitInfo.endCharacter,
+      children: traitInfo.methods.map((method) => ({
+        name: method.name,
+        kind: "method",
+        line: method.line,
+        startCharacter: method.startCharacter,
+        endCharacter: method.endCharacter
       }))
     });
   }
@@ -3374,6 +3575,15 @@ function resolveIdentifierSymbol(moduleInfo, functionInfo, name) {
     };
   }
 
+  if (moduleInfo.traits.has(name)) {
+    const symbol = moduleInfo.traits.get(name);
+    return {
+      ...symbol,
+      type: symbol.name,
+      hover: formatTraitHover(symbol)
+    };
+  }
+
   if (BUILTIN_ENUMS.has(name)) {
     const symbol = BUILTIN_ENUMS.get(name);
     return {
@@ -3444,12 +3654,58 @@ function resolveTypeMember(moduleInfo, typeName, memberName) {
     return enumInfo.members.get(memberName);
   }
 
+  const traitInfo = moduleInfo.traits.get(baseTypeName(typeName));
+  if (traitInfo && traitInfo.members.has(memberName)) {
+    return traitInfo.members.get(memberName);
+  }
+
   const builtinEnum = BUILTIN_ENUMS.get(baseTypeName(typeName));
   if (builtinEnum) {
     return builtinEnum.variants.find((variant) => variant.name === memberName) || null;
   }
 
+  const importedModuleMember = resolveImportedModuleMember(moduleInfo, typeName, memberName);
+  if (importedModuleMember) {
+    return importedModuleMember;
+  }
+
   return (BUILTIN_MEMBERS[baseTypeName(typeName)] || []).find((item) => item.name === memberName) || null;
+}
+
+function resolveImportedModuleMember(moduleInfo, typeName, memberName) {
+  const modulePath = normalizeType(typeName);
+  const candidatePath = `${modulePath}.${memberName}`;
+  if (moduleInfo.importedModules.has(candidatePath)) {
+    return {
+      kind: "module",
+      name: memberName,
+      type: candidatePath,
+      detail: `module ${candidatePath}`,
+      imported: true
+    };
+  }
+
+  if (moduleInfo.importedModules.has(modulePath) && !hasImportedModuleChild(moduleInfo, modulePath)) {
+    return {
+      kind: "binding",
+      name: memberName,
+      type: "Unknown",
+      detail: `imported ${memberName}`,
+      imported: true
+    };
+  }
+
+  return null;
+}
+
+function hasImportedModuleChild(moduleInfo, modulePath) {
+  const prefix = `${modulePath}.`;
+  for (const importedModule of moduleInfo.importedModules) {
+    if (importedModule.startsWith(prefix)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function inferExpressionType(expression, moduleInfo, functionInfo) {
@@ -3785,6 +4041,11 @@ function formatEnumHover(enumInfo) {
   return `\`\`\`aurora\nenum ${enumInfo.name}\n${variants}\n\`\`\``.trim();
 }
 
+function formatTraitHover(traitInfo) {
+  const methods = traitInfo.methods.map((method) => method.detail).join("\n");
+  return `\`\`\`aurora\ntrait ${traitInfo.name}\n${methods}\n\`\`\``.trim();
+}
+
 function formatBuiltinEnumHover(enumInfo) {
   const variants = enumInfo.variants
     .map((variant) =>
@@ -3995,7 +4256,22 @@ function isUnresolvedTypeParamType(moduleInfo, typeName) {
   if (PRIMITIVE_TYPES.has(base) || BUILTIN_ENUMS.has(base) || BUILTIN_MEMBERS[base]) {
     return false;
   }
-  return !moduleInfo.classes.has(base) && !moduleInfo.enums.has(base);
+  return !moduleInfo.classes.has(base) && !moduleInfo.enums.has(base) && !moduleInfo.traits.has(base);
+}
+
+function findBlockEnd(lines, startLine, indent) {
+  let i = startLine + 1;
+  for (; i < lines.length; i += 1) {
+    const raw = lines[i];
+    const currentTrimmed = raw.trim();
+    if (!currentTrimmed || currentTrimmed.startsWith("#")) {
+      continue;
+    }
+    if (countIndent(raw) <= indent) {
+      break;
+    }
+  }
+  return i - 1;
 }
 
 function inferCaseBindingType(trimmed, moduleInfo, functionInfo, lines, lineIndex) {

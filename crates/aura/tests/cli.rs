@@ -1207,6 +1207,101 @@ fn complete_stdin_resolves_local_module_member_completions() {
 }
 
 #[test]
+fn editor_stdin_analysis_and_completion_do_not_write_package_lockfile() {
+    let temp = TempDir::new("aurora-cli-editor-no-lock");
+    fs::create_dir_all(temp.path().join("app/src")).expect("failed to create app src");
+    fs::create_dir_all(temp.path().join("util/src")).expect("failed to create util src");
+    fs::write(
+        temp.path().join("app/Aurora.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\nutil = { path = \"../util\" }\n",
+    )
+    .expect("failed to write app manifest");
+    fs::write(
+        temp.path().join("util/Aurora.toml"),
+        "[package]\nname = \"util\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    )
+    .expect("failed to write util manifest");
+    fs::write(
+        temp.path().join("util/src/math.au"),
+        "public def double(value: int32) -> int32:\n    return value * 2\n",
+    )
+    .expect("failed to write util module");
+
+    let main_path = temp.path().join("app/src/main.au");
+    let analyze_source =
+        "import util.math\n\ndef main() -> int32:\n    print(util.math.double(5))\n    return 0\n";
+    let lockfile = temp.path().join("app/Aurora.lock");
+    assert!(
+        !lockfile.exists(),
+        "test package should start without a lockfile"
+    );
+
+    let mut analyze = Command::new(aura_bin())
+        .arg("analyze")
+        .arg("--stdin")
+        .arg(&main_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura analyze");
+    analyze
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(analyze_source.as_bytes())
+        .expect("failed to write analyze source");
+    let analyze_output = analyze
+        .wait_with_output()
+        .expect("failed to collect aura analyze output");
+    assert!(
+        analyze_output.status.success(),
+        "analyze should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&analyze_output.stderr)
+    );
+    assert!(
+        !lockfile.exists(),
+        "analyze --stdin should not write Aurora.lock for editor buffers"
+    );
+
+    let completion_source =
+        "import util.math\n\ndef main() -> int32:\n    util.math.\n    return 0\n";
+    let mut complete = Command::new(aura_bin())
+        .arg("complete")
+        .arg("--line")
+        .arg("3")
+        .arg("--character")
+        .arg("14")
+        .arg("--trigger")
+        .arg(".")
+        .arg("--stdin")
+        .arg(&main_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aura complete");
+    complete
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(completion_source.as_bytes())
+        .expect("failed to write completion source");
+    let complete_output = complete
+        .wait_with_output()
+        .expect("failed to collect aura complete output");
+    assert!(
+        complete_output.status.success(),
+        "complete should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&complete_output.stderr)
+    );
+    assert!(
+        !lockfile.exists(),
+        "complete --stdin should not write Aurora.lock for editor buffers"
+    );
+}
+
+#[test]
 fn complete_stdin_includes_imported_trait_methods() {
     let temp = TempDir::new("aurora-cli-complete-imported-trait");
     fs::create_dir_all(temp.path().join("pkg")).expect("failed to create package dir");
@@ -1217,7 +1312,7 @@ fn complete_stdin_includes_imported_trait_methods() {
     .expect("failed to write trait module");
     fs::write(
         temp.path().join("pkg/user.au"),
-        "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.label\n",
+        "from pkg.named import Named\n\npublic class User:\n    public label: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.label.clone()\n",
     )
     .expect("failed to write user module");
     let main_path = temp.path().join("main.au");

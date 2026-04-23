@@ -1,0 +1,2 @@
+def main() -> String:
+    return "not an exit code"

@@ -5503,7 +5503,7 @@ class Point:
 
 impl Named for User:
     def name(borrow self) -> String:
-        return self.label
+        return self.label.clone()
 
 impl Add[Point, Point] for Point:
     def add(borrow self, rhs: Point) -> Point:
@@ -6421,7 +6421,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
     );
     assert_eq!(
         checker.borrowed_root_binding_name(&expr(ExprKind::Name("self".to_string())), &locals),
-        None
+        Some("self".to_string())
     );
     assert_eq!(
         checker.member_access_path(&member_expr),

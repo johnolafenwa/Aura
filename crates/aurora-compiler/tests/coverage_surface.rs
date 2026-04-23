@@ -89,7 +89,7 @@ class Badge:
 
 impl Labelled for Badge:
     def label(borrow self) -> String:
-        return self.text
+        return self.text.clone()
 
 class Resource:
     closed: bool = false
@@ -278,7 +278,7 @@ public class User:
 
 impl Named for User:
     def name(borrow self) -> String:
-        return self.label
+        return self.label.clone()
 "#,
     );
     temp.write(

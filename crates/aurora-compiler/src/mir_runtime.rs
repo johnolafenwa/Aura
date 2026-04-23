@@ -1023,21 +1023,33 @@ impl MirRuntime {
             })?;
             let block = &function.blocks[block_index];
             for instruction in &block.instructions {
-                if let Some(value) =
-                    self.execute_instruction(instruction, env, &mut cleanup_stack)?
-                {
-                    self.unwind_cleanups(&mut cleanup_stack, env, true)?;
-                    return Ok(value);
+                match self.execute_instruction(instruction, env, &mut cleanup_stack) {
+                    Ok(Some(value)) => {
+                        self.unwind_cleanups(&mut cleanup_stack, env, true)?;
+                        return Ok(value);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let _ = self.unwind_cleanups(&mut cleanup_stack, env, true);
+                        return Err(error);
+                    }
                 }
             }
 
-            match self.execute_terminator(
+            let outcome = match self.execute_terminator(
                 &block.label,
                 &block.terminator,
                 env,
                 &mut loop_state,
                 &mut cleanup_stack,
-            )? {
+            ) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    let _ = self.unwind_cleanups(&mut cleanup_stack, env, true);
+                    return Err(error);
+                }
+            };
+            match outcome {
                 BlockOutcome::Return(value) => {
                     self.unwind_cleanups(&mut cleanup_stack, env, true)?;
                     return Ok(value);

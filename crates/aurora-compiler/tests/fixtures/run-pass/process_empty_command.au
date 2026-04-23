@@ -1,0 +1,11 @@
+import process
+
+def main() -> int32:
+    command: Vec[String] = []
+    match process.run(command):
+        case Result.Ok(_):
+            print("unexpected")
+            return 1
+        case Result.Err(error):
+            print(error)
+            return 0

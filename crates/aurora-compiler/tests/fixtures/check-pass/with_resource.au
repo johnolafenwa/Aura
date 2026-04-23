@@ -2,7 +2,7 @@ class FileHandle:
     name: String
 
     def read(borrow self) -> String:
-        return self.name
+        return self.name.clone()
 
     def close(borrow mut self):
         print("closed " + self.name)

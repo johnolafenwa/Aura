@@ -551,11 +551,11 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         "    label: String",
         "",
         "    def greet(borrow self) -> String:",
-        "        return self.label",
+        "        return self.label.clone()",
         "",
         "impl Show for User:",
         "    def show(borrow self) -> String:",
-        "        return self.label",
+        "        return self.label.clone()",
         "",
         "enum Status:",
         "    Ready",
@@ -1484,7 +1484,7 @@ fn path_aware_analysis_tracks_imported_function_field_and_trait_method_definitio
             "",
             "impl Named for User:",
             "    def name(borrow self) -> String:",
-            "        return self.label",
+            "        return self.label.clone()",
         ]
         .join("\n"),
     )

@@ -93,7 +93,7 @@ pub fn analyze_source(source: &str) -> AnalysisOutput {
 
 pub fn analyze_path_source(path: &Path, source: &str) -> AnalysisOutput {
     analyze_with_checker(source, |candidate| {
-        crate::check_path_with_source(path, candidate)
+        crate::check_path_with_source_without_lockfile(path, candidate)
     })
 }
 
@@ -105,7 +105,7 @@ pub fn complete_path_source(
     trigger_character: Option<char>,
 ) -> Result<Vec<AnalysisCompletion>> {
     complete_with_checker(source, line, character, trigger_character, |candidate| {
-        crate::check_path_with_source(path, candidate)
+        crate::check_path_with_source_without_lockfile(path, candidate)
     })
 }
 

@@ -1441,6 +1441,13 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
+        if let Some(target_ty) = &target_ty {
+            if let Some(value) = self.lower_collection_literal_with_type(&assign.value, target_ty) {
+                self.emit(Instruction::Assign { target, value });
+                return;
+            }
+        }
+
         let value = self.lower_expr(&assign.value);
         if let (Some(target_ty), Operand::Place(place)) = (target_ty, &value) {
             self.local_types.insert(place.clone(), target_ty);
@@ -1449,6 +1456,49 @@ impl<'a> Lowerer<'a> {
             target,
             value: Rvalue::Use(value),
         });
+    }
+
+    fn lower_collection_literal_with_type(&mut self, expr: &Expr, ty: &Type) -> Option<Rvalue> {
+        match (&expr.kind, ty) {
+            (ExprKind::List(elements), Type::Named(name, args))
+                if name == "Vec" && args.len() == 1 =>
+            {
+                Some(Rvalue::VecLiteral {
+                    elements: elements
+                        .iter()
+                        .map(|element| self.lower_expr(element))
+                        .collect(),
+                    element_type: args[0].clone(),
+                })
+            }
+            (ExprKind::Set(elements), Type::Named(name, args))
+                if name == "Set" && args.len() == 1 =>
+            {
+                Some(Rvalue::SetLiteral {
+                    elements: elements
+                        .iter()
+                        .map(|element| self.lower_expr(element))
+                        .collect(),
+                    element_type: args[0].clone(),
+                })
+            }
+            (ExprKind::Map(entries), Type::Named(name, args))
+                if name == "Map" && args.len() == 2 =>
+            {
+                Some(Rvalue::MapLiteral {
+                    entries: entries
+                        .iter()
+                        .map(|entry| MirMapEntry {
+                            key: self.lower_expr(&entry.key),
+                            value: self.lower_expr(&entry.value),
+                        })
+                        .collect(),
+                    key_type: args[0].clone(),
+                    value_type: args[1].clone(),
+                })
+            }
+            _ => None,
+        }
     }
 
     fn render_assign_target(&self, target: &AssignTarget) -> String {

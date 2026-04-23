@@ -1,7 +1,7 @@
 class Box[T]:
     value: T
 
-    def get(borrow self) -> T:
+    def get(self) -> T:
         return self.value
 
 enum Wrapper[T]:
@@ -18,4 +18,3 @@ def main() -> int32:
         case Wrapper.Item(value):
             print(value)
     return 0
-

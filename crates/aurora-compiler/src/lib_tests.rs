@@ -627,7 +627,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
             "",
             "public class Box[T]:",
             "    value: T",
-            "    public def read(borrow self) -> T:",
+            "    public def read(self) -> T:",
             "        return self.value",
             "",
             "class Hidden:",

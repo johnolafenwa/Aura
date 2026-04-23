@@ -5,9 +5,10 @@ use std::io::{Read, Write};
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use std::{
     ffi::CString,
@@ -27,6 +28,7 @@ const SUPPORTED_PACKAGE_EDITION: &str = "2026";
 const MAX_DEPENDENCIES_PER_PACKAGE: usize = 1024;
 const MAX_PACKAGES_IN_GRAPH: usize = 4096;
 const TEMP_FILE_RETRY_LIMIT: usize = 32;
+const DEFAULT_GIT_COMMAND_TIMEOUT: StdDuration = StdDuration::from_secs(60);
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -810,7 +812,7 @@ fn load_package_manifest(manifest_dir: &Path) -> Result<ParsedPackageManifest> {
     }
     if !is_valid_package_name(&package.name) {
         return Err(Diagnostic::new(format!(
-            "manifest `{}` has an invalid package name `{}`; package names must match `[A-Za-z_][A-Za-z0-9_-]*`",
+            "manifest `{}` has an invalid package name `{}`; package names must match `[A-Za-z_][A-Za-z0-9_]*`",
             manifest_path.display(),
             package.name
         )));
@@ -1210,11 +1212,111 @@ fn configured_git_command(current_dir: Option<&Path>, args: &[String]) -> Comman
     command
 }
 
-fn run_git_command(current_dir: Option<&Path>, args: Vec<String>) -> Result<String> {
-    let mut command = configured_git_command(current_dir, &args);
-    let output = command.output().map_err(|error| {
-        Diagnostic::new(format!("failed to run `git {}`: {}", args.join(" "), error))
+fn git_command_timeout() -> StdDuration {
+    env::var("AURORA_GIT_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|millis| *millis > 0)
+        .map(StdDuration::from_millis)
+        .unwrap_or(DEFAULT_GIT_COMMAND_TIMEOUT)
+}
+
+fn pipe_reader_thread<R>(mut reader: R) -> thread::JoinHandle<std::io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        reader.read_to_end(&mut output).map(|_| output)
+    })
+}
+
+fn join_command_pipe(
+    handle: thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    display_name: &str,
+    stream_name: &str,
+) -> Result<Vec<u8>> {
+    handle
+        .join()
+        .map_err(|_| {
+            Diagnostic::new(format!(
+                "failed to collect `{}` {} output",
+                display_name, stream_name
+            ))
+        })?
+        .map_err(|error| {
+            Diagnostic::new(format!(
+                "failed to read `{}` {} output: {}",
+                display_name, stream_name, error
+            ))
+        })
+}
+
+fn run_command_with_timeout(
+    mut command: Command,
+    display_name: &str,
+    timeout: StdDuration,
+) -> Result<Output> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| Diagnostic::new(format!("failed to run `{}`: {}", display_name, error)))?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        Diagnostic::new(format!(
+            "internal error: `{}` stdout was not captured",
+            display_name
+        ))
     })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        Diagnostic::new(format!(
+            "internal error: `{}` stderr was not captured",
+            display_name
+        ))
+    })?;
+    let stdout_handle = pipe_reader_thread(stdout);
+    let stderr_handle = pipe_reader_thread(stderr);
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = join_command_pipe(stdout_handle, display_name, "stdout")?;
+                let stderr = join_command_pipe(stderr_handle, display_name, "stderr")?;
+                return Ok(Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_handle.join();
+                let _ = stderr_handle.join();
+                return Err(Diagnostic::new(format!(
+                    "failed to wait for `{}`: {}",
+                    display_name, error
+                )));
+            }
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_handle.join();
+            let _ = stderr_handle.join();
+            return Err(Diagnostic::new(format!(
+                "`{}` timed out after {:?}",
+                display_name, timeout
+            )));
+        }
+        thread::sleep(StdDuration::from_millis(10));
+    }
+}
+
+fn run_git_command(current_dir: Option<&Path>, args: Vec<String>) -> Result<String> {
+    let command_display = format!("git {}", args.join(" "));
+    let command = configured_git_command(current_dir, &args);
+    let output = run_command_with_timeout(command, &command_display, git_command_timeout())?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1224,9 +1326,8 @@ fn run_git_command(current_dir: Option<&Path>, args: Vec<String>) -> Result<Stri
             stderr.trim().to_string()
         };
         return Err(Diagnostic::new(format!(
-            "`git {}` failed: {}",
-            args.join(" "),
-            details
+            "`{}` failed: {}",
+            command_display, details
         )));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -1575,7 +1676,7 @@ fn is_valid_package_name(name: &str) -> bool {
     if !(first == '_' || first.is_ascii_alphabetic()) {
         return false;
     }
-    chars.all(|ch| ch == '_' || ch == '-' || ch.is_ascii_alphanumeric())
+    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
 fn is_valid_package_version(version: &str) -> bool {
@@ -1829,6 +1930,22 @@ mod tests {
         );
         assert_eq!(envs.get("GIT_ASKPASS"), Some(&Some(String::new())));
         assert_eq!(envs.get("SSH_ASKPASS"), Some(&Some(String::new())));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_timeout_terminates_hung_git_helpers() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5"]);
+        let started = Instant::now();
+        let error =
+            run_command_with_timeout(command, "git test-timeout", StdDuration::from_millis(50))
+                .expect_err("hung commands should time out");
+        assert!(error.message.contains("timed out"));
+        assert!(
+            started.elapsed() < StdDuration::from_secs(2),
+            "timeout helper should not wait for the child sleep to finish"
+        );
     }
 
     #[cfg(unix)]

@@ -127,9 +127,23 @@ pub fn check_path(path: &Path) -> Result<Program> {
 }
 
 pub fn check_path_with_source(path: &Path, source: &str) -> Result<Program> {
+    check_path_with_source_inner(path, source, true)
+}
+
+fn check_path_with_source_without_lockfile(path: &Path, source: &str) -> Result<Program> {
+    check_path_with_source_inner(path, source, false)
+}
+
+fn check_path_with_source_inner(
+    path: &Path,
+    source: &str,
+    write_lockfile: bool,
+) -> Result<Program> {
     let mut loader = ModuleLoader::new_with_source(path, Some(source))?;
     let program = loader.load_program_with_source(path, source)?;
-    loader.write_lockfile()?;
+    if write_lockfile {
+        loader.write_lockfile()?;
+    }
     Ok(program)
 }
 

@@ -849,6 +849,32 @@ edition = "2026"
 }
 
 #[test]
+fn package_manifest_rejects_hyphenated_package_names_that_cannot_be_imported() {
+    let temp = TempDir::new("aurora-packages-hyphen-name");
+    let main_path = temp.write(
+        "app/src/main.au",
+        r#"def main() -> int32:
+    return 0
+"#,
+    );
+    temp.write(
+        "app/Aurora.toml",
+        r#"[package]
+name = "my-util"
+version = "0.1.0"
+edition = "2026"
+"#,
+    );
+
+    let error = check_path(&main_path).expect_err("hyphenated package names should be rejected");
+    assert!(
+        error.message.contains("invalid package name"),
+        "unexpected error message: {}",
+        error.message
+    );
+}
+
+#[test]
 fn package_manifest_rejects_unknown_editions() {
     let temp = TempDir::new("aurora-packages-invalid-edition");
     let main_path = temp.write(

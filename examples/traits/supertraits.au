@@ -10,7 +10,7 @@ class User:
 
 impl Named for User:
     def name(borrow self) -> String:
-        return self.name
+        return self.name.clone()
 
 impl Labelled for User:
     pass

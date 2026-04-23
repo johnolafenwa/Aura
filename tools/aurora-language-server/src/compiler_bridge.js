@@ -150,6 +150,8 @@ function symbolKind(kind) {
       return 8;
     case "enum":
       return 10;
+    case "trait":
+      return 11;
     case "variant":
       return 22;
     default:

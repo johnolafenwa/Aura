@@ -158,7 +158,7 @@ public class User:
 
 impl Named for User:
     def name(borrow self) -> String:
-        return self.label
+        return self.label.clone()
 "#,
     );
 
@@ -437,7 +437,7 @@ public class User:
 
 impl Named for User:
     def name(borrow self) -> String:
-        return self.label
+        return self.label.clone()
 "#,
     );
     let main_path = temp.write(

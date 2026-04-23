@@ -4,11 +4,12 @@ use super::{
     remove_file_checked, render_float, result_err, result_ok, run_blocking_io,
     run_lightweight_root_task, send_error_cancelled, send_error_closed,
     sleep_with_runtime_scheduler, spawn_lightweight_task, spawn_lightweight_task_with_cancellation,
-    task_group_cleanup_should_cancel, wait_for_runtime_scheduler, CancellationContext,
-    ChannelValue, EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, MapValue,
-    ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, RecvValueResult,
-    SetValue, TaskGroupValue, TaskValue, TcpListenerValue, TcpStreamValue, TryRecvResult,
-    UdpSocketValue, Value, VecValue, WebSocketListenerValue,
+    task_group_cleanup_should_cancel, validate_read_line_capacity, validate_requested_read_size,
+    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpListenerValue, HttpResponseValue, MapValue, ProcessRestartPolicy, ProcessStdioConfig,
+    ProcessSupervisorValue, RangeValue, RecvValueResult, SetValue, TaskGroupValue, TaskValue,
+    TcpListenerValue, TcpStreamValue, TryRecvResult, UdpSocketValue, Value, VecValue,
+    WebSocketListenerValue, MAX_READ_ALL_BYTES,
 };
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
@@ -21,12 +22,60 @@ use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
-use super::{TlsListenerValue, TlsStreamValue, UnixListenerValue, UnixStreamValue};
+use super::{
+    read_exact_with_fd_deadline, read_line_with_fd_deadline, read_some_with_fd_deadline,
+    TlsListenerValue, TlsStreamValue, UnixListenerValue, UnixStreamValue,
+};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 
 struct TempDir {
     path: PathBuf,
+}
+
+#[test]
+fn bounded_read_helpers_reject_oversized_requests_without_allocation() {
+    let error = validate_requested_read_size("read_exact(...)", MAX_READ_ALL_BYTES + 1)
+        .expect_err("oversized read_exact requests should fail before allocation");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+    let error = validate_read_line_capacity(MAX_READ_ALL_BYTES)
+        .expect_err("line reads should enforce the shared read limit");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+}
+
+#[cfg(unix)]
+#[test]
+fn fd_reads_check_deadline_and_size_before_ready_reads() {
+    let expired = Instant::now() - StdDuration::from_millis(1);
+    let mut line_reader = io::Cursor::new(b"ready\n".to_vec());
+    let error = read_line_with_fd_deadline(&mut line_reader, 0, libc::POLLIN, Some(expired), None)
+        .expect_err("expired read_line deadline should fail before consuming ready bytes");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+
+    let mut exact_reader = io::empty();
+    let error = read_exact_with_fd_deadline(
+        &mut exact_reader,
+        0,
+        MAX_READ_ALL_BYTES + 1,
+        libc::POLLIN,
+        None,
+        None,
+    )
+    .expect_err("oversized read_exact should fail before allocating");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+    let mut some_reader = io::empty();
+    let error = read_some_with_fd_deadline(
+        &mut some_reader,
+        0,
+        MAX_READ_ALL_BYTES + 1,
+        libc::POLLIN,
+        None,
+        None,
+    )
+    .expect_err("oversized read_bytes should fail before allocating");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 }
 
 impl TempDir {
