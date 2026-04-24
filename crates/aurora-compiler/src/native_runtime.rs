@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::process;
@@ -14,17 +14,18 @@ use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
 use crate::runtime_value::{
     cancel_current_lightweight_task_boundary, cast_numeric_value,
-    current_lightweight_task_cancellation, decode_process_restart_policy, decode_process_stdio,
-    fail_current_lightweight_task, io_error, io_read_line, option_none, option_some,
-    poll_cancellation, process_error_cancelled, process_error_io, process_error_no_command,
-    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
-    process_stdio_null, process_stdio_pipe, process_supervisor_wait_cancelled,
-    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
-    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
-    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
-    recv_for_task_group_iteration, render_float, result_err, result_ok, run_blocking_io,
-    run_lightweight_root_task, send_error_cancelled, send_error_closed, send_error_full,
-    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
+    current_lightweight_task_cancellation, current_lightweight_task_id,
+    decode_process_restart_policy, decode_process_stdio, fail_current_lightweight_task, io_error,
+    io_read_line, option_none, option_some, poll_cancellation, process_error_cancelled,
+    process_error_io, process_error_no_command, process_error_spawn, process_error_timed_out,
+    process_exit_status, process_stdio_inherit, process_stdio_null, process_stdio_pipe,
+    process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
+    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
+    queue_receive_item, queue_receive_timed_out, read_file_limited, recv_for_task_group_iteration,
+    render_float, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
+    send_error_cancelled, send_error_closed, send_error_full, send_error_timed_out,
+    sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
@@ -40,6 +41,38 @@ use crate::sema::Type;
 
 thread_local! {
     static TASK_RUNTIME_ERROR_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static DIRECT_CLEANUP_STACKS: RefCell<BTreeMap<u64, Vec<DirectCleanupRegistration>>> = const { RefCell::new(BTreeMap::new()) };
+    static DIRECT_NEXT_CLEANUP_ID: Cell<i64> = const { Cell::new(1) };
+    static DIRECT_CLEANUP_DRAINING: Cell<bool> = const { Cell::new(false) };
+}
+
+struct DirectCleanupRegistration {
+    id: i64,
+    thunk_ptr: i64,
+    args: *mut i64,
+    arg_count: usize,
+}
+
+fn direct_cleanup_key() -> u64 {
+    current_lightweight_task_id().unwrap_or(0)
+}
+
+struct DirectCleanupDrainGuard;
+
+impl Drop for DirectCleanupDrainGuard {
+    fn drop(&mut self) {
+        DIRECT_CLEANUP_DRAINING.with(|draining| draining.set(false));
+    }
+}
+
+struct DirectCallDepthGuard {
+    previous: usize,
+}
+
+impl Drop for DirectCallDepthGuard {
+    fn drop(&mut self) {
+        DIRECT_CALL_DEPTH.with(|depth| depth.set(self.previous));
+    }
 }
 
 fn write_stdout(text: &str) {
@@ -581,7 +614,61 @@ fn render_runtime_diagnostic(diagnostic: Diagnostic) -> String {
     }
 }
 
+unsafe fn release_direct_cleanup_args(args: *mut i64, arg_count: usize) {
+    if args.is_null() {
+        return;
+    }
+    let values = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(args, arg_count)) };
+    for value in values.iter().copied() {
+        if value != 0 {
+            unsafe {
+                aurora_direct_release_value(value as *mut OpaqueValue);
+            }
+        }
+    }
+}
+
+fn drain_direct_cleanup_stack() {
+    let already_draining = DIRECT_CLEANUP_DRAINING.with(|draining| {
+        if draining.get() {
+            true
+        } else {
+            draining.set(true);
+            false
+        }
+    });
+    if already_draining {
+        return;
+    }
+    let _guard = DirectCleanupDrainGuard;
+    let previous_depth = DIRECT_CALL_DEPTH.with(|depth| {
+        let previous = depth.get();
+        depth.set(0);
+        previous
+    });
+    let _depth_guard = DirectCallDepthGuard {
+        previous: previous_depth,
+    };
+    let cleanup_key = direct_cleanup_key();
+    let registrations = DIRECT_CLEANUP_STACKS
+        .with(|stacks| stacks.borrow_mut().remove(&cleanup_key).unwrap_or_default());
+    for registration in registrations.into_iter().rev() {
+        if registration.thunk_ptr != 0 {
+            let thunk: NativeThunk =
+                unsafe { std::mem::transmute(registration.thunk_ptr as usize) };
+            let result = unsafe { thunk(registration.args as *const i64, registration.arg_count) };
+            unsafe {
+                aurora_direct_release_value(result);
+            }
+        }
+        unsafe {
+            release_direct_cleanup_args(registration.args, registration.arg_count);
+        }
+    }
+}
+
 fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
+    drain_direct_cleanup_stack();
     if TASK_RUNTIME_ERROR_CAPTURE.with(|capture| capture.get()) {
         std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
     }
@@ -907,6 +994,9 @@ pub extern "C-unwind" fn aurora_direct_runtime_init(
     source_len: usize,
 ) {
     task_runtime_boundary(|| {
+        DIRECT_CLEANUP_STACKS.with(|stacks| stacks.borrow_mut().clear());
+        DIRECT_NEXT_CLEANUP_ID.with(|next| next.set(1));
+        DIRECT_CLEANUP_DRAINING.with(|draining| draining.set(false));
         let _ = DIRECT_PROGRAM_SOURCE.set(ProgramSourceContext {
             path: decode_bytes(path_ptr, path_len),
             source: decode_bytes(source_ptr, source_len),
@@ -2762,6 +2852,75 @@ pub extern "C-unwind" fn aurora_direct_arg_buffer_store(buffer: *mut i64, index:
 }
 
 #[no_mangle]
+pub extern "C-unwind" fn aurora_direct_register_cleanup(
+    thunk_ptr: i64,
+    args: *mut i64,
+    arg_count: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let arg_count = match usize::try_from(arg_count) {
+            Ok(arg_count) => arg_count,
+            Err(_) => runtime_error("invalid cleanup arg count"),
+        };
+        if thunk_ptr == 0 {
+            runtime_error("invalid cleanup thunk pointer");
+        }
+        let id = DIRECT_NEXT_CLEANUP_ID.with(|next| {
+            let id = next.get();
+            let mut next_id = id.checked_add(1).unwrap_or(1);
+            if next_id == 0 {
+                next_id = 1;
+            }
+            next.set(next_id);
+            id
+        });
+        let cleanup_key = direct_cleanup_key();
+        DIRECT_CLEANUP_STACKS.with(|stacks| {
+            stacks
+                .borrow_mut()
+                .entry(cleanup_key)
+                .or_default()
+                .push(DirectCleanupRegistration {
+                    id,
+                    thunk_ptr,
+                    args,
+                    arg_count,
+                });
+        });
+        id
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_unregister_cleanup(id: i64) {
+    task_runtime_boundary(|| {
+        if id == 0 {
+            return;
+        }
+        let cleanup_key = direct_cleanup_key();
+        let registration = DIRECT_CLEANUP_STACKS.with(|stacks| {
+            let mut stacks = stacks.borrow_mut();
+            let Some(stack) = stacks.get_mut(&cleanup_key) else {
+                return None;
+            };
+            let registration = stack
+                .iter()
+                .rposition(|registration| registration.id == id)
+                .map(|index| stack.remove(index));
+            if stack.is_empty() {
+                stacks.remove(&cleanup_key);
+            }
+            registration
+        });
+        if let Some(registration) = registration {
+            unsafe {
+                release_direct_cleanup_args(registration.args, registration.arg_count);
+            }
+        }
+    })
+}
+
+#[no_mangle]
 pub extern "C-unwind" fn aurora_direct_channel_new(capacity: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         if capacity.is_null() {
@@ -3484,6 +3643,28 @@ pub extern "C-unwind" fn aurora_direct_task_group_cancel(
     })
 }
 
+fn close_task_group(group: &TaskGroupValue, cancel_before: bool) {
+    let tasks = group.drain_tasks();
+    let cancellation = current_cancellation();
+    let mut cancel_group = cancel_before;
+    if !cancel_group && task_group_cleanup_should_cancel(&tasks, &cancellation) {
+        cancel_group = true;
+    }
+    if cancel_group {
+        group.cancel();
+    }
+    for task in tasks {
+        match task.wait_result_with_cancellation(None, Some(&cancellation)) {
+            TaskWaitStatus::Ready(_) => {
+                if let Some(error) = task.unobserved_error() {
+                    runtime_diagnostic_error(error);
+                }
+            }
+            TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => {}
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C-unwind" fn aurora_direct_task_group_close(
     group: *mut OpaqueValue,
@@ -3491,31 +3672,43 @@ pub extern "C-unwind" fn aurora_direct_task_group_close(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(group) } {
         Value::TaskGroup(group) => {
-            let tasks = group.drain_tasks();
-            let cancellation = current_cancellation();
-            let mut cancel_group = cancel_before != 0;
-            if !cancel_group && task_group_cleanup_should_cancel(&tasks, &cancellation) {
-                cancel_group = true;
-            }
-            if cancel_group {
-                group.cancel();
-            }
-            for task in tasks {
-                match task.wait_result_with_cancellation(None, Some(&cancellation)) {
-                    TaskWaitStatus::Ready(_) => {
-                        if let Some(error) = task.unobserved_error() {
-                            runtime_diagnostic_error(error);
-                        }
-                    }
-                    TaskWaitStatus::TimedOut | TaskWaitStatus::Cancelled => {}
-                }
-            }
+            close_task_group(&group, cancel_before != 0);
             boxed_value(Value::Unit)
         }
         other => runtime_error(format!(
             "expected `TaskGroup`, found `{}`",
             value_type_name(other)
         )),
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_close_value(
+    value: *mut OpaqueValue,
+    cancel_before: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        match unsafe { value_ref(value) } {
+            Value::Channel(channel) => channel.close(),
+            Value::TaskGroup(group) => close_task_group(&group, cancel_before != 0),
+            Value::File(file) => file.close(),
+            Value::TcpListener(listener) => listener.close(),
+            Value::TcpStream(stream) => stream.close(),
+            Value::UdpSocket(socket) => socket.close(),
+            Value::HttpListener(listener) => listener.close(),
+            Value::WebSocket(socket) => {
+                let _ = socket.close();
+            }
+            Value::ProcessChild(child) => child.close(),
+            Value::ProcessPipe(pipe) => pipe.close(),
+            Value::ProcessSupervisor(supervisor) => supervisor.close(),
+            Value::UnixListener(listener) => listener.close(),
+            Value::UnixStream(stream) => stream.close(),
+            Value::TlsListener(listener) => listener.close(),
+            Value::TlsStream(stream) => stream.close(),
+            _ => {}
+        }
+        boxed_value(Value::Unit)
     })
 }
 

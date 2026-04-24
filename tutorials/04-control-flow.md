@@ -136,7 +136,7 @@ See [examples/collections/vec_iteration.au](../examples/collections/vec_iteratio
 Sets support by-value and shared-borrow iteration:
 
 ```python
-seen = Set{1, 2, 3}
+seen = {1, 2, 3}
 for value in borrow seen:
     print(value)
 ```

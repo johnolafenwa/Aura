@@ -996,7 +996,7 @@ test("compiler bridge includes Set collection members and MapEntry fields", asyn
     const mainUri = `file://${mainPath}`;
     const source = [
       "def main() -> int32:",
-      "    mut seen = Set{1, 2, 3}",
+      "    mut seen = {1, 2, 3}",
       "    counts = {\"a\": 1, \"b\": 2}",
       "    entries: Vec[MapEntry[String, int32]] = counts.items()",
       "    match entries.get(index=0):",

@@ -1321,6 +1321,10 @@ pub(crate) fn current_lightweight_task_cancellation() -> Option<CancellationCont
     CURRENT_LIGHTWEIGHT_TASK_CANCELLATION.with(|slot| slot.borrow().clone())
 }
 
+pub(crate) fn current_lightweight_task_id() -> Option<u64> {
+    with_current_lightweight_task_context(|context| context.task_id)
+}
+
 #[derive(Debug)]
 pub(crate) struct TaskCancelledSignal;
 
@@ -6366,7 +6370,7 @@ impl TaskGroupValue {
 
     pub(crate) fn all_registered_tasks_completed(&self) -> bool {
         let tasks = lock_mutex(&self.inner.tasks);
-        !tasks.is_empty() && tasks.iter().all(|task| task.completed_result().is_some())
+        tasks.iter().all(|task| task.completed_result().is_some())
     }
 
     pub(crate) fn clear_completion_wake_if_tasks_still_running(&self) {

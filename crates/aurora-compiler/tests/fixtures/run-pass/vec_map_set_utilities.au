@@ -32,7 +32,7 @@ def main() -> int32:
     counts.clear()
     print(counts.is_empty().to_string())
 
-    mut seen = Set{1, 2, 2, 3}
+    mut seen = {1, 2, 2, 3}
     print(seen.len().to_string())
     print(seen.contains(2).to_string())
     print(seen.insert(2).to_string())

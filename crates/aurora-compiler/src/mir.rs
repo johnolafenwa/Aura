@@ -1864,18 +1864,23 @@ impl<'a> Lowerer<'a> {
                 ));
                 self.local_types
                     .insert(for_stmt.binding.clone(), element_ty);
-                let (field, args) = if let Some(task_group_place) = self.active_task_group_place() {
-                    (
-                        INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD.to_string(),
-                        vec![MirArg {
-                            name: None,
-                            value: Operand::Place(task_group_place),
-                            writeback_place: None,
-                        }],
-                    )
-                } else {
-                    ("get".to_string(), Vec::new())
-                };
+                let task_group_place = self.active_task_group_place().unwrap_or_else(|| {
+                    let task_group = self.new_typed_temp(Type::named("TaskGroup"));
+                    self.emit(Instruction::Assign {
+                        target: task_group.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Name("TaskGroup".to_string()),
+                            args: Vec::new(),
+                        },
+                    });
+                    task_group
+                });
+                let field = INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD.to_string();
+                let args = vec![MirArg {
+                    name: None,
+                    value: Operand::Place(task_group_place),
+                    writeback_place: None,
+                }];
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
                 self.switch_to(dispatch_block);
                 self.emit(Instruction::Assign {
@@ -4390,6 +4395,18 @@ impl<'a> Lowerer<'a> {
                 Type::Named("Result".to_string(), vec![Type::Unit, io_error_ty.clone()]),
             ),
             ("fs.File", "close") => Some(Type::Unit),
+            ("process.Completed", "status") => Some(Type::named("process.ExitStatus")),
+            ("process.Completed", "success") => Some(Type::named("bool")),
+            ("process.Completed", "stdout") | ("process.Completed", "stderr") => {
+                Some(Type::named("String"))
+            }
+            ("process.Completed", "stdout_bytes") | ("process.Completed", "stderr_bytes") => {
+                Some(bytes_ty.clone())
+            }
+            ("process.Completed", "check") => Some(Type::Named(
+                "Result".to_string(),
+                vec![Type::Unit, Type::named("process.Error")],
+            )),
             ("net.TcpListener", "accept") => Some(Type::Named(
                 "Result".to_string(),
                 vec![Type::named("net.TcpStream"), io_error_ty.clone()],

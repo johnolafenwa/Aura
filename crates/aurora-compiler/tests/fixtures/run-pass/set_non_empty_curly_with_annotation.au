@@ -1,0 +1,6 @@
+def main() -> int32:
+    mut values: Set[int32] = {1, 2, 2, 3}
+    print(values.len())
+    print(values.contains(2))
+    print(values.contains(9))
+    return 0

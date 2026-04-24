@@ -215,10 +215,10 @@ See [examples/collections/map_basics.au](../examples/collections/map_basics.au).
 
 ## `Set[T]` And Set Literals
 
-Create a set with the `Set{...}` syntax (note: curly braces with the `Set` prefix, to distinguish from map literals):
+Create a set with curly braces when the entries are values rather than `key: value` pairs:
 
 ```python
-mut seen = Set{1, 2, 2, 3}    # duplicates are removed
+mut seen = {1, 2, 2, 3}       # duplicates are removed
 print(seen.len())              # 3
 ```
 
@@ -231,7 +231,7 @@ names = Set[String]()
 Empty set literals need a type annotation:
 
 ```python
-mut names: Set[String] = Set{}
+mut names: Set[String] = {}
 ```
 
 The full method surface includes `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`.

@@ -12,7 +12,7 @@ def sum_set(values: borrow Set[int32]) -> int32:
     return total
 
 def main() -> int32:
-    mut seen = Set{1, 2, 2, 3}
+    mut seen = {1, 2, 2, 3}
     print(seen.len())
     print_bool(seen.contains(2))
     print_bool(seen.insert(2))

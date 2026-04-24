@@ -155,6 +155,7 @@ struct NativeCodegen<'a> {
     object: ObjectModule,
     functions: HashMap<String, FuncId>,
     function_thunks: HashMap<String, FuncId>,
+    cleanup_thunks: HashMap<(String, String), FuncId>,
     classes: HashMap<String, MirClass>,
     trait_impls: Vec<MirTraitImpl>,
     function_return_types: HashMap<String, DirectType>,
@@ -172,6 +173,9 @@ struct NativeCodegen<'a> {
     sqrt_f64: FuncId,
     fail_division_by_zero: FuncId,
     fail_int32_overflow: FuncId,
+    register_cleanup: FuncId,
+    unregister_cleanup: FuncId,
+    close_value: FuncId,
     box_i64: FuncId,
     box_uint_literal: FuncId,
     box_f64: FuncId,
@@ -581,6 +585,9 @@ impl<'a> NativeCodegen<'a> {
             sqrt_f64 => ("aurora_direct_sqrt_f64", [types::F64], Some(types::F64)),
             fail_division_by_zero => ("aurora_direct_fail_division_by_zero", [types::I64, types::I64], None),
             fail_int32_overflow => ("aurora_direct_fail_int32_overflow", [types::I64, types::I64, types::I64], None),
+            register_cleanup => ("aurora_direct_register_cleanup", [types::I64, types::I64, types::I64], Some(types::I64)),
+            unregister_cleanup => ("aurora_direct_unregister_cleanup", [types::I64], None),
+            close_value => ("aurora_direct_close_value", [types::I64, types::I64], Some(types::I64)),
             box_i64 => ("aurora_direct_box_i64", [types::I64], Some(types::I64)),
             box_uint_literal => ("aurora_direct_box_uint_literal", [types::I64, types::I64], Some(types::I64)),
             box_f64 => ("aurora_direct_box_f64", [types::F64], Some(types::I64)),
@@ -838,6 +845,7 @@ impl<'a> NativeCodegen<'a> {
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
+        let mut cleanup_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
         let mut function_param_types = HashMap::new();
         let mut function_writeback_types = HashMap::new();
@@ -860,6 +868,19 @@ impl<'a> NativeCodegen<'a> {
                 function.name
             );
             function_thunks.insert(function.name.clone(), thunk_id);
+            for (cleanup_index, place) in collect_cleanup_places(function).into_iter().enumerate() {
+                let cleanup_id = try_or_string_error!(
+                    object.declare_function(
+                        &mangle_cleanup_thunk_symbol(&function.name, &place, cleanup_index),
+                        Linkage::Local,
+                        &thunk_signature,
+                    ),
+                    "failed to declare cleanup thunk for `{}` in `{}`: {}",
+                    place,
+                    function.name
+                );
+                cleanup_thunks.insert((function.name.clone(), place), cleanup_id);
+            }
             function_return_types.insert(
                 function.name.clone(),
                 ensure_direct_type(
@@ -901,6 +922,7 @@ impl<'a> NativeCodegen<'a> {
             object,
             functions,
             function_thunks,
+            cleanup_thunks,
             classes,
             trait_impls,
             function_return_types,
@@ -918,6 +940,9 @@ impl<'a> NativeCodegen<'a> {
             sqrt_f64,
             fail_division_by_zero,
             fail_int32_overflow,
+            register_cleanup,
+            unregister_cleanup,
+            close_value,
             box_i64,
             box_uint_literal,
             box_f64,
@@ -1197,6 +1222,14 @@ impl<'a> NativeCodegen<'a> {
                 self.define_function_thunk(function)?;
             }
         }
+        for function in self
+            .module
+            .functions
+            .iter()
+            .chain(self.module.top_level.iter())
+        {
+            self.define_cleanup_thunks(function)?;
+        }
         self.define_main_wrapper()?;
         let product = self.object.finish();
         match product.emit() {
@@ -1371,6 +1404,7 @@ impl<'a> NativeCodegen<'a> {
             }
         }
         let mut cleanup_active_vars = HashMap::new();
+        let mut cleanup_registration_vars = HashMap::new();
         for place in &cleanup_places {
             let variable = Variable::from_u32(variable_index as u32);
             variable_index += 1;
@@ -1378,6 +1412,13 @@ impl<'a> NativeCodegen<'a> {
             let zero = builder.ins().iconst(types::I64, 0);
             builder.def_var(variable, zero);
             cleanup_active_vars.insert(place.clone(), variable);
+
+            let registration_variable = Variable::from_u32(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(registration_variable, types::I64);
+            let zero = builder.ins().iconst(types::I64, 0);
+            builder.def_var(registration_variable, zero);
+            cleanup_registration_vars.insert(place.clone(), registration_variable);
         }
 
         let mut writeback_locals = Vec::new();
@@ -1406,6 +1447,16 @@ impl<'a> NativeCodegen<'a> {
             let func_ref = self.object.declare_func_in_func(*func_id, builder.func);
             function_thunk_refs.insert(name.clone(), func_ref);
         }
+        let mut cleanup_thunk_refs = HashMap::new();
+        for place in &cleanup_places {
+            if let Some(func_id) = self
+                .cleanup_thunks
+                .get(&(function.name.clone(), place.clone()))
+            {
+                let func_ref = self.object.declare_func_in_func(*func_id, builder.func);
+                cleanup_thunk_refs.insert(place.clone(), func_ref);
+            }
+        }
 
         let print_i64 = self
             .object
@@ -1428,6 +1479,12 @@ impl<'a> NativeCodegen<'a> {
         let fail_int32_overflow = self
             .object
             .declare_func_in_func(self.fail_int32_overflow, builder.func);
+        let register_cleanup = self
+            .object
+            .declare_func_in_func(self.register_cleanup, builder.func);
+        let unregister_cleanup = self
+            .object
+            .declare_func_in_func(self.unregister_cleanup, builder.func);
         let box_i64 = self.object.declare_func_in_func(self.box_i64, builder.func);
         let box_uint_literal = self
             .object
@@ -2180,6 +2237,7 @@ impl<'a> NativeCodegen<'a> {
             next_variable_index: variable_index,
             function_refs,
             function_thunk_refs,
+            cleanup_thunk_refs,
             function_return_types: self.function_return_types.clone(),
             function_param_types: self.function_param_types.clone(),
             function_writeback_types: self.function_writeback_types.clone(),
@@ -2191,6 +2249,7 @@ impl<'a> NativeCodegen<'a> {
             string_data: &mut self.string_data,
             cleanup_places,
             cleanup_active_vars,
+            cleanup_registration_vars,
             exit_call,
             print_i64,
             print_f64,
@@ -2199,6 +2258,8 @@ impl<'a> NativeCodegen<'a> {
             sqrt_f64,
             fail_division_by_zero,
             fail_int32_overflow,
+            register_cleanup,
+            unregister_cleanup,
             box_i64,
             box_uint_literal,
             box_f64,
@@ -2577,6 +2638,151 @@ impl<'a> NativeCodegen<'a> {
         Ok(())
     }
 
+    fn define_cleanup_thunks(&mut self, function: &MirFunction) -> std::result::Result<(), String> {
+        for place in collect_cleanup_places(function) {
+            self.define_cleanup_thunk(function, &place)?;
+        }
+        Ok(())
+    }
+
+    fn define_cleanup_thunk(
+        &mut self,
+        function: &MirFunction,
+        place: &str,
+    ) -> std::result::Result<(), String> {
+        let thunk_id = *self
+            .cleanup_thunks
+            .get(&(function.name.clone(), place.to_string()))
+            .ok_or_else(|| {
+                format!(
+                    "direct backend could not find cleanup thunk for `{}` in `{}`",
+                    place, function.name
+                )
+            })?;
+        let place_ty =
+            cleanup_place_type(function, &self.classes, place, &self.function_return_types)?;
+
+        let mut ctx = self.object.make_context();
+        ctx.func.signature = thunk_signature(self.call_conv);
+        ctx.func.name = UserFuncName::user(0, thunk_id.as_u32());
+
+        let mut builder_ctx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+
+        let args_ptr = builder.block_params(entry)[0];
+        let raw = builder.ins().load(types::I64, MemFlags::new(), args_ptr, 0);
+        match &place_ty {
+            DirectType::PlainClass(class_ty) => {
+                let close_method = self
+                    .classes
+                    .get(&class_ty.class_name)
+                    .and_then(|class| class.methods.iter().find(|method| method.name == "close"))
+                    .cloned();
+                if let Some(method) = close_method {
+                    let target_id =
+                        *self.functions.get(&method.function_name).ok_or_else(|| {
+                            format!(
+                                "direct backend could not find cleanup close method `{}`",
+                                method.function_name
+                            )
+                        })?;
+                    let target_ref = self.object.declare_func_in_func(target_id, builder.func);
+                    let lowered = unbox_thunk_value(self, &mut builder, raw, &place_ty)?;
+                    let inst = builder.ins().call(target_ref, &lowered);
+                    let results = builder.inst_results(inst).to_vec();
+                    release_direct_call_results(
+                        self,
+                        &mut builder,
+                        &method.function_name,
+                        &results,
+                    )?;
+                }
+                let zero = builder.ins().iconst(types::I64, 0);
+                let unit = box_thunk_value(
+                    self,
+                    &mut builder,
+                    &[zero],
+                    &DirectType::Scalar(ScalarKind::Unit),
+                )?;
+                builder.ins().return_(&[unit]);
+            }
+            DirectType::Opaque(ty) => {
+                let close_method = match ty {
+                    Type::Named(class_name, _) => self
+                        .classes
+                        .get(class_name)
+                        .and_then(|class| {
+                            class.methods.iter().find(|method| method.name == "close")
+                        })
+                        .cloned(),
+                    _ => None,
+                };
+                if let Some(method) = close_method {
+                    let target_id =
+                        *self.functions.get(&method.function_name).ok_or_else(|| {
+                            format!(
+                                "direct backend could not find cleanup close method `{}`",
+                                method.function_name
+                            )
+                        })?;
+                    let target_ref = self.object.declare_func_in_func(target_id, builder.func);
+                    let retain_value = self
+                        .object
+                        .declare_func_in_func(self.retain_value, builder.func);
+                    let retained = builder.ins().call(retain_value, &[raw]);
+                    let retained = builder.inst_results(retained)[0];
+                    let inst = builder.ins().call(target_ref, &[retained]);
+                    let results = builder.inst_results(inst).to_vec();
+                    release_direct_call_results(
+                        self,
+                        &mut builder,
+                        &method.function_name,
+                        &results,
+                    )?;
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    let unit = box_thunk_value(
+                        self,
+                        &mut builder,
+                        &[zero],
+                        &DirectType::Scalar(ScalarKind::Unit),
+                    )?;
+                    builder.ins().return_(&[unit]);
+                } else {
+                    let close_value = self
+                        .object
+                        .declare_func_in_func(self.close_value, builder.func);
+                    let cancel_before = builder.ins().iconst(types::I64, 1);
+                    let inst = builder.ins().call(close_value, &[raw, cancel_before]);
+                    let result = builder.inst_results(inst)[0];
+                    builder.ins().return_(&[result]);
+                }
+            }
+            DirectType::Scalar(_) => {
+                let zero = builder.ins().iconst(types::I64, 0);
+                let unit = box_thunk_value(
+                    self,
+                    &mut builder,
+                    &[zero],
+                    &DirectType::Scalar(ScalarKind::Unit),
+                )?;
+                builder.ins().return_(&[unit]);
+            }
+        }
+        builder.finalize();
+
+        try_or_string_error!(
+            self.object.define_function(thunk_id, &mut ctx),
+            "failed to define cleanup thunk for `{}` in `{}`: {}",
+            place,
+            function.name
+        );
+        Ok(())
+    }
+
     fn define_main_wrapper(&mut self) -> std::result::Result<(), String> {
         let entry_name = if self.functions.contains_key("main") {
             "main".to_string()
@@ -2650,6 +2856,7 @@ struct FunctionCompiler<'a> {
     next_variable_index: usize,
     function_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     function_thunk_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
+    cleanup_thunk_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
     function_writeback_types: HashMap<String, Vec<DirectType>>,
@@ -2661,6 +2868,7 @@ struct FunctionCompiler<'a> {
     string_data: &'a mut HashMap<Vec<u8>, DataId>,
     cleanup_places: Vec<String>,
     cleanup_active_vars: HashMap<String, Variable>,
+    cleanup_registration_vars: HashMap<String, Variable>,
     exit_call: cranelift_codegen::ir::FuncRef,
     print_i64: cranelift_codegen::ir::FuncRef,
     print_f64: cranelift_codegen::ir::FuncRef,
@@ -2669,6 +2877,8 @@ struct FunctionCompiler<'a> {
     sqrt_f64: cranelift_codegen::ir::FuncRef,
     fail_division_by_zero: cranelift_codegen::ir::FuncRef,
     fail_int32_overflow: cranelift_codegen::ir::FuncRef,
+    register_cleanup: cranelift_codegen::ir::FuncRef,
+    unregister_cleanup: cranelift_codegen::ir::FuncRef,
     box_i64: cranelift_codegen::ir::FuncRef,
     box_uint_literal: cranelift_codegen::ir::FuncRef,
     box_f64: cranelift_codegen::ir::FuncRef,
@@ -3103,11 +3313,13 @@ impl<'a> FunctionCompiler<'a> {
             }
             Instruction::PushCleanup { place } => {
                 self.set_cleanup_active(place, true)?;
+                self.register_cleanup_for_place(place)?;
             }
             Instruction::PopCleanup {
                 place,
                 cancel_before_cleanup,
             } => {
+                self.unregister_cleanup_for_place(place)?;
                 self.emit_cleanup_for_place(place, *cancel_before_cleanup)?;
                 self.set_cleanup_active(place, false)?;
             }
@@ -5467,6 +5679,59 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    fn register_cleanup_for_place(&mut self, place: &str) -> std::result::Result<(), String> {
+        let Some(registration_variable) = self.cleanup_registration_vars.get(place).copied() else {
+            return Err(format!(
+                "direct backend does not know cleanup registration for `{}`",
+                place
+            ));
+        };
+        let Some(thunk_ref) = self.cleanup_thunk_refs.get(place).copied() else {
+            return Err(format!(
+                "direct backend does not know cleanup thunk for `{}`",
+                place
+            ));
+        };
+
+        let loaded = self.load_place(place)?;
+        let boxed = self.ensure_opaque(loaded)?;
+        let count = self.builder.ins().iconst(types::I64, 1);
+        let buffer = self.builder.ins().call(self.arg_buffer_new, &[count]);
+        let buffer = self.builder.inst_results(buffer)[0];
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder
+            .ins()
+            .call(self.arg_buffer_store, &[buffer, zero, boxed.values[0]]);
+        if self.temporary_owns_opaque(&boxed) {
+            self.clear_temporary_opaque_owned(&boxed);
+            self.release_opaque_handle(boxed.values[0]);
+        }
+        let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk_ref);
+        let registration = self
+            .builder
+            .ins()
+            .call(self.register_cleanup, &[thunk_ptr, buffer, count]);
+        let registration_id = self.builder.inst_results(registration)[0];
+        self.builder.def_var(registration_variable, registration_id);
+        Ok(())
+    }
+
+    fn unregister_cleanup_for_place(&mut self, place: &str) -> std::result::Result<(), String> {
+        let Some(variable) = self.cleanup_registration_vars.get(place).copied() else {
+            return Err(format!(
+                "direct backend does not know cleanup registration for `{}`",
+                place
+            ));
+        };
+        let registration_id = self.builder.use_var(variable);
+        self.builder
+            .ins()
+            .call(self.unregister_cleanup, &[registration_id]);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder.def_var(variable, zero);
+        Ok(())
+    }
+
     fn emit_pending_cleanups(
         &mut self,
         cancel_before_cleanup: bool,
@@ -5484,6 +5749,7 @@ impl<'a> FunctionCompiler<'a> {
                 .ins()
                 .brif(should_run, run_block, &[], next_block, &[]);
             self.builder.switch_to_block(run_block);
+            self.unregister_cleanup_for_place(&place)?;
             self.emit_cleanup_for_place(&place, cancel_before_cleanup)?;
             self.builder.def_var(variable, zero);
             self.builder.ins().jump(next_block, &[]);
@@ -9644,6 +9910,81 @@ fn receiver_type(
     )
 }
 
+fn cleanup_place_type(
+    function: &MirFunction,
+    classes: &HashMap<String, MirClass>,
+    place: &str,
+    function_return_types: &HashMap<String, DirectType>,
+) -> std::result::Result<DirectType, String> {
+    let mut root_types = HashMap::new();
+    if function.receiver.is_some() {
+        if let Some(local) = function
+            .local_types
+            .iter()
+            .find(|local| local.name == "self")
+        {
+            root_types.insert(
+                "self".to_string(),
+                ensure_direct_type(&local.ty, classes, "cleanup receiver")?,
+            );
+        }
+    }
+    for param in &function.params {
+        root_types.insert(
+            param.name.clone(),
+            ensure_direct_type(
+                &param.ty,
+                classes,
+                &format!("cleanup parameter `{}`", param.name),
+            )?,
+        );
+    }
+    for local in &function.local_types {
+        root_types
+            .entry(local.name.clone())
+            .or_insert(ensure_direct_type(
+                &local.ty,
+                classes,
+                &format!("cleanup local `{}`", local.name),
+            )?);
+    }
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            let Instruction::Assign { target, value } = instruction else {
+                continue;
+            };
+            if target.contains('.') || root_types.contains_key(target) {
+                continue;
+            }
+            if let Some(ty) = infer_rvalue_type(value, &root_types, function_return_types, classes)
+            {
+                root_types.insert(target.clone(), ty);
+            }
+        }
+    }
+
+    let mut segments = place.split('.');
+    let root = segments
+        .next()
+        .ok_or_else(|| "direct backend encountered an empty cleanup place".to_string())?;
+    let mut ty = root_types.get(root).cloned().ok_or_else(|| {
+        format!(
+            "direct backend does not know cleanup place `{}` in `{}`",
+            place, function.name
+        )
+    })?;
+    for field in segments {
+        ty = direct_field_type(&ty, field, classes).ok_or_else(|| {
+            format!(
+                "direct backend does not know cleanup field `{}` on `{}`",
+                field,
+                render_direct_type(&ty)
+            )
+        })?;
+    }
+    Ok(ty)
+}
+
 fn declare_root_variables(
     builder: &mut FunctionBuilder<'_>,
     variable_index: &mut usize,
@@ -9669,6 +10010,21 @@ fn declare_root_variables(
     }
     variables.insert(name.clone(), declared);
     variable_types.insert(name, ty);
+}
+
+fn collect_cleanup_places(function: &MirFunction) -> Vec<String> {
+    let mut cleanup_places = Vec::<String>::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            let Instruction::PushCleanup { place } = instruction else {
+                continue;
+            };
+            if !cleanup_places.contains(place) {
+                cleanup_places.push(place.clone());
+            }
+        }
+    }
+    cleanup_places
 }
 
 fn validate_module(module: &MirModule) -> std::result::Result<(), String> {
@@ -11335,6 +11691,94 @@ fn unbox_thunk_value(
     }
 }
 
+fn release_direct_call_results(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    function_name: &str,
+    results: &[Value],
+) -> std::result::Result<(), String> {
+    let return_ty = codegen
+        .function_return_types
+        .get(function_name)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "direct backend does not know return type for `{}`",
+                function_name
+            )
+        })?;
+    let return_count = return_ty.value_count();
+    if results.len() < return_count {
+        return Err(format!(
+            "direct backend cleanup call `{}` returned too few values",
+            function_name
+        ));
+    }
+    release_direct_values(codegen, builder, &results[..return_count], &return_ty)?;
+    let mut cursor = return_count;
+    for writeback_ty in codegen
+        .function_writeback_types
+        .get(function_name)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let count = writeback_ty.value_count();
+        if results.len() < cursor + count {
+            return Err(format!(
+                "direct backend cleanup call `{}` returned incomplete writeback values",
+                function_name
+            ));
+        }
+        release_direct_values(
+            codegen,
+            builder,
+            &results[cursor..cursor + count],
+            &writeback_ty,
+        )?;
+        cursor += count;
+    }
+    Ok(())
+}
+
+fn release_direct_values(
+    codegen: &mut NativeCodegen<'_>,
+    builder: &mut FunctionBuilder<'_>,
+    values: &[Value],
+    ty: &DirectType,
+) -> std::result::Result<(), String> {
+    match ty {
+        DirectType::Opaque(_) => {
+            let Some(value) = values.first().copied() else {
+                return Err(format!(
+                    "direct backend cleanup expected an opaque `{}` result",
+                    render_direct_type(ty)
+                ));
+            };
+            let release_value = codegen
+                .object
+                .declare_func_in_func(codegen.release_value, builder.func);
+            builder.ins().call(release_value, &[value]);
+        }
+        DirectType::PlainClass(class) => {
+            let mut start = 0usize;
+            for field in &class.fields {
+                let end = start + field.ty.value_count();
+                if values.len() < end {
+                    return Err(format!(
+                        "direct backend cleanup expected `{}` values for `{}`",
+                        end,
+                        render_direct_type(ty)
+                    ));
+                }
+                release_direct_values(codegen, builder, &values[start..end], &field.ty)?;
+                start = end;
+            }
+        }
+        DirectType::Scalar(_) => {}
+    }
+    Ok(())
+}
+
 fn main_signature(call_conv: CallConv) -> Signature {
     let mut signature = Signature::new(call_conv);
     signature.returns.push(AbiParam::new(types::I32));
@@ -11364,6 +11808,22 @@ fn mangle_symbol(name: &str) -> String {
 fn mangle_thunk_symbol(name: &str) -> String {
     let mut mangled = String::from("aurora_thunk_");
     for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            mangled.push(ch);
+        } else {
+            mangled.push('_');
+        }
+    }
+    mangled
+}
+
+fn mangle_cleanup_thunk_symbol(function_name: &str, place: &str, index: usize) -> String {
+    let mut mangled = format!("aurora_cleanup_{}_", index);
+    for ch in function_name
+        .chars()
+        .chain(std::iter::once('_'))
+        .chain(place.chars())
+    {
         if ch.is_ascii_alphanumeric() {
             mangled.push(ch);
         } else {

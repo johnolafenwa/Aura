@@ -187,7 +187,7 @@ The current compiler supports these expression forms:
   - integer casts are range-checked and integer-to-float casts reject silent precision loss
 - list literals such as `[1, 2, 3]`
 - map literals such as `{"aurora": 1}`
-- set literals such as `Set{1, 2, 3}`
+- set literals such as `{1, 2, 3}`
 - member access with `.`
 - indexing with `expr[index]`
 - function and method calls
@@ -220,7 +220,7 @@ Borrowed ordinary parameters currently work for normal calls, but `TaskGroup.sta
 Calls also reject overlapping borrowed arguments whenever a `borrow mut` parameter participates, including a `borrow mut self` receiver overlapping another borrowed argument in the same method call.
 Empty list literals currently require an expected `Vec[T]` type such as `values: Vec[int32] = []`, or you can use `Vec[int32]()` explicitly.
 Empty map literals currently require an expected `Map[K, V]` type such as `counts: Map[String, int32] = {}`.
-Empty set literals currently require an expected `Set[T]` type such as `seen: Set[int32] = Set{}`, or you can use `Set[int32]()` explicitly.
+Empty set literals currently require an expected `Set[T]` type such as `seen: Set[int32] = {}`, or you can use `Set[int32]()` explicitly.
 
 Top-level declarations may also be generic:
 
@@ -524,7 +524,7 @@ Current collection notes:
 - empty map literals still need an expected `Map[K, V]` type, or you can use `Map[K, V]()` explicitly
 - `Map[K, V]` supports literal construction, indexed reads/writes, and the maintained method surface `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`
 - `Map.items()` and `Map.entries()` return `Vec[MapEntry[K, V]]`, where entry values expose `.key` and `.value`
-- `Set[T]` supports literal construction with `Set{...}` and the maintained method surface `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`
+- `Set[T]` supports literal construction with `{...}` and the maintained method surface `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`
 - `for value in set:` and `for value in borrow set:` are supported for `Set[T]`
 - `for value in borrow mut set:` is not currently supported
 - `Queue[T]` supports `Queue[T](capacity=...)` for bounded-capacity queues on the shared runtime scheduler

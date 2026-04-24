@@ -1,0 +1,4 @@
+def main() -> int32:
+    mut values: Set[int32] = {1, 2, 2, 3}
+    values.insert(4)
+    return 0

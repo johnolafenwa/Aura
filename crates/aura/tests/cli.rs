@@ -4952,6 +4952,43 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_backend_unwinds_with_resources_when_callee_traps() {
+    let source = r#"
+class Resource:
+    name: String
+
+    def close(borrow mut self):
+        print("close " + self.name)
+
+def boom() -> int32:
+    values: Vec[int32] = []
+    return values[5]
+
+def main() -> int32:
+    with a = Resource(name="A"):
+        with b = Resource(name="B"):
+            with c = Resource(name="C"):
+                return boom()
+    return 0
+"#;
+
+    let (_, run) = build_and_run_direct_source("aurora-direct-with-callee-trap-cleanup", source);
+    assert!(
+        !run.status.success(),
+        "direct binary should fail on vector OOB"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "close C\nclose B\nclose A\n"
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("vector index `5` is out of bounds"),
+        "stderr should include vector OOB diagnostic, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
 fn direct_backend_recursion_limit_uses_source_diagnostic() {
     let source = r#"
 def recurse(value: int32) -> int32:
@@ -4976,6 +5013,37 @@ def main() -> int32:
         stderr.contains("-->") && !stderr.contains("direct backend"),
         "stderr should render with source context and avoid backend-specific wording, stderr was:\n{}",
         stderr
+    );
+}
+
+#[test]
+fn direct_backend_unwinds_with_resources_before_recursion_limit() {
+    let source = r#"
+class Resource:
+    name: String
+
+    def close(borrow mut self):
+        print("close " + self.name)
+
+def recurse(value: int32) -> int32:
+    return recurse(value + 1)
+
+def main() -> int32:
+    with resource = Resource(name="A"):
+        return recurse(0)
+    return 0
+"#;
+
+    let (_, run) = build_and_run_direct_source("aurora-direct-recursion-cleanup", source);
+    assert!(
+        !run.status.success(),
+        "direct binary should fail on recursion limit"
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "close A\n");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("maximum call depth"),
+        "stderr should describe the Aurora recursion limit, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
     );
 }
 
@@ -5037,6 +5105,56 @@ def main() -> int32:
         "aurora-process-completed-stdout-bytes",
         source,
         "3\n255\n0\n65\n",
+    );
+}
+
+#[test]
+fn process_completed_stdout_bytes_get_matches_short_option_patterns() {
+    let source = r#"import process
+
+def inspect_first_byte() -> Result[None, process.Error]:
+    completed = try process.run(["/bin/echo", "hi"], stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
+    opt = completed.stdout_bytes().get(0)
+    match opt:
+        case Some(byte):
+            print("some")
+            print(byte)
+        case None:
+            print("none")
+    return Result.Ok(None)
+
+def main() -> int32:
+    match inspect_first_byte():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-process-stdout-bytes-short-option-match",
+        source,
+        "some\n104\n",
+    );
+}
+
+#[test]
+fn queue_iteration_without_registered_producers_exits() {
+    let source = r#"
+def main() -> int32:
+    jobs: Queue[int32] = Queue[int32]()
+    for job in jobs:
+        print(job)
+    print("done")
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-queue-iteration-zero-producers",
+        source,
+        std::time::Duration::from_secs(5),
+        "done\n",
     );
 }
 

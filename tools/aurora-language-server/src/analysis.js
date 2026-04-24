@@ -3779,19 +3779,20 @@ function inferExpressionType(expression, moduleInfo, functionInfo) {
     return elementType ? `Set[${elementType}]` : null;
   }
 
-  const mapLiteralMatch = expr.match(/^\{(.*)\}$/);
-  if (mapLiteralMatch && mapLiteralMatch[1].includes(":")) {
-    const entries = splitTopLevelCommaSeparated(mapLiteralMatch[1]);
+  const bracedLiteralMatch = expr.match(/^\{(.*)\}$/);
+  if (bracedLiteralMatch) {
+    const entries = splitTopLevelCommaSeparated(bracedLiteralMatch[1]);
     if (entries.length === 0) {
       return null;
     }
     const [firstKey, firstValue] = splitTopLevelColon(entries[0]);
-    if (!firstKey || !firstValue) {
-      return null;
+    if (firstKey && firstValue) {
+      const keyType = inferExpressionType(firstKey, moduleInfo, functionInfo);
+      const valueType = inferExpressionType(firstValue, moduleInfo, functionInfo);
+      return keyType && valueType ? `Map[${keyType}, ${valueType}]` : null;
     }
-    const keyType = inferExpressionType(firstKey, moduleInfo, functionInfo);
-    const valueType = inferExpressionType(firstValue, moduleInfo, functionInfo);
-    return keyType && valueType ? `Map[${keyType}, ${valueType}]` : null;
+    const elementType = inferExpressionType(entries[0], moduleInfo, functionInfo);
+    return elementType ? `Set[${elementType}]` : null;
   }
 
   const indexMatch = expr.match(/^(.+)\[(.+)\]$/);

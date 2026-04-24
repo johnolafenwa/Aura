@@ -255,7 +255,7 @@ test("collection member completion exposes Map methods", () => {
 
 test("collection member completion exposes Set methods", () => {
   const source =
-    "def main() -> int32:\n    mut seen = Set{1, 2, 3}\n    seen.\n    return 0\n";
+    "def main() -> int32:\n    mut seen = {1, 2, 3}\n    seen.\n    return 0\n";
   const lineIndex = source.split("\n").findIndex((line) => line.includes("seen."));
   const lineText = source.split("\n")[lineIndex];
   const character = lineText.indexOf(".") + 1;
@@ -1194,7 +1194,7 @@ test("fallback analysis helper infers loop binding types for vec, set, range, an
   const source = [
     "def main():",
     "    values = [1, 2, 3]",
-    "    seen = Set{true, false}",
+    "    seen = {true, false}",
     "    for value in values:",
     "        print(value)",
     "    for flag in seen:",

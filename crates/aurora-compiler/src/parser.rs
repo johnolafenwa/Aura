@@ -1561,17 +1561,35 @@ impl Parser {
                 })
             }
             TokenKind::LBrace => {
-                let mut entries = Vec::new();
-                if !self.at_simple(&TokenKind::RBrace) {
-                    loop {
-                        let key = self.parse_expr()?;
-                        self.expect_simple(TokenKind::Colon)?;
-                        let value = self.parse_expr()?;
-                        entries.push(MapEntryExpr { key, value });
-                        if self.eat_simple(&TokenKind::Comma).is_none() {
-                            break;
-                        }
+                if self.at_simple(&TokenKind::RBrace) {
+                    self.bump();
+                    return Ok(Expr {
+                        kind: ExprKind::Map(Vec::new()),
+                        span: token.span,
+                    });
+                }
+
+                let first = self.parse_expr()?;
+                if self.eat_simple(&TokenKind::Colon).is_none() {
+                    let mut elements = vec![first];
+                    while self.eat_simple(&TokenKind::Comma).is_some() {
+                        elements.push(self.parse_expr()?);
                     }
+                    self.expect_simple(TokenKind::RBrace)?;
+                    return Ok(Expr {
+                        kind: ExprKind::Set(elements),
+                        span: token.span,
+                    });
+                }
+
+                let mut entries = Vec::new();
+                let value = self.parse_expr()?;
+                entries.push(MapEntryExpr { key: first, value });
+                while self.eat_simple(&TokenKind::Comma).is_some() {
+                    let key = self.parse_expr()?;
+                    self.expect_simple(TokenKind::Colon)?;
+                    let value = self.parse_expr()?;
+                    entries.push(MapEntryExpr { key, value });
                 }
                 self.expect_simple(TokenKind::RBrace)?;
                 Ok(Expr {
