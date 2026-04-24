@@ -33,6 +33,7 @@ const INTERNAL_VEC_SET_INDEX_FIELD: &str = "__set_index";
 const INTERNAL_MAP_INDEX_FIELD: &str = "__index";
 const INTERNAL_MAP_SET_INDEX_FIELD: &str = "__set_index";
 const INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD: &str = "__get_in_task_group";
+const INTERNAL_QUEUE_GET_WITH_REGISTERED_PRODUCERS_FIELD: &str = "__get_with_registered_producers";
 
 fn is_builtin_unary_operator(op: UnaryOp, ty: &Type) -> bool {
     match op {
@@ -1864,23 +1865,21 @@ impl<'a> Lowerer<'a> {
                 ));
                 self.local_types
                     .insert(for_stmt.binding.clone(), element_ty);
-                let task_group_place = self.active_task_group_place().unwrap_or_else(|| {
-                    let task_group = self.new_typed_temp(Type::named("TaskGroup"));
-                    self.emit(Instruction::Assign {
-                        target: task_group.clone(),
-                        value: Rvalue::Call {
-                            callee: CallTarget::Name("TaskGroup".to_string()),
-                            args: Vec::new(),
-                        },
-                    });
-                    task_group
-                });
-                let field = INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD.to_string();
-                let args = vec![MirArg {
-                    name: None,
-                    value: Operand::Place(task_group_place),
-                    writeback_place: None,
-                }];
+                let (field, args) = if let Some(task_group_place) = self.active_task_group_place() {
+                    (
+                        INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD.to_string(),
+                        vec![MirArg {
+                            name: None,
+                            value: Operand::Place(task_group_place),
+                            writeback_place: None,
+                        }],
+                    )
+                } else {
+                    (
+                        INTERNAL_QUEUE_GET_WITH_REGISTERED_PRODUCERS_FIELD.to_string(),
+                        Vec::new(),
+                    )
+                };
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
                 self.switch_to(dispatch_block);
                 self.emit(Instruction::Assign {
@@ -4327,13 +4326,15 @@ impl<'a> Lowerer<'a> {
                     .cloned()
                     .unwrap_or_else(|| Type::named("Unknown"))],
             )),
-            ("Queue", "get") => Some(Type::Named(
-                "QueueReceive".to_string(),
-                vec![args
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
-            )),
+            ("Queue", "get" | "__get_in_task_group" | "__get_with_registered_producers") => {
+                Some(Type::Named(
+                    "QueueReceive".to_string(),
+                    vec![args
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| Type::named("Unknown"))],
+                ))
+            }
             ("Queue", "get_or_none") => Some(Type::Named(
                 "Option".to_string(),
                 vec![args

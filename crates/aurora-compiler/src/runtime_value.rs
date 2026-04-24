@@ -16,7 +16,7 @@ use std::process::{
     Stdio as StdProcessStdio,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
@@ -144,6 +144,7 @@ pub struct ChannelValue {
 
 struct ChannelState {
     state: Mutex<ChannelInner>,
+    producer_tasks: Mutex<Vec<Weak<TaskState>>>,
 }
 
 struct ChannelInner {
@@ -2057,8 +2058,55 @@ impl ChannelValue {
                     closed: false,
                     capacity,
                 }),
+                producer_tasks: Mutex::new(Vec::new()),
             }),
         }
+    }
+}
+
+fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
+    match value {
+        Value::Channel(channel) => queues.push(channel.clone()),
+        Value::Vec(vector) => {
+            for element in &vector.elements {
+                collect_queue_values(element, queues);
+            }
+        }
+        Value::Set(set) => {
+            for element in &set.elements {
+                collect_queue_values(element, queues);
+            }
+        }
+        Value::Map(map) => {
+            for (key, value) in &map.entries {
+                collect_queue_values(key, queues);
+                collect_queue_values(value, queues);
+            }
+        }
+        Value::Instance(instance) => {
+            for value in instance.fields.values() {
+                collect_queue_values(value, queues);
+            }
+        }
+        Value::EnumVariant(variant) => {
+            for payload in &variant.payloads {
+                collect_queue_values(payload, queues);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn register_task_as_queue_producer_for_values<'a>(
+    values: impl IntoIterator<Item = &'a Value>,
+    task: &TaskValue,
+) {
+    let mut queues = Vec::new();
+    for value in values {
+        collect_queue_values(value, &mut queues);
+    }
+    for queue in queues {
+        queue.register_producer_task(task);
     }
 }
 
@@ -2111,6 +2159,34 @@ impl ChannelValue {
             || state
                 .capacity
                 .is_none_or(|capacity| state.queue.len() < capacity)
+    }
+
+    pub(crate) fn register_producer_task(&self, task: &TaskValue) {
+        let mut tasks = lock_mutex(&self.inner.producer_tasks);
+        let weak = Arc::downgrade(&task.inner);
+        if !tasks.iter().any(|existing| existing.ptr_eq(&weak)) {
+            tasks.push(weak);
+        }
+    }
+
+    fn registered_producer_tasks(&self) -> Vec<TaskValue> {
+        let mut tasks = lock_mutex(&self.inner.producer_tasks);
+        let mut live = Vec::new();
+        tasks.retain(|task| {
+            if let Some(inner) = task.upgrade() {
+                live.push(TaskValue { inner });
+                true
+            } else {
+                false
+            }
+        });
+        live
+    }
+
+    fn all_registered_producer_tasks_completed(&self) -> bool {
+        self.registered_producer_tasks()
+            .iter()
+            .all(|task| task.completed_result().is_some())
     }
 
     pub(crate) fn try_recv(&self) -> TryRecvResult {
@@ -6626,6 +6702,39 @@ pub(crate) fn recv_for_task_group_iteration(
                 group.clear_failure_wake_if_no_unobserved_error();
                 group.clear_completion_wake_if_tasks_still_running();
             }
+            RuntimeSchedulerWakeReason::TimedOut => return RecvValueResult::TimedOut,
+        }
+    }
+}
+
+pub(crate) fn recv_for_registered_producers_iteration(
+    channel: &ChannelValue,
+    cancellation: &CancellationContext,
+) -> RecvValueResult {
+    loop {
+        match channel.try_recv() {
+            TryRecvResult::Value(value) => {
+                if channel.has_pending_values() {
+                    let _ = yield_now_current_lightweight_task();
+                }
+                return RecvValueResult::Value(value);
+            }
+            TryRecvResult::Closed => return RecvValueResult::Closed,
+            TryRecvResult::Empty => {}
+        }
+        if channel.all_registered_producer_tasks_completed() {
+            return RecvValueResult::Closed;
+        }
+        match wait_for_runtime_scheduler(
+            vec![channel.clone()],
+            false,
+            Vec::new(),
+            channel.registered_producer_tasks(),
+            None,
+            Some(cancellation),
+        ) {
+            RuntimeSchedulerWakeReason::Ready => {}
+            RuntimeSchedulerWakeReason::Cancelled => return RecvValueResult::Cancelled,
             RuntimeSchedulerWakeReason::TimedOut => return RecvValueResult::TimedOut,
         }
     }

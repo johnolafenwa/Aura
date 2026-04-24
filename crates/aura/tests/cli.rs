@@ -4989,6 +4989,39 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_backend_callee_trap_cleanup_uses_current_resource_state() {
+    let source = r#"
+class Resource:
+    name: String
+
+    def close(borrow mut self):
+        print("close " + self.name)
+
+def boom() -> int32:
+    values: Vec[int32] = []
+    return values[5]
+
+def main() -> int32:
+    with resource = Resource(name="old"):
+        resource.name = "new"
+        return boom()
+    return 0
+"#;
+
+    let (_, run) = build_and_run_direct_source("aurora-direct-with-current-cleanup", source);
+    assert!(
+        !run.status.success(),
+        "direct binary should fail on vector OOB"
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "close new\n");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("vector index `5` is out of bounds"),
+        "stderr should include vector OOB diagnostic, stderr was:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
 fn direct_backend_recursion_limit_uses_source_diagnostic() {
     let source = r#"
 def recurse(value: int32) -> int32:
@@ -5155,6 +5188,32 @@ def main() -> int32:
         source,
         std::time::Duration::from_secs(5),
         "done\n",
+    );
+}
+
+#[test]
+fn queue_iteration_waits_for_standalone_task_group_producers() {
+    let source = r#"
+def producer(jobs: Queue[int32]) -> None:
+    sleep(1ms)
+    jobs.put(7)
+    jobs.close()
+
+def main() -> int32:
+    jobs: Queue[int32] = Queue[int32]()
+    group = TaskGroup()
+    group.start(producer, jobs)
+    for job in jobs:
+        print(job)
+    print("done")
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout_with_timeout(
+        "aurora-queue-iteration-standalone-task-group",
+        source,
+        std::time::Duration::from_secs(5),
+        "7\ndone\n",
     );
 }
 

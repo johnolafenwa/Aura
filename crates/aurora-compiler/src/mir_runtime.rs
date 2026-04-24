@@ -22,21 +22,22 @@ use crate::runtime_value::{
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, read_file_limited, recv_for_task_group_iteration,
-    result_err, result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled,
-    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
-    spawn_lightweight_task, task_group_cleanup_should_cancel, task_result_cancelled,
-    task_result_error, task_result_ready, task_result_timed_out, wait_all_cancelled,
-    wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
-    wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler, CancellationContext,
-    ChannelValue, EnumVariantValue, FileValue, HttpExchangeValue, HttpListenerValue,
-    HttpResponseValue, InstanceValue, MapValue, ProcessChildValue, ProcessChildWaitStatus,
-    ProcessCompletedValue, ProcessPipeValue, ProcessRestartPolicy, ProcessSupervisorValue,
-    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RunOutput,
-    RuntimeSchedulerWakeReason, SendValueError, SetValue, TaskGroupValue, TaskValue,
-    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
-    UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
-    WebSocketListenerValue, WebSocketValue,
+    queue_receive_item, queue_receive_timed_out, read_file_limited,
+    recv_for_registered_producers_iteration, recv_for_task_group_iteration,
+    register_task_as_queue_producer_for_values, result_err, result_ok, run_blocking_io,
+    run_lightweight_root_task, send_error_cancelled, send_error_closed, send_error_full,
+    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
+    task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
+    task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
+    wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
+    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
+    ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    RecvValueResult, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetValue,
+    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
+    TlsStreamValue, UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
+    VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{substitute_type, Type};
 
@@ -2287,6 +2288,10 @@ impl MirRuntime {
             .ok_or_else(|| Diagnostic::new(format!("unknown MIR function `{}`", function)))?;
         self.require_task_startable_function(&function)?;
         let bound_args = evaluate_named_args(args, env)?;
+        let queue_producer_args = bound_args
+            .iter()
+            .map(|arg| arg.value.clone())
+            .collect::<Vec<_>>();
 
         let value = self.evaluate_operand(task_group, env)?;
         let Value::TaskGroup(group_value) = value else {
@@ -2309,6 +2314,7 @@ impl MirRuntime {
                 .map(|outcome| outcome.value)
         })?;
         group_value.register_task(task.clone());
+        register_task_as_queue_producer_for_values(queue_producer_args.iter(), &task);
 
         if returns_handle {
             Ok(Value::Task(task))
@@ -2438,6 +2444,21 @@ impl MirRuntime {
                 };
                 Ok(
                     match recv_for_task_group_iteration(&channel, &self.cancellation, &group) {
+                        RecvValueResult::Value(value) => queue_receive_item(value),
+                        RecvValueResult::Closed => queue_receive_closed(),
+                        RecvValueResult::TimedOut => queue_receive_timed_out(),
+                        RecvValueResult::Cancelled => queue_receive_cancelled(),
+                    },
+                )
+            }
+            "__get_with_registered_producers" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new(
+                        "internal queue producer iteration helper expects no arguments",
+                    ));
+                }
+                Ok(
+                    match recv_for_registered_producers_iteration(&channel, &self.cancellation) {
                         RecvValueResult::Value(value) => queue_receive_item(value),
                         RecvValueResult::Closed => queue_receive_closed(),
                         RecvValueResult::TimedOut => queue_receive_timed_out(),

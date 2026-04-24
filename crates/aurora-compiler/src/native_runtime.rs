@@ -22,16 +22,18 @@ use crate::runtime_value::{
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, read_file_limited, recv_for_task_group_iteration,
-    render_float, result_err, result_ok, run_blocking_io, run_lightweight_root_task,
-    send_error_cancelled, send_error_closed, send_error_full, send_error_timed_out,
-    sleep_with_runtime_scheduler, spawn_lightweight_task_with_cancellation,
-    task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
-    task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
-    wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
-    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, LightweightTaskFailureSignal, MapValue,
-    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
+    queue_receive_item, queue_receive_timed_out, read_file_limited,
+    recv_for_registered_producers_iteration, recv_for_task_group_iteration,
+    register_task_as_queue_producer_for_values, render_float, result_err, result_ok,
+    run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
+    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
+    spawn_lightweight_task_with_cancellation, task_group_cleanup_should_cancel,
+    task_result_cancelled, task_result_error, task_result_ready, task_result_timed_out,
+    wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled,
+    wait_any_error, wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
+    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpListenerValue,
+    HttpResponseValue, InstanceValue, LightweightTaskFailureSignal, MapValue, ProcessChildValue,
+    ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
     ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RuntimeSchedulerWakeReason,
     SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
     TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, UdpSocketValue,
@@ -55,6 +57,57 @@ struct DirectCleanupRegistration {
 
 fn direct_cleanup_key() -> u64 {
     current_lightweight_task_id().unwrap_or(0)
+}
+
+fn next_direct_cleanup_id() -> i64 {
+    DIRECT_NEXT_CLEANUP_ID.with(|next| {
+        let id = next.get();
+        let mut next_id = id.checked_add(1).unwrap_or(1);
+        if next_id == 0 {
+            next_id = 1;
+        }
+        next.set(next_id);
+        id
+    })
+}
+
+fn push_direct_cleanup_registration(thunk_ptr: i64, args: *mut i64, arg_count: usize) -> i64 {
+    let id = next_direct_cleanup_id();
+    let cleanup_key = direct_cleanup_key();
+    DIRECT_CLEANUP_STACKS.with(|stacks| {
+        stacks
+            .borrow_mut()
+            .entry(cleanup_key)
+            .or_default()
+            .push(DirectCleanupRegistration {
+                id,
+                thunk_ptr,
+                args,
+                arg_count,
+            });
+    });
+    id
+}
+
+fn take_direct_cleanup_registration(id: i64) -> Option<DirectCleanupRegistration> {
+    if id == 0 {
+        return None;
+    }
+    let cleanup_key = direct_cleanup_key();
+    DIRECT_CLEANUP_STACKS.with(|stacks| {
+        let mut stacks = stacks.borrow_mut();
+        let Some(stack) = stacks.get_mut(&cleanup_key) else {
+            return None;
+        };
+        let registration = stack
+            .iter()
+            .rposition(|registration| registration.id == id)
+            .map(|index| stack.remove(index));
+        if stack.is_empty() {
+            stacks.remove(&cleanup_key);
+        }
+        registration
+    })
 }
 
 struct DirectCleanupDrainGuard;
@@ -2865,58 +2918,62 @@ pub extern "C-unwind" fn aurora_direct_register_cleanup(
         if thunk_ptr == 0 {
             runtime_error("invalid cleanup thunk pointer");
         }
-        let id = DIRECT_NEXT_CLEANUP_ID.with(|next| {
-            let id = next.get();
-            let mut next_id = id.checked_add(1).unwrap_or(1);
-            if next_id == 0 {
-                next_id = 1;
-            }
-            next.set(next_id);
-            id
-        });
-        let cleanup_key = direct_cleanup_key();
-        DIRECT_CLEANUP_STACKS.with(|stacks| {
-            stacks
-                .borrow_mut()
-                .entry(cleanup_key)
-                .or_default()
-                .push(DirectCleanupRegistration {
-                    id,
-                    thunk_ptr,
-                    args,
-                    arg_count,
-                });
-        });
-        id
+        push_direct_cleanup_registration(thunk_ptr, args, arg_count)
     })
 }
 
 #[no_mangle]
 pub extern "C-unwind" fn aurora_direct_unregister_cleanup(id: i64) {
     task_runtime_boundary(|| {
-        if id == 0 {
-            return;
-        }
-        let cleanup_key = direct_cleanup_key();
-        let registration = DIRECT_CLEANUP_STACKS.with(|stacks| {
-            let mut stacks = stacks.borrow_mut();
-            let Some(stack) = stacks.get_mut(&cleanup_key) else {
-                return None;
-            };
-            let registration = stack
-                .iter()
-                .rposition(|registration| registration.id == id)
-                .map(|index| stack.remove(index));
-            if stack.is_empty() {
-                stacks.remove(&cleanup_key);
-            }
-            registration
-        });
-        if let Some(registration) = registration {
+        if let Some(registration) = take_direct_cleanup_registration(id) {
             unsafe {
                 release_direct_cleanup_args(registration.args, registration.arg_count);
             }
         }
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_refresh_cleanup(
+    active: i64,
+    id: i64,
+    thunk_ptr: i64,
+    args: *mut i64,
+    arg_count: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let arg_count = match usize::try_from(arg_count) {
+            Ok(arg_count) => arg_count,
+            Err(_) => runtime_error("invalid cleanup arg count"),
+        };
+        if active == 0 {
+            if let Some(registration) = take_direct_cleanup_registration(id) {
+                unsafe {
+                    release_direct_cleanup_args(registration.args, registration.arg_count);
+                }
+            }
+            unsafe {
+                release_direct_cleanup_args(args, arg_count);
+            }
+            return 0;
+        }
+        if thunk_ptr == 0 {
+            unsafe {
+                release_direct_cleanup_args(args, arg_count);
+            }
+            if let Some(registration) = take_direct_cleanup_registration(id) {
+                unsafe {
+                    release_direct_cleanup_args(registration.args, registration.arg_count);
+                }
+            }
+            runtime_error("invalid cleanup thunk pointer");
+        }
+        if let Some(registration) = take_direct_cleanup_registration(id) {
+            unsafe {
+                release_direct_cleanup_args(registration.args, registration.arg_count);
+            }
+        }
+        push_direct_cleanup_registration(thunk_ptr, args, arg_count)
     })
 }
 
@@ -3095,6 +3152,26 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_in_task_group(
                 value_type_name(other)
             )),
         }
+    })
+}
+
+#[no_mangle]
+pub extern "C-unwind" fn aurora_direct_channel_recv_with_registered_producers(
+    channel: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(channel) } {
+        Value::Channel(channel) => boxed_value(
+            match recv_for_registered_producers_iteration(&channel, &current_cancellation()) {
+                RecvValueResult::Value(value) => queue_receive_item(value),
+                RecvValueResult::Closed => queue_receive_closed(),
+                RecvValueResult::TimedOut => queue_receive_timed_out(),
+                RecvValueResult::Cancelled => queue_receive_cancelled(),
+            },
+        ),
+        other => runtime_error(format!(
+            "expected `Queue`, found `{}`",
+            value_type_name(other)
+        )),
     })
 }
 
@@ -6450,6 +6527,12 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
             ));
             boxed.into_vec()
         };
+        let queue_producer_args = args
+            .iter()
+            .copied()
+            .filter(|arg| *arg != 0)
+            .map(|arg| unsafe { value_ref(arg as *mut OpaqueValue).clone() })
+            .collect::<Vec<_>>();
         let group = if task_group.is_null() {
             runtime_error("task starting requires a `TaskGroup`")
         } else {
@@ -6471,6 +6554,7 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
         .unwrap_or_else(|error| runtime_diagnostic_error(error));
 
         group.register_task(task.clone());
+        register_task_as_queue_producer_for_values(queue_producer_args.iter(), &task);
 
         if returns_handle == 0 {
             return boxed_value(Value::Unit);

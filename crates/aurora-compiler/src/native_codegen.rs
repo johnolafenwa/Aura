@@ -175,6 +175,7 @@ struct NativeCodegen<'a> {
     fail_int32_overflow: FuncId,
     register_cleanup: FuncId,
     unregister_cleanup: FuncId,
+    refresh_cleanup: FuncId,
     close_value: FuncId,
     box_i64: FuncId,
     box_uint_literal: FuncId,
@@ -271,6 +272,7 @@ struct NativeCodegen<'a> {
     channel_try_send: FuncId,
     channel_recv: FuncId,
     channel_recv_in_task_group: FuncId,
+    channel_recv_with_registered_producers: FuncId,
     channel_recv_timeout_value: FuncId,
     channel_recv_or_none: FuncId,
     channel_recv_or_none_timeout_value: FuncId,
@@ -587,6 +589,7 @@ impl<'a> NativeCodegen<'a> {
             fail_int32_overflow => ("aurora_direct_fail_int32_overflow", [types::I64, types::I64, types::I64], None),
             register_cleanup => ("aurora_direct_register_cleanup", [types::I64, types::I64, types::I64], Some(types::I64)),
             unregister_cleanup => ("aurora_direct_unregister_cleanup", [types::I64], None),
+            refresh_cleanup => ("aurora_direct_refresh_cleanup", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             close_value => ("aurora_direct_close_value", [types::I64, types::I64], Some(types::I64)),
             box_i64 => ("aurora_direct_box_i64", [types::I64], Some(types::I64)),
             box_uint_literal => ("aurora_direct_box_uint_literal", [types::I64, types::I64], Some(types::I64)),
@@ -683,6 +686,7 @@ impl<'a> NativeCodegen<'a> {
             channel_try_send => ("aurora_direct_channel_try_send", [types::I64, types::I64], Some(types::I64)),
             channel_recv => ("aurora_direct_channel_recv", [types::I64], Some(types::I64)),
             channel_recv_in_task_group => ("aurora_direct_channel_recv_in_task_group", [types::I64, types::I64], Some(types::I64)),
+            channel_recv_with_registered_producers => ("aurora_direct_channel_recv_with_registered_producers", [types::I64], Some(types::I64)),
             channel_recv_timeout_value => ("aurora_direct_channel_recv_timeout_value", [types::I64, types::I64], Some(types::I64)),
             channel_recv_or_none => ("aurora_direct_channel_recv_or_none", [types::I64], Some(types::I64)),
             channel_recv_or_none_timeout_value => ("aurora_direct_channel_recv_or_none_timeout_value", [types::I64, types::I64], Some(types::I64)),
@@ -942,6 +946,7 @@ impl<'a> NativeCodegen<'a> {
             fail_int32_overflow,
             register_cleanup,
             unregister_cleanup,
+            refresh_cleanup,
             close_value,
             box_i64,
             box_uint_literal,
@@ -1038,6 +1043,7 @@ impl<'a> NativeCodegen<'a> {
             channel_try_send,
             channel_recv,
             channel_recv_in_task_group,
+            channel_recv_with_registered_producers,
             channel_recv_timeout_value,
             channel_recv_or_none,
             channel_recv_or_none_timeout_value,
@@ -1485,6 +1491,9 @@ impl<'a> NativeCodegen<'a> {
         let unregister_cleanup = self
             .object
             .declare_func_in_func(self.unregister_cleanup, builder.func);
+        let refresh_cleanup = self
+            .object
+            .declare_func_in_func(self.refresh_cleanup, builder.func);
         let box_i64 = self.object.declare_func_in_func(self.box_i64, builder.func);
         let box_uint_literal = self
             .object
@@ -1756,6 +1765,9 @@ impl<'a> NativeCodegen<'a> {
         let channel_recv_in_task_group = self
             .object
             .declare_func_in_func(self.channel_recv_in_task_group, builder.func);
+        let channel_recv_with_registered_producers = self
+            .object
+            .declare_func_in_func(self.channel_recv_with_registered_producers, builder.func);
         let channel_recv_timeout_value = self
             .object
             .declare_func_in_func(self.channel_recv_timeout_value, builder.func);
@@ -2260,6 +2272,7 @@ impl<'a> NativeCodegen<'a> {
             fail_int32_overflow,
             register_cleanup,
             unregister_cleanup,
+            refresh_cleanup,
             box_i64,
             box_uint_literal,
             box_f64,
@@ -2355,6 +2368,7 @@ impl<'a> NativeCodegen<'a> {
             channel_try_send,
             channel_recv,
             channel_recv_in_task_group,
+            channel_recv_with_registered_producers,
             channel_recv_timeout_value,
             channel_recv_or_none,
             channel_recv_or_none_timeout_value,
@@ -2879,6 +2893,7 @@ struct FunctionCompiler<'a> {
     fail_int32_overflow: cranelift_codegen::ir::FuncRef,
     register_cleanup: cranelift_codegen::ir::FuncRef,
     unregister_cleanup: cranelift_codegen::ir::FuncRef,
+    refresh_cleanup: cranelift_codegen::ir::FuncRef,
     box_i64: cranelift_codegen::ir::FuncRef,
     box_uint_literal: cranelift_codegen::ir::FuncRef,
     box_f64: cranelift_codegen::ir::FuncRef,
@@ -2974,6 +2989,7 @@ struct FunctionCompiler<'a> {
     channel_try_send: cranelift_codegen::ir::FuncRef,
     channel_recv: cranelift_codegen::ir::FuncRef,
     channel_recv_in_task_group: cranelift_codegen::ir::FuncRef,
+    channel_recv_with_registered_producers: cranelift_codegen::ir::FuncRef,
     channel_recv_timeout_value: cranelift_codegen::ir::FuncRef,
     channel_recv_or_none: cranelift_codegen::ir::FuncRef,
     channel_recv_or_none_timeout_value: cranelift_codegen::ir::FuncRef,
@@ -3320,8 +3336,8 @@ impl<'a> FunctionCompiler<'a> {
                 cancel_before_cleanup,
             } => {
                 self.unregister_cleanup_for_place(place)?;
-                self.emit_cleanup_for_place(place, *cancel_before_cleanup)?;
                 self.set_cleanup_active(place, false)?;
+                self.emit_cleanup_for_place(place, *cancel_before_cleanup)?;
             }
         }
         self.release_all_temporary_owned();
@@ -5345,11 +5361,9 @@ impl<'a> FunctionCompiler<'a> {
     fn store_place(&mut self, place: &str, value: ValueRef) -> std::result::Result<(), String> {
         let mut segments = place.split('.').collect::<Vec<_>>();
         let root = segments.remove(0);
-        if segments.is_empty() {
-            return self.store_root(root, value);
-        }
-
-        if matches!(self.variable_types.get(root), Some(DirectType::Opaque(_)))
+        let result = if segments.is_empty() {
+            self.store_root(root, value)
+        } else if matches!(self.variable_types.get(root), Some(DirectType::Opaque(_)))
             && segments.len() == 1
         {
             let current = self.load_root(root)?;
@@ -5365,7 +5379,7 @@ impl<'a> FunctionCompiler<'a> {
                     updated_value.values[0],
                 ],
             );
-            return self.store_root(
+            self.store_root(
                 root,
                 ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
@@ -5373,12 +5387,14 @@ impl<'a> FunctionCompiler<'a> {
                         format!("direct backend does not know local type for `{}`", root)
                     })?,
                 },
-            );
-        }
-
-        let root_value = self.load_root(root)?;
-        let updated = self.replace_nested_field(root_value, &segments, value)?;
-        self.store_root(root, updated)
+            )
+        } else {
+            let root_value = self.load_root(root)?;
+            let updated = self.replace_nested_field(root_value, &segments, value)?;
+            self.store_root(root, updated)
+        };
+        result?;
+        self.refresh_cleanup_registrations_for_mutation(place)
     }
 
     fn replace_nested_field(
@@ -5732,6 +5748,70 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    fn refresh_cleanup_registration_for_place(
+        &mut self,
+        place: &str,
+    ) -> std::result::Result<(), String> {
+        let Some(active_variable) = self.cleanup_active_vars.get(place).copied() else {
+            return Err(format!(
+                "direct backend does not know cleanup place `{}`",
+                place
+            ));
+        };
+        let Some(registration_variable) = self.cleanup_registration_vars.get(place).copied() else {
+            return Err(format!(
+                "direct backend does not know cleanup registration for `{}`",
+                place
+            ));
+        };
+        let Some(thunk_ref) = self.cleanup_thunk_refs.get(place).copied() else {
+            return Err(format!(
+                "direct backend does not know cleanup thunk for `{}`",
+                place
+            ));
+        };
+
+        let loaded = self.load_place(place)?;
+        let boxed = self.ensure_opaque(loaded)?;
+        let count = self.builder.ins().iconst(types::I64, 1);
+        let buffer = self.builder.ins().call(self.arg_buffer_new, &[count]);
+        let buffer = self.builder.inst_results(buffer)[0];
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder
+            .ins()
+            .call(self.arg_buffer_store, &[buffer, zero, boxed.values[0]]);
+        if self.temporary_owns_opaque(&boxed) {
+            self.clear_temporary_opaque_owned(&boxed);
+            self.release_opaque_handle(boxed.values[0]);
+        }
+        let active = self.builder.use_var(active_variable);
+        let registration_id = self.builder.use_var(registration_variable);
+        let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk_ref);
+        let refreshed = self.builder.ins().call(
+            self.refresh_cleanup,
+            &[active, registration_id, thunk_ptr, buffer, count],
+        );
+        let refreshed_id = self.builder.inst_results(refreshed)[0];
+        self.builder.def_var(registration_variable, refreshed_id);
+        Ok(())
+    }
+
+    fn refresh_cleanup_registrations_for_mutation(
+        &mut self,
+        mutated_place: &str,
+    ) -> std::result::Result<(), String> {
+        let cleanup_places = self
+            .cleanup_places
+            .clone()
+            .into_iter()
+            .filter(|place| direct_place_paths_overlap(place, mutated_place))
+            .collect::<Vec<_>>();
+        for place in cleanup_places {
+            self.refresh_cleanup_registration_for_place(&place)?;
+        }
+        Ok(())
+    }
+
     fn emit_pending_cleanups(
         &mut self,
         cancel_before_cleanup: bool,
@@ -5750,8 +5830,9 @@ impl<'a> FunctionCompiler<'a> {
                 .brif(should_run, run_block, &[], next_block, &[]);
             self.builder.switch_to_block(run_block);
             self.unregister_cleanup_for_place(&place)?;
-            self.emit_cleanup_for_place(&place, cancel_before_cleanup)?;
             self.builder.def_var(variable, zero);
+            self.emit_cleanup_for_place(&place, cancel_before_cleanup)?;
+            self.release_all_temporary_owned();
             self.builder.ins().jump(next_block, &[]);
             self.builder.seal_block(run_block);
             self.builder.switch_to_block(next_block);
@@ -9108,6 +9189,28 @@ impl<'a> FunctionCompiler<'a> {
                             ),
                         ))
                     }
+                    "__get_with_registered_producers" => {
+                        if !args.is_empty() {
+                            return Err(
+                                "direct backend expected internal `__get_with_registered_producers()` to take no arguments"
+                                    .to_string(),
+                            );
+                        }
+                        let inst = self.builder.ins().call(
+                            self.channel_recv_with_registered_producers,
+                            &[object.values[0]],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            Type::Named(
+                                "QueueReceive".to_string(),
+                                vec![class_args
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                            ),
+                        ))
+                    }
                     "get_or_none" => {
                         let inst = match args {
                             [] => self
@@ -10027,6 +10130,20 @@ fn collect_cleanup_places(function: &MirFunction) -> Vec<String> {
     cleanup_places
 }
 
+fn direct_place_paths_overlap(left: &str, right: &str) -> bool {
+    let left_segments = left.split('.').collect::<Vec<_>>();
+    let right_segments = right.split('.').collect::<Vec<_>>();
+    if left_segments.first() != right_segments.first() {
+        return false;
+    }
+    let shared = left_segments
+        .iter()
+        .zip(right_segments.iter())
+        .take_while(|(lhs, rhs)| lhs == rhs)
+        .count();
+    shared == left_segments.len() || shared == right_segments.len()
+}
+
 fn validate_module(module: &MirModule) -> std::result::Result<(), String> {
     let mut classes = HashMap::new();
     for class in &module.classes {
@@ -10877,16 +10994,18 @@ fn builtin_opaque_member_return_type(
             ),
             classes,
         ),
-        ("Queue", "get") => direct_type(
-            &Type::Named(
-                "QueueReceive".to_string(),
-                vec![args
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
-            ),
-            classes,
-        ),
+        ("Queue", "get" | "__get_in_task_group" | "__get_with_registered_producers") => {
+            direct_type(
+                &Type::Named(
+                    "QueueReceive".to_string(),
+                    vec![args
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| Type::named("Unknown"))],
+                ),
+                classes,
+            )
+        }
         ("Queue", "close") | ("TaskGroup", "cancel") | ("TaskGroup", "close") => {
             Some(DirectType::Scalar(ScalarKind::Unit))
         }
