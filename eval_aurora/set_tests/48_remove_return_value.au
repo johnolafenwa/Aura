@@ -1,9 +1,0 @@
-def main() -> int32:
-    mut s = Set{1, 2, 3}
-    # remove returns true when element was present (per docs: "returning false when absent")
-    r1 = s.remove(2)
-    print(r1)
-    # remove returns false when element was not present
-    r2 = s.remove(2)
-    print(r2)
-    return 0

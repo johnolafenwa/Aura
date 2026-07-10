@@ -1,7 +1,0 @@
-def main() -> int32:
-    mut xs: Vec[int32] = []
-    for i in range(10):
-        xs.push(i * i)
-    for x in xs:
-        print(x)
-    return 0

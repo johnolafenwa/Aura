@@ -1,6 +1,0 @@
-# Test 2: Push wrong type - should fail type check
-# Push a String onto a Vec[int32]
-def main() -> int32:
-    mut v = [1, 2, 3]
-    v.push("hello")
-    return 0

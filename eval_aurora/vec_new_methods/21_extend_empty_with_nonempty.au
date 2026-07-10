@@ -1,9 +1,0 @@
-# Test 21: Extend empty vec with non-empty
-def main() -> int32:
-    mut a = Vec[int32]()
-    b = [10, 20, 30]
-    a.extend(b)
-    for x in borrow a:
-        print(x)
-    print(a.len())
-    return 0

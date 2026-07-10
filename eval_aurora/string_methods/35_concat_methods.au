@@ -1,5 +1,0 @@
-def main() -> int32:
-    s = "hello" + " world"
-    print(s.contains("lo w"))
-    print(s.len())
-    return 0

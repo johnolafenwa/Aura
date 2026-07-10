@@ -1,6 +1,0 @@
-# Test 03: For-in with borrow over Vec[String]
-def main() -> int32:
-    names: Vec[String] = ["Alice", "Bob", "Charlie"]
-    for name in borrow names:
-        print(name)
-    return 0

@@ -1,8 +1,0 @@
-# Test 26b: Verifying extend MOVES the source - using b after extend is a compile error
-# Expected: error "use of moved value `b`"
-def main() -> int32:
-    mut a = [1, 2]
-    b = [3, 4]
-    a.extend(b)
-    print(b.len())
-    return 0

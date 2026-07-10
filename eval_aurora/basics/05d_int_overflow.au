@@ -1,6 +1,0 @@
-# Test 5d: Integer overflow arithmetic
-x: int8 = 127
-y: int8 = 1
-# This may overflow
-z = x + y
-print(z)

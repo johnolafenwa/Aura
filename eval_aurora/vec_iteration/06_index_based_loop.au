@@ -1,8 +1,0 @@
-# Test 06: Index-based loop using range and vec[i]
-# len() returns uintsize, range requires int32 -- must cast
-def main() -> int32:
-    xs = [100, 200, 300, 400]
-    n = xs.len() as int32
-    for i in range(n):
-        print(xs[i])
-    return 0

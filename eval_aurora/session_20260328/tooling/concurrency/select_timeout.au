@@ -1,5 +1,0 @@
-def main() -> int32:
-    select:
-        case after(1ms):
-            print("timeout")
-    return 0

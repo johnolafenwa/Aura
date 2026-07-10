@@ -1,5 +1,0 @@
-def main() -> int32:
-    status: None = None
-    if status == None:
-        print(1)
-    return 0

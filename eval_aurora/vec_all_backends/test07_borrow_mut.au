@@ -1,7 +1,0 @@
-def main() -> int32:
-    mut v = [1, 2, 3, 4, 5]
-    for x in borrow mut v:
-        x += 10
-    for x in borrow v:
-        print(x)
-    return 0

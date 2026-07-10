@@ -1,6 +1,0 @@
-def main() -> int32:
-    m = {"greeting": "hello", "farewell": "goodbye"}
-    print(m["greeting"])
-    print(m["farewell"])
-    print(m.len())
-    return 0

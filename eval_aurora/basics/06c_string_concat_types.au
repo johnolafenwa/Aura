@@ -1,4 +1,0 @@
-# Test 6c: String concatenation with non-strings
-# Can we concatenate string + int?
-s = "count: " + 5
-print(s)

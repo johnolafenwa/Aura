@@ -1,6 +1,0 @@
-from helpers.resource import FileHandle
-
-def main() -> int32:
-    with file = FileHandle(name="scratch"):
-        print(file.name)
-    return 0

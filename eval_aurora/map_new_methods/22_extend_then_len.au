@@ -1,7 +1,0 @@
-def main() -> int32:
-    mut m1 = {"a": 1}
-    m2 = {"b": 2, "c": 3}
-    print(m1.len())
-    m1.extend(m2)
-    print(m1.len())
-    return 0

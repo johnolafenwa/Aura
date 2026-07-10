@@ -1,7 +1,0 @@
-# Test 14: Nested module paths - import a.b.c
-import mylib.utils.formatter
-
-def main() -> int32:
-    print(mylib.utils.formatter.format_number(n=42))
-    print(mylib.utils.formatter.format_greeting(name="Aurora"))
-    return 0

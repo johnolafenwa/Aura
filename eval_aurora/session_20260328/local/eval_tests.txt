@@ -1,7 +1,0 @@
-eval_aurora/test_1_basics.au
-eval_aurora/test_2_classes.au
-eval_aurora/test_3_enums.au
-eval_aurora/test_4_generics.au
-eval_aurora/test_5_concurrency.au
-eval_aurora/test_6_strings.au
-eval_aurora/test_7_errors.au

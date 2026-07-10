@@ -1,5 +1,0 @@
-trait Mapper[T]:
-    def map(borrow self, value: T) -> T
-
-def main() -> int32:
-    return 0

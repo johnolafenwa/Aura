@@ -1,7 +1,0 @@
-# Test 15: contains - element not found
-def main() -> int32:
-    v = [1, 2, 3]
-    print(v.contains(99))
-    print(v.contains(0))
-    print(v.contains(-1))
-    return 0

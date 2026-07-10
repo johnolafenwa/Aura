@@ -1,5 +1,0 @@
-def main() -> int32:
-    x: int32 = 42
-    print(x.to_string().contains("4").to_string())
-    print(x.to_string().contains("9").to_string())
-    return 0

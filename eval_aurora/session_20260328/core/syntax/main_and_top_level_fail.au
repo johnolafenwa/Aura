@@ -1,4 +1,0 @@
-print(1)
-
-def main() -> int32:
-    return 0

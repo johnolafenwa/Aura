@@ -1,7 +1,0 @@
-def main() -> int32:
-    s = Set{1, 2, 2, 3, 3, 3}
-    print(s.len())
-    print(s.contains(1))
-    print(s.contains(2))
-    print(s.contains(3))
-    return 0

@@ -1,6 +1,0 @@
-def main() -> int32:
-    s = Set{1.1, 2.2, 3.3}
-    print(s.len())
-    print(s.contains(1.1))
-    print(s.contains(9.9))
-    return 0

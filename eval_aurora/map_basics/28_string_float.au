@@ -1,5 +1,0 @@
-def main() -> int32:
-    m = {"pi": 3.14, "e": 2.718}
-    print(m["pi"])
-    print(m["e"])
-    return 0

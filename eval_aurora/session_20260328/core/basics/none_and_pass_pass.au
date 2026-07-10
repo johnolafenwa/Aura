@@ -1,8 +1,0 @@
-def noop():
-    pass
-
-def main() -> int32:
-    status: None = None
-    noop()
-    print(0)
-    return 0

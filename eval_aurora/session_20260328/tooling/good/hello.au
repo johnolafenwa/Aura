@@ -1,3 +1,0 @@
-def main() -> int32:
-    print("hello, tooling")
-    return 0

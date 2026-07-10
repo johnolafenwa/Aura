@@ -1,9 +1,0 @@
-def main() -> int32:
-    ch: Channel[int32] = channel()
-    ch.close()
-    match ch.send(1):
-        case Result.Ok(value):
-            print(value)
-        case Result.Err(error):
-            print(error)
-    return 0

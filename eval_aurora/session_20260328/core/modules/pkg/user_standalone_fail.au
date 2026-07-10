@@ -1,8 +1,0 @@
-from pkg.named import Named
-
-public class User:
-    public label: String
-
-impl Named for User:
-    def name(borrow self) -> String:
-        return self.label

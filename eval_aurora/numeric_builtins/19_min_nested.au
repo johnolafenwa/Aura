@@ -1,3 +1,0 @@
-def main() -> int32:
-    print(min(min(3, 5), min(2, 4)))
-    return 0

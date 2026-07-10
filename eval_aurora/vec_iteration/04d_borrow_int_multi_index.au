@@ -1,9 +1,0 @@
-# Test 04d: Multiple index accesses after borrow iteration (int32 - copy type)
-def main() -> int32:
-    mut nums = [10, 20, 30]
-    for n in borrow nums:
-        print(n)
-    print(nums[0])
-    print(nums[1])
-    print(nums[2])
-    return 0

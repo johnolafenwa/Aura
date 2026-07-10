@@ -1,4 +1,0 @@
-def main() -> int32:
-    values = [1, 2, 3]
-    print(values)
-    return 0

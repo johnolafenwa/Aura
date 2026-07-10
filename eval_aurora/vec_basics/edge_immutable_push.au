@@ -1,5 +1,0 @@
-def main() -> int32:
-    # Test: push on immutable vec (should fail to compile)
-    v = [10, 20, 30]
-    v.push(40)
-    return 0

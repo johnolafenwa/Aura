@@ -1,7 +1,0 @@
-def main() -> int32:
-    xs = [1, 2, 3, 4, 5]
-    mut total: int32 = 0
-    for x in xs:
-        total += x
-    print(total)
-    return 0

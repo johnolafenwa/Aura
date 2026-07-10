@@ -1,3 +1,0 @@
-def main() -> int32:
-    print(sqrt(0.01))
-    return 0

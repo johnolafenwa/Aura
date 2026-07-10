@@ -1,4 +1,0 @@
-def main() -> None:
-    x: Option[int32] = None
-    if x == None:
-        print(9)

@@ -1,7 +1,0 @@
-def main() -> int32:
-    mut m = Map[String, int32]()
-    m.set("key", 42)
-    print(m.contains_key("key"))
-    m.remove("key")
-    print(m.contains_key("key"))
-    return 0

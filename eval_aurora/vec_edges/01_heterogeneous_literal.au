@@ -1,5 +1,0 @@
-# Test 1: Heterogeneous literal - should fail type check
-# Mixing int, string, and bool in a vec literal
-def main() -> int32:
-    xs = [1, "hello", true]
-    return 0

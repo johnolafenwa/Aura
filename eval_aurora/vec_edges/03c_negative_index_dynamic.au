@@ -1,7 +1,0 @@
-# Test 3c: Negative index via dynamic computation - runtime behavior
-def main() -> int32:
-    v = [10, 20, 30]
-    mut i = 0
-    i = i - 1
-    print(v[i])
-    return 0

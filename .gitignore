@@ -1,6 +1,11 @@
 .DS_Store
 node_modules/
 *.vsix
+.DS_Store
+.playwright-cli/
+
+# Historical evaluation output belongs in fixtures or external archives, not Git.
+eval_aurora/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -55,6 +60,7 @@ coverage.xml
 .pytest_cache/
 cover/
 tools/aurora-language-server/coverage/tmp/
+tools/aurora-language-server/coverage/coverage-summary.json
 
 # Translations
 *.mo
@@ -75,6 +81,9 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+tools/aurora-language-server/coverage/coverage-final.json
 
 # PyBuilder
 .pybuilder/

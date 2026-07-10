@@ -1,8 +1,0 @@
-# Test 4d: Int to bool cast
-zero: int32 = 0
-b1: bool = zero as bool
-print(b1)
-
-one: int32 = 1
-b2: bool = one as bool
-print(b2)

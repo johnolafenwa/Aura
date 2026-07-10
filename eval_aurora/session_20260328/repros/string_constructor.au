@@ -1,3 +1,0 @@
-def main() -> None:
-    message = String("aurora")
-    print(message)

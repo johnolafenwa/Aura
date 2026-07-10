@@ -1,8 +1,0 @@
-def main() -> int32:
-    url = "https://example.com"
-    match url.strip_prefix("https://"):
-        case Some(domain):
-            print(domain)
-        case None:
-            print("FAIL: expected Some")
-    return 0

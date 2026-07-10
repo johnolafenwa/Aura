@@ -1,8 +1,0 @@
-def main() -> int32:
-    # Test: consuming iteration (no borrow) - does it consume the vec?
-    mut v = [10, 20, 30]
-    for x in v:
-        print(x)
-    # Can we use v after consuming iteration?
-    print(v.len())
-    return 0

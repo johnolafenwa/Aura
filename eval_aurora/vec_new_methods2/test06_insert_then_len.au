@@ -1,9 +1,0 @@
-# Test 6: Insert then verify len increases by 1
-def main() -> int32:
-    mut v = [10, 20, 30]
-    print(v.len())
-    v.insert(index=1, value=15)
-    print(v.len())
-    v.insert(index=0, value=5)
-    print(v.len())
-    return 0

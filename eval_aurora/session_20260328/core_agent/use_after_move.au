@@ -1,8 +1,0 @@
-class Box:
-    value: String
-
-def main() -> int32:
-    box = Box(value="aurora")
-    print(box.value)
-    print(box.value)
-    return 0

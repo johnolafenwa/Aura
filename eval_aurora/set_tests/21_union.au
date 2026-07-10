@@ -1,8 +1,0 @@
-def main() -> int32:
-    s1 = Set{1, 2, 3}
-    s2 = Set{3, 4, 5}
-    s3 = s1.union(s2)
-    print(s3.len())
-    print(s3.contains(1))
-    print(s3.contains(5))
-    return 0

@@ -1,4 +1,0 @@
-def main() -> int32:
-    parts = ["a", "b", "c"]
-    print("".join(parts))
-    return 0

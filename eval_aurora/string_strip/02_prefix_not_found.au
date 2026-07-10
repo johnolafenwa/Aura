@@ -1,8 +1,0 @@
-def main() -> int32:
-    result = "HelloWorld".strip_prefix("xyz")
-    match result:
-        case Some(inner):
-            print("FAIL: expected None, got " + inner)
-        case None:
-            print("None")
-    return 0

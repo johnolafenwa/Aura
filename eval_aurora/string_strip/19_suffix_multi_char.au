@@ -1,8 +1,0 @@
-def main() -> int32:
-    result = "data.txt".strip_suffix(".txt")
-    match result:
-        case Some(inner):
-            print(inner)
-        case None:
-            print("FAIL: expected Some")
-    return 0

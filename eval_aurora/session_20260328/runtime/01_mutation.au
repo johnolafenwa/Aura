@@ -1,6 +1,0 @@
-def main() -> int32:
-    mut value: int32 = 5
-    value += 7
-    value = value - 2
-    print(value)
-    return 0

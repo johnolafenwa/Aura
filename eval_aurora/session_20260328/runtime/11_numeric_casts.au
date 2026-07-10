@@ -1,4 +1,0 @@
-def main() -> int32:
-    print(7 as float64)
-    print(8.9 as int32)
-    return 0

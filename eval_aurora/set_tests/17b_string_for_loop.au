@@ -1,6 +1,0 @@
-def main() -> int32:
-    s = Set{"alpha", "beta", "gamma"}
-    for x in borrow s:
-        print(x)
-    print(s.len())
-    return 0

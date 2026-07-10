@@ -1,9 +1,0 @@
-def main() -> int32:
-    s1 = Set{1, 2, 3}
-    s2 = Set{2, 3, 4}
-    s3 = s1.intersection(s2)
-    print(s3.len())
-    print(s3.contains(2))
-    print(s3.contains(3))
-    print(s3.contains(1))
-    return 0

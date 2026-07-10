@@ -1,4 +1,0 @@
-def main() -> int32:
-    value: float64 = 81.0
-    print(value.sqrt())
-    return 0

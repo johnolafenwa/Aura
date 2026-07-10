@@ -1,6 +1,0 @@
-def main() -> int32:
-    parts = ["hello", "world"]
-    joined = ", ".join(parts)
-    print(joined)
-    print(joined.len())
-    return 0

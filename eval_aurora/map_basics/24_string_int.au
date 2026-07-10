@@ -1,5 +1,0 @@
-def main() -> int32:
-    m = {"age": 30, "score": 100}
-    print(m["age"])
-    print(m["score"])
-    return 0

@@ -1,9 +1,0 @@
-def main() -> int32:
-    v = [1, 2, 2, 3, 3, 3, 4, 4, 4, 4]
-    mut s = Set[int32]()
-    for x in v:
-        s.insert(x)
-    print(s.len())
-    print(s.contains(1))
-    print(s.contains(4))
-    return 0

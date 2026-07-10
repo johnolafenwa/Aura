@@ -1,7 +1,0 @@
-def main() -> int32:
-    a: int32 = 3
-    b: int32 = 7
-    c: int32 = 1
-    d: int32 = 9
-    print(min(a, b) + min(c, d))
-    return 0

@@ -1,5 +1,0 @@
-def main() -> int32:
-    s: Set[int32] = Set{}
-    print(s.len())
-    print(s.is_empty())
-    return 0

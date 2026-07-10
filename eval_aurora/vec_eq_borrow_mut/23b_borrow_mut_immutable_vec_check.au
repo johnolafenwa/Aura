@@ -1,8 +1,0 @@
-def main() -> int32:
-    v = [1, 2, 3]
-    for x in borrow mut v:
-        x = x + 1
-    # Check if mutation persisted
-    for x in borrow v:
-        print(x)
-    return 0

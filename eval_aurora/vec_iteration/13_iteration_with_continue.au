@@ -1,8 +1,0 @@
-# Test 13: Iteration with continue - skip odd numbers
-def main() -> int32:
-    xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    for x in xs:
-        if x % 2 != 0:
-            continue
-        print(x)
-    return 0

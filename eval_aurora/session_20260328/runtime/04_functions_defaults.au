@@ -1,7 +1,0 @@
-def scale(value: int32, factor: int32 = 2) -> int32:
-    return value * factor
-
-def main() -> int32:
-    print(scale(4))
-    print(scale(4, 3))
-    return 0

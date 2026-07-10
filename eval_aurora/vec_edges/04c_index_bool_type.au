@@ -1,5 +1,0 @@
-# Test 4c: Index with bool type
-def main() -> int32:
-    v = [10, 20, 30]
-    print(v[true])
-    return 0

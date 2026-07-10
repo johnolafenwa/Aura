@@ -1,9 +1,0 @@
-def main() -> int32:
-    mut s = Set[int32]()
-    # insert returns true for new element (per docs: "returning false when already present")
-    r1 = s.insert(1)
-    print(r1)
-    # insert returns false for duplicate
-    r2 = s.insert(1)
-    print(r2)
-    return 0

@@ -1,6 +1,0 @@
-def main() -> int32:
-    words: Vec[String] = ["error: bad input", "info: started", "error: timeout", "info: done"]
-    for w in borrow words:
-        if w.starts_with("error"):
-            print(w)
-    return 0

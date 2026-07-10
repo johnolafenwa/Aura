@@ -1,8 +1,0 @@
-# Test 25: Assign vec to new variable - move semantics
-# After b = a, can we still use a?
-def main() -> int32:
-    a = [1, 2, 3]
-    b = a
-    # Try to use a after move
-    print(a.len())
-    return 0

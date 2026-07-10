@@ -1,8 +1,0 @@
-def main() -> int32:
-    # Fast membership lookup using Set
-    allowed = Set{"admin", "editor", "viewer"}
-    print(allowed.contains("admin"))
-    print(allowed.contains("guest"))
-    print(allowed.contains("editor"))
-    print(allowed.contains("hacker"))
-    return 0

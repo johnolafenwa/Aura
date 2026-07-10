@@ -1,4 +1,0 @@
-def main() -> int32:
-    x: int32 = -10
-    print(x.to_string())
-    return 0

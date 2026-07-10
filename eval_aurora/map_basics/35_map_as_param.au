@@ -1,9 +1,0 @@
-def print_map(m: borrow Map[String, int32]):
-    print(m.len())
-    for k in borrow m.keys():
-        print(k)
-
-def main() -> int32:
-    m = {"a": 1, "b": 2, "c": 3}
-    print_map(m)
-    return 0

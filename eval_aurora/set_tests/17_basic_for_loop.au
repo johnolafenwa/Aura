@@ -1,5 +1,0 @@
-def main() -> int32:
-    s = Set{10, 20, 30}
-    for x in s:
-        print(x)
-    return 0

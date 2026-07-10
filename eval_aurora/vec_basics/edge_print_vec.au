@@ -1,5 +1,0 @@
-def main() -> int32:
-    # Can we print a Vec directly?
-    v = [1, 2, 3]
-    print(v)
-    return 0

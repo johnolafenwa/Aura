@@ -1,7 +1,0 @@
-# Test 20c: Dynamic len-1 on empty vec - runtime behavior
-def main() -> int32:
-    mut v: Vec[int32] = []
-    n = v.len()
-    x = n - 1
-    print(x)
-    return 0

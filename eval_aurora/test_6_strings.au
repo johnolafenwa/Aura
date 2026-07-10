@@ -1,7 +1,0 @@
-def main() -> None:
-    s = String("Aurora")
-    s2 = s.clone()
-    print(s2)
-    
-    f = f"Hello {s}"
-    print(f)

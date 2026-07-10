@@ -1,9 +1,0 @@
-def main() -> int32:
-    x: int32 = 42
-    s = x.to_string()
-    match parse_int32(s):
-        case Result.Ok(value):
-            print(value)
-        case Result.Err(e):
-            print("ERR: " + e)
-    return 0

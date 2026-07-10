@@ -1,5 +1,0 @@
-def main() -> int32:
-    m = {"name": "Alice", "city": "Paris"}
-    for e in m.entries():
-        print(f"{e.key} -> {e.value}")
-    return 0

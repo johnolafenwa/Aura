@@ -1,7 +1,0 @@
-def main() -> int32:
-    m = {"hello": 42}
-    entries = m.entries()
-    e = entries[0]
-    msg = f"{e.key}: {e.value}"
-    print(msg)
-    return 0

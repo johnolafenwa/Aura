@@ -1,7 +1,0 @@
-# Test 19: Reverse single element
-def main() -> int32:
-    mut v = [42]
-    v.reverse()
-    print(v.len())
-    print(v[0])
-    return 0

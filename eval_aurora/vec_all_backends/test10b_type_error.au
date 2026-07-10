@@ -1,3 +1,0 @@
-def main() -> int32:
-    values = [1, true]
-    return 0

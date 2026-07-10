@@ -1,7 +1,0 @@
-# Test 11: Module import - import and use module
-import helpers.math
-
-def main() -> int32:
-    print(helpers.math.double(x=5))
-    print(helpers.math.add(a=3, b=4))
-    return 0

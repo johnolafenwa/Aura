@@ -1,8 +1,0 @@
-def main() -> int32:
-    s = Set{1, 2, 3}
-    print(s)
-    s2 = Set{"hello", "world"}
-    print(s2)
-    s3 = Set[int32]()
-    print(s3)
-    return 0

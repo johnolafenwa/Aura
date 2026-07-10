@@ -1,5 +1,0 @@
-def main() -> int32:
-    s = "hello\nworld"
-    result = s.replace("\n", " ")
-    print(result)
-    return 0

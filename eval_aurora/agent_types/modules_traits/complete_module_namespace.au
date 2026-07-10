@@ -1,5 +1,0 @@
-import pkg.user
-
-def main() -> int32:
-    pkg.user.
-    return 0

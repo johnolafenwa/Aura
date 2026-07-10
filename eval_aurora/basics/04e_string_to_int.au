@@ -1,4 +1,0 @@
-# Test 4e: String to int cast - should this work?
-s: str = "42"
-n: int32 = s as int32
-print(n)

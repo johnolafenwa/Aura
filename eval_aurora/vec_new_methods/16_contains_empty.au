@@ -1,5 +1,0 @@
-# Test 16: contains on empty vec - should return false
-def main() -> int32:
-    v = Vec[int32]()
-    print(v.contains(42))
-    return 0

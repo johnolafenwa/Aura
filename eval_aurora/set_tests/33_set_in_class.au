@@ -1,9 +1,0 @@
-class TagSet:
-    tags: Set[String]
-
-def main() -> int32:
-    ts = TagSet(tags=Set{"rust", "aurora", "compiler"})
-    print(ts.tags.len())
-    print(ts.tags.contains("aurora"))
-    print(ts.tags.contains("python"))
-    return 0

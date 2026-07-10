@@ -1,8 +1,0 @@
-def main() -> int32:
-    results = [1, 2, 3]
-    expected = [1, 2, 3]
-    if results == expected:
-        print("pass")
-    else:
-        print("fail")
-    return 0

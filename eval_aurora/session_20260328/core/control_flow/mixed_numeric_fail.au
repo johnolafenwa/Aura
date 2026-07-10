@@ -1,5 +1,0 @@
-def main() -> int32:
-    a: int32 = 1
-    b: float64 = 2.0
-    print(a + b)
-    return 0

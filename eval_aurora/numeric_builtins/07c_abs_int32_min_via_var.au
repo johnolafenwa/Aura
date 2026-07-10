@@ -1,5 +1,0 @@
-def main() -> int32:
-    # Try to get int32 min via arithmetic
-    x: int32 = -2147483647 - 1
-    print(abs(x))
-    return 0

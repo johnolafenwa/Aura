@@ -1,9 +1,0 @@
-def main() -> int32:
-    m = Map[String, int32]()
-    result = m.get("nonexistent")
-    match result:
-        case Some(v):
-            print(v)
-        case None:
-            print("None")
-    return 0

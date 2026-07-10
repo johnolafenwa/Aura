@@ -1,6 +1,0 @@
-# Test 3b: Negative index via variable (not literal) - does the runtime catch this?
-def main() -> int32:
-    v = [10, 20, 30]
-    i = -1
-    print(v[i])
-    return 0

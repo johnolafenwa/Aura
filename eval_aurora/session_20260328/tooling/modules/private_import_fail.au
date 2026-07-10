@@ -1,6 +1,0 @@
-from helpers.counter import Counter, hidden
-
-def main() -> int32:
-    counter = Counter(value=1)
-    print(hidden(counter))
-    return 0

@@ -1,6 +1,0 @@
-def main() -> int32:
-    m = Map[String, int32]()
-    keys = m.keys()
-    print(keys.len())
-    print(keys.is_empty())
-    return 0

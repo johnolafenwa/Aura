@@ -1,6 +1,0 @@
-def main() -> int32:
-    empty = Set[int32]()
-    nonempty = Set{1, 2, 3}
-    print(empty.is_empty())
-    print(nonempty.is_empty())
-    return 0

@@ -1,8 +1,0 @@
-# Test 27: Self-extend - extend a vec with a clone of itself
-def main() -> int32:
-    mut v = [1, 2, 3]
-    v.extend(v.clone())
-    for x in borrow v:
-        print(x)
-    print(v.len())
-    return 0

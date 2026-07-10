@@ -1,3 +1,0 @@
-def main() -> int32:
-    print(abs(-5) + abs(-3))
-    return 0

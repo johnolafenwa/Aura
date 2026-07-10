@@ -1,5 +1,0 @@
-def main() -> int32:
-    s = "hello world"
-    result = s.replace("world", "aurora")
-    print(result)
-    return 0

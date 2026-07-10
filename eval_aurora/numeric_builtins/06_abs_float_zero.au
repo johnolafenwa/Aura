@@ -1,3 +1,0 @@
-def main() -> int32:
-    print(abs(0.0))
-    return 0

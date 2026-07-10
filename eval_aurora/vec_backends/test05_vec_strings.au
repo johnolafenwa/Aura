@@ -1,6 +1,0 @@
-def main() -> int32:
-    names: Vec[String] = ["hello", "world"]
-    for name in borrow names:
-        print(name)
-    print(names.len())
-    return 0

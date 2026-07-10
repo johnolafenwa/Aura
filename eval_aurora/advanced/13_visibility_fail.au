@@ -1,8 +1,0 @@
-# Test 13: Visibility - private items should not be accessible from outside
-from helpers.counter import Counter
-
-def main() -> int32:
-    counter = Counter(value=5)
-    # hidden() is not public, should fail
-    print(counter.hidden())
-    return 0

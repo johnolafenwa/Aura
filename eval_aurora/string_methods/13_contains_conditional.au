@@ -1,7 +1,0 @@
-def main() -> int32:
-    s = "error: file not found"
-    if s.contains("error"):
-        print("found error")
-    else:
-        print("no error")
-    return 0

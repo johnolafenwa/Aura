@@ -1,8 +1,0 @@
-# Test 14: Clear an already empty vec
-def main() -> int32:
-    mut v = Vec[int32]()
-    v.clear()
-    print(v.len())
-    v.clear()
-    print(v.len())
-    return 0

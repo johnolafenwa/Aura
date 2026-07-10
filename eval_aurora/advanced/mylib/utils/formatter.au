@@ -1,5 +1,0 @@
-public def format_number(n: int32) -> String:
-    return f"Number: {n}"
-
-public def format_greeting(name: borrow str) -> String:
-    return f"Greetings, {name}!"

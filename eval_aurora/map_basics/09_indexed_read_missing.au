@@ -1,5 +1,0 @@
-def main() -> int32:
-    m = Map[String, int32]()
-    val = m["nonexistent"]
-    print(val)
-    return 0

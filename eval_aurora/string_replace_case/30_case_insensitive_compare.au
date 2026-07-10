@@ -1,6 +1,0 @@
-def main() -> int32:
-    a = "Hello"
-    b = "hELLO"
-    result = a.to_lower() == b.to_lower()
-    print(result)
-    return 0

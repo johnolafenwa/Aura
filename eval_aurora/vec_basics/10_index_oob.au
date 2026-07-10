@@ -1,5 +1,0 @@
-def main() -> int32:
-    v = [10, 20, 30]
-    # Access out of bounds - expect runtime error
-    print(v[999])
-    return 0

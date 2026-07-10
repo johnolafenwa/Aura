@@ -1,5 +1,0 @@
-# Test 4b: Index with wrong type (float) - should fail type check
-def main() -> int32:
-    v = [10, 20, 30]
-    print(v[3.14])
-    return 0

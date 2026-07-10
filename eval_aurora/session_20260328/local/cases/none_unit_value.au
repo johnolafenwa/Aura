@@ -1,3 +1,0 @@
-def main() -> None:
-    done: None = None
-    print(1)

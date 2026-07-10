@@ -1,6 +1,0 @@
-def main() -> int32:
-    s = "  Hello World  "
-    result = s.trim().to_lower().replace("world", "aurora")
-    print(result)
-    print(result.len())
-    return 0

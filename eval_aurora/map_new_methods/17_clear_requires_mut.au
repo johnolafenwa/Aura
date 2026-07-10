@@ -1,5 +1,0 @@
-# This test should produce a compile error because m is not mut
-def main() -> int32:
-    m = {"a": 1}
-    m.clear()
-    return 0

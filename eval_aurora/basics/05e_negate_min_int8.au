@@ -1,4 +1,0 @@
-# Test 5e: Negate min int8 (-128) - should overflow to 128 which doesn't fit
-x: int8 = -128
-y = -x
-print(y)

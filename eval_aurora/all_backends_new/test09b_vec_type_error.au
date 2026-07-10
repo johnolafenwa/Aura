@@ -1,4 +1,0 @@
-def main() -> int32:
-    mut v = [1, 2, 3]
-    v.push("hello")
-    return 0

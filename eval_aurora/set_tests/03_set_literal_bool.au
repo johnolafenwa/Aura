@@ -1,6 +1,0 @@
-def main() -> int32:
-    s = Set{true, false}
-    print(s.len())
-    print(s.contains(true))
-    print(s.contains(false))
-    return 0

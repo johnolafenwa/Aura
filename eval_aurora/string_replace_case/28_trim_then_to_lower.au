@@ -1,5 +1,0 @@
-def main() -> int32:
-    s = "  HELLO  "
-    result = s.trim().to_lower()
-    print(result)
-    return 0

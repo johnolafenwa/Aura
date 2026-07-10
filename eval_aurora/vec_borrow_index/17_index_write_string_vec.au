@@ -1,6 +1,0 @@
-def main() -> int32:
-    mut names = ["Alice", "Bob", "Charlie"]
-    print(names[0])
-    names[0] = "Zara"
-    print(names[0])
-    return 0

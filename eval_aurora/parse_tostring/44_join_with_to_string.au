@@ -1,7 +1,0 @@
-def main() -> int32:
-    mut parts: Vec[String] = Vec[String]()
-    parts.push("value1=" + (10).to_string())
-    parts.push("value2=" + (20).to_string())
-    parts.push("value3=" + (30).to_string())
-    print(", ".join(parts))
-    return 0

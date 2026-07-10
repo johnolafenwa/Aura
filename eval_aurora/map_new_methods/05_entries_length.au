@@ -1,6 +1,0 @@
-def main() -> int32:
-    m = {"a": 1, "b": 2, "c": 3}
-    print(m.entries().len())
-    print(m.len())
-    print(m.entries().len() == m.len())
-    return 0

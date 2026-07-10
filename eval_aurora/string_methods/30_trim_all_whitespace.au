@@ -1,5 +1,0 @@
-def main() -> int32:
-    s = "   "
-    result = s.trim()
-    print(result.len())
-    return 0

@@ -1,9 +1,0 @@
-def main() -> int32:
-    mut v = [1, 2, 3]
-    # First modify with borrow mut
-    for x in borrow mut v:
-        x = x * 3
-    # Then read with borrow
-    for x in borrow v:
-        print(x)
-    return 0

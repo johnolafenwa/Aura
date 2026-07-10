@@ -1,4 +1,0 @@
-# Test 4b: Narrowing cast with value in range (should work?)
-large: int32 = 100
-narrow: int8 = large as int8
-print(narrow)

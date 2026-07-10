@@ -1,7 +1,0 @@
-def main() -> int32:
-    v = [3, 7, 1, 9, 2, 8, 4]
-    mut best: int32 = v[0]
-    for item in borrow v:
-        best = max(best, item)
-    print(best)
-    return 0

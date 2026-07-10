@@ -1,5 +1,0 @@
-def main() -> int32:
-    s = "abcabc"
-    result = s.replace("abc", "x")
-    print(result)
-    return 0

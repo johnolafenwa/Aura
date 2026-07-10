@@ -1,5 +1,0 @@
-def main() -> int32:
-    value: int32 = 3
-    for item in value:
-        print(item)
-    return 0

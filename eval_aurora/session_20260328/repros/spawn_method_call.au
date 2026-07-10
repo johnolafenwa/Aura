@@ -1,8 +1,0 @@
-class Worker:
-    def run(borrow self) -> None:
-        print(1)
-
-def main() -> None:
-    worker = Worker()
-    task = spawn worker.run()
-    task.join()

@@ -1,9 +1,0 @@
-class Point:
-    x: float64
-    y: float64
-
-def main() -> int32:
-    p = Point(x=3.0, y=4.0)
-    print(p.x)
-    print(p.y)
-    return 0

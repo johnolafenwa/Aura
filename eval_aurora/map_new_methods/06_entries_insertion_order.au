@@ -1,8 +1,0 @@
-def main() -> int32:
-    mut m = Map[String, int32]()
-    m.set("first", 1)
-    m.set("second", 2)
-    m.set("third", 3)
-    for e in m.entries():
-        print(f"{e.key}: {e.value}")
-    return 0

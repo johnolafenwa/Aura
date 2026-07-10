@@ -1,5 +1,0 @@
-def main() -> int32:
-    s = "a,b,c"
-    parts = s.replace(",", " ").split(" ")
-    print(parts.len())
-    return 0

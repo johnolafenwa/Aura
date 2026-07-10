@@ -1,9 +1,0 @@
-def main() -> int32:
-    mut m = Map[int32, String]()
-    m.set(1, "one")
-    m.set(2, "two")
-    m.set(3, "three")
-    print(m[1])
-    print(m[2])
-    print(m[3])
-    return 0

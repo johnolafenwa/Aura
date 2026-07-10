@@ -1,3 +1,0 @@
-def main() -> int32:
-    value: int32 = "not an int"
-    return value

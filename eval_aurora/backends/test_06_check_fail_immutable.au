@@ -1,3 +1,0 @@
-def main():
-    count: int32 = 1
-    count = 2

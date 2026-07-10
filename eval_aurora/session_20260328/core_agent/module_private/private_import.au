@@ -1,5 +1,0 @@
-from helper import hidden_value
-
-def main() -> int32:
-    print(hidden_value())
-    return 0

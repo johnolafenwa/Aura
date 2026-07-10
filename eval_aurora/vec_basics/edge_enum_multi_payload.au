@@ -1,6 +1,0 @@
-enum Pair:
-    Values(int32, int32)
-
-def main() -> int32:
-    p = Pair.Values(1, 2)
-    return 0

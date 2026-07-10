@@ -1,4 +1,0 @@
-def main() -> int32:
-    x: float64 = 3.14
-    print(x.to_string())
-    return 0

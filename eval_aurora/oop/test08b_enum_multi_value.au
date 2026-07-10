@@ -1,8 +1,0 @@
-enum Shape:
-    Circle(float64)
-    Rectangle(float64, float64)
-    Empty
-
-def main() -> int32:
-    c = Shape.Circle(5.0)
-    return 0

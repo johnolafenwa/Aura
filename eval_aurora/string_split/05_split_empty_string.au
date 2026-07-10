@@ -1,6 +1,0 @@
-def main() -> int32:
-    result = "".split(",")
-    print(result.len())
-    if result.len() > 0:
-        print(result[0])
-    return 0

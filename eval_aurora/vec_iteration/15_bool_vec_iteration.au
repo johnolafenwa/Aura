@@ -1,9 +1,0 @@
-# Test 15: Vec of booleans - count trues
-def main() -> int32:
-    flags = [true, false, true, true, false, true]
-    mut true_count: int32 = 0
-    for flag in flags:
-        if flag:
-            true_count += 1
-    print(true_count)
-    return 0

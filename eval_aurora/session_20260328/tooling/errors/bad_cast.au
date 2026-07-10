@@ -1,4 +1,0 @@
-def main() -> int32:
-    value = 999999999999999999999 as int8
-    print(value)
-    return 0

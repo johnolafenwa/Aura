@@ -1,6 +1,0 @@
-def main() -> int32:
-    mut m = Map[String, int32]()
-    print(m.is_empty())
-    m.set("key", 1)
-    print(m.is_empty())
-    return 0

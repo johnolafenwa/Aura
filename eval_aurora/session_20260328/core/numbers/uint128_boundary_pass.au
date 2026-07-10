@@ -1,8 +1,0 @@
-def main() -> int32:
-    value: uint128 = 340282366920938463463374607431768211455
-    almost: uint128 = 340282366920938463463374607431768211454
-
-    print(value)
-    print(almost + 1)
-
-    return 0

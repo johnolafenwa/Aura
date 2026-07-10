@@ -1,3 +1,0 @@
-# Test 1b: Type mismatch - assigning wrong type
-x: int32 = "hello"
-print(x)

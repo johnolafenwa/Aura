@@ -1,6 +1,0 @@
-from pkg.user import User
-
-def main() -> int32:
-    user = User(label="ok")
-    print(user.label)
-    return 0

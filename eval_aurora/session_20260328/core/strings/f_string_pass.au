@@ -1,5 +1,0 @@
-def main() -> int32:
-    s = "Aurora"
-    f = f"Hello {s}"
-    print(f)
-    return 0

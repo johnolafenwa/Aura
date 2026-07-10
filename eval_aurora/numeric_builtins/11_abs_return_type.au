@@ -1,6 +1,0 @@
-def main() -> int32:
-    a: int32 = abs(-7)
-    b: float64 = abs(-3.5)
-    print(a)
-    print(b)
-    return 0

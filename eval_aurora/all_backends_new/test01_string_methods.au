@@ -1,9 +1,0 @@
-def main() -> int32:
-    s = "  Hello, World!  "
-    print(s.len())
-    print(s.trim())
-    print(s.trim().len())
-    print(s.contains("World"))
-    print(s.starts_with("  Hello"))
-    print(s.ends_with("!  "))
-    return 0

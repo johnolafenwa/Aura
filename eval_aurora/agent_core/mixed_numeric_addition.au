@@ -1,5 +1,0 @@
-def main() -> int32:
-    whole: int32 = 3
-    fraction: float64 = 1.5
-    print(whole + fraction)
-    return 0

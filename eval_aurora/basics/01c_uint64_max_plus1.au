@@ -1,5 +1,0 @@
-# Test 1c: uint64 max value + 1 overflow
-x: uint64 = 18446744073709551615
-y: uint64 = 1
-z = x + y
-print(z)

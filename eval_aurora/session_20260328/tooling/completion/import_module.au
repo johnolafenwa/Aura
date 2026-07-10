@@ -1,8 +1,0 @@
-import helpers.math
-from helpers.counter import Counter
-
-def main() -> int32:
-    counter = Counter(value=3)
-    print(helpers.
-    print(counter.
-    return 0

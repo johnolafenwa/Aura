@@ -1,7 +1,0 @@
-# Test 26: Reverse then iterate
-def main() -> int32:
-    mut v = [10, 20, 30, 40, 50]
-    v.reverse()
-    for value in v:
-        print(value)
-    return 0

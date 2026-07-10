@@ -1,5 +1,0 @@
-def main() -> int32:
-    mut value: int8 = 127
-    value += 1
-    print(value)
-    return 0

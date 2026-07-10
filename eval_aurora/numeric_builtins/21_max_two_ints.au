@@ -1,3 +1,0 @@
-def main() -> int32:
-    print(max(3, 7))
-    return 0

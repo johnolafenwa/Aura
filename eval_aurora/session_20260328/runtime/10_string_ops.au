@@ -1,6 +1,0 @@
-def main() -> int32:
-    name: String = "Aurora"
-    copy = name.clone()
-    print("hello " + copy)
-    print(f"value={3}")
-    return 0

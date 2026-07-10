@@ -1,8 +1,0 @@
-def main() -> int32:
-    mut outer = Map[String, Map[String, int32]]()
-    inner = {"x": 1, "y": 2}
-    outer.set("coords", inner)
-    coords = outer["coords"]
-    print(coords["x"])
-    print(coords["y"])
-    return 0

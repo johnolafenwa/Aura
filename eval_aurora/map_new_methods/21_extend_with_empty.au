@@ -1,8 +1,0 @@
-def main() -> int32:
-    mut m1 = {"a": 1, "b": 2}
-    m2: Map[String, int32] = {}
-    m1.extend(m2)
-    print(m1.len())
-    print(m1["a"])
-    print(m1["b"])
-    return 0

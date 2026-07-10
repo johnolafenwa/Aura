@@ -1,5 +1,0 @@
-# Test 5f: Unsigned integer underflow (subtract below 0)
-x: uint8 = 0
-y: uint8 = 1
-z = x - y
-print(z)

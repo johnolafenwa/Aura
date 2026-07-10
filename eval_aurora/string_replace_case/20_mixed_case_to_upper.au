@@ -1,5 +1,0 @@
-def main() -> int32:
-    s = "Hello World"
-    result = s.to_upper()
-    print(result)
-    return 0

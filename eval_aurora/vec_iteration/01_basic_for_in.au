@@ -1,6 +1,0 @@
-# Test 01: Basic for-in iteration over Vec[int32]
-def main() -> int32:
-    xs = [10, 20, 30, 40, 50]
-    for x in xs:
-        print(x)
-    return 0

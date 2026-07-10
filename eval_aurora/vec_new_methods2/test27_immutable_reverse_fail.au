@@ -1,5 +1,0 @@
-# Test 27: Immutable vec reverse should fail (no mut)
-def main() -> int32:
-    v = [1, 2, 3]
-    v.reverse()
-    return 0

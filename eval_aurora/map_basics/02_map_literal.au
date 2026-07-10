@@ -1,5 +1,0 @@
-def main() -> int32:
-    m = {"name": "Alice", "city": "NYC"}
-    print(m.len())
-    print(m.is_empty())
-    return 0

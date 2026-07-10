@@ -1,8 +1,0 @@
-def identity[T](value: T) -> T:
-    return value
-
-
-def main() -> int32:
-    print(identity(7))
-    print(identity("aurora"))
-    return 0

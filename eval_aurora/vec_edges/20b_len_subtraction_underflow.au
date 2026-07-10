@@ -1,6 +1,0 @@
-# Test 20b: len() - 1 on empty vec - potential underflow if uintsize
-def main() -> int32:
-    v: Vec[int32] = []
-    x = v.len() - 1
-    print(x)
-    return 0

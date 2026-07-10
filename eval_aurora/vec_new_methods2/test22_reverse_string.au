@@ -1,8 +1,0 @@
-# Test 22: Reverse String vec
-def main() -> int32:
-    mut v = ["a", "b", "c"]
-    v.reverse()
-    print(v[0])
-    print(v[1])
-    print(v[2])
-    return 0

@@ -1,9 +1,0 @@
-# Test 05: Vec consumed after value iteration (move type)
-# This should FAIL because String is a move type and the vec is consumed
-def main() -> int32:
-    names: Vec[String] = ["hello", "world"]
-    for name in names:
-        print(name)
-    # This should error - vec was consumed
-    print(names.len())
-    return 0

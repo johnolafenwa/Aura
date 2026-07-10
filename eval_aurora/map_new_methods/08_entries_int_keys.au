@@ -1,7 +1,0 @@
-def main() -> int32:
-    mut m = Map[int32, String]()
-    m.set(1, "one")
-    m.set(2, "two")
-    for e in m.entries():
-        print(f"{e.key} = {e.value}")
-    return 0

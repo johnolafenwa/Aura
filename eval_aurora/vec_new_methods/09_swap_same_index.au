@@ -1,9 +1,0 @@
-# Test 09: Swap same index - should be no-op
-def main() -> int32:
-    mut v = [10, 20, 30]
-    result = v.swap(1, 1)
-    print(result)
-    print(v[0])
-    print(v[1])
-    print(v[2])
-    return 0

@@ -1,6 +1,0 @@
-def main() -> int32:
-    s = " hello , world , aurora "
-    parts = s.split(",")
-    for part in borrow parts:
-        print(part.trim())
-    return 0

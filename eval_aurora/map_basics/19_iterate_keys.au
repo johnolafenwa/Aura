@@ -1,5 +1,0 @@
-def main() -> int32:
-    m = {"x": 10, "y": 20, "z": 30}
-    for k in borrow m.keys():
-        print(k)
-    return 0

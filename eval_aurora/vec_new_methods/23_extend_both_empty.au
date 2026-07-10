@@ -1,7 +1,0 @@
-# Test 23: Extend empty with empty
-def main() -> int32:
-    mut a = Vec[int32]()
-    b = Vec[int32]()
-    a.extend(b)
-    print(a.len())
-    return 0

@@ -1,5 +1,0 @@
-def main() -> int32:
-    s = "ABC123!@#"
-    result = s.to_lower()
-    print(result)
-    return 0

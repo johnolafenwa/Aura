@@ -1,5 +1,0 @@
-def main() -> int32:
-    # Test: index write out of bounds
-    mut v = [10, 20, 30]
-    v[999] = 42
-    return 0

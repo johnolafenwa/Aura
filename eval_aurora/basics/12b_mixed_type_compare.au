@@ -1,5 +1,0 @@
-# Test 12b: Mixed type comparisons
-# int vs float comparison
-print(10 == 10.0)
-print(10 < 10.5)
-print(10 > 9.5)
