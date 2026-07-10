@@ -8,26 +8,62 @@ use cranelift_codegen::Context;
 use cranelift_frontend::FunctionBuilderContext;
 
 use super::{
-    box_thunk_value, builtin_opaque_member_return_type, collect_type_params_from_type,
-    direct_field_type, direct_type, direct_type_to_type, emit_host_object,
-    emit_host_object_with_metadata, ensure_direct_type, infer_operand_type, infer_rvalue_type,
-    infer_try_type, is_numeric_type_name, main_signature, mangle_symbol, mangle_thunk_symbol,
-    render_direct_type, runtime_type_is_wildcard, signature_for, thunk_signature,
-    thunk_string_constant, unbox_thunk_value, validate_function, validate_operand, DirectType,
-    NativeCodegen, PlainClassField, PlainClassType, ScalarKind,
+    box_thunk_value, builtin_opaque_member_return_type, cleanup_place_type,
+    collect_type_params_from_type, direct_field_type, direct_type, direct_type_to_type,
+    emit_host_object, emit_host_object_with_metadata, ensure_direct_type,
+    enum_variant_payload_types_for_target, infer_operand_type, infer_rvalue_type, infer_try_type,
+    infer_variant_payload_type, is_numeric_type_name, main_signature, mangle_symbol,
+    mangle_thunk_symbol, ordered_named_args, ordered_optional_named_args,
+    release_direct_call_results, release_direct_values, render_direct_type,
+    runtime_type_is_wildcard, signature_for, thunk_signature, thunk_string_constant,
+    unbox_thunk_value, validate_function, validate_operand, DirectType, NativeCodegen,
+    PlainClassField, PlainClassType, ScalarKind,
 };
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::Span;
 use crate::mir::MirReceiverKind;
 use crate::mir::{
     BasicBlock, CallTarget, Instruction, MirArg, MirFormatPart, MirFunction, MirLocalType,
-    MirMapEntry, MirParam, Operand, Rvalue, Terminator,
+    MirMapEntry, MirMatchArm, MirParam, Operand, Rvalue, Terminator,
 };
 use crate::sema::Type;
 use crate::{lower_path_to_mir, lower_source_to_mir};
 
 fn scalar_kind_for_tests(ty: &Type) -> Option<ScalarKind> {
     direct_type(ty, &HashMap::new()).and_then(|ty| ty.scalar_kind())
+}
+
+#[test]
+fn host_builtin_return_types_cover_the_control_plane_surface() {
+    for name in [
+        "sys::args",
+        "sys::env",
+        "sys::current_dir",
+        "sys::unix_time_ms",
+        "sys::monotonic_time_ms",
+        "path::join",
+        "path::parent",
+        "path::file_name",
+        "path::extension",
+        "path::is_absolute",
+        "json::is_valid",
+        "json::stringify_map",
+        "json::parse_string_map",
+        "toml::is_valid",
+        "toml::stringify_map",
+        "toml::parse_string_map",
+        "metrics::increment",
+        "metrics::get",
+        "metrics::reset",
+        "log::debug",
+        "log::info",
+        "log::warn",
+        "log::error",
+        "trace::event",
+    ] {
+        assert!(super::host_builtin_return_type(name).is_some(), "{name}");
+    }
+    assert!(super::host_builtin_return_type("missing::call").is_none());
 }
 
 #[test]
@@ -126,6 +162,10 @@ fn direct_backend_emits_object_for_extended_feature_examples() {
             include_str!("../../../examples/error_handling/try_result.au"),
         ),
         (
+            "error_handling/try_from_trait",
+            include_str!("../tests/fixtures/run-pass/try_from_trait.au"),
+        ),
+        (
             "numbers/numeric_builtins",
             include_str!("../../../examples/numbers/numeric_builtins.au"),
         ),
@@ -167,6 +207,30 @@ fn direct_backend_emits_object_for_extended_feature_examples() {
 }
 
 #[test]
+fn direct_backend_emits_object_for_every_runnable_fixture() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-pass");
+    let mut paths = std::fs::read_dir(&fixtures)
+        .expect("run-pass fixture directory should be readable")
+        .map(|entry| {
+            entry
+                .expect("run-pass fixture entry should be readable")
+                .path()
+        })
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("au"))
+        .collect::<Vec<_>>();
+    paths.sort();
+
+    for path in paths {
+        let mir = lower_path_to_mir(&path)
+            .unwrap_or_else(|error| panic!("{} should lower to MIR: {error}", path.display()));
+        let object = emit_host_object(&mir).unwrap_or_else(|error| {
+            panic!("{} should emit a direct object: {error}", path.display())
+        });
+        assert!(!object.is_empty(), "{}", path.display());
+    }
+}
+
+#[test]
 fn direct_backend_emits_object_for_runtime_member_surface_matrix() {
     let source = r#"
 def worker(value: int32) -> int32:
@@ -175,6 +239,8 @@ def worker(value: int32) -> int32:
 def main() -> int32:
     text = "  Aurora Repo  "
     trimmed = text.trim()
+    truth = (trimmed.contains("Repo") and true) or false
+    print(truth)
     print(trimmed.len())
     print(trimmed.contains("Repo"))
     print(trimmed.starts_with("Aurora"))
@@ -357,6 +423,10 @@ def main() -> int32:
 }
 
 fn module_with_main_call(call: Rvalue) -> crate::mir::MirModule {
+    module_with_main_call_result_type(call, Type::named("int32"))
+}
+
+fn module_with_main_call_result_type(call: Rvalue, result_ty: Type) -> crate::mir::MirModule {
     crate::mir::MirModule {
         functions: vec![MirFunction {
             name: "main".to_string(),
@@ -366,7 +436,7 @@ fn module_with_main_call(call: Rvalue) -> crate::mir::MirModule {
             params: Vec::new(),
             local_types: vec![MirLocalType {
                 name: "%t0".to_string(),
-                ty: Type::named("int32"),
+                ty: result_ty,
             }],
             return_type: Type::named("int32"),
             entry: "entry".to_string(),
@@ -616,6 +686,121 @@ fn direct_backend_internal_collection_member_surface_compiles() {
 }
 
 #[test]
+fn direct_backend_scalar_bool_range_and_coercion_paths_compile() {
+    let module = crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: vec![
+                MirLocalType {
+                    name: "%left".to_string(),
+                    ty: Type::named("bool"),
+                },
+                MirLocalType {
+                    name: "%right".to_string(),
+                    ty: Type::named("bool"),
+                },
+                MirLocalType {
+                    name: "%and".to_string(),
+                    ty: Type::named("bool"),
+                },
+                MirLocalType {
+                    name: "%or".to_string(),
+                    ty: Type::named("bool"),
+                },
+                MirLocalType {
+                    name: "%range".to_string(),
+                    ty: Type::named("Range"),
+                },
+                MirLocalType {
+                    name: "%int_as_bool".to_string(),
+                    ty: Type::named("bool"),
+                },
+                MirLocalType {
+                    name: "%unit_as_int".to_string(),
+                    ty: Type::named("int32"),
+                },
+            ],
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![
+                    Instruction::Assign {
+                        target: "%left".to_string(),
+                        value: Rvalue::Use(Operand::Bool(true)),
+                    },
+                    Instruction::Assign {
+                        target: "%right".to_string(),
+                        value: Rvalue::Use(Operand::Bool(false)),
+                    },
+                    Instruction::Assign {
+                        target: "%and".to_string(),
+                        value: Rvalue::Binary {
+                            op: BinaryOp::And,
+                            left: Operand::Place("%left".to_string()),
+                            right: Operand::Place("%right".to_string()),
+                            span: Span::new(1, 1),
+                        },
+                    },
+                    Instruction::Assign {
+                        target: "%or".to_string(),
+                        value: Rvalue::Binary {
+                            op: BinaryOp::Or,
+                            left: Operand::Place("%left".to_string()),
+                            right: Operand::Place("%right".to_string()),
+                            span: Span::new(1, 1),
+                        },
+                    },
+                    Instruction::Assign {
+                        target: "%range".to_string(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Name("range".to_string()),
+                            args: vec![
+                                MirArg {
+                                    name: None,
+                                    value: Operand::Int(0),
+                                    writeback_place: None,
+                                },
+                                MirArg {
+                                    name: None,
+                                    value: Operand::Int(4),
+                                    writeback_place: None,
+                                },
+                                MirArg {
+                                    name: Some("start".to_string()),
+                                    value: Operand::Int(1),
+                                    writeback_place: None,
+                                },
+                            ],
+                        },
+                    },
+                    Instruction::Assign {
+                        target: "%int_as_bool".to_string(),
+                        value: Rvalue::Use(Operand::Int(1)),
+                    },
+                    Instruction::Assign {
+                        target: "%unit_as_int".to_string(),
+                        value: Rvalue::Use(Operand::Unit),
+                    },
+                ],
+                terminator: Terminator::Return(Operand::Int(0)),
+            }],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+
+    let object = emit_host_object(&module)
+        .expect("manual scalar bool/range/coercion MIR should emit direct object");
+    assert!(!object.is_empty());
+}
+
+#[test]
 fn direct_backend_internal_collection_member_errors_are_reported() {
     let cases = [
         (
@@ -736,7 +921,6 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
         callee: CallTarget::Name("TaskGroup".to_string()),
         args: Vec::new(),
     };
-
     let cases = vec![
         (
             "String.contains",
@@ -818,6 +1002,21 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                         writeback_place: None,
                     },
                 ],
+            ),
+        ),
+        (
+            "String.add",
+            module_with_main_member_call_result_type(
+                "text",
+                string_ty.clone(),
+                string_value.clone(),
+                Type::named("String"),
+                "add",
+                vec![MirArg {
+                    name: None,
+                    value: Operand::String(" language".to_string()),
+                    writeback_place: None,
+                }],
             ),
         ),
         (
@@ -1341,11 +1540,1279 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
                 Vec::new(),
             ),
         ),
+        (
+            "TaskGroup.close",
+            module_with_main_member_call_result_type(
+                "group",
+                task_group_ty.clone(),
+                task_group_value,
+                Type::Unit,
+                "close",
+                Vec::new(),
+            ),
+        ),
     ];
 
     for (name, module) in cases {
         let object = emit_host_object(&module).expect("runtime member surface should compile");
         assert!(!object.is_empty(), "{name}");
+    }
+}
+
+#[test]
+fn direct_backend_resource_member_argument_errors_cover_network_and_process_paths() {
+    let arg = |name: Option<&str>, value: Operand| MirArg {
+        name: name.map(str::to_string),
+        value,
+        writeback_place: None,
+    };
+    let opaque_value = || Rvalue::Use(Operand::String("opaque-resource".to_string()));
+    let named = |name: &str| Type::Named(name.to_string(), Vec::new());
+
+    let cases = vec![
+        (
+            named("fs.File"),
+            "read_all",
+            vec![arg(None, Operand::Int(1))],
+            "expected `read_all()` to take no arguments",
+        ),
+        (
+            named("fs.File"),
+            "read_bytes",
+            vec![arg(None, Operand::Int(1))],
+            "expected `read_bytes()` to take no arguments",
+        ),
+        (
+            named("fs.File"),
+            "write_all",
+            Vec::new(),
+            "expected `write_all()` to receive one argument",
+        ),
+        (
+            named("fs.File"),
+            "write_bytes",
+            Vec::new(),
+            "expected `write_bytes()` to receive one argument",
+        ),
+        (
+            named("fs.File"),
+            "flush",
+            vec![arg(None, Operand::Int(1))],
+            "expected `flush()` to take no arguments",
+        ),
+        (
+            named("fs.File"),
+            "close",
+            vec![arg(None, Operand::Int(1))],
+            "expected `close()` to take no arguments",
+        ),
+        (
+            named("fs.File"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `fs.File.unknown`",
+        ),
+        (
+            named("process.Child"),
+            "stdin",
+            vec![arg(None, Operand::Int(1))],
+            "expected `stdin()` to take no arguments",
+        ),
+        (
+            named("process.Child"),
+            "stdout",
+            vec![arg(None, Operand::Int(1))],
+            "expected `stdout()` to take no arguments",
+        ),
+        (
+            named("process.Child"),
+            "stderr",
+            vec![arg(None, Operand::Int(1))],
+            "expected `stderr()` to take no arguments",
+        ),
+        (
+            named("process.Child"),
+            "kill",
+            vec![arg(None, Operand::Int(1))],
+            "expected `kill()` to take no arguments",
+        ),
+        (
+            named("process.Child"),
+            "terminate",
+            vec![arg(None, Operand::Int(1))],
+            "expected `terminate()` to take no arguments",
+        ),
+        (
+            named("process.Child"),
+            "close",
+            vec![arg(None, Operand::Int(1))],
+            "expected `close()` to take no arguments",
+        ),
+        (
+            named("process.Child"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `process.Child.unknown`",
+        ),
+        (
+            named("process.Pipe"),
+            "read_all",
+            vec![arg(None, Operand::Int(1))],
+            "expected `read_all()` to take no arguments",
+        ),
+        (
+            named("process.Pipe"),
+            "read_bytes",
+            Vec::new(),
+            "expected `read_bytes()` to receive `max_bytes`",
+        ),
+        (
+            named("process.Pipe"),
+            "write_all",
+            Vec::new(),
+            "expected `write_all()` to receive `text`",
+        ),
+        (
+            named("process.Pipe"),
+            "write_bytes",
+            Vec::new(),
+            "expected `write_bytes()` to receive `bytes`",
+        ),
+        (
+            named("process.Pipe"),
+            "flush",
+            vec![arg(None, Operand::Int(1))],
+            "expected `flush()` to take no arguments",
+        ),
+        (
+            named("process.Pipe"),
+            "close",
+            vec![arg(None, Operand::Int(1))],
+            "expected `close()` to take no arguments",
+        ),
+        (
+            named("process.Pipe"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `process.Pipe.unknown`",
+        ),
+        (
+            named("process.Completed"),
+            "status",
+            vec![arg(None, Operand::Int(1))],
+            "expected `status()` to take no arguments",
+        ),
+        (
+            named("process.Completed"),
+            "success",
+            vec![arg(None, Operand::Int(1))],
+            "expected `success()` to take no arguments",
+        ),
+        (
+            named("process.Completed"),
+            "stdout",
+            vec![arg(None, Operand::Int(1))],
+            "expected `stdout()` to take no arguments",
+        ),
+        (
+            named("process.Completed"),
+            "stderr",
+            vec![arg(None, Operand::Int(1))],
+            "expected `stderr()` to take no arguments",
+        ),
+        (
+            named("process.Completed"),
+            "stdout_bytes",
+            vec![arg(None, Operand::Int(1))],
+            "expected `stdout_bytes()` to take no arguments",
+        ),
+        (
+            named("process.Completed"),
+            "stderr_bytes",
+            vec![arg(None, Operand::Int(1))],
+            "expected `stderr_bytes()` to take no arguments",
+        ),
+        (
+            named("process.Completed"),
+            "check",
+            vec![arg(None, Operand::Int(1))],
+            "expected `check()` to take no arguments",
+        ),
+        (
+            named("process.Completed"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `process.Completed.unknown`",
+        ),
+        (
+            named("process.Supervisor"),
+            "start",
+            Vec::new(),
+            "expected `start()` to receive `name`",
+        ),
+        (
+            named("process.Supervisor"),
+            "start",
+            vec![arg(Some("name"), Operand::String("worker".to_string()))],
+            "expected `start()` to receive `command`",
+        ),
+        (
+            named("process.Supervisor"),
+            "stop",
+            vec![arg(None, Operand::Int(1))],
+            "expected `stop()` to take no arguments",
+        ),
+        (
+            named("process.Supervisor"),
+            "is_empty",
+            vec![arg(None, Operand::Int(1))],
+            "expected `is_empty()` to take no arguments",
+        ),
+        (
+            named("process.Supervisor"),
+            "close",
+            vec![arg(None, Operand::Int(1))],
+            "expected `close()` to take no arguments",
+        ),
+        (
+            named("process.Supervisor"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `process.Supervisor.unknown`",
+        ),
+        (
+            named("net.TcpListener"),
+            "local_addr",
+            vec![arg(None, Operand::Int(1))],
+            "expected `local_addr()` to take no arguments",
+        ),
+        (
+            named("net.TcpListener"),
+            "close",
+            vec![arg(None, Operand::Int(1))],
+            "expected `close()` to take no arguments",
+        ),
+        (
+            named("net.TcpListener"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `net.TcpListener.unknown`",
+        ),
+        (
+            named("net.TcpStream"),
+            "read_bytes",
+            Vec::new(),
+            "expected `read_bytes()` to receive `max_bytes`",
+        ),
+        (
+            named("net.TcpStream"),
+            "read_exact",
+            Vec::new(),
+            "expected `read_exact()` to receive `count`",
+        ),
+        (
+            named("net.TcpStream"),
+            "write_all",
+            Vec::new(),
+            "expected `write_all()` to receive `text`",
+        ),
+        (
+            named("net.TcpStream"),
+            "write_bytes",
+            Vec::new(),
+            "expected `write_bytes()` to receive `bytes`",
+        ),
+        (
+            named("net.TcpStream"),
+            "flush",
+            vec![arg(None, Operand::Int(1))],
+            "expected `flush()` to take no arguments",
+        ),
+        (
+            named("net.TcpStream"),
+            "local_addr",
+            vec![arg(None, Operand::Int(1))],
+            "expected `local_addr()` to take no arguments",
+        ),
+        (
+            named("net.TcpStream"),
+            "peer_addr",
+            vec![arg(None, Operand::Int(1))],
+            "expected `peer_addr()` to take no arguments",
+        ),
+        (
+            named("net.TcpStream"),
+            "shutdown_read",
+            vec![arg(None, Operand::Int(1))],
+            "expected `shutdown_read()` to take no arguments",
+        ),
+        (
+            named("net.TcpStream"),
+            "shutdown_write",
+            vec![arg(None, Operand::Int(1))],
+            "expected `shutdown_write()` to take no arguments",
+        ),
+        (
+            named("net.TcpStream"),
+            "shutdown_both",
+            vec![arg(None, Operand::Int(1))],
+            "expected `shutdown_both()` to take no arguments",
+        ),
+        (
+            named("net.TcpStream"),
+            "close",
+            vec![arg(None, Operand::Int(1))],
+            "expected `close()` to take no arguments",
+        ),
+        (
+            named("net.TcpStream"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `net.TcpStream.unknown`",
+        ),
+        (
+            named("net.UdpSocket"),
+            "send_text",
+            Vec::new(),
+            "expected `send_text()` to receive `address`",
+        ),
+        (
+            named("net.UdpSocket"),
+            "send_text",
+            vec![arg(
+                Some("address"),
+                Operand::String("127.0.0.1:9".to_string()),
+            )],
+            "expected `send_text()` to receive `text`",
+        ),
+        (
+            named("net.UdpSocket"),
+            "send_bytes",
+            Vec::new(),
+            "expected `send_bytes()` to receive `address`",
+        ),
+        (
+            named("net.UdpSocket"),
+            "send_bytes",
+            vec![arg(
+                Some("address"),
+                Operand::String("127.0.0.1:9".to_string()),
+            )],
+            "expected `send_bytes()` to receive `bytes`",
+        ),
+        (
+            named("net.UdpSocket"),
+            "recv",
+            Vec::new(),
+            "expected `recv()` to receive `max_bytes`",
+        ),
+        (
+            named("net.UdpSocket"),
+            "recv_from",
+            Vec::new(),
+            "expected `recv_from()` to receive `max_bytes`",
+        ),
+        (
+            named("net.UdpSocket"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `net.UdpSocket.unknown`",
+        ),
+        (
+            named("net.UdpDatagram"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `net.UdpDatagram.unknown`",
+        ),
+        (
+            named("net.HttpListener"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `net.HttpListener.unknown`",
+        ),
+        (
+            named("net.HttpExchange"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `net.HttpExchange.unknown`",
+        ),
+        (
+            named("net.HttpResponse"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `net.HttpResponse.unknown`",
+        ),
+        (
+            named("net.WebSocketListener"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `net.WebSocketListener.unknown`",
+        ),
+        (
+            named("net.WebSocket"),
+            "send_text",
+            Vec::new(),
+            "expected `send_text()` to receive `text`",
+        ),
+        (
+            named("net.WebSocket"),
+            "send_bytes",
+            Vec::new(),
+            "expected `send_bytes()` to receive `bytes`",
+        ),
+        (
+            named("net.WebSocket"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `net.WebSocket.unknown`",
+        ),
+        (
+            named("net.UnixListener"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `net.UnixListener.unknown`",
+        ),
+        (
+            named("net.UnixStream"),
+            "read_exact",
+            Vec::new(),
+            "expected `read_exact()` to receive `count`",
+        ),
+        (
+            named("net.UnixStream"),
+            "write_all",
+            Vec::new(),
+            "expected `write_all()` to receive `text`",
+        ),
+        (
+            named("net.UnixStream"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `net.UnixStream.unknown`",
+        ),
+        (
+            named("net.TlsListener"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `net.TlsListener.unknown`",
+        ),
+        (
+            named("net.TlsStream"),
+            "read_exact",
+            Vec::new(),
+            "expected `read_exact()` to receive `count`",
+        ),
+        (
+            named("net.TlsStream"),
+            "write_all",
+            Vec::new(),
+            "expected `write_all()` to receive `text`",
+        ),
+        (
+            named("net.TlsStream"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `net.TlsStream.unknown`",
+        ),
+    ];
+
+    for (object_ty, field, args, expected) in cases {
+        let module = module_with_main_member_call_result_type(
+            "resource",
+            object_ty,
+            opaque_value(),
+            Type::named("int32"),
+            field,
+            args,
+        );
+        let error = emit_host_object(&module).expect_err("invalid resource member call");
+        assert!(
+            error.contains(expected),
+            "expected `{expected}` in `{error}`"
+        );
+    }
+}
+
+#[test]
+fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
+    let arg = |name: Option<&str>, value: Operand| MirArg {
+        name: name.map(str::to_string),
+        value,
+        writeback_place: None,
+    };
+    let opaque_value = || Rvalue::Use(Operand::String("opaque-resource".to_string()));
+    let vec_int = || Type::Named("Vec".to_string(), vec![Type::named("int32")]);
+    let map_string_int = || {
+        Type::Named(
+            "Map".to_string(),
+            vec![Type::named("String"), Type::named("int32")],
+        )
+    };
+    let set_string = || Type::Named("Set".to_string(), vec![Type::named("String")]);
+    let queue_int = || Type::Named("Queue".to_string(), vec![Type::named("int32")]);
+    let task_int = || Type::Named("Task".to_string(), vec![Type::named("int32")]);
+
+    let cases = vec![
+        (
+            Type::named("String"),
+            "to_string",
+            vec![arg(None, Operand::Int(1))],
+            "expected `to_string()` to take no arguments",
+        ),
+        (
+            Type::named("String"),
+            "clone",
+            vec![arg(None, Operand::Int(1))],
+            "expected `clone()` to take no arguments",
+        ),
+        (
+            Type::named("String"),
+            "len",
+            vec![arg(None, Operand::Int(1))],
+            "expected `len()` to take no arguments",
+        ),
+        (
+            Type::named("String"),
+            "contains",
+            Vec::new(),
+            "expected `contains`() to receive one string argument",
+        ),
+        (
+            Type::named("String"),
+            "split",
+            Vec::new(),
+            "expected `split()` to receive one string argument",
+        ),
+        (
+            Type::named("String"),
+            "replace",
+            vec![arg(None, Operand::String("from".to_string()))],
+            "expected `replace()` to receive `from` and `to` string arguments",
+        ),
+        (
+            Type::named("String"),
+            "add",
+            Vec::new(),
+            "expected `add()` to receive one string argument",
+        ),
+        (
+            Type::named("String"),
+            "to_lower",
+            vec![arg(None, Operand::Int(1))],
+            "expected `to_lower()` to take no arguments",
+        ),
+        (
+            Type::named("String"),
+            "to_upper",
+            vec![arg(None, Operand::Int(1))],
+            "expected `to_upper()` to take no arguments",
+        ),
+        (
+            Type::named("String"),
+            "join",
+            Vec::new(),
+            "expected `join()` to receive one vector argument",
+        ),
+        (
+            Type::named("String"),
+            "strip_prefix",
+            Vec::new(),
+            "expected `strip_prefix`() to receive one string argument",
+        ),
+        (
+            Type::named("String"),
+            "trim",
+            vec![arg(None, Operand::Int(1))],
+            "expected `trim()` to take no arguments",
+        ),
+        (
+            Type::named("String"),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `String.unknown`",
+        ),
+        (
+            vec_int(),
+            "len",
+            vec![arg(None, Operand::Int(1))],
+            "expected `len()` to take no arguments",
+        ),
+        (
+            vec_int(),
+            "is_empty",
+            vec![arg(None, Operand::Int(1))],
+            "expected `is_empty()` to take no arguments",
+        ),
+        (
+            vec_int(),
+            "push",
+            Vec::new(),
+            "expected `push()` to receive one argument",
+        ),
+        (
+            vec_int(),
+            "pop",
+            vec![arg(None, Operand::Int(1))],
+            "expected `pop()` to take no arguments",
+        ),
+        (
+            vec_int(),
+            "get",
+            Vec::new(),
+            "expected `get()` to receive one index argument",
+        ),
+        (
+            vec_int(),
+            "__index_option",
+            Vec::new(),
+            "expected internal optional vector indexing to receive one argument",
+        ),
+        (
+            vec_int(),
+            "__index",
+            vec![arg(None, Operand::Int(0))],
+            "expected internal vector indexing to receive index, line, and column",
+        ),
+        (
+            vec_int(),
+            "set",
+            vec![arg(None, Operand::Int(0))],
+            "expected `set()` to receive index and value",
+        ),
+        (
+            vec_int(),
+            "__set_index",
+            vec![arg(None, Operand::Int(0))],
+            "expected internal indexed assignment to receive index, value, line, and column",
+        ),
+        (
+            vec_int(),
+            "remove",
+            Vec::new(),
+            "expected `remove()` to receive one index argument",
+        ),
+        (
+            vec_int(),
+            "swap",
+            vec![arg(None, Operand::Int(0))],
+            "expected `swap()` to receive two index arguments",
+        ),
+        (
+            vec_int(),
+            "contains",
+            Vec::new(),
+            "expected `contains()` to receive one value argument",
+        ),
+        (
+            vec_int(),
+            "insert",
+            vec![arg(None, Operand::Int(0))],
+            "expected `insert()` to receive index and value",
+        ),
+        (
+            vec_int(),
+            "clear",
+            vec![arg(None, Operand::Int(1))],
+            "expected `clear()` to take no arguments",
+        ),
+        (
+            vec_int(),
+            "reverse",
+            vec![arg(None, Operand::Int(1))],
+            "expected `reverse()` to take no arguments",
+        ),
+        (
+            vec_int(),
+            "extend",
+            Vec::new(),
+            "expected `extend()` to receive one vector argument",
+        ),
+        (
+            vec_int(),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `Vec.unknown`",
+        ),
+        (
+            map_string_int(),
+            "len",
+            vec![arg(None, Operand::Int(1))],
+            "expected `len()` to take no arguments",
+        ),
+        (
+            map_string_int(),
+            "is_empty",
+            vec![arg(None, Operand::Int(1))],
+            "expected `is_empty()` to take no arguments",
+        ),
+        (
+            map_string_int(),
+            "get",
+            Vec::new(),
+            "expected `get()` to receive one key argument",
+        ),
+        (
+            map_string_int(),
+            "__index",
+            vec![arg(None, Operand::String("a".to_string()))],
+            "expected internal map indexing to receive key, line, and column",
+        ),
+        (
+            map_string_int(),
+            "set",
+            vec![arg(None, Operand::String("a".to_string()))],
+            "expected `set()` to receive key and value",
+        ),
+        (
+            map_string_int(),
+            "__set_index",
+            vec![arg(None, Operand::String("a".to_string()))],
+            "expected internal map indexed assignment to receive key, value, line, and column",
+        ),
+        (
+            map_string_int(),
+            "remove",
+            Vec::new(),
+            "expected `remove()` to receive one key argument",
+        ),
+        (
+            map_string_int(),
+            "contains_key",
+            Vec::new(),
+            "expected `contains_key()` to receive one key argument",
+        ),
+        (
+            map_string_int(),
+            "keys",
+            vec![arg(None, Operand::Int(1))],
+            "expected `keys()` to take no arguments",
+        ),
+        (
+            map_string_int(),
+            "values",
+            vec![arg(None, Operand::Int(1))],
+            "expected `values()` to take no arguments",
+        ),
+        (
+            map_string_int(),
+            "items",
+            vec![arg(None, Operand::Int(1))],
+            "expected `items`() to take no arguments",
+        ),
+        (
+            map_string_int(),
+            "clear",
+            vec![arg(None, Operand::Int(1))],
+            "expected `clear()` to take no arguments",
+        ),
+        (
+            map_string_int(),
+            "extend",
+            Vec::new(),
+            "expected `extend()` to receive one map argument",
+        ),
+        (
+            map_string_int(),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `Map.unknown`",
+        ),
+        (
+            set_string(),
+            "len",
+            vec![arg(None, Operand::Int(1))],
+            "expected `len()` to take no arguments",
+        ),
+        (
+            set_string(),
+            "is_empty",
+            vec![arg(None, Operand::Int(1))],
+            "expected `is_empty()` to take no arguments",
+        ),
+        (
+            set_string(),
+            "contains",
+            Vec::new(),
+            "expected `contains()` to receive one value argument",
+        ),
+        (
+            set_string(),
+            "insert",
+            Vec::new(),
+            "expected `insert()` to receive one value argument",
+        ),
+        (
+            set_string(),
+            "remove",
+            Vec::new(),
+            "expected `remove()` to receive one value argument",
+        ),
+        (
+            set_string(),
+            "__index_option",
+            Vec::new(),
+            "expected internal optional set indexing to receive one argument",
+        ),
+        (
+            set_string(),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `Set.unknown`",
+        ),
+        (
+            queue_int(),
+            "put",
+            Vec::new(),
+            "expected `put()` to receive a value argument",
+        ),
+        (
+            queue_int(),
+            "try_put",
+            Vec::new(),
+            "expected `try_put()` to receive one argument",
+        ),
+        (
+            queue_int(),
+            "close",
+            vec![arg(None, Operand::Int(1))],
+            "expected `close()` to take no arguments",
+        ),
+        (
+            queue_int(),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `Queue.unknown`",
+        ),
+        (
+            Type::named("TaskGroup"),
+            "cancel",
+            vec![arg(None, Operand::Int(1))],
+            "expected `cancel()` to take no arguments",
+        ),
+        (
+            Type::named("TaskGroup"),
+            "close",
+            vec![arg(None, Operand::Int(1))],
+            "expected `close()` to take no arguments",
+        ),
+        (
+            task_int(),
+            "unknown",
+            Vec::new(),
+            "does not know runtime member `Task.unknown`",
+        ),
+    ];
+
+    for (object_ty, field, args, expected) in cases {
+        let module = module_with_main_member_call_result_type(
+            "resource",
+            object_ty,
+            opaque_value(),
+            Type::named("int32"),
+            field,
+            args,
+        );
+        let error = emit_host_object(&module).expect_err("invalid collection member call");
+        assert!(
+            error.contains(expected),
+            "expected `{expected}` in `{error}`"
+        );
+    }
+}
+
+#[test]
+fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces() {
+    let arg = |name: Option<&str>, value: Operand| MirArg {
+        name: name.map(str::to_string),
+        value,
+        writeback_place: None,
+    };
+    let opaque_value = || Rvalue::Use(Operand::String("opaque-resource".to_string()));
+    let named = |name: &str| Type::Named(name.to_string(), Vec::new());
+    let vec_uint8 = || Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+    let option = |ty: Type| Type::Named("Option".to_string(), vec![ty]);
+    let result = |ok: Type| {
+        Type::Named(
+            "Result".to_string(),
+            vec![ok, Type::Named("io.Error".to_string(), Vec::new())],
+        )
+    };
+    let process_result = |ok: Type| {
+        Type::Named(
+            "Result".to_string(),
+            vec![ok, Type::Named("process.Error".to_string(), Vec::new())],
+        )
+    };
+    let string_arg = |name: &str, value: &str| arg(Some(name), Operand::String(value.to_string()));
+
+    let cases = vec![
+        (
+            named("fs.File"),
+            "read_all",
+            Vec::new(),
+            result(Type::named("String")),
+        ),
+        (
+            named("fs.File"),
+            "read_bytes",
+            Vec::new(),
+            result(vec_uint8()),
+        ),
+        (
+            named("fs.File"),
+            "write_all",
+            vec![string_arg("text", "payload")],
+            result(Type::Unit),
+        ),
+        (
+            named("fs.File"),
+            "write_bytes",
+            vec![string_arg("bytes", "payload")],
+            result(Type::Unit),
+        ),
+        (named("fs.File"), "flush", Vec::new(), result(Type::Unit)),
+        (named("fs.File"), "close", Vec::new(), Type::Unit),
+        (
+            named("process.Child"),
+            "stdin",
+            Vec::new(),
+            option(named("process.Pipe")),
+        ),
+        (
+            named("process.Child"),
+            "stdout",
+            Vec::new(),
+            option(named("process.Pipe")),
+        ),
+        (
+            named("process.Child"),
+            "stderr",
+            Vec::new(),
+            option(named("process.Pipe")),
+        ),
+        (
+            named("process.Child"),
+            "wait",
+            Vec::new(),
+            named("process.Wait"),
+        ),
+        (
+            named("process.Child"),
+            "wait_or_none",
+            Vec::new(),
+            process_result(option(named("process.ExitStatus"))),
+        ),
+        (
+            named("process.Child"),
+            "wait_ok",
+            Vec::new(),
+            process_result(named("process.ExitStatus")),
+        ),
+        (
+            named("process.Child"),
+            "kill",
+            Vec::new(),
+            process_result(Type::Unit),
+        ),
+        (
+            named("process.Child"),
+            "terminate",
+            Vec::new(),
+            process_result(Type::Unit),
+        ),
+        (named("process.Child"), "close", Vec::new(), Type::Unit),
+        (
+            named("process.Pipe"),
+            "read_all",
+            Vec::new(),
+            process_result(Type::named("String")),
+        ),
+        (
+            named("process.Pipe"),
+            "read_line",
+            Vec::new(),
+            process_result(option(Type::named("String"))),
+        ),
+        (
+            named("process.Pipe"),
+            "read_bytes",
+            vec![arg(Some("max_bytes"), Operand::Int(4))],
+            process_result(option(vec_uint8())),
+        ),
+        (
+            named("process.Pipe"),
+            "write_all",
+            vec![string_arg("text", "payload")],
+            process_result(Type::Unit),
+        ),
+        (
+            named("process.Pipe"),
+            "write_bytes",
+            vec![string_arg("bytes", "payload")],
+            process_result(Type::Unit),
+        ),
+        (
+            named("process.Pipe"),
+            "flush",
+            Vec::new(),
+            process_result(Type::Unit),
+        ),
+        (named("process.Pipe"), "close", Vec::new(), Type::Unit),
+        (
+            named("process.Completed"),
+            "status",
+            Vec::new(),
+            named("process.ExitStatus"),
+        ),
+        (
+            named("process.Completed"),
+            "success",
+            Vec::new(),
+            Type::named("bool"),
+        ),
+        (
+            named("process.Completed"),
+            "stdout",
+            Vec::new(),
+            Type::named("String"),
+        ),
+        (
+            named("process.Completed"),
+            "stderr",
+            Vec::new(),
+            Type::named("String"),
+        ),
+        (
+            named("process.Completed"),
+            "stdout_bytes",
+            Vec::new(),
+            vec_uint8(),
+        ),
+        (
+            named("process.Completed"),
+            "stderr_bytes",
+            Vec::new(),
+            vec_uint8(),
+        ),
+        (
+            named("process.Completed"),
+            "check",
+            Vec::new(),
+            process_result(Type::Unit),
+        ),
+        (
+            named("process.Supervisor"),
+            "start",
+            vec![
+                string_arg("name", "worker"),
+                arg(
+                    Some("command"),
+                    Operand::String("aurora-worker".to_string()),
+                ),
+            ],
+            process_result(Type::Unit),
+        ),
+        (
+            named("process.Supervisor"),
+            "start",
+            vec![
+                string_arg("name", "configured"),
+                arg(
+                    Some("command"),
+                    Operand::String("aurora-worker".to_string()),
+                ),
+                arg(Some("cwd"), Operand::Unit),
+                arg(Some("env"), Operand::String("env".to_string())),
+                arg(Some("stdin"), Operand::String("stdin".to_string())),
+                arg(Some("stdout"), Operand::String("stdout".to_string())),
+                arg(Some("stderr"), Operand::String("stderr".to_string())),
+                arg(Some("restart"), Operand::String("restart".to_string())),
+                arg(Some("backoff"), Operand::Duration(10)),
+                arg(Some("max_restarts"), Operand::Int(1)),
+                arg(Some("group"), Operand::Bool(false)),
+            ],
+            process_result(Type::Unit),
+        ),
+        (
+            named("process.Supervisor"),
+            "wait",
+            Vec::new(),
+            named("process.SupervisorWait"),
+        ),
+        (
+            named("process.Supervisor"),
+            "wait_or_none",
+            Vec::new(),
+            process_result(option(named("process.SupervisorEvent"))),
+        ),
+        (
+            named("process.Supervisor"),
+            "stop",
+            Vec::new(),
+            process_result(Type::Unit),
+        ),
+        (
+            named("process.Supervisor"),
+            "is_empty",
+            Vec::new(),
+            Type::named("bool"),
+        ),
+        (named("process.Supervisor"), "close", Vec::new(), Type::Unit),
+        (
+            named("net.TcpStream"),
+            "local_addr",
+            Vec::new(),
+            result(Type::named("String")),
+        ),
+        (
+            named("net.TcpStream"),
+            "read_all",
+            Vec::new(),
+            result(Type::named("String")),
+        ),
+        (
+            named("net.TcpStream"),
+            "peer_addr",
+            Vec::new(),
+            result(Type::named("String")),
+        ),
+        (
+            named("net.TcpStream"),
+            "shutdown_read",
+            Vec::new(),
+            result(Type::Unit),
+        ),
+        (
+            named("net.TcpStream"),
+            "shutdown_write",
+            Vec::new(),
+            result(Type::Unit),
+        ),
+        (
+            named("net.TcpStream"),
+            "shutdown_both",
+            Vec::new(),
+            result(Type::Unit),
+        ),
+        (
+            named("net.UdpSocket"),
+            "send_bytes",
+            vec![
+                string_arg("address", "127.0.0.1:9"),
+                string_arg("bytes", "payload"),
+            ],
+            result(Type::Unit),
+        ),
+        (
+            named("net.UdpSocket"),
+            "recv",
+            vec![arg(Some("max_bytes"), Operand::Int(32))],
+            result(option(vec_uint8())),
+        ),
+        (
+            named("net.UdpSocket"),
+            "peer_addr",
+            Vec::new(),
+            result(Type::named("String")),
+        ),
+        (named("net.UdpSocket"), "close", Vec::new(), Type::Unit),
+        (named("net.UdpDatagram"), "bytes", Vec::new(), vec_uint8()),
+        (
+            named("net.UdpDatagram"),
+            "text",
+            Vec::new(),
+            result(Type::named("String")),
+        ),
+        (
+            named("net.HttpExchange"),
+            "body_bytes",
+            Vec::new(),
+            vec_uint8(),
+        ),
+        (
+            named("net.HttpExchange"),
+            "respond_bytes",
+            vec![
+                arg(Some("status"), Operand::Int(200)),
+                string_arg("bytes", "payload"),
+                string_arg("headers", "headers"),
+            ],
+            result(Type::Unit),
+        ),
+        (
+            named("net.HttpResponse"),
+            "reason",
+            Vec::new(),
+            Type::named("String"),
+        ),
+        (
+            named("net.HttpResponse"),
+            "headers",
+            Vec::new(),
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("String")],
+            ),
+        ),
+        (named("net.HttpResponse"), "bytes", Vec::new(), vec_uint8()),
+        (
+            named("net.WebSocket"),
+            "send_bytes",
+            vec![string_arg("bytes", "payload")],
+            result(Type::Unit),
+        ),
+        (
+            named("net.WebSocket"),
+            "recv_bytes",
+            Vec::new(),
+            result(option(vec_uint8())),
+        ),
+        (named("net.WebSocket"), "close", Vec::new(), Type::Unit),
+        (
+            named("net.UnixStream"),
+            "read_exact",
+            vec![arg(Some("count"), Operand::Int(4))],
+            result(vec_uint8()),
+        ),
+        (
+            named("net.UnixStream"),
+            "write_all",
+            vec![string_arg("text", "payload")],
+            result(Type::Unit),
+        ),
+        (named("net.UnixStream"), "close", Vec::new(), Type::Unit),
+        (
+            named("net.TlsStream"),
+            "read_line",
+            Vec::new(),
+            result(option(Type::named("String"))),
+        ),
+        (
+            named("net.TlsStream"),
+            "read_exact",
+            vec![arg(Some("count"), Operand::Int(4))],
+            result(vec_uint8()),
+        ),
+        (
+            named("net.TlsStream"),
+            "write_all",
+            vec![string_arg("text", "payload")],
+            result(Type::Unit),
+        ),
+        (named("net.TlsStream"), "close", Vec::new(), Type::Unit),
+    ];
+
+    for (object_ty, field, args, result_ty) in cases {
+        let module = module_with_main_member_call_result_type(
+            "resource",
+            object_ty,
+            opaque_value(),
+            result_ty,
+            field,
+            args,
+        );
+        let object = emit_host_object(&module).expect("resource member call should compile");
+        assert!(!object.is_empty(), "{field}");
     }
 }
 
@@ -1380,10 +2847,17 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
         callee: CallTarget::Name("Queue".to_string()),
         args: Vec::new(),
     };
+    let task_ty = Type::Named("Task".to_string(), vec![Type::named("int32")]);
+    let task_value = Rvalue::Use(Operand::String("opaque-task".to_string()));
     let task_group_ty = Type::named("TaskGroup");
     let task_group_value = Rvalue::Call {
         callee: CallTarget::Name("TaskGroup".to_string()),
         args: Vec::new(),
+    };
+    let arg = |value| MirArg {
+        name: None,
+        value,
+        writeback_place: None,
     };
 
     let cases = vec![
@@ -1447,6 +2921,72 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
             module_with_main_member_call_result_type(
                 "text",
                 string_ty.clone(),
+                string_value.clone(),
+                Type::named("String"),
+                "to_string",
+                vec![arg(Operand::Int(1))],
+            ),
+            "expected `to_string()` to take no arguments",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "text",
+                string_ty.clone(),
+                string_value.clone(),
+                Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                "split",
+                Vec::new(),
+            ),
+            "expected `split()` to receive one string argument",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "text",
+                string_ty.clone(),
+                string_value.clone(),
+                Type::named("String"),
+                "add",
+                Vec::new(),
+            ),
+            "expected `add()` to receive one string argument",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "text",
+                string_ty.clone(),
+                string_value.clone(),
+                Type::named("String"),
+                "to_lower",
+                vec![arg(Operand::String("x".to_string()))],
+            ),
+            "expected `to_lower()` to take no arguments",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "text",
+                string_ty.clone(),
+                string_value.clone(),
+                Type::named("String"),
+                "to_upper",
+                vec![arg(Operand::String("x".to_string()))],
+            ),
+            "expected `to_upper()` to take no arguments",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "text",
+                string_ty.clone(),
+                string_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("String")]),
+                "strip_prefix",
+                Vec::new(),
+            ),
+            "expected `strip_prefix`() to receive one string argument",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "text",
+                string_ty.clone(),
                 string_value,
                 Type::named("String"),
                 "unknown",
@@ -1464,6 +3004,39 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 Vec::new(),
             ),
             "expected `push()` to receive one argument",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "values",
+                vec_ty.clone(),
+                vec_value.clone(),
+                Type::named("bool"),
+                "is_empty",
+                vec![arg(Operand::Int(1))],
+            ),
+            "expected `is_empty()` to take no arguments",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "values",
+                vec_ty.clone(),
+                vec_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "pop",
+                vec![arg(Operand::Int(1))],
+            ),
+            "expected `pop()` to take no arguments",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "values",
+                vec_ty.clone(),
+                vec_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "get",
+                Vec::new(),
+            ),
+            "expected `get()` to receive one index argument",
         ),
         (
             module_with_main_member_call_result_type(
@@ -1509,6 +3082,61 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 }],
             ),
             "expected `swap()` to receive two index arguments",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "values",
+                vec_ty.clone(),
+                vec_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "set",
+                vec![arg(Operand::Int(0))],
+            ),
+            "expected `set()` to receive index and value",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "values",
+                vec_ty.clone(),
+                vec_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "remove",
+                Vec::new(),
+            ),
+            "expected `remove()` to receive one index argument",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "values",
+                vec_ty.clone(),
+                vec_value.clone(),
+                Type::named("bool"),
+                "contains",
+                Vec::new(),
+            ),
+            "expected `contains()` to receive one value argument",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "values",
+                vec_ty.clone(),
+                vec_value.clone(),
+                Type::Unit,
+                "reverse",
+                vec![arg(Operand::Int(1))],
+            ),
+            "expected `reverse()` to take no arguments",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "values",
+                vec_ty.clone(),
+                vec_value.clone(),
+                Type::Unit,
+                "extend",
+                Vec::new(),
+            ),
+            "expected `extend()` to receive one vector argument",
         ),
         (
             module_with_main_member_call_result_type(
@@ -1567,6 +3195,39 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
+                Type::named("bool"),
+                "is_empty",
+                vec![arg(Operand::Int(1))],
+            ),
+            "expected `is_empty()` to take no arguments",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "counts",
+                map_ty.clone(),
+                map_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "get",
+                Vec::new(),
+            ),
+            "expected `get()` to receive one key argument",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "counts",
+                map_ty.clone(),
+                map_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "remove",
+                Vec::new(),
+            ),
+            "expected `remove()` to receive one key argument",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "counts",
+                map_ty.clone(),
+                map_value.clone(),
                 Type::Named("Vec".to_string(), vec![Type::named("String")]),
                 "keys",
                 vec![MirArg {
@@ -1597,6 +3258,28 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "counts",
                 map_ty.clone(),
                 map_value.clone(),
+                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                "values",
+                vec![arg(Operand::Int(1))],
+            ),
+            "expected `values()` to take no arguments",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "counts",
+                map_ty.clone(),
+                map_value.clone(),
+                Type::Unit,
+                "clear",
+                vec![arg(Operand::Int(1))],
+            ),
+            "expected `clear()` to take no arguments",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "counts",
+                map_ty.clone(),
+                map_value.clone(),
                 Type::named("bool"),
                 "unknown",
                 Vec::new(),
@@ -1613,6 +3296,39 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 Vec::new(),
             ),
             "expected `contains()` to receive one value argument",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "seen",
+                set_ty.clone(),
+                set_value.clone(),
+                Type::named("bool"),
+                "is_empty",
+                vec![arg(Operand::Int(1))],
+            ),
+            "expected `is_empty()` to take no arguments",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "seen",
+                set_ty.clone(),
+                set_value.clone(),
+                Type::named("bool"),
+                "insert",
+                Vec::new(),
+            ),
+            "expected `insert()` to receive one value argument",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "seen",
+                set_ty.clone(),
+                set_value.clone(),
+                Type::named("bool"),
+                "remove",
+                Vec::new(),
+            ),
+            "expected `remove()` to receive one value argument",
         ),
         (
             module_with_main_member_call_result_type(
@@ -1641,6 +3357,88 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "jobs",
                 channel_ty.clone(),
                 channel_value.clone(),
+                Type::Unit,
+                "put",
+                Vec::new(),
+            ),
+            "expected `put()` to receive a value argument",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "jobs",
+                channel_ty.clone(),
+                channel_value.clone(),
+                Type::Unit,
+                "put",
+                vec![MirArg {
+                    name: Some("delay".to_string()),
+                    value: Operand::Int(1),
+                    writeback_place: None,
+                }],
+            ),
+            "expected `put()` arguments to use `value` and optional `timeout`, found `delay`",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "jobs",
+                channel_ty.clone(),
+                channel_value.clone(),
+                Type::Unit,
+                "put",
+                vec![
+                    arg(Operand::Int(1)),
+                    arg(Operand::Int(2)),
+                    arg(Operand::Int(3)),
+                ],
+            ),
+            "expected `put(value, timeout=...)`",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "jobs",
+                channel_ty.clone(),
+                channel_value.clone(),
+                Type::Unit,
+                "try_put",
+                Vec::new(),
+            ),
+            "expected `try_put()` to receive one argument",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "jobs",
+                channel_ty.clone(),
+                channel_value.clone(),
+                Type::Unit,
+                "try_put",
+                vec![MirArg {
+                    name: Some("item".to_string()),
+                    value: Operand::Int(1),
+                    writeback_place: None,
+                }],
+            ),
+            "expected `try_put()` to receive only `value=`",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "jobs",
+                channel_ty.clone(),
+                channel_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "get",
+                vec![MirArg {
+                    name: Some("delay".to_string()),
+                    value: Operand::Int(1),
+                    writeback_place: None,
+                }],
+            ),
+            "expected `get()` or `get(timeout=...)`",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "jobs",
+                channel_ty.clone(),
+                channel_value.clone(),
                 Type::Named("Option".to_string(), vec![Type::named("int32")]),
                 "get",
                 vec![
@@ -1657,6 +3455,65 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 ],
             ),
             "expected `get()` or `get(timeout=...)`",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "jobs",
+                channel_ty.clone(),
+                channel_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "__get_in_task_group",
+                Vec::new(),
+            ),
+            "expected internal `__get_in_task_group()` to receive one task-group argument",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "jobs",
+                channel_ty.clone(),
+                channel_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "__get_with_registered_producers",
+                vec![arg(Operand::Int(1))],
+            ),
+            "expected internal `__get_with_registered_producers()` to take no arguments",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "jobs",
+                channel_ty.clone(),
+                channel_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "get_or_none",
+                vec![MirArg {
+                    name: Some("delay".to_string()),
+                    value: Operand::Int(1),
+                    writeback_place: None,
+                }],
+            ),
+            "expected `get_or_none()` or `get_or_none(timeout=...)`",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "jobs",
+                channel_ty.clone(),
+                channel_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "get_or_none",
+                vec![arg(Operand::Int(1)), arg(Operand::Int(2))],
+            ),
+            "expected `get_or_none()` or `get_or_none(timeout=...)`",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "jobs",
+                channel_ty.clone(),
+                channel_value.clone(),
+                Type::named("int32"),
+                "get_or",
+                Vec::new(),
+            ),
+            "expected `get_or()` to receive `default`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -1683,6 +3540,80 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 Vec::new(),
             ),
             "does not know runtime member `Queue.unknown`",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "task",
+                task_ty.clone(),
+                task_value.clone(),
+                Type::named("int32"),
+                "result",
+                vec![MirArg {
+                    name: Some("delay".to_string()),
+                    value: Operand::Int(1),
+                    writeback_place: None,
+                }],
+            ),
+            "expected `result()` or `result(timeout=...)`",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "task",
+                task_ty.clone(),
+                task_value.clone(),
+                Type::named("int32"),
+                "result",
+                vec![arg(Operand::Int(1)), arg(Operand::Int(2))],
+            ),
+            "expected `result()` or `result(timeout=...)`",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "task",
+                task_ty.clone(),
+                task_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "result_or_none",
+                vec![MirArg {
+                    name: Some("delay".to_string()),
+                    value: Operand::Int(1),
+                    writeback_place: None,
+                }],
+            ),
+            "expected `result_or_none()` or `result_or_none(timeout=...)`",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "task",
+                task_ty.clone(),
+                task_value.clone(),
+                Type::Named("Option".to_string(), vec![Type::named("int32")]),
+                "result_or_none",
+                vec![arg(Operand::Int(1)), arg(Operand::Int(2))],
+            ),
+            "expected `result_or_none()` or `result_or_none(timeout=...)`",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "task",
+                task_ty.clone(),
+                task_value.clone(),
+                Type::named("int32"),
+                "result_or",
+                Vec::new(),
+            ),
+            "expected `result_or()` to receive `default`",
+        ),
+        (
+            module_with_main_member_call_result_type(
+                "task",
+                task_ty,
+                task_value,
+                Type::named("bool"),
+                "unknown",
+                Vec::new(),
+            ),
+            "does not know runtime member `Task.unknown`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -1753,7 +3684,10 @@ def main() -> int32:
         task = group.start(worker, jobs, 7)
         receive = jobs.get(timeout=5ms)
         one = wait_any([task], timeout=5ms)
+        one_positional = wait_any([task], 5ms)
+        all_now = wait_all([task])
         all = wait_all([task], timeout=5ms)
+        all_positional = wait_all([task], 5ms)
         match receive:
             case QueueReceive.Item(value):
                 print(value)
@@ -1774,7 +3708,38 @@ def main() -> int32:
                 print("timedout")
             case WaitAny.Cancelled:
                 print("cancelled")
+        match one_positional:
+            case WaitAny.Ready(index, result):
+                print(index)
+                print(result)
+            case WaitAny.Error(index, message):
+                print(index)
+                print(message)
+            case WaitAny.TimedOut:
+                print("timedout")
+            case WaitAny.Cancelled:
+                print("cancelled")
         match all:
+            case WaitAll.Ready(_):
+                print("ready")
+            case WaitAll.Error(index, message):
+                print(index)
+                print(message)
+            case WaitAll.TimedOut:
+                print("timedout")
+            case WaitAll.Cancelled:
+                print("cancelled")
+        match all_positional:
+            case WaitAll.Ready(_):
+                print("ready")
+            case WaitAll.Error(index, message):
+                print(index)
+                print(message)
+            case WaitAll.TimedOut:
+                print("timedout")
+            case WaitAll.Cancelled:
+                print("cancelled")
+        match all_now:
             case WaitAll.Ready(_):
                 print("ready")
             case WaitAll.Error(index, message):
@@ -1790,6 +3755,179 @@ def main() -> int32:
     let module = lower_source_to_mir(source).expect("manual wait source should lower");
     assert!(!emit_host_object(&module)
         .expect("manual queue/task wait surface should compile directly")
+        .is_empty());
+}
+
+#[test]
+fn direct_backend_wait_helpers_cover_unknown_task_payload_fallback() {
+    let string_vec = Type::Named("Vec".to_string(), vec![Type::named("String")]);
+    let wait_all_unknown = crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: vec![
+                MirLocalType {
+                    name: "tasks".to_string(),
+                    ty: string_vec.clone(),
+                },
+                MirLocalType {
+                    name: "%wait".to_string(),
+                    ty: Type::Named("WaitAll".to_string(), vec![Type::named("Unknown")]),
+                },
+            ],
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![
+                    Instruction::Assign {
+                        target: "tasks".to_string(),
+                        value: Rvalue::VecLiteral {
+                            elements: vec![Operand::String("not-a-task".to_string())],
+                            element_type: Type::named("String"),
+                        },
+                    },
+                    Instruction::Assign {
+                        target: "%wait".to_string(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Name("wait_all".to_string()),
+                            args: vec![MirArg {
+                                name: None,
+                                value: Operand::Place("tasks".to_string()),
+                                writeback_place: None,
+                            }],
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(Operand::Int(0)),
+            }],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+
+    assert!(!emit_host_object(&wait_all_unknown)
+        .expect("direct wait helpers should preserve unknown task payload fallback")
+        .is_empty());
+}
+
+#[test]
+fn direct_backend_entry_thunk_handles_unit_parameters() {
+    let unit_param_main = crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: vec![MirParam {
+                name: "marker".to_string(),
+                passing: MirReceiverKind::Value,
+                ty: Type::Unit,
+            }],
+            local_types: vec![MirLocalType {
+                name: "marker".to_string(),
+                ty: Type::Unit,
+            }],
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: Vec::new(),
+                terminator: Terminator::Return(Operand::Int(0)),
+            }],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+
+    assert!(!emit_host_object(&unit_param_main)
+        .expect("direct entry thunk should lower Unit parameters")
+        .is_empty());
+}
+
+#[test]
+fn direct_backend_emits_object_for_process_member_surface_matrix() {
+    let source = r#"
+import process
+
+def process_members() -> Result[None, process.Error]:
+    completed = try process.run(["/bin/echo", "done"], stdout=process.pipe(), stderr=process.pipe(), timeout=2s, group=true)
+    print(completed.status())
+    print(completed.success())
+    print(completed.stdout())
+    print(completed.stdout_bytes())
+    print(completed.stderr())
+    print(completed.stderr_bytes())
+    try completed.check()
+
+    with child = try process.start(["/bin/cat"], stdin=process.pipe(), stdout=process.pipe(), stderr=process.pipe(), group=true):
+        match child.stdin():
+            case Option.Some(found_stdin):
+                stdin_pipe: process.Pipe = found_stdin
+                try stdin_pipe.write_all(text="ping\n", timeout=500ms)
+                try stdin_pipe.write_bytes(bytes=[33 as uint8, 10 as uint8], timeout=500ms)
+                try stdin_pipe.flush()
+                stdin_pipe.close()
+            case Option.None:
+                pass
+        match child.stdout():
+            case Option.Some(found_stdout):
+                stdout_pipe: process.Pipe = found_stdout
+                print(try stdout_pipe.read_line(timeout=500ms))
+                print(try stdout_pipe.read_bytes(max_bytes=4, timeout=500ms))
+                print(try stdout_pipe.read_all())
+                stdout_pipe.close()
+            case Option.None:
+                pass
+        match child.stderr():
+            case Option.Some(found_stderr):
+                stderr_pipe: process.Pipe = found_stderr
+                print(try stderr_pipe.read_all())
+                stderr_pipe.close()
+            case Option.None:
+                pass
+        print(child.wait(timeout=2s))
+        print(try child.wait_or_none(timeout=1ms))
+        child.close()
+
+    with success = try process.start(["/bin/true"], stdout=process.null(), stderr=process.null(), group=true):
+        print(try success.wait_ok(timeout=2s))
+
+    with terminable = try process.start(["/bin/sleep", "10"], stdout=process.null(), stderr=process.null(), group=true):
+        try terminable.terminate()
+        print(terminable.wait(timeout=2s))
+
+    with killable = try process.start(["/bin/sleep", "10"], stdout=process.null(), stderr=process.null(), group=true):
+        try killable.kill()
+        print(killable.wait(timeout=2s))
+
+    with supervisor = process.supervisor():
+        try supervisor.start(name="defaulted", command=["/usr/bin/false"])
+        print(supervisor.wait(timeout=2s))
+        env: Map[String, String] = {}
+        try supervisor.start(name="explicit", command=["/usr/bin/false"], cwd=Option.None, env=env, stdin=process.null(), stdout=process.null(), stderr=process.null(), restart=process.RestartPolicy.Never, backoff=100ms, max_restarts=0, group=true)
+        print(try supervisor.wait_or_none(timeout=2s))
+        print(supervisor.is_empty())
+        try supervisor.stop()
+    return Result.Ok(None)
+
+def main() -> int32:
+    match process_members():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#;
+
+    let module = lower_source_to_mir(source).expect("process member source should lower");
+    assert!(!emit_host_object(&module)
+        .expect("process member source should compile directly")
         .is_empty());
 }
 
@@ -1899,6 +4037,10 @@ def main() -> int32:
 #[test]
 fn direct_backend_builtin_call_surface_compiles_across_success_and_error_matrix() {
     let success_source = r#"
+import fs
+import io
+import net
+
 def main() -> int32:
     print(7)
     print(3.5)
@@ -1906,7 +4048,12 @@ def main() -> int32:
     print(None)
     text = "  Aurora repo  "
     print(text)
+    print("Aurora " + "repo")
     print(f"value={text}")
+    write_status = io.write("status")
+    flushed = io.flush()
+    line = io.read_line()
+    entries = fs.read_dir(".")
     jobs = Queue[int32]()
     group = TaskGroup()
     ready = cancelled()
@@ -1918,6 +4065,9 @@ def main() -> int32:
     parsed32 = parse_int32("7")
     parsed64 = parse_int64("7")
     parsedf = parse_float64("7.0")
+    headers: Map[String, String] = {"X-Test": "ok"}
+    body: Vec[uint8] = [1 as uint8, 2 as uint8]
+    http_bytes = net.http_request_bytes_timeout("POST", "http://127.0.0.1/", body, headers, 5ms)
     values: Vec[int32] = Vec[int32]()
     names: Set[String] = Set[String]()
     counts: Map[String, int32] = Map[String, int32]()
@@ -1961,6 +4111,18 @@ def main() -> int32:
             "expected `Queue()` to take at most one capacity argument",
         ),
         (
+            "channel bad named arg",
+            module_with_main_call(Rvalue::Call {
+                callee: CallTarget::Name("Queue".to_string()),
+                args: vec![MirArg {
+                    name: Some("size".to_string()),
+                    value: Operand::Int(1),
+                    writeback_place: None,
+                }],
+            }),
+            "expected `Queue()` to receive only `capacity=`",
+        ),
+        (
             "tasks extra arg",
             module_with_main_call(Rvalue::Call {
                 callee: CallTarget::Name("TaskGroup".to_string()),
@@ -1991,6 +4153,61 @@ def main() -> int32:
                 args: vec![],
             }),
             "expected `sleep()` to receive one duration argument",
+        ),
+        (
+            "wait_any duplicate tasks",
+            module_with_main_call(Rvalue::Call {
+                callee: CallTarget::Name("wait_any".to_string()),
+                args: vec![
+                    MirArg {
+                        name: Some("tasks".to_string()),
+                        value: Operand::Unit,
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: Some("tasks".to_string()),
+                        value: Operand::Unit,
+                        writeback_place: None,
+                    },
+                ],
+            }),
+            "expected `wait_any(tasks, timeout=...)`",
+        ),
+        (
+            "wait_all duplicate timeout",
+            module_with_main_call(Rvalue::Call {
+                callee: CallTarget::Name("wait_all".to_string()),
+                args: vec![
+                    MirArg {
+                        name: Some("tasks".to_string()),
+                        value: Operand::Unit,
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: Some("timeout".to_string()),
+                        value: Operand::Unit,
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: Some("timeout".to_string()),
+                        value: Operand::Unit,
+                        writeback_place: None,
+                    },
+                ],
+            }),
+            "expected `wait_all(tasks, timeout=...)`",
+        ),
+        (
+            "wait_any unknown arg",
+            module_with_main_call(Rvalue::Call {
+                callee: CallTarget::Name("wait_any".to_string()),
+                args: vec![MirArg {
+                    name: Some("jobs".to_string()),
+                    value: Operand::Unit,
+                    writeback_place: None,
+                }],
+            }),
+            "expected `wait_any(tasks, timeout=...)`",
         ),
         (
             "abs missing arg",
@@ -2065,6 +4282,35 @@ def main() -> int32:
             "expected `range()` to receive one or two arguments",
         ),
         (
+            "range too many mixed args",
+            module_with_main_call(Rvalue::Call {
+                callee: CallTarget::Name("range".to_string()),
+                args: vec![
+                    MirArg {
+                        name: Some("start".to_string()),
+                        value: Operand::Int(0),
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: None,
+                        value: Operand::Int(1),
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: None,
+                        value: Operand::Int(2),
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: None,
+                        value: Operand::Int(3),
+                        writeback_place: None,
+                    },
+                ],
+            }),
+            "expected `range()` to receive one or two arguments",
+        ),
+        (
             "range bad named arg",
             module_with_main_call(Rvalue::Call {
                 callee: CallTarget::Name("range".to_string()),
@@ -2105,6 +4351,286 @@ def main() -> int32:
             "{label} reported `{error}` instead of containing `{expected}`"
         );
     }
+
+    for (label, module) in [
+        (
+            "untyped Map constructor",
+            module_with_main_call_result_type(
+                Rvalue::Call {
+                    callee: CallTarget::Name("Map".to_string()),
+                    args: Vec::new(),
+                },
+                Type::Named(
+                    "Map".to_string(),
+                    vec![Type::named("String"), Type::named("int32")],
+                ),
+            ),
+        ),
+        (
+            "opaque unary not",
+            module_with_main_call_result_type(
+                Rvalue::Unary {
+                    op: UnaryOp::Not,
+                    value: Operand::String("truthy".to_string()),
+                    span: Span::new(1, 1),
+                },
+                Type::named("Unknown"),
+            ),
+        ),
+        (
+            "identity int32 cast",
+            module_with_main_call(Rvalue::Cast {
+                value: Operand::Int(7),
+                ty: Type::named("int32"),
+                span: Span::new(1, 1),
+            }),
+        ),
+        (
+            "wait_all without timeout",
+            module_with_main_call_result_type(
+                Rvalue::Call {
+                    callee: CallTarget::Name("wait_all".to_string()),
+                    args: vec![MirArg {
+                        name: None,
+                        value: Operand::Unit,
+                        writeback_place: None,
+                    }],
+                },
+                Type::Named("WaitAll".to_string(), vec![Type::named("Unknown")]),
+            ),
+        ),
+        (
+            "wait_any positional timeout",
+            module_with_main_call_result_type(
+                Rvalue::Call {
+                    callee: CallTarget::Name("wait_any".to_string()),
+                    args: vec![
+                        MirArg {
+                            name: None,
+                            value: Operand::Unit,
+                            writeback_place: None,
+                        },
+                        MirArg {
+                            name: None,
+                            value: Operand::Duration(5),
+                            writeback_place: None,
+                        },
+                    ],
+                },
+                Type::Named("WaitAny".to_string(), vec![Type::named("Unknown")]),
+            ),
+        ),
+        (
+            "bool to int32 coercion",
+            module_with_main_call(Rvalue::Use(Operand::Bool(true))),
+        ),
+        (
+            "unit to int32 coercion",
+            module_with_main_call(Rvalue::Use(Operand::Unit)),
+        ),
+        (
+            "boolean and",
+            module_with_main_call_result_type(
+                Rvalue::Binary {
+                    op: BinaryOp::And,
+                    left: Operand::Bool(true),
+                    right: Operand::Bool(false),
+                    span: Span::new(1, 1),
+                },
+                Type::named("bool"),
+            ),
+        ),
+        (
+            "boolean or",
+            module_with_main_call_result_type(
+                Rvalue::Binary {
+                    op: BinaryOp::Or,
+                    left: Operand::Bool(true),
+                    right: Operand::Bool(false),
+                    span: Span::new(1, 1),
+                },
+                Type::named("bool"),
+            ),
+        ),
+    ] {
+        let object = emit_host_object(&module)
+            .unwrap_or_else(|error| panic!("{label} should emit direct code: {error}"));
+        assert!(!object.is_empty(), "{label} should produce object bytes");
+    }
+}
+
+#[test]
+fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths() {
+    let wildcard_match = crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: vec![MirLocalType {
+                name: "%maybe".to_string(),
+                ty: Type::Named("Option".to_string(), vec![Type::named("int32")]),
+            }],
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![
+                BasicBlock {
+                    label: "entry".to_string(),
+                    instructions: vec![Instruction::Assign {
+                        target: "%maybe".to_string(),
+                        value: Rvalue::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant_name: "Some".to_string(),
+                            payloads: vec![Operand::Int(1)],
+                        },
+                    }],
+                    terminator: Terminator::Match {
+                        scrutinee: Operand::Place("%maybe".to_string()),
+                        arms: vec![MirMatchArm {
+                            enum_name: None,
+                            variant_name: None,
+                            wildcard: true,
+                            label: "wild".to_string(),
+                        }],
+                        otherwise: "other".to_string(),
+                    },
+                },
+                BasicBlock {
+                    label: "wild".to_string(),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(Operand::Int(1)),
+                },
+                BasicBlock {
+                    label: "other".to_string(),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(Operand::Int(0)),
+                },
+            ],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    assert!(!emit_host_object(&wildcard_match)
+        .expect("wildcard enum matches should compile directly")
+        .is_empty());
+
+    let opaque_branch = crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: Vec::new(),
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![
+                BasicBlock {
+                    label: "entry".to_string(),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Branch {
+                        condition: Operand::String("truthy".to_string()),
+                        then_label: "then".to_string(),
+                        else_label: "else".to_string(),
+                    },
+                },
+                BasicBlock {
+                    label: "then".to_string(),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(Operand::Int(1)),
+                },
+                BasicBlock {
+                    label: "else".to_string(),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(Operand::Int(0)),
+                },
+            ],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    assert!(!emit_host_object(&opaque_branch)
+        .expect("opaque branch conditions should use runtime truthiness")
+        .is_empty());
+
+    let scalar_match = crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: Vec::new(),
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![
+                BasicBlock {
+                    label: "entry".to_string(),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Match {
+                        scrutinee: Operand::Int(1),
+                        arms: Vec::new(),
+                        otherwise: "other".to_string(),
+                    },
+                },
+                BasicBlock {
+                    label: "other".to_string(),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(Operand::Int(0)),
+                },
+            ],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    let scalar_error = emit_host_object(&scalar_match)
+        .expect_err("scalar match scrutinees should be rejected by direct codegen");
+    assert!(scalar_error.contains("expected enum matches to use opaque scrutinees"));
+
+    let module_match = crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: vec![MirLocalType {
+                name: "%module".to_string(),
+                ty: Type::Module("pkg.tools".to_string()),
+            }],
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![
+                BasicBlock {
+                    label: "entry".to_string(),
+                    instructions: vec![Instruction::Assign {
+                        target: "%module".to_string(),
+                        value: Rvalue::Use(Operand::Unit),
+                    }],
+                    terminator: Terminator::Match {
+                        scrutinee: Operand::Place("%module".to_string()),
+                        arms: Vec::new(),
+                        otherwise: "other".to_string(),
+                    },
+                },
+                BasicBlock {
+                    label: "other".to_string(),
+                    instructions: Vec::new(),
+                    terminator: Terminator::Return(Operand::Int(0)),
+                },
+            ],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    let module_error = emit_host_object(&module_match)
+        .expect_err("non-named opaque match scrutinees should be rejected");
+    assert!(module_error.contains("expected match scrutinee to carry an enum type name"));
 }
 
 #[test]
@@ -2766,6 +5292,33 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         emit_host_object(&empty_place_module).expect_err("empty places should be rejected");
     assert!(empty_place_error.contains("does not know local"));
 
+    let stray_pop_cleanup_module = crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: Vec::new(),
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![Instruction::PopCleanup {
+                    place: "ghost".to_string(),
+                    cancel_before_cleanup: false,
+                }],
+                terminator: Terminator::Return(Operand::Int(0)),
+            }],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    let stray_pop_cleanup_error = emit_host_object(&stray_pop_cleanup_module)
+        .expect_err("unmatched cleanup pops should report the missing cleanup registration");
+    assert!(stray_pop_cleanup_error.contains("does not know cleanup registration for `ghost`"));
+
     let pair_class = crate::mir::MirClass {
         name: "Pair".to_string(),
         type_params: Vec::new(),
@@ -2821,6 +5374,171 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     let non_class_construct_error = emit_host_object(&non_class_construct_module)
         .expect_err("constructing scalar types should be rejected");
     assert!(non_class_construct_error.contains("could not construct non-class type `int32`"));
+
+    let plain_cast_target_module = crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: vec![MirLocalType {
+                name: "%t0".to_string(),
+                ty: Type::named("Pair"),
+            }],
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![Instruction::Assign {
+                    target: "%t0".to_string(),
+                    value: Rvalue::Cast {
+                        value: Operand::Int(1),
+                        ty: Type::named("Pair"),
+                        span: Span::new(1, 1),
+                    },
+                }],
+                terminator: Terminator::Return(Operand::Int(0)),
+            }],
+        }],
+        classes: vec![pair_class.clone()],
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    let plain_cast_target_error = emit_host_object(&plain_cast_target_module)
+        .expect_err("casts to plain classes should be rejected before code emission");
+    assert!(plain_cast_target_error
+        .contains("direct backend only supports numeric casts, found target `Pair`"));
+
+    let plain_cast_source_module = crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: vec![
+                MirLocalType {
+                    name: "pair".to_string(),
+                    ty: Type::named("Pair"),
+                },
+                MirLocalType {
+                    name: "%t0".to_string(),
+                    ty: Type::named("int32"),
+                },
+            ],
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![
+                    Instruction::Assign {
+                        target: "pair".to_string(),
+                        value: Rvalue::Construct {
+                            class_name: "Pair".to_string(),
+                            fields: vec![
+                                crate::mir::MirFieldInit {
+                                    name: "left".to_string(),
+                                    value: Operand::Int(1),
+                                },
+                                crate::mir::MirFieldInit {
+                                    name: "right".to_string(),
+                                    value: Operand::Int(2),
+                                },
+                            ],
+                        },
+                    },
+                    Instruction::Assign {
+                        target: "%t0".to_string(),
+                        value: Rvalue::Cast {
+                            value: Operand::Place("pair".to_string()),
+                            ty: Type::named("int32"),
+                            span: Span::new(1, 1),
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(Operand::Int(0)),
+            }],
+        }],
+        classes: vec![pair_class.clone()],
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    let plain_cast_source_error = emit_host_object(&plain_cast_source_module)
+        .expect_err("casts from plain classes should be rejected before code emission");
+    assert!(plain_cast_source_error
+        .contains("direct backend only supports numeric casts from scalar values, found `Pair`"));
+
+    for (label, module, expected) in [
+        (
+            "scalar field access",
+            module_with_main_call(Rvalue::Member {
+                object: Operand::Int(1),
+                field: "missing".to_string(),
+            }),
+            "direct backend does not know field `missing` on `int32`",
+        ),
+        (
+            "integer boolean op",
+            module_with_main_call(Rvalue::Binary {
+                op: BinaryOp::And,
+                left: Operand::Int(1),
+                right: Operand::Int(2),
+                span: Span::new(1, 1),
+            }),
+            "direct backend does not support integer binary operation `And`",
+        ),
+        (
+            "float boolean op",
+            module_with_main_call_result_type(
+                Rvalue::Binary {
+                    op: BinaryOp::And,
+                    left: Operand::Float(1.0),
+                    right: Operand::Float(2.0),
+                    span: Span::new(1, 1),
+                },
+                Type::named("float64"),
+            ),
+            "direct backend does not support float binary operation `And`",
+        ),
+        (
+            "bool arithmetic op",
+            module_with_main_call_result_type(
+                Rvalue::Binary {
+                    op: BinaryOp::Add,
+                    left: Operand::Bool(true),
+                    right: Operand::Bool(false),
+                    span: Span::new(1, 1),
+                },
+                Type::named("bool"),
+            ),
+            "direct backend does not support boolean binary operation `Add`",
+        ),
+        (
+            "unsupported scalar cast target",
+            module_with_main_call(Rvalue::Cast {
+                value: Operand::Int(1),
+                ty: Type::named("bool"),
+                span: Span::new(1, 1),
+            }),
+            "direct backend only supports numeric casts, found `int32` to `bool`",
+        ),
+        (
+            "nonnumeric cast source",
+            module_with_main_call(Rvalue::Cast {
+                value: Operand::Unit,
+                ty: Type::named("int32"),
+                span: Span::new(1, 1),
+            }),
+            "direct backend only supports numeric casts, found `None` to `int32`",
+        ),
+    ] {
+        let error = emit_host_object(&module).expect_err(&format!("{label} should be rejected"));
+        assert!(
+            error.contains(expected),
+            "{label} reported `{error}` instead of containing `{expected}`"
+        );
+    }
 
     let missing_field_access_module = crate::mir::MirModule {
         functions: vec![MirFunction {
@@ -2925,6 +5643,54 @@ fn native_codegen_reports_invalid_non_boolean_branch_conditions() {
     let error = emit_host_object(&invalid_module)
         .expect_err("non-boolean branch conditions should be rejected by direct codegen");
     assert!(error.contains("cannot use `float64` as a branch condition"));
+}
+
+#[test]
+fn native_codegen_rejects_try_between_non_result_types() {
+    let invalid_module = crate::mir::MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: vec![
+                MirLocalType {
+                    name: "%source".to_string(),
+                    ty: Type::named("int32"),
+                },
+                MirLocalType {
+                    name: "%target".to_string(),
+                    ty: Type::named("int32"),
+                },
+            ],
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![
+                    Instruction::Assign {
+                        target: "%source".to_string(),
+                        value: Rvalue::Use(Operand::Int(1)),
+                    },
+                    Instruction::Assign {
+                        target: "%target".to_string(),
+                        value: Rvalue::Try {
+                            value: Operand::Place("%source".to_string()),
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(Operand::Int(0)),
+            }],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+
+    let error = emit_host_object(&invalid_module)
+        .expect_err("direct backend try should require Result operands and returns");
+    assert!(error.contains("requires Result types"));
 }
 
 #[test]
@@ -3067,6 +5833,100 @@ fn native_codegen_thunk_helpers_cover_roundtrip_paths() {
 }
 
 #[test]
+fn native_codegen_release_helpers_cover_cleanup_error_paths() {
+    let source = "def main() -> int32:\n    return 0\n";
+    let mir = lower_source_to_mir(source).expect("release helper source should lower");
+    let mut codegen = NativeCodegen::new(&mir, "/tmp/release_helpers.au", source)
+        .expect("codegen should initialize");
+
+    let mut ctx = Context::new();
+    ctx.func.signature = cranelift_codegen::ir::Signature::new(codegen.call_conv);
+    let mut builder_ctx = FunctionBuilderContext::new();
+    let mut builder = cranelift_frontend::FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+    let block = builder.create_block();
+    builder.switch_to_block(block);
+    builder.seal_block(block);
+
+    let raw_opaque = builder.ins().iconst(types::I64, 7);
+    let raw_unit = builder.ins().iconst(types::I64, 0);
+    let raw_bool = builder.ins().iconst(types::I64, 1);
+    let opaque_string = DirectType::Opaque(Type::named("String"));
+    let plain_pair = DirectType::PlainClass(PlainClassType {
+        class_name: "Pair".to_string(),
+        fields: vec![
+            PlainClassField {
+                name: "text".to_string(),
+                ty: opaque_string.clone(),
+            },
+            PlainClassField {
+                name: "flag".to_string(),
+                ty: DirectType::Scalar(ScalarKind::Bool),
+            },
+        ],
+    });
+
+    let unknown_return_error =
+        release_direct_call_results(&mut codegen, &mut builder, "missing", &[raw_opaque])
+            .expect_err("unknown cleanup return types should fail");
+    assert!(unknown_return_error.contains("does not know return type for `missing`"));
+
+    codegen
+        .function_return_types
+        .insert("needs_opaque".to_string(), opaque_string.clone());
+    let too_few_error =
+        release_direct_call_results(&mut codegen, &mut builder, "needs_opaque", &[])
+            .expect_err("too few cleanup return values should fail");
+    assert!(too_few_error.contains("cleanup call `needs_opaque` returned too few values"));
+
+    let missing_opaque_error =
+        release_direct_values(&mut codegen, &mut builder, &[], &opaque_string)
+            .expect_err("opaque cleanup release should require one value");
+    assert!(missing_opaque_error.contains("expected an opaque `String` result"));
+
+    codegen.function_return_types.insert(
+        "unit_with_writeback".to_string(),
+        DirectType::Scalar(ScalarKind::Unit),
+    );
+    codegen.function_writeback_types.insert(
+        "unit_with_writeback".to_string(),
+        vec![opaque_string.clone()],
+    );
+    let incomplete_writeback_error = release_direct_call_results(
+        &mut codegen,
+        &mut builder,
+        "unit_with_writeback",
+        &[raw_unit],
+    )
+    .expect_err("missing cleanup writeback values should fail");
+    assert!(incomplete_writeback_error
+        .contains("cleanup call `unit_with_writeback` returned incomplete writeback values"));
+
+    release_direct_call_results(
+        &mut codegen,
+        &mut builder,
+        "unit_with_writeback",
+        &[raw_unit, raw_opaque],
+    )
+    .expect("complete cleanup writeback values should release");
+
+    let incomplete_plain_class_error =
+        release_direct_values(&mut codegen, &mut builder, &[raw_opaque], &plain_pair)
+            .expect_err("plain class cleanup release should require every field value");
+    assert!(incomplete_plain_class_error.contains("expected `2` values for `Pair`"));
+
+    release_direct_values(
+        &mut codegen,
+        &mut builder,
+        &[raw_opaque, raw_bool],
+        &plain_pair,
+    )
+    .expect("complete plain class values should release recursively");
+
+    builder.ins().return_(&[]);
+    builder.finalize();
+}
+
+#[test]
 fn direct_backend_emits_object_for_module_examples() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -3148,6 +6008,15 @@ fn direct_backend_emits_object_for_broad_maintained_example_surface() {
         "examples/concurrency/task_group_start_soon.au",
         "examples/concurrency/task_group_cancel.au",
         "examples/concurrency/task_group_queue_sum.au",
+        "examples/io/read_text_file.au",
+        "examples/io/bytes_file_io.au",
+        "examples/io/process_run.au",
+        "examples/io/process_supervisor.au",
+        "examples/io/tcp_echo.au",
+        "examples/io/tcp_bytes.au",
+        "examples/io/udp_echo.au",
+        "examples/io/http_roundtrip.au",
+        "examples/io/websocket_roundtrip.au",
         "examples/resources/with_resource.au",
         "examples/modules/namespace_import_types.au",
         "examples/modules/trait_impl_imports.au",
@@ -3161,7 +6030,8 @@ fn direct_backend_emits_object_for_broad_maintained_example_surface() {
     for relative in paths {
         let path = repo_root.join(relative);
         let mir = lower_path_to_mir(&path).expect("maintained example should lower to MIR");
-        let object = emit_host_object(&mir).expect("maintained example should emit direct object");
+        let object =
+            emit_host_object(&mir).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         assert!(!object.is_empty(), "{}", path.display());
     }
 }
@@ -3251,6 +6121,37 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
     let mut variable_types = HashMap::new();
     variable_types.insert("flag".to_string(), DirectType::Scalar(ScalarKind::Bool));
     variable_types.insert("number".to_string(), DirectType::Scalar(ScalarKind::Int32));
+    variable_types.insert("ratio".to_string(), DirectType::Scalar(ScalarKind::Float64));
+    variable_types.insert(
+        "word".to_string(),
+        DirectType::Opaque(Type::named("String")),
+    );
+    variable_types.insert("node".to_string(), DirectType::Opaque(Type::named("Node")));
+    variable_types.insert(
+        "tasks".to_string(),
+        DirectType::Opaque(Type::Named(
+            "Vec".to_string(),
+            vec![Type::Named("Task".to_string(), vec![Type::named("String")])],
+        )),
+    );
+    variable_types.insert(
+        "unit_tasks".to_string(),
+        DirectType::Opaque(Type::Named(
+            "Vec".to_string(),
+            vec![Type::Named("Task".to_string(), Vec::new())],
+        )),
+    );
+    variable_types.insert(
+        "strings".to_string(),
+        DirectType::Opaque(Type::Named("Vec".to_string(), vec![Type::named("String")])),
+    );
+    variable_types.insert(
+        "result".to_string(),
+        DirectType::Opaque(Type::Named(
+            "Result".to_string(),
+            vec![Type::named("String"), Type::named("io.Error")],
+        )),
+    );
     variable_types.insert(
         "point".to_string(),
         DirectType::PlainClass(super::PlainClassType {
@@ -3272,7 +6173,42 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         "helper".to_string(),
         DirectType::Scalar(ScalarKind::Float64),
     );
-    let classes = HashMap::new();
+    returns.insert(
+        "Point::norm".to_string(),
+        DirectType::Scalar(ScalarKind::Float64),
+    );
+    returns.insert(
+        "Node::size".to_string(),
+        DirectType::Scalar(ScalarKind::Int32),
+    );
+    let classes = HashMap::from([
+        (
+            "Point".to_string(),
+            crate::mir::MirClass {
+                name: "Point".to_string(),
+                type_params: Vec::new(),
+                fields: Vec::new(),
+                methods: vec![crate::mir::MirMethod {
+                    name: "norm".to_string(),
+                    function_name: "Point::norm".to_string(),
+                    receiver: Some(MirReceiverKind::Borrow),
+                }],
+            },
+        ),
+        (
+            "Node".to_string(),
+            crate::mir::MirClass {
+                name: "Node".to_string(),
+                type_params: Vec::new(),
+                fields: Vec::new(),
+                methods: vec![crate::mir::MirMethod {
+                    name: "size".to_string(),
+                    function_name: "Node::size".to_string(),
+                    receiver: Some(MirReceiverKind::Borrow),
+                }],
+            },
+        ),
+    ]);
 
     assert_eq!(
         infer_operand_type(
@@ -3291,6 +6227,18 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         Some(DirectType::Scalar(ScalarKind::Float64))
     );
     assert_eq!(
+        infer_operand_type(&Operand::Bool(true), &variable_types, &classes),
+        Some(DirectType::Scalar(ScalarKind::Bool))
+    );
+    assert_eq!(
+        infer_operand_type(&Operand::Float(1.25), &variable_types, &classes),
+        Some(DirectType::Scalar(ScalarKind::Float64))
+    );
+    assert_eq!(
+        infer_operand_type(&Operand::Unit, &variable_types, &classes),
+        Some(DirectType::Scalar(ScalarKind::Unit))
+    );
+    assert_eq!(
         infer_rvalue_type(
             &Rvalue::Unary {
                 op: UnaryOp::Not,
@@ -3302,6 +6250,45 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             &classes,
         ),
         Some(DirectType::Scalar(ScalarKind::Bool))
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Unary {
+                op: UnaryOp::Neg,
+                value: Operand::Place("number".to_string()),
+                span: Span::new(1, 1),
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        Some(DirectType::Scalar(ScalarKind::Int32))
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Unary {
+                op: UnaryOp::Neg,
+                value: Operand::Place("ratio".to_string()),
+                span: Span::new(1, 1),
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        Some(DirectType::Scalar(ScalarKind::Float64))
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Unary {
+                op: UnaryOp::Neg,
+                value: Operand::Place("word".to_string()),
+                span: Span::new(1, 1),
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        None
     );
     assert_eq!(
         infer_rvalue_type(
@@ -3317,6 +6304,23 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
         ),
         Some(DirectType::Scalar(ScalarKind::Int32))
     );
+    for op in [BinaryOp::And, BinaryOp::Or] {
+        assert_eq!(
+            infer_rvalue_type(
+                &Rvalue::Binary {
+                    op,
+                    left: Operand::Place("flag".to_string()),
+                    right: Operand::Bool(false),
+                    span: Span::new(1, 1),
+                },
+                &variable_types,
+                &returns,
+                &classes,
+            ),
+            Some(DirectType::Scalar(ScalarKind::Bool)),
+            "boolean operator `{op:?}` should infer bool",
+        );
+    }
     assert_eq!(
         infer_rvalue_type(
             &Rvalue::Call {
@@ -3332,6 +6336,18 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             &classes,
         ),
         Some(DirectType::Scalar(ScalarKind::Unit))
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Call {
+                callee: CallTarget::Name("helper".to_string()),
+                args: Vec::new(),
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        Some(DirectType::Scalar(ScalarKind::Float64))
     );
     assert_eq!(
         infer_rvalue_type(
@@ -3469,6 +6485,427 @@ fn infer_operand_and_rvalue_types_track_plain_classes() {
             "expected builtin `{name}` to infer correctly",
         );
     }
+
+    for (name, expected_variant) in [("wait_any", "WaitAny"), ("wait_all", "WaitAll")] {
+        assert_eq!(
+            infer_rvalue_type(
+                &Rvalue::Call {
+                    callee: CallTarget::Name(name.to_string()),
+                    args: vec![MirArg {
+                        name: None,
+                        value: Operand::Place("tasks".to_string()),
+                        writeback_place: None,
+                    }],
+                },
+                &variable_types,
+                &returns,
+                &classes,
+            ),
+            Some(DirectType::Opaque(Type::Named(
+                expected_variant.to_string(),
+                vec![Type::named("String")],
+            ))),
+            "expected `{name}` to infer the task payload type",
+        );
+    }
+    for (name, args) in [
+        ("wait_any", Vec::new()),
+        (
+            "wait_all",
+            vec![MirArg {
+                name: None,
+                value: Operand::Place("flag".to_string()),
+                writeback_place: None,
+            }],
+        ),
+    ] {
+        assert_eq!(
+            infer_rvalue_type(
+                &Rvalue::Call {
+                    callee: CallTarget::Name(name.to_string()),
+                    args,
+                },
+                &variable_types,
+                &returns,
+                &classes,
+            ),
+            Some(DirectType::Opaque(Type::Named(
+                if name == "wait_any" {
+                    "WaitAny".to_string()
+                } else {
+                    "WaitAll".to_string()
+                },
+                vec![Type::named("Unknown")],
+            ))),
+            "expected `{name}` to fall back to an unknown task payload",
+        );
+    }
+    for (place, expected_payload) in [
+        ("unit_tasks", Type::Unit),
+        ("strings", Type::named("Unknown")),
+    ] {
+        assert_eq!(
+            infer_rvalue_type(
+                &Rvalue::Call {
+                    callee: CallTarget::Name("wait_any".to_string()),
+                    args: vec![MirArg {
+                        name: None,
+                        value: Operand::Place(place.to_string()),
+                        writeback_place: None,
+                    }],
+                },
+                &variable_types,
+                &returns,
+                &classes,
+            ),
+            Some(DirectType::Opaque(Type::Named(
+                "WaitAny".to_string(),
+                vec![expected_payload],
+            ))),
+            "expected wait_any on `{place}` to infer the maintained fallback payload",
+        );
+    }
+
+    let named_type = |name: &str| Type::Named(name.to_string(), Vec::new());
+    let result_type =
+        |ok: Type, err: Type| DirectType::Opaque(Type::Named("Result".to_string(), vec![ok, err]));
+    let io_error = named_type("io.Error");
+    let process_error = named_type("process.Error");
+    for (name, expected) in [
+        ("io::write", result_type(Type::Unit, io_error.clone())),
+        ("io::flush", result_type(Type::Unit, io_error.clone())),
+        (
+            "io::read_line",
+            result_type(
+                Type::Named("Option".to_string(), vec![Type::named("String")]),
+                io_error.clone(),
+            ),
+        ),
+        ("fs::exists", DirectType::Scalar(ScalarKind::Bool)),
+        (
+            "fs::read_to_string",
+            result_type(Type::named("String"), io_error.clone()),
+        ),
+        (
+            "fs::read_bytes",
+            result_type(
+                Type::Named("Vec".to_string(), vec![Type::named("uint8")]),
+                io_error.clone(),
+            ),
+        ),
+        (
+            "fs::write_string",
+            result_type(Type::Unit, io_error.clone()),
+        ),
+        ("fs::write_bytes", result_type(Type::Unit, io_error.clone())),
+        (
+            "fs::append_string",
+            result_type(Type::Unit, io_error.clone()),
+        ),
+        (
+            "fs::append_bytes",
+            result_type(Type::Unit, io_error.clone()),
+        ),
+        ("fs::create_dir", result_type(Type::Unit, io_error.clone())),
+        ("fs::remove_file", result_type(Type::Unit, io_error.clone())),
+        (
+            "fs::read_dir",
+            result_type(
+                Type::Named("Vec".to_string(), vec![Type::named("String")]),
+                io_error.clone(),
+            ),
+        ),
+        (
+            "fs::open",
+            result_type(named_type("fs.File"), io_error.clone()),
+        ),
+        (
+            "fs::create",
+            result_type(named_type("fs.File"), io_error.clone()),
+        ),
+        (
+            "fs::append",
+            result_type(named_type("fs.File"), io_error.clone()),
+        ),
+        (
+            "process::inherit",
+            DirectType::Opaque(named_type("process.Stdio")),
+        ),
+        (
+            "process::null",
+            DirectType::Opaque(named_type("process.Stdio")),
+        ),
+        (
+            "process::pipe",
+            DirectType::Opaque(named_type("process.Stdio")),
+        ),
+        (
+            "process::supervisor",
+            DirectType::Opaque(named_type("process.Supervisor")),
+        ),
+        (
+            "process::start",
+            result_type(named_type("process.Child"), process_error.clone()),
+        ),
+        (
+            "process::run",
+            result_type(named_type("process.Completed"), process_error.clone()),
+        ),
+        (
+            "net::connect",
+            result_type(named_type("net.TcpStream"), io_error.clone()),
+        ),
+        (
+            "net::connect_timeout",
+            result_type(named_type("net.TcpStream"), io_error.clone()),
+        ),
+        (
+            "net::listen",
+            result_type(named_type("net.TcpListener"), io_error.clone()),
+        ),
+        (
+            "net::udp_bind",
+            result_type(named_type("net.UdpSocket"), io_error.clone()),
+        ),
+        (
+            "net::unix_listen",
+            result_type(named_type("net.UnixListener"), io_error.clone()),
+        ),
+        (
+            "net::unix_connect",
+            result_type(named_type("net.UnixStream"), io_error.clone()),
+        ),
+        (
+            "net::unix_connect_timeout",
+            result_type(named_type("net.UnixStream"), io_error.clone()),
+        ),
+        (
+            "net::tls_listen",
+            result_type(named_type("net.TlsListener"), io_error.clone()),
+        ),
+        (
+            "net::tls_connect",
+            result_type(named_type("net.TlsStream"), io_error.clone()),
+        ),
+        (
+            "net::tls_connect_timeout",
+            result_type(named_type("net.TlsStream"), io_error.clone()),
+        ),
+        (
+            "net::http_listen",
+            result_type(named_type("net.HttpListener"), io_error.clone()),
+        ),
+        (
+            "net::http_request_text",
+            result_type(named_type("net.HttpResponse"), io_error.clone()),
+        ),
+        (
+            "net::http_request_text_timeout",
+            result_type(named_type("net.HttpResponse"), io_error.clone()),
+        ),
+        (
+            "net::http_request_bytes",
+            result_type(named_type("net.HttpResponse"), io_error.clone()),
+        ),
+        (
+            "net::http_request_bytes_timeout",
+            result_type(named_type("net.HttpResponse"), io_error.clone()),
+        ),
+        (
+            "net::websocket_listen",
+            result_type(named_type("net.WebSocketListener"), io_error.clone()),
+        ),
+        (
+            "net::websocket_connect",
+            result_type(named_type("net.WebSocket"), io_error.clone()),
+        ),
+        (
+            "net::websocket_connect_timeout",
+            result_type(named_type("net.WebSocket"), io_error.clone()),
+        ),
+    ] {
+        assert_eq!(
+            infer_rvalue_type(
+                &Rvalue::Call {
+                    callee: CallTarget::Name(name.to_string()),
+                    args: Vec::new(),
+                },
+                &variable_types,
+                &returns,
+                &classes,
+            ),
+            Some(expected),
+            "expected direct builtin `{name}` to infer correctly",
+        );
+    }
+
+    for (object, field, expected) in [
+        (
+            Operand::Place("ratio".to_string()),
+            "sqrt",
+            Some(DirectType::Scalar(ScalarKind::Float64)),
+        ),
+        (
+            Operand::Place("number".to_string()),
+            "to_string",
+            Some(DirectType::Opaque(Type::named("String"))),
+        ),
+        (
+            Operand::Place("point".to_string()),
+            "norm",
+            Some(DirectType::Scalar(ScalarKind::Float64)),
+        ),
+        (
+            Operand::Place("node".to_string()),
+            "size",
+            Some(DirectType::Scalar(ScalarKind::Int32)),
+        ),
+        (
+            Operand::Place("word".to_string()),
+            "missing",
+            Some(DirectType::Opaque(Type::named("Unknown"))),
+        ),
+        (Operand::Place("flag".to_string()), "missing", None),
+    ] {
+        assert_eq!(
+            infer_rvalue_type(
+                &Rvalue::Call {
+                    callee: CallTarget::Member {
+                        object,
+                        field: field.to_string(),
+                        receiver_place: None,
+                    },
+                    args: Vec::new(),
+                },
+                &variable_types,
+                &returns,
+                &classes,
+            ),
+            expected,
+            "expected direct member `{field}` to infer correctly",
+        );
+    }
+
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Try {
+                value: Operand::Place("result".to_string()),
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        Some(DirectType::Opaque(Type::named("String")))
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Try {
+                value: Operand::Place("flag".to_string()),
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        Some(DirectType::Opaque(Type::named("Unknown")))
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Construct {
+                class_name: "Point".to_string(),
+                fields: Vec::new(),
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        Some(DirectType::PlainClass(PlainClassType {
+            class_name: "Point".to_string(),
+            fields: Vec::new(),
+        }))
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::Member {
+                object: Operand::Place("point".to_string()),
+                field: "y".to_string(),
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        Some(DirectType::Scalar(ScalarKind::Float64))
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::EnumVariant {
+                enum_name: "Option".to_string(),
+                variant_name: "None".to_string(),
+                payloads: Vec::new(),
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        Some(DirectType::Opaque(Type::named("Option")))
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::VariantPayload {
+                scrutinee: Operand::Place("flag".to_string()),
+                variant_name: "Ready".to_string(),
+                index: 0,
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        Some(DirectType::Opaque(Type::named("Unknown")))
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::StartTask {
+                returns_handle: true,
+                task_group: Operand::Unit,
+                function: "helper".to_string(),
+                args: Vec::new(),
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        Some(DirectType::Opaque(Type::Named(
+            "Task".to_string(),
+            vec![Type::named("float64")],
+        )))
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::StartTask {
+                returns_handle: false,
+                task_group: Operand::Unit,
+                function: "helper".to_string(),
+                args: Vec::new(),
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        Some(DirectType::Scalar(ScalarKind::Unit))
+    );
+    assert_eq!(
+        infer_rvalue_type(
+            &Rvalue::StartTask {
+                returns_handle: true,
+                task_group: Operand::Unit,
+                function: "missing".to_string(),
+                args: Vec::new(),
+            },
+            &variable_types,
+            &returns,
+            &classes,
+        ),
+        None
+    );
 }
 
 #[test]
@@ -3482,6 +6919,33 @@ fn ensure_direct_type_maps_runtime_backed_types_to_opaque_values() {
     let ty = ensure_direct_type(&Type::named("String"), &HashMap::new(), "test type")
         .expect("runtime-backed types should still be representable directly");
     assert_eq!(ty, DirectType::Opaque(Type::named("String")));
+}
+
+#[test]
+fn native_codegen_receiver_and_type_param_helpers_cover_missing_receiver_and_terminal_types() {
+    let function = MirFunction {
+        name: "Widget.read".to_string(),
+        module_name: "<test>".to_string(),
+        span: Span::new(1, 1),
+        receiver: Some(MirReceiverKind::Borrow),
+        params: Vec::new(),
+        local_types: Vec::new(),
+        return_type: Type::named("int32"),
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: Vec::new(),
+            terminator: Terminator::Return(Operand::Int(0)),
+        }],
+    };
+    let error = super::receiver_type(&function, &HashMap::new())
+        .expect_err("receiver functions without a self local should be rejected");
+    assert!(error.contains("could not find receiver local type for `Widget.read`"));
+
+    let mut collected = BTreeSet::new();
+    collect_type_params_from_type(&Type::Unit, &mut collected);
+    collect_type_params_from_type(&Type::Module("pkg.tools".to_string()), &mut collected);
+    assert!(collected.is_empty());
 }
 
 #[test]
@@ -3574,6 +7038,115 @@ fn signature_helpers_flatten_plain_class_abi_types() {
     );
     assert_eq!(point_ty.field_slice("missing"), None);
     assert_eq!(render_direct_type(&point_ty), "Point");
+}
+
+#[test]
+fn cleanup_place_type_resolves_receivers_params_locals_and_inferred_values() {
+    let resource_class = crate::mir::MirClass {
+        name: "Resource".to_string(),
+        type_params: Vec::new(),
+        fields: vec![crate::mir::MirClassField {
+            name: "closed".to_string(),
+            ty: Type::named("bool"),
+        }],
+        methods: Vec::new(),
+    };
+    let holder_class = crate::mir::MirClass {
+        name: "Holder".to_string(),
+        type_params: Vec::new(),
+        fields: vec![crate::mir::MirClassField {
+            name: "resource".to_string(),
+            ty: Type::named("Resource"),
+        }],
+        methods: Vec::new(),
+    };
+    let classes = HashMap::from([
+        ("Resource".to_string(), resource_class),
+        ("Holder".to_string(), holder_class),
+    ]);
+    let function = MirFunction {
+        name: "cleanup_demo".to_string(),
+        module_name: "<test>".to_string(),
+        span: Span::new(1, 1),
+        receiver: Some(MirReceiverKind::BorrowMut),
+        params: vec![MirParam {
+            name: "input".to_string(),
+            passing: MirReceiverKind::Borrow,
+            ty: Type::named("Holder"),
+        }],
+        local_types: vec![
+            MirLocalType {
+                name: "self".to_string(),
+                ty: Type::named("Holder"),
+            },
+            MirLocalType {
+                name: "local".to_string(),
+                ty: Type::named("Resource"),
+            },
+        ],
+        return_type: Type::Unit,
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: vec![Instruction::Assign {
+                target: "%made".to_string(),
+                value: Rvalue::Construct {
+                    class_name: "Resource".to_string(),
+                    fields: Vec::new(),
+                },
+            }],
+            terminator: Terminator::Return(Operand::Unit),
+        }],
+    };
+    let function_return_types = HashMap::new();
+
+    assert_eq!(
+        cleanup_place_type(
+            &function,
+            &classes,
+            "self.resource.closed",
+            &function_return_types,
+        )
+        .expect("receiver cleanup fields should resolve"),
+        DirectType::Scalar(ScalarKind::Bool)
+    );
+    assert_eq!(
+        render_direct_type(
+            &cleanup_place_type(
+                &function,
+                &classes,
+                "input.resource",
+                &function_return_types
+            )
+            .expect("parameter cleanup fields should resolve")
+        ),
+        "Resource"
+    );
+    assert_eq!(
+        render_direct_type(
+            &cleanup_place_type(&function, &classes, "local", &function_return_types)
+                .expect("typed locals should resolve as cleanup places")
+        ),
+        "Resource"
+    );
+    assert_eq!(
+        cleanup_place_type(&function, &classes, "%made.closed", &function_return_types)
+            .expect("assigned values should infer cleanup field types"),
+        DirectType::Scalar(ScalarKind::Bool)
+    );
+    assert!(
+        cleanup_place_type(&function, &classes, "missing", &function_return_types)
+            .expect_err("unknown cleanup roots should be rejected")
+            .contains("does not know cleanup place `missing`")
+    );
+    assert!(cleanup_place_type(
+        &function,
+        &classes,
+        "self.resource.missing",
+        &function_return_types,
+    )
+    .expect_err("unknown cleanup fields should be rejected")
+    .contains("does not know cleanup field `missing`"));
 }
 
 #[test]
@@ -3758,6 +7331,82 @@ fn builtin_member_type_helpers_cover_collection_runtime_surface() {
             "expected `{object_ty}.{field}` to infer correctly",
         );
     }
+    assert_eq!(
+        builtin_opaque_member_return_type(&Type::Unit, "len", &classes),
+        None
+    );
+    for (object_ty, field, expected) in [
+        (
+            Type::Named("Vec".to_string(), Vec::new()),
+            "pop",
+            DirectType::Opaque(Type::Named(
+                "Option".to_string(),
+                vec![Type::named("Unknown")],
+            )),
+        ),
+        (
+            Type::Named("Map".to_string(), vec![Type::named("String")]),
+            "get",
+            DirectType::Opaque(Type::Named(
+                "Option".to_string(),
+                vec![Type::named("Unknown")],
+            )),
+        ),
+        (
+            Type::Named("Map".to_string(), Vec::new()),
+            "keys",
+            DirectType::Opaque(Type::Named("Vec".to_string(), vec![Type::named("Unknown")])),
+        ),
+        (
+            Type::Named("Map".to_string(), Vec::new()),
+            "items",
+            DirectType::Opaque(Type::Named(
+                "Vec".to_string(),
+                vec![Type::Named(
+                    "MapEntry".to_string(),
+                    vec![Type::named("Unknown"), Type::named("Unknown")],
+                )],
+            )),
+        ),
+        (
+            Type::Named("Set".to_string(), Vec::new()),
+            "__index_option",
+            DirectType::Opaque(Type::Named(
+                "Option".to_string(),
+                vec![Type::named("Unknown")],
+            )),
+        ),
+        (
+            Type::Named("Queue".to_string(), Vec::new()),
+            "put",
+            DirectType::Opaque(Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Unit,
+                    Type::Named("SendError".to_string(), vec![Type::named("Unknown")]),
+                ],
+            )),
+        ),
+        (
+            Type::Named("Queue".to_string(), Vec::new()),
+            "get",
+            DirectType::Opaque(Type::Named(
+                "QueueReceive".to_string(),
+                vec![Type::named("Unknown")],
+            )),
+        ),
+        (
+            Type::Named("Task".to_string(), Vec::new()),
+            "result",
+            DirectType::Opaque(Type::Named("TaskResult".to_string(), vec![Type::Unit])),
+        ),
+    ] {
+        assert_eq!(
+            builtin_opaque_member_return_type(&object_ty, field, &classes),
+            Some(expected),
+            "expected malformed `{object_ty}.{field}` to use the defensive fallback type",
+        );
+    }
 }
 
 #[test]
@@ -3874,6 +7523,211 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         ),
         Some(DirectType::Opaque(Type::named("Entry")))
     );
+}
+
+#[test]
+fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
+    let classes = HashMap::new();
+    let named = |name: &str| Type::Named(name.to_string(), Vec::new());
+    let opaque_named =
+        |name: &str, args: Vec<Type>| DirectType::Opaque(Type::Named(name.to_string(), args));
+    let direct_int = DirectType::Scalar(ScalarKind::Int32);
+    let direct_string = DirectType::Opaque(Type::named("String"));
+    let direct_vec_int =
+        DirectType::Opaque(Type::Named("Vec".to_string(), vec![Type::named("int32")]));
+
+    for (target, enum_name, variant, expected) in [
+        (
+            opaque_named("Option", vec![Type::named("int32")]),
+            "Option",
+            "Some",
+            Some(vec![direct_int.clone()]),
+        ),
+        (
+            opaque_named("Option", vec![Type::named("int32")]),
+            "Option",
+            "None",
+            Some(Vec::new()),
+        ),
+        (
+            opaque_named("Result", vec![Type::named("String"), named("io.Error")]),
+            "Result",
+            "Ok",
+            Some(vec![direct_string.clone()]),
+        ),
+        (
+            opaque_named("Result", vec![Type::named("String"), named("io.Error")]),
+            "Result",
+            "Err",
+            Some(vec![DirectType::Opaque(named("io.Error"))]),
+        ),
+        (
+            opaque_named("SendError", vec![Type::named("int32")]),
+            "SendError",
+            "Full",
+            Some(vec![direct_int.clone()]),
+        ),
+        (
+            opaque_named("QueueReceive", vec![Type::named("String")]),
+            "QueueReceive",
+            "Item",
+            Some(vec![direct_string.clone()]),
+        ),
+        (
+            opaque_named("QueueReceive", vec![Type::named("String")]),
+            "QueueReceive",
+            "Closed",
+            Some(Vec::new()),
+        ),
+        (
+            opaque_named("TaskResult", vec![Type::named("int32")]),
+            "TaskResult",
+            "Ready",
+            Some(vec![direct_int.clone()]),
+        ),
+        (
+            opaque_named("TaskResult", vec![Type::named("int32")]),
+            "TaskResult",
+            "Error",
+            Some(vec![direct_string.clone()]),
+        ),
+        (
+            opaque_named("TaskResult", vec![Type::named("int32")]),
+            "TaskResult",
+            "TimedOut",
+            Some(Vec::new()),
+        ),
+        (
+            opaque_named("WaitAny", vec![Type::named("String")]),
+            "WaitAny",
+            "Ready",
+            Some(vec![direct_int.clone(), direct_string.clone()]),
+        ),
+        (
+            opaque_named("WaitAny", vec![Type::named("String")]),
+            "WaitAny",
+            "Error",
+            Some(vec![direct_int.clone(), direct_string.clone()]),
+        ),
+        (
+            opaque_named("WaitAny", vec![Type::named("String")]),
+            "WaitAny",
+            "Cancelled",
+            Some(Vec::new()),
+        ),
+        (
+            opaque_named("WaitAll", vec![Type::named("int32")]),
+            "WaitAll",
+            "Ready",
+            Some(vec![direct_vec_int.clone()]),
+        ),
+        (
+            opaque_named("WaitAll", vec![Type::named("int32")]),
+            "WaitAll",
+            "Error",
+            Some(vec![direct_int.clone(), direct_string.clone()]),
+        ),
+        (
+            opaque_named("WaitAll", vec![Type::named("int32")]),
+            "WaitAll",
+            "TimedOut",
+            Some(Vec::new()),
+        ),
+        (
+            opaque_named("Result", vec![Type::named("String"), named("io.Error")]),
+            "Option",
+            "Some",
+            None,
+        ),
+        (
+            opaque_named("Result", vec![Type::named("String"), named("io.Error")]),
+            "Result",
+            "Missing",
+            None,
+        ),
+    ] {
+        assert_eq!(
+            enum_variant_payload_types_for_target(&enum_name, variant, &target, &classes),
+            expected,
+            "unexpected payload types for {enum_name}.{variant}"
+        );
+    }
+    assert_eq!(
+        enum_variant_payload_types_for_target(
+            "Result",
+            "Ok",
+            &DirectType::Scalar(ScalarKind::Int32),
+            &classes,
+        ),
+        None
+    );
+
+    let variable_types = HashMap::from([
+        (
+            "maybe".to_string(),
+            opaque_named("Option", vec![Type::named("int32")]),
+        ),
+        (
+            "result".to_string(),
+            opaque_named("Result", vec![Type::named("String"), named("io.Error")]),
+        ),
+        (
+            "send".to_string(),
+            opaque_named("SendError", vec![Type::named("int32")]),
+        ),
+        (
+            "recv".to_string(),
+            opaque_named("QueueReceive", vec![Type::named("String")]),
+        ),
+        (
+            "task".to_string(),
+            opaque_named("TaskResult", vec![Type::named("int32")]),
+        ),
+        (
+            "any".to_string(),
+            opaque_named("WaitAny", vec![Type::named("String")]),
+        ),
+        (
+            "all".to_string(),
+            opaque_named("WaitAll", vec![Type::named("int32")]),
+        ),
+        ("count".to_string(), direct_int.clone()),
+    ]);
+
+    for (place, variant, index, expected) in [
+        ("maybe", "Some", 0usize, Some(direct_int.clone())),
+        ("result", "Ok", 0, Some(direct_string.clone())),
+        (
+            "result",
+            "Err",
+            0,
+            Some(DirectType::Opaque(named("io.Error"))),
+        ),
+        ("send", "Closed", 0, Some(direct_int.clone())),
+        ("recv", "Item", 0, Some(direct_string.clone())),
+        ("task", "Ready", 0, Some(direct_int.clone())),
+        ("task", "Error", 0, Some(direct_string.clone())),
+        ("any", "Ready", 0, Some(direct_int.clone())),
+        ("any", "Ready", 1, Some(direct_string.clone())),
+        ("any", "Error", 1, Some(direct_string.clone())),
+        ("all", "Ready", 0, Some(direct_vec_int.clone())),
+        ("all", "Error", 0, Some(direct_int.clone())),
+        ("all", "Error", 1, Some(direct_string.clone())),
+        ("count", "Ready", 0, None),
+        ("result", "Missing", 0, None),
+    ] {
+        assert_eq!(
+            infer_variant_payload_type(
+                &Operand::Place(place.to_string()),
+                variant,
+                index,
+                &variable_types,
+                &classes,
+            ),
+            expected,
+            "unexpected inferred payload for {place}.{variant}[{index}]"
+        );
+    }
 }
 
 #[test]
@@ -4051,6 +7905,75 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
 }
 
 #[test]
+fn native_codegen_orders_named_builtin_args_and_reports_binding_errors() {
+    let arg = |name: Option<&str>, value: u128| MirArg {
+        name: name.map(str::to_string),
+        value: Operand::Int(value),
+        writeback_place: None,
+    };
+    let int_arg = |argument: &MirArg| match &argument.value {
+        Operand::Int(value) => *value,
+        other => panic!("expected int argument, found {other:?}"),
+    };
+
+    let mixed_args = vec![arg(Some("timeout"), 30), arg(None, 7)];
+    let ordered = ordered_named_args(&["value", "timeout"], &mixed_args)
+        .expect("named and positional arguments should bind by expected parameter order");
+    assert_eq!(int_arg(ordered[0]), 7);
+    assert_eq!(int_arg(ordered[1]), 30);
+
+    let positional_after_named = vec![arg(Some("value"), 7), arg(None, 30)];
+    let ordered = ordered_named_args(&["value", "timeout"], &positional_after_named)
+        .expect("positional arguments should skip slots filled by named arguments");
+    assert_eq!(int_arg(ordered[0]), 7);
+    assert_eq!(int_arg(ordered[1]), 30);
+
+    assert!(ordered_named_args(&["value"], &[arg(Some("missing"), 1)])
+        .expect_err("unknown names should fail")
+        .contains("does not recognize builtin argument `missing`"));
+    assert!(
+        ordered_named_args(&["value"], &[arg(Some("value"), 1), arg(Some("value"), 2)])
+            .expect_err("duplicate names should fail")
+            .contains("duplicate builtin argument `value`")
+    );
+    assert!(
+        ordered_named_args(&["value"], &[arg(None, 1), arg(None, 2)])
+            .expect_err("extra positional arguments should fail")
+            .contains("too many builtin arguments")
+    );
+    assert!(ordered_named_args(&["value", "timeout"], &[arg(None, 1)])
+        .expect_err("missing required arguments should fail")
+        .contains("missing a builtin argument"));
+
+    let optional = ordered_optional_named_args(&["default", "timeout"], &mixed_args)
+        .expect("optional named arguments should preserve empty slots");
+    assert_eq!(int_arg(optional[0].expect("default should bind")), 7);
+    assert_eq!(int_arg(optional[1].expect("timeout should bind")), 30);
+
+    let optional_after_named = vec![arg(Some("default"), 7), arg(None, 30)];
+    let optional = ordered_optional_named_args(&["default", "timeout"], &optional_after_named)
+        .expect("optional positional arguments should skip named slots");
+    assert_eq!(int_arg(optional[0].expect("default should bind")), 7);
+    assert_eq!(int_arg(optional[1].expect("timeout should bind")), 30);
+    assert!(
+        ordered_optional_named_args(&["timeout"], &[arg(Some("missing"), 1)])
+            .expect_err("unknown optional names should fail")
+            .contains("does not recognize builtin argument `missing`")
+    );
+    assert!(ordered_optional_named_args(
+        &["timeout"],
+        &[arg(Some("timeout"), 1), arg(Some("timeout"), 2)]
+    )
+    .expect_err("duplicate optional names should fail")
+    .contains("duplicate builtin argument `timeout`"));
+    assert!(
+        ordered_optional_named_args(&["timeout"], &[arg(None, 1), arg(None, 2)])
+            .expect_err("extra optional positional arguments should fail")
+            .contains("too many builtin arguments")
+    );
+}
+
+#[test]
 fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths() {
     let classes = HashMap::from([
         (
@@ -4097,11 +8020,41 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         ),
         (
             Type::named("String"),
+            "len",
+            direct_type(&Type::named("int32"), &classes),
+        ),
+        (
+            Type::named("String"),
+            "contains",
+            Some(DirectType::Scalar(ScalarKind::Bool)),
+        ),
+        (
+            Type::named("String"),
+            "starts_with",
+            Some(DirectType::Scalar(ScalarKind::Bool)),
+        ),
+        (
+            Type::named("String"),
+            "ends_with",
+            Some(DirectType::Scalar(ScalarKind::Bool)),
+        ),
+        (
+            Type::named("String"),
             "split",
             Some(DirectType::Opaque(Type::Named(
                 "Vec".to_string(),
                 vec![Type::named("String")],
             ))),
+        ),
+        (
+            Type::named("String"),
+            "replace",
+            Some(DirectType::Opaque(Type::named("String"))),
+        ),
+        (
+            Type::named("String"),
+            "add",
+            Some(DirectType::Opaque(Type::named("String"))),
         ),
         (
             Type::named("String"),
@@ -4115,6 +8068,29 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         ),
         (
             Type::named("String"),
+            "trim",
+            Some(DirectType::Opaque(Type::named("String"))),
+        ),
+        (
+            Type::named("String"),
+            "clone",
+            Some(DirectType::Opaque(Type::named("String"))),
+        ),
+        (
+            Type::named("String"),
+            "join",
+            Some(DirectType::Opaque(Type::named("String"))),
+        ),
+        (
+            Type::named("String"),
+            "strip_prefix",
+            Some(DirectType::Opaque(Type::Named(
+                "Option".to_string(),
+                vec![Type::named("String")],
+            ))),
+        ),
+        (
+            Type::named("String"),
             "strip_suffix",
             Some(DirectType::Opaque(Type::Named(
                 "Option".to_string(),
@@ -4123,12 +8099,170 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
         ),
         (
             Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "len",
+            direct_type(&Type::named("int32"), &classes),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
             "is_empty",
             Some(DirectType::Scalar(ScalarKind::Bool)),
         ),
         (
             Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "clone",
+            Some(DirectType::Opaque(Type::Named(
+                "Vec".to_string(),
+                vec![Type::named("int32")],
+            ))),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "push",
+            Some(DirectType::Scalar(ScalarKind::Unit)),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "extend",
+            Some(DirectType::Scalar(ScalarKind::Unit)),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "clear",
+            Some(DirectType::Scalar(ScalarKind::Unit)),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "reverse",
+            Some(DirectType::Scalar(ScalarKind::Unit)),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "__set_index",
+            Some(DirectType::Scalar(ScalarKind::Unit)),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "swap",
+            Some(DirectType::Scalar(ScalarKind::Bool)),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "contains",
+            Some(DirectType::Scalar(ScalarKind::Bool)),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "insert",
+            Some(DirectType::Scalar(ScalarKind::Bool)),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
             "pop",
+            Some(DirectType::Opaque(Type::Named(
+                "Option".to_string(),
+                vec![Type::named("int32")],
+            ))),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "get",
+            Some(DirectType::Opaque(Type::Named(
+                "Option".to_string(),
+                vec![Type::named("int32")],
+            ))),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "set",
+            Some(DirectType::Opaque(Type::Named(
+                "Option".to_string(),
+                vec![Type::named("int32")],
+            ))),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "remove",
+            Some(DirectType::Opaque(Type::Named(
+                "Option".to_string(),
+                vec![Type::named("int32")],
+            ))),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "__index_option",
+            Some(DirectType::Opaque(Type::Named(
+                "Option".to_string(),
+                vec![Type::named("int32")],
+            ))),
+        ),
+        (
+            Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+            "__index",
+            direct_type(&Type::named("int32"), &classes),
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "len",
+            direct_type(&Type::named("int32"), &classes),
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "is_empty",
+            Some(DirectType::Scalar(ScalarKind::Bool)),
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "contains_key",
+            Some(DirectType::Scalar(ScalarKind::Bool)),
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "clone",
+            Some(DirectType::Opaque(Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ))),
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "get",
+            Some(DirectType::Opaque(Type::Named(
+                "Option".to_string(),
+                vec![Type::named("int32")],
+            ))),
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "set",
+            Some(DirectType::Opaque(Type::Named(
+                "Option".to_string(),
+                vec![Type::named("int32")],
+            ))),
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "remove",
             Some(DirectType::Opaque(Type::Named(
                 "Option".to_string(),
                 vec![Type::named("int32")],
@@ -4146,9 +8280,138 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
             ))),
         ),
         (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "values",
+            Some(DirectType::Opaque(Type::Named(
+                "Vec".to_string(),
+                vec![Type::named("int32")],
+            ))),
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "items",
+            Some(DirectType::Opaque(Type::Named(
+                "Vec".to_string(),
+                vec![Type::Named(
+                    "MapEntry".to_string(),
+                    vec![Type::named("String"), Type::named("int32")],
+                )],
+            ))),
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "entries",
+            Some(DirectType::Opaque(Type::Named(
+                "Vec".to_string(),
+                vec![Type::Named(
+                    "MapEntry".to_string(),
+                    vec![Type::named("String"), Type::named("int32")],
+                )],
+            ))),
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "clear",
+            Some(DirectType::Scalar(ScalarKind::Unit)),
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "extend",
+            Some(DirectType::Scalar(ScalarKind::Unit)),
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "__index",
+            direct_type(&Type::named("int32"), &classes),
+        ),
+        (
+            Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("int32")],
+            ),
+            "__set_index",
+            Some(DirectType::Scalar(ScalarKind::Unit)),
+        ),
+        (
+            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            "len",
+            direct_type(&Type::named("int32"), &classes),
+        ),
+        (
+            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            "is_empty",
+            Some(DirectType::Scalar(ScalarKind::Bool)),
+        ),
+        (
+            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            "clone",
+            Some(DirectType::Opaque(Type::Named(
+                "Set".to_string(),
+                vec![Type::named("String")],
+            ))),
+        ),
+        (
             Type::Named("Set".to_string(), vec![Type::named("String")]),
             "contains",
             Some(DirectType::Scalar(ScalarKind::Bool)),
+        ),
+        (
+            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            "insert",
+            Some(DirectType::Scalar(ScalarKind::Bool)),
+        ),
+        (
+            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            "remove",
+            Some(DirectType::Scalar(ScalarKind::Bool)),
+        ),
+        (
+            Type::Named("Set".to_string(), vec![Type::named("String")]),
+            "__index_option",
+            Some(DirectType::Opaque(Type::Named(
+                "Option".to_string(),
+                vec![Type::named("String")],
+            ))),
+        ),
+        (
+            Type::Named("Queue".to_string(), vec![Type::named("int32")]),
+            "put",
+            Some(DirectType::Opaque(Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Unit,
+                    Type::Named("SendError".to_string(), vec![Type::named("int32")]),
+                ],
+            ))),
+        ),
+        (
+            Type::Named("Queue".to_string(), vec![Type::named("int32")]),
+            "try_put",
+            Some(DirectType::Opaque(Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Unit,
+                    Type::Named("SendError".to_string(), vec![Type::named("int32")]),
+                ],
+            ))),
         ),
         (
             Type::Named("Queue".to_string(), vec![Type::named("int32")]),
@@ -4157,6 +8420,27 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
                 "QueueReceive".to_string(),
                 vec![Type::named("int32")],
             ))),
+        ),
+        (
+            Type::Named("Queue".to_string(), vec![Type::named("int32")]),
+            "__get_in_task_group",
+            Some(DirectType::Opaque(Type::Named(
+                "QueueReceive".to_string(),
+                vec![Type::named("int32")],
+            ))),
+        ),
+        (
+            Type::Named("Queue".to_string(), vec![Type::named("int32")]),
+            "__get_with_registered_producers",
+            Some(DirectType::Opaque(Type::Named(
+                "QueueReceive".to_string(),
+                vec![Type::named("int32")],
+            ))),
+        ),
+        (
+            Type::Named("Queue".to_string(), vec![Type::named("int32")]),
+            "close",
+            Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
         (
             Type::Named("Task".to_string(), vec![Type::named("int32")]),
@@ -4171,12 +8455,536 @@ fn native_codegen_builtin_member_tables_and_trait_lookup_cover_additional_paths(
             "cancel",
             Some(DirectType::Scalar(ScalarKind::Unit)),
         ),
+        (
+            Type::Named("TaskGroup".to_string(), vec![]),
+            "close",
+            Some(DirectType::Scalar(ScalarKind::Unit)),
+        ),
         (Type::named("String"), "missing", None),
     ] {
         assert_eq!(
             builtin_opaque_member_return_type(&object_ty, field, &classes),
             expected,
             "unexpected direct member type for `{object_ty}.{field}`"
+        );
+    }
+
+    let named_type = |name: &str| Type::Named(name.to_string(), Vec::new());
+    let vec_type = |inner: Type| Type::Named("Vec".to_string(), vec![inner]);
+    let option_type = |inner: Type| Type::Named("Option".to_string(), vec![inner]);
+    let result_direct =
+        |ok: Type, err: Type| DirectType::Opaque(Type::Named("Result".to_string(), vec![ok, err]));
+    let direct_named = |name: &str| DirectType::Opaque(named_type(name));
+    let direct_vec = |inner: Type| DirectType::Opaque(vec_type(inner));
+    let io_error = named_type("io.Error");
+    let process_error = named_type("process.Error");
+    for (object_ty, field, expected) in [
+        (
+            named_type("fs.File"),
+            "read_all",
+            result_direct(Type::named("String"), io_error.clone()),
+        ),
+        (
+            named_type("fs.File"),
+            "read_bytes",
+            result_direct(vec_type(Type::named("uint8")), io_error.clone()),
+        ),
+        (
+            named_type("fs.File"),
+            "write_all",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("fs.File"),
+            "write_bytes",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("fs.File"),
+            "flush",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("fs.File"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("process.Child"),
+            "stdin",
+            DirectType::Opaque(option_type(named_type("process.Pipe"))),
+        ),
+        (
+            named_type("process.Child"),
+            "stdout",
+            DirectType::Opaque(option_type(named_type("process.Pipe"))),
+        ),
+        (
+            named_type("process.Child"),
+            "stderr",
+            DirectType::Opaque(option_type(named_type("process.Pipe"))),
+        ),
+        (
+            named_type("process.Child"),
+            "wait",
+            direct_named("process.Wait"),
+        ),
+        (
+            named_type("process.Child"),
+            "kill",
+            result_direct(Type::Unit, process_error.clone()),
+        ),
+        (
+            named_type("process.Child"),
+            "terminate",
+            result_direct(Type::Unit, process_error.clone()),
+        ),
+        (
+            named_type("process.Child"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("process.Pipe"),
+            "read_all",
+            result_direct(Type::named("String"), process_error.clone()),
+        ),
+        (
+            named_type("process.Pipe"),
+            "read_line",
+            result_direct(option_type(Type::named("String")), process_error.clone()),
+        ),
+        (
+            named_type("process.Pipe"),
+            "read_bytes",
+            result_direct(
+                option_type(vec_type(Type::named("uint8"))),
+                process_error.clone(),
+            ),
+        ),
+        (
+            named_type("process.Pipe"),
+            "write_all",
+            result_direct(Type::Unit, process_error.clone()),
+        ),
+        (
+            named_type("process.Pipe"),
+            "write_bytes",
+            result_direct(Type::Unit, process_error.clone()),
+        ),
+        (
+            named_type("process.Pipe"),
+            "flush",
+            result_direct(Type::Unit, process_error.clone()),
+        ),
+        (
+            named_type("process.Pipe"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("process.Completed"),
+            "status",
+            direct_named("process.ExitStatus"),
+        ),
+        (
+            named_type("process.Completed"),
+            "success",
+            DirectType::Scalar(ScalarKind::Bool),
+        ),
+        (
+            named_type("process.Completed"),
+            "stdout",
+            direct_named("String"),
+        ),
+        (
+            named_type("process.Completed"),
+            "stderr",
+            direct_named("String"),
+        ),
+        (
+            named_type("process.Completed"),
+            "stdout_bytes",
+            direct_vec(Type::named("uint8")),
+        ),
+        (
+            named_type("process.Completed"),
+            "stderr_bytes",
+            direct_vec(Type::named("uint8")),
+        ),
+        (
+            named_type("process.Supervisor"),
+            "start",
+            result_direct(Type::Unit, process_error.clone()),
+        ),
+        (
+            named_type("process.Supervisor"),
+            "stop",
+            result_direct(Type::Unit, process_error.clone()),
+        ),
+        (
+            named_type("process.Supervisor"),
+            "wait",
+            direct_named("process.SupervisorWait"),
+        ),
+        (
+            named_type("process.Supervisor"),
+            "wait_or_none",
+            result_direct(
+                option_type(named_type("process.SupervisorEvent")),
+                process_error.clone(),
+            ),
+        ),
+        (
+            named_type("process.Supervisor"),
+            "is_empty",
+            DirectType::Scalar(ScalarKind::Bool),
+        ),
+        (
+            named_type("process.Supervisor"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("net.TcpListener"),
+            "accept",
+            result_direct(named_type("net.TcpStream"), io_error.clone()),
+        ),
+        (
+            named_type("net.TcpListener"),
+            "local_addr",
+            result_direct(Type::named("String"), io_error.clone()),
+        ),
+        (
+            named_type("net.TcpListener"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("net.TcpStream"),
+            "read_all",
+            result_direct(Type::named("String"), io_error.clone()),
+        ),
+        (
+            named_type("net.TcpStream"),
+            "local_addr",
+            result_direct(Type::named("String"), io_error.clone()),
+        ),
+        (
+            named_type("net.TcpStream"),
+            "peer_addr",
+            result_direct(Type::named("String"), io_error.clone()),
+        ),
+        (
+            named_type("net.TcpStream"),
+            "read_line",
+            result_direct(option_type(Type::named("String")), io_error.clone()),
+        ),
+        (
+            named_type("net.TcpStream"),
+            "read_bytes",
+            result_direct(
+                option_type(vec_type(Type::named("uint8"))),
+                io_error.clone(),
+            ),
+        ),
+        (
+            named_type("net.TcpStream"),
+            "read_exact",
+            result_direct(vec_type(Type::named("uint8")), io_error.clone()),
+        ),
+        (
+            named_type("net.TcpStream"),
+            "write_all",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.TcpStream"),
+            "write_bytes",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.TcpStream"),
+            "flush",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.TcpStream"),
+            "shutdown_read",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.TcpStream"),
+            "shutdown_write",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.TcpStream"),
+            "shutdown_both",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.TcpStream"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("net.UdpSocket"),
+            "send_text",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.UdpSocket"),
+            "send_bytes",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.UdpSocket"),
+            "recv",
+            result_direct(
+                option_type(vec_type(Type::named("uint8"))),
+                io_error.clone(),
+            ),
+        ),
+        (
+            named_type("net.UdpSocket"),
+            "recv_from",
+            result_direct(option_type(named_type("net.UdpDatagram")), io_error.clone()),
+        ),
+        (
+            named_type("net.UdpSocket"),
+            "local_addr",
+            result_direct(Type::named("String"), io_error.clone()),
+        ),
+        (
+            named_type("net.UdpSocket"),
+            "peer_addr",
+            result_direct(Type::named("String"), io_error.clone()),
+        ),
+        (
+            named_type("net.UdpSocket"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("net.UdpDatagram"),
+            "address",
+            direct_named("String"),
+        ),
+        (
+            named_type("net.UdpDatagram"),
+            "bytes",
+            direct_vec(Type::named("uint8")),
+        ),
+        (
+            named_type("net.UdpDatagram"),
+            "text",
+            result_direct(Type::named("String"), io_error.clone()),
+        ),
+        (
+            named_type("net.HttpListener"),
+            "accept",
+            result_direct(named_type("net.HttpExchange"), io_error.clone()),
+        ),
+        (
+            named_type("net.HttpListener"),
+            "local_addr",
+            result_direct(Type::named("String"), io_error.clone()),
+        ),
+        (
+            named_type("net.HttpListener"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("net.HttpExchange"),
+            "method",
+            direct_named("String"),
+        ),
+        (
+            named_type("net.HttpExchange"),
+            "path",
+            direct_named("String"),
+        ),
+        (
+            named_type("net.HttpExchange"),
+            "headers",
+            DirectType::Opaque(Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("String")],
+            )),
+        ),
+        (
+            named_type("net.HttpResponse"),
+            "headers",
+            DirectType::Opaque(Type::Named(
+                "Map".to_string(),
+                vec![Type::named("String"), Type::named("String")],
+            )),
+        ),
+        (
+            named_type("net.HttpExchange"),
+            "body_text",
+            result_direct(Type::named("String"), io_error.clone()),
+        ),
+        (
+            named_type("net.HttpResponse"),
+            "text",
+            result_direct(Type::named("String"), io_error.clone()),
+        ),
+        (
+            named_type("net.HttpExchange"),
+            "body_bytes",
+            direct_vec(Type::named("uint8")),
+        ),
+        (
+            named_type("net.HttpResponse"),
+            "bytes",
+            direct_vec(Type::named("uint8")),
+        ),
+        (
+            named_type("net.HttpExchange"),
+            "respond_text",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.HttpExchange"),
+            "respond_bytes",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.HttpExchange"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("net.HttpResponse"),
+            "status",
+            DirectType::Scalar(ScalarKind::Int32),
+        ),
+        (
+            named_type("net.HttpResponse"),
+            "reason",
+            direct_named("String"),
+        ),
+        (
+            named_type("net.HttpResponse"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("net.WebSocketListener"),
+            "accept",
+            result_direct(named_type("net.WebSocket"), io_error.clone()),
+        ),
+        (
+            named_type("net.WebSocketListener"),
+            "local_addr",
+            result_direct(Type::named("String"), io_error.clone()),
+        ),
+        (
+            named_type("net.WebSocketListener"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("net.WebSocket"),
+            "send_text",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.WebSocket"),
+            "send_bytes",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.WebSocket"),
+            "recv_text",
+            result_direct(option_type(Type::named("String")), io_error.clone()),
+        ),
+        (
+            named_type("net.WebSocket"),
+            "recv_bytes",
+            result_direct(
+                option_type(vec_type(Type::named("uint8"))),
+                io_error.clone(),
+            ),
+        ),
+        (
+            named_type("net.WebSocket"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("net.UnixListener"),
+            "accept",
+            result_direct(named_type("net.UnixStream"), io_error.clone()),
+        ),
+        (
+            named_type("net.UnixListener"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("net.UnixStream"),
+            "read_line",
+            result_direct(option_type(Type::named("String")), io_error.clone()),
+        ),
+        (
+            named_type("net.UnixStream"),
+            "read_exact",
+            result_direct(vec_type(Type::named("uint8")), io_error.clone()),
+        ),
+        (
+            named_type("net.UnixStream"),
+            "write_all",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.UnixStream"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("net.TlsListener"),
+            "accept",
+            result_direct(named_type("net.TlsStream"), io_error.clone()),
+        ),
+        (
+            named_type("net.TlsListener"),
+            "local_addr",
+            result_direct(Type::named("String"), io_error.clone()),
+        ),
+        (
+            named_type("net.TlsListener"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+        (
+            named_type("net.TlsStream"),
+            "read_line",
+            result_direct(option_type(Type::named("String")), io_error.clone()),
+        ),
+        (
+            named_type("net.TlsStream"),
+            "read_exact",
+            result_direct(vec_type(Type::named("uint8")), io_error.clone()),
+        ),
+        (
+            named_type("net.TlsStream"),
+            "write_all",
+            result_direct(Type::Unit, io_error.clone()),
+        ),
+        (
+            named_type("net.TlsStream"),
+            "close",
+            DirectType::Scalar(ScalarKind::Unit),
+        ),
+    ] {
+        assert_eq!(
+            builtin_opaque_member_return_type(&object_ty, field, &classes),
+            Some(expected),
+            "unexpected direct runtime member type for `{object_ty}.{field}`",
         );
     }
 
@@ -4379,6 +9187,73 @@ fn native_codegen_constructor_initializes_runtime_function_surface() {
 }
 
 #[test]
+fn native_codegen_trait_method_class_name_lookup_handles_specificity_and_ambiguity() {
+    let method = |name: &str, function_name: &str| crate::mir::MirMethod {
+        name: name.to_string(),
+        function_name: function_name.to_string(),
+        receiver: None,
+    };
+    let impl_for =
+        |trait_name: &str,
+         trait_args: Vec<Type>,
+         for_type: Type,
+         methods: Vec<crate::mir::MirMethod>| crate::mir::MirTraitImpl {
+            trait_name: trait_name.to_string(),
+            trait_args,
+            for_type,
+            methods,
+        };
+    let trait_impls = vec![
+        impl_for(
+            "UnitFactory",
+            Vec::new(),
+            Type::Unit,
+            vec![method("build", "UnitFactory.build")],
+        ),
+        impl_for(
+            "OtherFactory",
+            Vec::new(),
+            Type::named("Other"),
+            vec![method("build", "OtherFactory.build")],
+        ),
+        impl_for(
+            "BaseFactory",
+            Vec::new(),
+            Type::named("Point"),
+            vec![method("build", "BaseFactory.build")],
+        ),
+        impl_for(
+            "SpecificFactory",
+            vec![Type::named("int32")],
+            Type::named("Point"),
+            vec![method("build", "SpecificFactory.build")],
+        ),
+        impl_for(
+            "FirstAmbiguousFactory",
+            Vec::new(),
+            Type::named("Point"),
+            vec![method("ambiguous", "FirstAmbiguousFactory.ambiguous")],
+        ),
+        impl_for(
+            "SecondAmbiguousFactory",
+            Vec::new(),
+            Type::named("Point"),
+            vec![method("ambiguous", "SecondAmbiguousFactory.ambiguous")],
+        ),
+        impl_for("EmptyFactory", Vec::new(), Type::named("Point"), Vec::new()),
+    ];
+
+    assert_eq!(
+        super::find_trait_method_for_class_name(&trait_impls, "Point", "build")
+            .map(|method| method.function_name.as_str()),
+        Some("SpecificFactory.build")
+    );
+    assert!(super::find_trait_method_for_class_name(&trait_impls, "Point", "ambiguous").is_none());
+    assert!(super::find_trait_method_for_class_name(&trait_impls, "Point", "missing").is_none());
+    assert!(super::find_trait_method_for_class_name(&trait_impls, "Missing", "build").is_none());
+}
+
+#[test]
 fn native_codegen_constructor_tracks_receiver_and_writeback_types_for_methods_and_top_level() {
     let source = r#"
 class Counter:
@@ -4432,6 +9307,218 @@ fn native_codegen_replace_nested_field_rejects_empty_paths_without_panicking() {
     let error = super::split_field_path_segments(&[])
         .expect_err("empty field paths should surface an internal diagnostic");
     assert!(error.contains("empty field path"));
+}
+
+fn cleanup_test_function(local_name: &str, ty: Type, place: &str) -> MirFunction {
+    MirFunction {
+        name: "main".to_string(),
+        module_name: "<test>".to_string(),
+        span: Span::new(1, 1),
+        receiver: None,
+        params: Vec::new(),
+        local_types: vec![MirLocalType {
+            name: local_name.to_string(),
+            ty,
+        }],
+        return_type: Type::named("int32"),
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: vec![Instruction::PushCleanup {
+                place: place.to_string(),
+            }],
+            terminator: Terminator::Return(Operand::Int(0)),
+        }],
+    }
+}
+
+fn cleanup_test_module(functions: Vec<MirFunction>) -> crate::mir::MirModule {
+    crate::mir::MirModule {
+        functions,
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    }
+}
+
+fn class_field(name: &str, ty: Type) -> crate::mir::MirClassField {
+    crate::mir::MirClassField {
+        name: name.to_string(),
+        ty,
+    }
+}
+
+fn close_method(function_name: &str) -> crate::mir::MirMethod {
+    crate::mir::MirMethod {
+        name: "close".to_string(),
+        function_name: function_name.to_string(),
+        receiver: Some(MirReceiverKind::BorrowMut),
+    }
+}
+
+fn close_function(class_name: &str) -> MirFunction {
+    MirFunction {
+        name: format!("{class_name}.close"),
+        module_name: "<test>".to_string(),
+        span: Span::new(1, 1),
+        receiver: Some(MirReceiverKind::BorrowMut),
+        params: Vec::new(),
+        local_types: vec![MirLocalType {
+            name: "self".to_string(),
+            ty: Type::named(class_name),
+        }],
+        return_type: Type::Unit,
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: Vec::new(),
+            terminator: Terminator::Return(Operand::Unit),
+        }],
+    }
+}
+
+#[test]
+fn native_codegen_cleanup_thunks_cover_scalar_plain_opaque_and_metadata_errors() {
+    let scalar_function = cleanup_test_function("count", Type::named("int32"), "count");
+    let scalar_module = cleanup_test_module(vec![scalar_function.clone()]);
+    let mut scalar_codegen =
+        super::NativeCodegen::new(&scalar_module, "/tmp/direct_scalar_cleanup.au", "")
+            .expect("scalar cleanup test codegen should initialize");
+    scalar_codegen
+        .define_cleanup_thunk(&scalar_function, "count")
+        .expect("scalar cleanup thunks should return unit");
+
+    let mut missing_thunk_codegen =
+        super::NativeCodegen::new(&scalar_module, "/tmp/direct_missing_cleanup.au", "")
+            .expect("missing cleanup test codegen should initialize");
+    missing_thunk_codegen
+        .cleanup_thunks
+        .remove(&("main".to_string(), "count".to_string()));
+    let missing_thunk_error = missing_thunk_codegen
+        .define_cleanup_thunk(&scalar_function, "count")
+        .expect_err("missing cleanup thunk metadata should fail");
+    assert!(missing_thunk_error.contains("could not find cleanup thunk for `count` in `main`"));
+
+    let unknown_field_id = *missing_thunk_codegen
+        .cleanup_thunks
+        .entry(("main".to_string(), "count.missing".to_string()))
+        .or_insert_with(|| {
+            scalar_codegen.cleanup_thunks[&("main".to_string(), "count".to_string())]
+        });
+    missing_thunk_codegen.cleanup_thunks.insert(
+        ("main".to_string(), "count.missing".to_string()),
+        unknown_field_id,
+    );
+    let unknown_field_error = missing_thunk_codegen
+        .define_cleanup_thunk(&scalar_function, "count.missing")
+        .expect_err("unknown cleanup fields should fail before code emission");
+    assert!(unknown_field_error.contains("does not know cleanup field `missing`"));
+
+    let plain_function = cleanup_test_function("resource", Type::named("Plain"), "resource");
+    let plain_module = crate::mir::MirModule {
+        functions: vec![plain_function.clone()],
+        classes: vec![crate::mir::MirClass {
+            name: "Plain".to_string(),
+            type_params: Vec::new(),
+            fields: vec![class_field("value", Type::named("int32"))],
+            methods: Vec::new(),
+        }],
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    let mut plain_codegen =
+        super::NativeCodegen::new(&plain_module, "/tmp/direct_plain_cleanup.au", "")
+            .expect("plain cleanup test codegen should initialize");
+    plain_codegen
+        .define_cleanup_thunk(&plain_function, "resource")
+        .expect("plain-class cleanup without close should return unit");
+
+    let opaque_function = cleanup_test_function("text", Type::named("String"), "text");
+    let opaque_module = cleanup_test_module(vec![opaque_function.clone()]);
+    let mut opaque_codegen =
+        super::NativeCodegen::new(&opaque_module, "/tmp/direct_opaque_cleanup.au", "")
+            .expect("opaque cleanup test codegen should initialize");
+    opaque_codegen
+        .define_cleanup_thunk(&opaque_function, "text")
+        .expect("opaque cleanup without custom close should call runtime close");
+}
+
+#[test]
+fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets() {
+    let plain_close_function =
+        cleanup_test_function("resource", Type::named("Resource"), "resource");
+    let resource_close = close_function("Resource");
+    let plain_close_module = crate::mir::MirModule {
+        functions: vec![plain_close_function.clone(), resource_close],
+        classes: vec![crate::mir::MirClass {
+            name: "Resource".to_string(),
+            type_params: Vec::new(),
+            fields: vec![class_field("closed", Type::named("bool"))],
+            methods: vec![close_method("Resource.close")],
+        }],
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    let mut plain_close_codegen = super::NativeCodegen::new(
+        &plain_close_module,
+        "/tmp/direct_plain_close_cleanup.au",
+        "",
+    )
+    .expect("plain close cleanup codegen should initialize");
+    plain_close_codegen
+        .define_cleanup_thunk(&plain_close_function, "resource")
+        .expect("plain-class cleanup should call a close method when available");
+
+    let mut missing_target_codegen = super::NativeCodegen::new(
+        &plain_close_module,
+        "/tmp/direct_missing_close_cleanup.au",
+        "",
+    )
+    .expect("missing close target codegen should initialize");
+    missing_target_codegen.functions.remove("Resource.close");
+    let missing_target_error = missing_target_codegen
+        .define_cleanup_thunk(&plain_close_function, "resource")
+        .expect_err("missing plain-class close targets should be reported");
+    assert!(missing_target_error.contains("could not find cleanup close method `Resource.close`"));
+
+    let opaque_close_function = cleanup_test_function("managed", Type::named("Managed"), "managed");
+    let managed_close = close_function("Managed");
+    let opaque_close_module = crate::mir::MirModule {
+        functions: vec![opaque_close_function.clone(), managed_close],
+        classes: vec![crate::mir::MirClass {
+            name: "Managed".to_string(),
+            type_params: Vec::new(),
+            fields: vec![class_field("handle", Type::named("String"))],
+            methods: vec![close_method("Managed.close")],
+        }],
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    let mut opaque_close_codegen = super::NativeCodegen::new(
+        &opaque_close_module,
+        "/tmp/direct_opaque_close_cleanup.au",
+        "",
+    )
+    .expect("opaque close cleanup codegen should initialize");
+    opaque_close_codegen
+        .define_cleanup_thunk(&opaque_close_function, "managed")
+        .expect("opaque cleanup should call a custom close method when available");
+
+    let mut missing_opaque_target_codegen = super::NativeCodegen::new(
+        &opaque_close_module,
+        "/tmp/direct_missing_opaque_close.au",
+        "",
+    )
+    .expect("missing opaque close target codegen should initialize");
+    missing_opaque_target_codegen
+        .functions
+        .remove("Managed.close");
+    let missing_opaque_target_error = missing_opaque_target_codegen
+        .define_cleanup_thunk(&opaque_close_function, "managed")
+        .expect_err("missing opaque close targets should be reported");
+    assert!(
+        missing_opaque_target_error.contains("could not find cleanup close method `Managed.close`")
+    );
 }
 
 #[test]

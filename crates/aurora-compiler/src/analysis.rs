@@ -363,7 +363,7 @@ impl<'a> AnalysisBuilder<'a> {
                 }
                 _ => None,
             })
-            .last()
+            .next_back()
     }
 
     fn enclosing_method(&self, line: usize) -> Option<(&str, &FunctionDecl, &MethodInfo)> {
@@ -386,10 +386,10 @@ impl<'a> AnalysisBuilder<'a> {
                                 .unwrap(),
                         )
                     })
-                    .last(),
+                    .next_back(),
                 _ => None,
             })
-            .last()
+            .next_back()
     }
 
     fn accumulate_scope_from_stmts(
@@ -937,42 +937,34 @@ impl<'a> AnalysisBuilder<'a> {
         variant: &VariantPattern,
     ) -> Option<ResolvedSymbol> {
         if let Some(ty) = scrutinee_type {
-            match (base_type_name(ty), variant.variant_name.as_str()) {
-                ("Option", "Some") => {
-                    return Some(ResolvedSymbol {
-                        hover: format_variant_hover("Option", "Some", ty.type_arguments().first()),
-                        definition: None,
-                    })
-                }
-                ("Option", "None") => {
-                    return Some(ResolvedSymbol {
-                        hover: format_variant_hover("Option", "None", None),
-                        definition: None,
-                    })
-                }
-                ("Result", "Ok") => {
-                    return Some(ResolvedSymbol {
-                        hover: format_variant_hover("Result", "Ok", ty.type_arguments().first()),
-                        definition: None,
-                    })
-                }
-                ("Result", "Err") => {
-                    return Some(ResolvedSymbol {
-                        hover: format_variant_hover("Result", "Err", ty.type_arguments().get(1)),
-                        definition: None,
-                    })
-                }
-                ("SendError", "Closed" | "Cancelled") => {
-                    return Some(ResolvedSymbol {
-                        hover: format_variant_hover(
-                            "SendError",
-                            variant.variant_name.as_str(),
-                            ty.type_arguments().first(),
-                        ),
-                        definition: None,
-                    })
-                }
-                _ => {}
+            if let Some(resolved) = match (base_type_name(ty), variant.variant_name.as_str()) {
+                ("Option", "Some") => Some(ResolvedSymbol {
+                    hover: format_variant_hover("Option", "Some", ty.type_arguments().first()),
+                    definition: None,
+                }),
+                ("Option", "None") => Some(ResolvedSymbol {
+                    hover: format_variant_hover("Option", "None", None),
+                    definition: None,
+                }),
+                ("Result", "Ok") => Some(ResolvedSymbol {
+                    hover: format_variant_hover("Result", "Ok", ty.type_arguments().first()),
+                    definition: None,
+                }),
+                ("Result", "Err") => Some(ResolvedSymbol {
+                    hover: format_variant_hover("Result", "Err", ty.type_arguments().get(1)),
+                    definition: None,
+                }),
+                ("SendError", "Closed" | "Cancelled") => Some(ResolvedSymbol {
+                    hover: format_variant_hover(
+                        "SendError",
+                        variant.variant_name.as_str(),
+                        ty.type_arguments().first(),
+                    ),
+                    definition: None,
+                }),
+                _ => None,
+            } {
+                return Some(resolved);
             }
         }
 
@@ -2085,22 +2077,6 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         match base_name {
-            "TaskGroup" if field == "start" => Some(ResolvedMember {
-                hover: builtin_function_hover(
-                    &format!("{}(function, ...) -> Task[T]", field),
-                    "Starts a child task in the current task group.",
-                ),
-                definition: None,
-                ty: Some(Type::Named("Task".to_string(), vec![Type::Unit])),
-            }),
-            "TaskGroup" if field == "start_soon" => Some(ResolvedMember {
-                hover: builtin_function_hover(
-                    "start_soon(function, ...) -> None",
-                    "Starts a child task in the current task group without returning a task handle.",
-                ),
-                definition: None,
-                ty: Some(Type::Unit),
-            }),
             "Option" if field == "Some" => Some(ResolvedMember {
                 hover: format_variant_hover("Option", "Some", Some(&Type::named("T"))),
                 definition: None,
@@ -2355,7 +2331,7 @@ impl<'a> AnalysisBuilder<'a> {
                 if self.program.classes.contains_key(name) {
                     return Some(Type::named(name));
                 }
-                return match BuiltinFunction::from_name(name)? {
+                match BuiltinFunction::from_name(name)? {
                     BuiltinFunction::Abs | BuiltinFunction::Min | BuiltinFunction::Max => args
                         .first()
                         .and_then(|arg| self.infer_expr_type(&arg.value, scope)),
@@ -2405,7 +2381,7 @@ impl<'a> AnalysisBuilder<'a> {
                         }
                     }),
                     _ => builtin_function_return_type(name),
-                };
+                }
             }
             ExprKind::Member { object, field } => {
                 if let ExprKind::Name(enum_name) = &object.kind {
@@ -3564,15 +3540,25 @@ fn recover_checked_program_after_member_errors<F>(
 where
     F: FnMut(&str) -> Result<Program>,
 {
+    recover_checked_program_after_member_errors_with(
+        source,
+        check_program,
+        replace_dangling_member_stmt_with_recovery_stmt,
+    )
+}
+
+fn recover_checked_program_after_member_errors_with(
+    source: &str,
+    check_program: &mut dyn FnMut(&str) -> Result<Program>,
+    replace_member_stmt: fn(&str, usize) -> String,
+) -> Option<Program> {
     let mut candidate = source.to_string();
     for _ in 0..8 {
         match parser::parse(&candidate) {
             Ok(_) => return check_program(&candidate).ok(),
             Err(error) if error.message.starts_with("expected member name") => {
-                let Some(line) = error.span.map(|span| span.line.saturating_sub(1)) else {
-                    return None;
-                };
-                let next = replace_dangling_member_stmt_with_recovery_stmt(&candidate, line);
+                let line = error.span.map(|span| span.line.saturating_sub(1))?;
+                let next = replace_member_stmt(&candidate, line);
                 if next == candidate {
                     return None;
                 }
@@ -3662,24 +3648,8 @@ fn placeholder_stmt_for_return_type(return_type: &str) -> Option<String> {
         "float32" | "float64" => Some("return 0.0".to_string()),
         "String" | "str" => Some("return \"\"".to_string()),
         "Duration" => Some("return 0ms".to_string()),
-        ty if matches!(
-            ty,
-            "int8"
-                | "int16"
-                | "int32"
-                | "int64"
-                | "int128"
-                | "intsize"
-                | "uint8"
-                | "uint16"
-                | "uint32"
-                | "uint64"
-                | "uint128"
-                | "uintsize"
-        ) =>
-        {
-            Some("return 0".to_string())
-        }
+        "int8" | "int16" | "int32" | "int64" | "int128" | "intsize" | "uint8" | "uint16"
+        | "uint32" | "uint64" | "uint128" | "uintsize" => Some("return 0".to_string()),
         ty if ty.starts_with("Option[") => Some("return Option.None".to_string()),
         _ => None,
     }

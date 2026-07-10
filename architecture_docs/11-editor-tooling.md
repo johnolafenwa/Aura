@@ -36,7 +36,8 @@ Aurora deliberately keeps the VS Code extension thin and pushes semantic work do
 [`tools/aurora-language-server/src/server.js`](../tools/aurora-language-server/src/server.js):
 
 - manages documents and cached document state
-- invalidates and revalidates the open-document compiler cache when imported files change
+- debounces edits and guards asynchronous results by document version
+- invalidates only changed documents and their dependency consumers
 - handles LSP requests
 - requests compiler-backed analysis when possible
 - falls back when compiler analysis is unavailable
@@ -46,18 +47,20 @@ Aurora deliberately keeps the VS Code extension thin and pushes semantic work do
 [`tools/aurora-language-server/src/compiler_bridge.js`](../tools/aurora-language-server/src/compiler_bridge.js):
 
 - locates the best `aura` command for the workspace
-- runs `aura analyze --stdin ...`
-- runs `aura complete --stdin ...`
+- owns one persistent `aura lsp` process
+- multiplexes newline-delimited JSON analysis and completion requests
+- enforces cancellation, request timeouts, response limits, and process restart after failure
 - normalizes `file://` URIs through the shared helper in [`src/uri.js`](../tools/aurora-language-server/src/uri.js), including Windows UNC paths
 - converts compiler output into LSP-shaped data
 
-### Fallback analysis
+### Lexical recovery
 
-[`tools/aurora-language-server/src/analysis.js`](../tools/aurora-language-server/src/analysis.js):
+[`tools/aurora-language-server/src/recovery.js`](../tools/aurora-language-server/src/recovery.js):
 
-- provides lightweight document parsing/symbol logic
-- handles basic completions, hover, definitions, and diagnostics
-- is used when the compiler path cannot provide results
+- recovers declaration outlines and top-level names
+- provides same-file hover/definition for those recovered declarations
+- intentionally provides no semantic diagnostics or member type inference
+- is used only when the compiler service cannot be started or has failed
 
 ## Preferred path vs fallback path
 
@@ -67,14 +70,15 @@ flowchart TD
     B --> C["compiler_bridge.js"]
     C --> D{"compiler result available?"}
     D -- yes --> E["Return compiler-backed result"]
-    D -- no --> F["Use analysis.js fallback"]
-    F --> G["Return lightweight result"]
+    D -- no --> F["Use recovery.js lexical recovery"]
+    F --> G["Return non-semantic recovery result"]
 ```
 
 This split is important:
 
 - the compiler is the canonical semantic engine
-- the fallback path keeps the editor usable in broken or incomplete buffers
+- compiler recovery handles ordinary incomplete buffers
+- the lexical path keeps basic navigation available when the compiler process itself is unavailable without maintaining a second Aurora type system
 
 ## Why Aurora uses compiler-backed analysis
 
@@ -124,7 +128,7 @@ Here is the core pattern in plain terms:
 editor request
     -> language server
         -> compiler-backed query when available
-        -> lightweight fallback if needed
+        -> lexical compiler-unavailable recovery if needed
         -> convert result into editor protocol objects
 ```
 
@@ -134,7 +138,7 @@ Aurora follows exactly that pattern.
 
 - [`tools/aurora-language-server/src/server.js`](../tools/aurora-language-server/src/server.js)
 - [`tools/aurora-language-server/src/compiler_bridge.js`](../tools/aurora-language-server/src/compiler_bridge.js)
-- [`tools/aurora-language-server/src/analysis.js`](../tools/aurora-language-server/src/analysis.js)
+- [`tools/aurora-language-server/src/recovery.js`](../tools/aurora-language-server/src/recovery.js)
 - [`tools/vscode-aurora/src/extension.js`](../tools/vscode-aurora/src/extension.js)
 - [`tools/vscode-aurora/src/indentation.js`](../tools/vscode-aurora/src/indentation.js)
 

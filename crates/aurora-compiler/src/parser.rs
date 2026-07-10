@@ -11,6 +11,9 @@ use crate::integer::IntegerValue;
 use crate::lexer::{lex, Token, TokenKind};
 use crate::limits::RECURSION_LIMIT;
 
+type TypeParamBounds = std::collections::BTreeMap<String, Vec<TypeRef>>;
+type ParsedTypeParams = (Vec<String>, TypeParamBounds);
+
 pub fn parse(source: &str) -> Result<Module> {
     let tokens = lex(source)?;
     Parser::new(tokens).parse_module()
@@ -498,15 +501,9 @@ impl Parser {
         Ok((passing, borrow_source, return_type))
     }
 
-    fn parse_optional_type_params(
-        &mut self,
-        allow_bounds: bool,
-    ) -> Result<(
-        Vec<String>,
-        std::collections::BTreeMap<String, Vec<TypeRef>>,
-    )> {
+    fn parse_optional_type_params(&mut self, allow_bounds: bool) -> Result<ParsedTypeParams> {
         let mut type_params = Vec::new();
-        let mut bounds = std::collections::BTreeMap::new();
+        let mut bounds = TypeParamBounds::new();
         if self.eat_simple(&TokenKind::LBracket).is_none() {
             return Ok((type_params, bounds));
         }
@@ -908,14 +905,15 @@ impl Parser {
                 let kind = match self.current_kind().clone() {
                     TokenKind::IntLiteral(value) => {
                         self.bump();
-                        let negative = IntegerValue::from_literal(value)
-                            .checked_neg()
-                            .ok_or_else(|| {
-                                Diagnostic::at(
+                        let negative = match IntegerValue::from_literal(value).checked_neg() {
+                            Some(value) => value,
+                            None => {
+                                return Err(Diagnostic::at(
                                     minus.span,
                                     "negative integer literal in pattern is outside the supported range",
-                                )
-                            })?;
+                                ));
+                            }
+                        };
                         LiteralPatternKind::Int(negative)
                     }
                     TokenKind::FloatLiteral(value) => {
@@ -1804,9 +1802,7 @@ impl Parser {
     }
 
     fn parse_optional_borrow_mode(&mut self) -> Option<ReceiverKind> {
-        if self.eat_simple(&TokenKind::KwBorrow).is_none() {
-            return None;
-        }
+        self.eat_simple(&TokenKind::KwBorrow)?;
         if self.eat_simple(&TokenKind::KwMut).is_some() {
             Some(ReceiverKind::BorrowMut)
         } else {
@@ -1944,13 +1940,16 @@ impl Parser {
                     "f-string interpolation cannot be empty",
                 ));
             }
-            let mut expr = parse_expression_with_recursion_depth(expr_text, self.recursion_depth)
-                .map_err(|error| {
-                Diagnostic::at(
-                    span,
-                    format!("invalid f-string interpolation `{}`: {}", expr_text, error),
-                )
-            })?;
+            let mut expr =
+                match parse_expression_with_recursion_depth(expr_text, self.recursion_depth) {
+                    Ok(expr) => expr,
+                    Err(error) => {
+                        return Err(Diagnostic::at(
+                            span,
+                            format!("invalid f-string interpolation `{}`: {}", expr_text, error),
+                        ))
+                    }
+                };
             let column_offset = span.column + expr_start + leading_ws + 1;
             offset_expr_span(&mut expr, span.line, column_offset);
             parts.push(FormatPart::Expr(expr));

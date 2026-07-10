@@ -274,6 +274,16 @@ edition = "2026"
         !temp.path.join("app/Aurora.lock").exists(),
         "workspace members should not each write their own lockfile"
     );
+    let lockfile_source =
+        fs::read_to_string(workspace_lockfile).expect("workspace lockfile should be readable");
+    assert!(
+        lockfile_source.contains("name = \"app\""),
+        "workspace lockfile should record the app member package"
+    );
+    assert!(
+        lockfile_source.contains("name = \"util\""),
+        "workspace lockfile should record the util member package"
+    );
 }
 
 #[test]

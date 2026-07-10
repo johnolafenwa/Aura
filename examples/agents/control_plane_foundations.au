@@ -1,0 +1,28 @@
+import json
+import log
+import metrics
+import path
+import toml
+import trace
+
+def main() -> int32:
+    metadata: Map[String, String] = {"service": "router", "model": "small"}
+    print(path.join("artifacts", "manifest.json"))
+    match json.stringify_map(metadata.clone()):
+        case Result.Ok(text):
+            print(text)
+        case Result.Err(error):
+            print(error)
+            return 1
+    match toml.stringify_map(metadata.clone()):
+        case Result.Ok(text):
+            print(toml.is_valid(text))
+        case Result.Err(error):
+            print(error)
+            return 1
+    metrics.reset()
+    metrics.increment("requests", 1)
+    print(metrics.get("requests"))
+    log.info("router ready", metadata.clone())
+    trace.event("startup", metadata)
+    return 0

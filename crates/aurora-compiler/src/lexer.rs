@@ -569,21 +569,15 @@ fn tokenize_line(
                 let text = &content[chars[start].0..end_offset];
 
                 if is_float {
-                    let value = match text.parse::<f64>() {
-                        Ok(value) if value.is_finite() => value,
-                        Ok(_) => {
-                            return Err(Diagnostic::at(
-                                Span::new(line_no, column),
-                                "floating-point literal is out of range",
-                            ));
-                        }
-                        Err(_) => {
-                            return Err(Diagnostic::at(
-                                Span::new(line_no, column),
-                                "invalid floating-point literal",
-                            ));
-                        }
-                    };
+                    let value = text
+                        .parse::<f64>()
+                        .expect("lexer should only build syntactically valid float literals");
+                    if !value.is_finite() {
+                        return Err(Diagnostic::at(
+                            Span::new(line_no, column),
+                            "floating-point literal is out of range",
+                        ));
+                    }
                     tokens.push(Token {
                         kind: TokenKind::FloatLiteral(value),
                         span: Span::new(line_no, column),

@@ -26,9 +26,9 @@ use corosensei::{Coroutine, CoroutineResult, Yielder};
 use httparse::{
     Request as HttpParseRequest, Response as HttpParseResponse, Status as HttpParseStatus,
 };
-use rustls::pki_types::{CertificateDer, ServerName};
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection};
-use rustls_pemfile::{certs, private_key};
 use tungstenite::protocol::WebSocketConfig;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{
@@ -46,6 +46,18 @@ use std::os::unix::process::CommandExt;
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::{IntegerBounds, IntegerValue};
 use crate::sema::Type;
+
+type HttpHeaders = Vec<(String, String)>;
+type HttpRequestHead = (usize, String, String, HttpHeaders, HttpBodyFraming);
+type HttpResponseHead = (usize, i32, String, HttpHeaders, HttpBodyFraming);
+type HttpRequestParts = (String, String, HttpHeaders, Vec<u8>);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HttpBodyFraming {
+    ContentLength(usize),
+    Chunked,
+    UntilClose,
+}
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -307,8 +319,8 @@ struct WebSocketListenerState {
 }
 
 enum WebSocketStateKind {
-    Plain(WebSocket<StdTcpStream>),
-    MaybeTls(WebSocket<MaybeTlsStream<StdTcpStream>>),
+    Plain(Box<WebSocket<StdTcpStream>>),
+    MaybeTls(Box<WebSocket<MaybeTlsStream<StdTcpStream>>>),
 }
 
 struct WebSocketState {
@@ -458,7 +470,6 @@ pub(crate) struct CancellationContext {
 
 enum TaskYield {
     Wait(TaskWaitRegistration),
-    Park,
     YieldNow,
     Exit,
 }
@@ -647,7 +658,7 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
                 _ => Err(render_target_error(
                     span,
                     format!(
-                        "casts are only supported between numeric types, found `float64` and `{}`",
+                        "casts are only supported between numeric types, found `integer` and `{}`",
                         target
                     ),
                 )),
@@ -952,15 +963,17 @@ impl PartialEq for TlsStreamValue {
 }
 
 fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 fn wait_condvar<'a, T>(condvar: &Condvar, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
-    condvar
-        .wait(guard)
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    match condvar.wait(guard) {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 fn wait_timeout_condvar<'a, T>(
@@ -968,9 +981,10 @@ fn wait_timeout_condvar<'a, T>(
     guard: MutexGuard<'a, T>,
     timeout: StdDuration,
 ) -> (MutexGuard<'a, T>, bool) {
-    let (guard, timeout_result) = condvar
-        .wait_timeout(guard, timeout)
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (guard, timeout_result) = match condvar.wait_timeout(guard, timeout) {
+        Ok(result) => result,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     (guard, timeout_result.timed_out())
 }
 
@@ -1068,7 +1082,9 @@ impl RuntimeScheduler {
     }
 
     fn notify(&self) {
+        let state = lock_mutex(&self.state);
         self.ready.notify_all();
+        drop(state);
     }
 
     fn run(self: Arc<Self>) {
@@ -1329,10 +1345,6 @@ pub(crate) fn current_lightweight_task_id() -> Option<u64> {
 #[derive(Debug)]
 pub(crate) struct TaskCancelledSignal;
 
-pub(crate) fn cancel_current_lightweight_task() -> ! {
-    panic::panic_any(TaskCancelledSignal);
-}
-
 fn task_panic_message(payload: &(dyn Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<String>() {
         message.clone()
@@ -1434,10 +1446,6 @@ fn yield_current_lightweight_wait(
     wait: TaskWaitRegistration,
 ) -> Option<RuntimeSchedulerWakeReason> {
     yield_current_lightweight_task(TaskYield::Wait(wait))
-}
-
-fn park_current_lightweight_task() -> Option<RuntimeSchedulerWakeReason> {
-    yield_current_lightweight_task(TaskYield::Park)
 }
 
 fn yield_now_current_lightweight_task() -> Option<RuntimeSchedulerWakeReason> {
@@ -1597,9 +1605,6 @@ impl LightweightTaskScheduler {
                     self.waiting.insert(task_id, wait);
                 }
             }
-            CoroutineResult::Yield(TaskYield::Park) => {
-                self.tasks.insert(task_id, record);
-            }
             CoroutineResult::Yield(TaskYield::YieldNow) => {
                 self.tasks.insert(task_id, record);
                 self.ready
@@ -1714,7 +1719,7 @@ impl LightweightTaskScheduler {
         }
 
         let mut fd_ready = BTreeMap::new();
-        for (task_id, descriptor) in task_ids.into_iter().zip(descriptors.into_iter()) {
+        for (task_id, descriptor) in task_ids.into_iter().zip(descriptors) {
             if descriptor.revents != 0 {
                 fd_ready.insert(task_id, true);
             }
@@ -2126,10 +2131,21 @@ pub(crate) enum TrySendResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SendValueError {
-    Closed(Value),
-    Cancelled(Value),
-    TimedOut(Value),
-    Full(Value),
+    Closed(Box<Value>),
+    Cancelled(Box<Value>),
+    TimedOut(Box<Value>),
+    Full(Box<Value>),
+}
+
+impl SendValueError {
+    fn into_value(self) -> Box<Value> {
+        match self {
+            Self::Closed(value)
+            | Self::Cancelled(value)
+            | Self::TimedOut(value)
+            | Self::Full(value) => value,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2222,10 +2238,7 @@ impl ChannelValue {
     pub(crate) fn send(&self, value: Value) -> std::result::Result<(), Value> {
         match self.send_with_cancellation(value, None) {
             Ok(()) => Ok(()),
-            Err(SendValueError::Closed(value))
-            | Err(SendValueError::Cancelled(value))
-            | Err(SendValueError::TimedOut(value))
-            | Err(SendValueError::Full(value)) => Err(value),
+            Err(error) => Err(*error.into_value()),
         }
     }
 
@@ -2240,8 +2253,8 @@ impl ChannelValue {
     pub(crate) fn try_send_result(&self, value: Value) -> std::result::Result<(), SendValueError> {
         match self.try_send(value) {
             TrySendResult::Sent => Ok(()),
-            TrySendResult::Closed(value) => Err(SendValueError::Closed(value)),
-            TrySendResult::Full(value) => Err(SendValueError::Full(value)),
+            TrySendResult::Closed(value) => Err(SendValueError::Closed(Box::new(value))),
+            TrySendResult::Full(value) => Err(SendValueError::Full(Box::new(value))),
         }
     }
 
@@ -2264,9 +2277,11 @@ impl ChannelValue {
         loop {
             value = match self.try_send(value) {
                 TrySendResult::Sent => return Ok(()),
-                TrySendResult::Closed(value) => return Err(SendValueError::Closed(value)),
+                TrySendResult::Closed(value) => {
+                    return Err(SendValueError::Closed(Box::new(value)))
+                }
                 TrySendResult::Full(value) if fail_on_full => {
-                    return Err(SendValueError::Full(value));
+                    return Err(SendValueError::Full(Box::new(value)));
                 }
                 TrySendResult::Full(value) => value,
             };
@@ -2281,10 +2296,10 @@ impl ChannelValue {
             ) {
                 RuntimeSchedulerWakeReason::Ready => {}
                 RuntimeSchedulerWakeReason::TimedOut => {
-                    return Err(SendValueError::TimedOut(value));
+                    return Err(SendValueError::TimedOut(Box::new(value)));
                 }
                 RuntimeSchedulerWakeReason::Cancelled => {
-                    return Err(SendValueError::Cancelled(value));
+                    return Err(SendValueError::Cancelled(Box::new(value)));
                 }
             }
         }
@@ -3125,30 +3140,23 @@ where
     )
 }
 
-fn read_pem_file_limited(
-    path: &str,
-    label: &str,
-) -> io::Result<io::BufReader<io::Cursor<Vec<u8>>>> {
-    Ok(io::BufReader::new(io::Cursor::new(read_file_limited(
-        path, label,
-    )?)))
-}
-
 fn load_tls_server_config(
     cert_pem_path: &str,
     key_pem_path: &str,
 ) -> io::Result<Arc<ServerConfig>> {
     ensure_rustls_crypto_provider();
-    let mut cert_reader = read_pem_file_limited(cert_pem_path, "TLS certificate PEM")?;
-    let cert_chain = certs(&mut cert_reader)
-        .collect::<std::result::Result<Vec<CertificateDer<'static>>, _>>()?;
-    let mut key_reader = read_pem_file_limited(key_pem_path, "TLS private key PEM")?;
-    let Some(private_key) = private_key(&mut key_reader)? else {
+    let cert_pem = read_file_limited(cert_pem_path, "TLS certificate PEM")?;
+    let cert_chain = CertificateDer::pem_slice_iter(&cert_pem)
+        .collect::<std::result::Result<Vec<CertificateDer<'static>>, _>>()
+        .map_err(io::Error::other)?;
+    let key_pem = read_file_limited(key_pem_path, "TLS private key PEM")?;
+    let Some(private_key) = PrivateKeyDer::pem_slice_iter(&key_pem).next() else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "TLS private key PEM did not contain a key",
         ));
     };
+    let private_key = private_key.map_err(io::Error::other)?;
     let config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(cert_chain, private_key)
@@ -3161,9 +3169,9 @@ fn load_tls_root_store(ca_pem_path: Option<&str>) -> io::Result<RootCertStore> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if let Some(ca_pem_path) = ca_pem_path.filter(|path| !path.is_empty()) {
-        let mut reader = read_pem_file_limited(ca_pem_path, "TLS CA PEM")?;
-        for certificate in certs(&mut reader) {
-            let certificate = certificate?;
+        let pem = read_file_limited(ca_pem_path, "TLS CA PEM")?;
+        for certificate in CertificateDer::pem_slice_iter(&pem) {
+            let certificate = certificate.map_err(io::Error::other)?;
             roots.add(certificate).map_err(io::Error::other)?;
         }
     }
@@ -3278,6 +3286,7 @@ fn parse_http_headers(headers: &[httparse::Header<'_>]) -> io::Result<Vec<(Strin
         .collect()
 }
 
+#[cfg(test)]
 fn parse_http_content_length(headers: &[(String, String)]) -> io::Result<Option<usize>> {
     let mut content_length = None;
     for (name, value) in headers {
@@ -3310,6 +3319,59 @@ fn parse_http_content_length(headers: &[(String, String)]) -> io::Result<Option<
     Ok(content_length)
 }
 
+fn parse_http_body_framing(
+    headers: &[(String, String)],
+    default: HttpBodyFraming,
+) -> io::Result<HttpBodyFraming> {
+    let content_length = headers
+        .iter()
+        .filter(|(name, _)| http_header_name_eq(name, "Content-Length"))
+        .try_fold(None, |current, (_, value)| {
+            let parsed = value.parse::<usize>().map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid HTTP content length `{value}`: {error}"),
+                )
+            })?;
+            match current {
+                Some(existing) if existing != parsed => Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "conflicting HTTP content-length headers",
+                )),
+                Some(existing) => Ok(Some(existing)),
+                None => Ok(Some(parsed)),
+            }
+        })?;
+    let transfer_codings = headers
+        .iter()
+        .filter(|(name, _)| http_header_name_eq(name, "Transfer-Encoding"))
+        .flat_map(|(_, value)| value.split(','))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty() && value != "identity")
+        .collect::<Vec<_>>();
+    if transfer_codings.is_empty() {
+        return Ok(content_length
+            .map(HttpBodyFraming::ContentLength)
+            .unwrap_or(default));
+    }
+    if transfer_codings.as_slice() == ["chunked"] {
+        if content_length.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "HTTP message cannot combine transfer-encoding chunked with content-length",
+            ));
+        }
+        return Ok(HttpBodyFraming::Chunked);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "unsupported HTTP transfer-encoding `{}`",
+            transfer_codings.join(", ")
+        ),
+    ))
+}
+
 fn push_http_chunk(buffer: &mut Vec<u8>, chunk: &[u8]) -> io::Result<()> {
     if buffer.len().saturating_add(chunk.len()) > MAX_HTTP_MESSAGE_BYTES {
         return Err(http_message_too_large_error());
@@ -3318,9 +3380,72 @@ fn push_http_chunk(buffer: &mut Vec<u8>, chunk: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-fn parse_http_request_head(
-    buffer: &[u8],
-) -> io::Result<Option<(usize, String, String, Vec<(String, String)>, usize)>> {
+fn find_http_crlf(bytes: &[u8], start: usize) -> Option<usize> {
+    bytes
+        .get(start..)?
+        .windows(2)
+        .position(|window| window == b"\r\n")
+        .map(|offset| start + offset)
+}
+
+fn try_decode_chunked_http_body(buffer: &[u8], start: usize) -> io::Result<Option<Vec<u8>>> {
+    let mut cursor = start;
+    let mut body = Vec::new();
+    loop {
+        let Some(line_end) = find_http_crlf(buffer, cursor) else {
+            return Ok(None);
+        };
+        let line = std::str::from_utf8(&buffer[cursor..line_end]).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid chunk-size line: {error}"),
+            )
+        })?;
+        let size_text = line.split_once(';').map_or(line, |(size, _)| size).trim();
+        let size = usize::from_str_radix(size_text, 16).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid HTTP chunk size `{size_text}`: {error}"),
+            )
+        })?;
+        cursor = line_end + 2;
+        if size == 0 {
+            if buffer.get(cursor..cursor + 2) == Some(b"\r\n") {
+                return Ok(Some(body));
+            }
+            let Some(trailer_end) = buffer
+                .get(cursor..)
+                .and_then(|tail| tail.windows(4).position(|window| window == b"\r\n\r\n"))
+            else {
+                return Ok(None);
+            };
+            let trailer_bytes = &buffer[cursor..cursor + trailer_end];
+            if trailer_bytes.len() > MAX_HTTP_MESSAGE_BYTES {
+                return Err(http_message_too_large_error());
+            }
+            return Ok(Some(body));
+        }
+        if body.len().saturating_add(size) > MAX_HTTP_MESSAGE_BYTES {
+            return Err(http_message_too_large_error());
+        }
+        let Some(chunk_end) = cursor.checked_add(size) else {
+            return Err(http_message_too_large_error());
+        };
+        if buffer.len() < chunk_end.saturating_add(2) {
+            return Ok(None);
+        }
+        if buffer.get(chunk_end..chunk_end + 2) != Some(b"\r\n") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "HTTP chunk data was not followed by CRLF",
+            ));
+        }
+        body.extend_from_slice(&buffer[cursor..chunk_end]);
+        cursor = chunk_end + 2;
+    }
+}
+
+fn parse_http_request_head(buffer: &[u8]) -> io::Result<Option<HttpRequestHead>> {
     let mut raw_headers = [httparse::EMPTY_HEADER; MAX_HTTP_HEADERS];
     let mut request = HttpParseRequest::new(&mut raw_headers);
     match request.parse(buffer).map_err(|error| match error {
@@ -3333,27 +3458,27 @@ fn parse_http_request_head(
         HttpParseStatus::Complete(header_len) => {
             let method = request
                 .method
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, "HTTP request missing method")
-                })?
+                .ok_or(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "HTTP request missing method",
+                ))?
                 .to_string();
             let path = request
                 .path
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, "HTTP request missing path")
-                })?
+                .ok_or(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "HTTP request missing path",
+                ))?
                 .to_string();
             let headers = parse_http_headers(request.headers)?;
-            let content_length = parse_http_content_length(&headers)?.unwrap_or(0);
-            Ok(Some((header_len, method, path, headers, content_length)))
+            let framing = parse_http_body_framing(&headers, HttpBodyFraming::ContentLength(0))?;
+            Ok(Some((header_len, method, path, headers, framing)))
         }
         HttpParseStatus::Partial => Ok(None),
     }
 }
 
-fn parse_http_response_head(
-    buffer: &[u8],
-) -> io::Result<Option<(usize, i32, String, Vec<(String, String)>, Option<usize>)>> {
+fn parse_http_response_head(buffer: &[u8]) -> io::Result<Option<HttpResponseHead>> {
     let mut raw_headers = [httparse::EMPTY_HEADER; MAX_HTTP_HEADERS];
     let mut response = HttpParseResponse::new(&mut raw_headers);
     match response.parse(buffer).map_err(|error| {
@@ -3363,19 +3488,17 @@ fn parse_http_response_head(
         )
     })? {
         HttpParseStatus::Complete(header_len) => {
-            let status = i32::from(response.code.ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "HTTP response missing status code",
-                )
-            })?);
+            let status = i32::from(response.code.ok_or(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "HTTP response missing status code",
+            ))?);
             let reason = response
                 .reason
                 .unwrap_or(http_reason_phrase(status))
                 .to_string();
             let headers = parse_http_headers(response.headers)?;
-            let content_length = parse_http_content_length(&headers)?;
-            Ok(Some((header_len, status, reason, headers, content_length)))
+            let framing = parse_http_body_framing(&headers, HttpBodyFraming::UntilClose)?;
+            Ok(Some((header_len, status, reason, headers, framing)))
         }
         HttpParseStatus::Partial => Ok(None),
     }
@@ -3385,9 +3508,9 @@ fn read_http_request_from_stream(
     stream: &mut StdTcpStream,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
-) -> io::Result<(String, String, Vec<(String, String)>, Vec<u8>)> {
+) -> io::Result<HttpRequestParts> {
     let mut buffer = Vec::new();
-    let (header_len, method, path, headers, content_length) = loop {
+    let (header_len, method, path, headers, framing) = loop {
         if let Some(parsed) = parse_http_request_head(&buffer)? {
             break parsed;
         }
@@ -3400,35 +3523,118 @@ fn read_http_request_from_stream(
         push_http_chunk(&mut buffer, &chunk)?;
     };
 
-    if header_len.saturating_add(content_length) > MAX_HTTP_MESSAGE_BYTES {
-        return Err(http_message_too_large_error());
-    }
-
-    while buffer.len() < header_len.saturating_add(content_length) {
-        let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "stream closed before the HTTP request body was fully received",
-            ));
-        };
-        push_http_chunk(&mut buffer, &chunk)?;
-    }
-
-    let body_end = header_len.saturating_add(content_length);
-    Ok((method, path, headers, buffer[header_len..body_end].to_vec()))
+    let body = match framing {
+        HttpBodyFraming::ContentLength(content_length) => {
+            if header_len.saturating_add(content_length) > MAX_HTTP_MESSAGE_BYTES {
+                return Err(http_message_too_large_error());
+            }
+            while buffer.len() < header_len.saturating_add(content_length) {
+                let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)?
+                else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "stream closed before the HTTP request body was fully received",
+                    ));
+                };
+                push_http_chunk(&mut buffer, &chunk)?;
+            }
+            buffer[header_len..header_len.saturating_add(content_length)].to_vec()
+        }
+        HttpBodyFraming::Chunked => loop {
+            if let Some(body) = try_decode_chunked_http_body(&buffer, header_len)? {
+                break body;
+            }
+            let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "stream closed before the chunked HTTP request body was fully received",
+                ));
+            };
+            push_http_chunk(&mut buffer, &chunk)?;
+        },
+        HttpBodyFraming::UntilClose => unreachable!("requests always have explicit body framing"),
+    };
+    Ok((method, path, headers, body))
 }
 
-fn read_http_response_from_stream(
-    stream: &mut StdTcpStream,
+trait HttpDeadlineReader: Read {
+    fn read_http_some(
+        &mut self,
+        max_bytes: usize,
+        deadline: Option<Instant>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<Option<Vec<u8>>>;
+
+    fn read_http_all(
+        &mut self,
+        deadline: Option<Instant>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<Vec<u8>>;
+}
+
+impl HttpDeadlineReader for StdTcpStream {
+    fn read_http_some(
+        &mut self,
+        max_bytes: usize,
+        deadline: Option<Instant>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<Option<Vec<u8>>> {
+        read_some_with_deadline(self, max_bytes, deadline, cancellation)
+    }
+
+    fn read_http_all(
+        &mut self,
+        deadline: Option<Instant>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<Vec<u8>> {
+        read_all_with_deadline(self, deadline, cancellation)
+    }
+}
+
+#[cfg(unix)]
+impl HttpDeadlineReader for rustls::StreamOwned<ClientConnection, StdTcpStream> {
+    fn read_http_some(
+        &mut self,
+        max_bytes: usize,
+        deadline: Option<Instant>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<Option<Vec<u8>>> {
+        read_some_with_fd_deadline(
+            self,
+            self.sock.as_raw_fd(),
+            max_bytes,
+            libc::POLLIN | libc::POLLOUT,
+            deadline,
+            cancellation,
+        )
+    }
+
+    fn read_http_all(
+        &mut self,
+        deadline: Option<Instant>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<Vec<u8>> {
+        read_all_with_fd_deadline(
+            self,
+            self.sock.as_raw_fd(),
+            libc::POLLIN | libc::POLLOUT,
+            deadline,
+            cancellation,
+        )
+    }
+}
+
+fn read_http_response_from_stream<R: HttpDeadlineReader>(
+    stream: &mut R,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<HttpResponseValue> {
     let mut buffer = Vec::new();
-    let (header_len, status, reason, headers, content_length) = loop {
+    let (header_len, status, reason, headers, framing) = loop {
         if let Some(parsed) = parse_http_response_head(&buffer)? {
             break parsed;
         }
-        let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
+        let Some(chunk) = stream.read_http_some(4096, deadline, cancellation)? else {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "stream closed before a complete HTTP response was received",
@@ -3437,22 +3643,37 @@ fn read_http_response_from_stream(
         push_http_chunk(&mut buffer, &chunk)?;
     };
 
-    let body = if let Some(content_length) = content_length {
-        while buffer.len() < header_len.saturating_add(content_length) {
-            let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
+    let body = match framing {
+        HttpBodyFraming::ContentLength(content_length) => {
+            while buffer.len() < header_len.saturating_add(content_length) {
+                let Some(chunk) = stream.read_http_some(4096, deadline, cancellation)? else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "stream closed before the HTTP response body was fully received",
+                    ));
+                };
+                push_http_chunk(&mut buffer, &chunk)?;
+            }
+            buffer[header_len..header_len.saturating_add(content_length)].to_vec()
+        }
+        HttpBodyFraming::Chunked => loop {
+            if let Some(body) = try_decode_chunked_http_body(&buffer, header_len)? {
+                break body;
+            }
+            let Some(chunk) = stream.read_http_some(4096, deadline, cancellation)? else {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
-                    "stream closed before the HTTP response body was fully received",
+                    "stream closed before the chunked HTTP response body was fully received",
                 ));
             };
             push_http_chunk(&mut buffer, &chunk)?;
+        },
+        HttpBodyFraming::UntilClose => {
+            let mut body = buffer[header_len..].to_vec();
+            let rest = stream.read_http_all(deadline, cancellation)?;
+            push_http_chunk(&mut body, &rest)?;
+            body
         }
-        buffer[header_len..header_len.saturating_add(content_length)].to_vec()
-    } else {
-        let mut body = buffer[header_len..].to_vec();
-        let rest = read_all_with_deadline(stream, deadline, cancellation)?;
-        push_http_chunk(&mut body, &rest)?;
-        body
     };
 
     Ok(parse_http_response(status, reason, headers, body))
@@ -3475,7 +3696,11 @@ fn build_http_request_bytes(
         path.push_str(query);
     }
 
-    let default_port = url.port_or_known_default();
+    let default_port = match url.scheme() {
+        "http" | "ws" => Some(80),
+        "https" | "wss" => Some(443),
+        _ => None,
+    };
     let host = match (url.host(), url.port()) {
         (Some(url::Host::Ipv6(host)), Some(port)) if Some(port) != default_port => {
             format!("[{}]:{}", host, port)
@@ -3658,7 +3883,7 @@ fn accept_websocket_stream(
             return Err(websocket_error_to_io(error));
         }
     };
-    Ok(WebSocketStateKind::Plain(socket))
+    Ok(WebSocketStateKind::Plain(Box::new(socket)))
 }
 
 #[cfg(unix)]
@@ -3679,7 +3904,7 @@ fn connect_websocket_stream(
             return Err(websocket_error_to_io(error));
         }
     };
-    Ok(WebSocketStateKind::MaybeTls(socket))
+    Ok(WebSocketStateKind::MaybeTls(Box::new(socket)))
 }
 
 #[cfg(unix)]
@@ -4193,6 +4418,7 @@ impl ProcessSupervisorValue {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start(
         &self,
         name: String,
@@ -4324,8 +4550,8 @@ impl ProcessSupervisorValue {
         let drained: Vec<ProcessChildValue> = {
             let mut services = lock_mutex(&self.inner.services);
             std::mem::take(&mut *services)
-                .into_iter()
-                .filter_map(|(_, entry)| entry.child)
+                .into_values()
+                .filter_map(|entry| entry.child)
                 .collect::<Vec<_>>()
         };
         for child in drained {
@@ -4372,43 +4598,11 @@ impl ProcessSupervisorValue {
                                 entry.spec.max_restarts,
                             ) {
                                 entry.restart_count += 1;
-                                if entry.spec.backoff.is_zero() {
-                                    match ProcessChildValue::spawn(
-                                        entry.spec.command.clone(),
-                                        entry.spec.cwd.clone(),
-                                        entry.spec.env.clone(),
-                                        entry.spec.stdin,
-                                        entry.spec.stdout,
-                                        entry.spec.stderr,
-                                        entry.spec.group,
-                                    ) {
-                                        Ok(restarted_child) => {
-                                            entry.child = Some(restarted_child);
-                                            Action::Emit(process_supervisor_event_restarted(
-                                                name.clone(),
-                                                status,
-                                                IntegerValue::from_signed(
-                                                    entry.restart_count as i128,
-                                                ),
-                                            ))
-                                        }
-                                        Err(error) => {
-                                            Action::RemoveAndEmit(process_supervisor_event_failed(
-                                                name.clone(),
-                                                process_error_spawn(error.to_string()),
-                                                IntegerValue::from_signed(
-                                                    entry.restart_count as i128,
-                                                ),
-                                            ))
-                                        }
-                                    }
-                                } else {
-                                    entry.child = None;
-                                    entry.pending_restart_status = Some(status);
-                                    entry.next_restart_at =
-                                        now.checked_add(entry.spec.backoff).or(Some(now));
-                                    Action::None
-                                }
+                                entry.child = None;
+                                entry.pending_restart_status = Some(status);
+                                entry.next_restart_at =
+                                    now.checked_add(entry.spec.backoff).or(Some(now));
+                                Action::None
                             } else {
                                 Action::RemoveAndEmit(process_supervisor_event_exited(
                                     name.clone(),
@@ -4425,7 +4619,7 @@ impl ProcessSupervisorValue {
                         )),
                     }
                 } else if let (Some(status), Some(next_restart_at)) =
-                    (entry.pending_restart_status.clone(), entry.next_restart_at)
+                    (entry.pending_restart_status, entry.next_restart_at)
                 {
                     if next_restart_at <= now {
                         match ProcessChildValue::spawn(
@@ -4570,7 +4764,7 @@ impl ProcessChildValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> ProcessChildWaitStatus {
-        if let Some(status) = lock_mutex(&self.inner.waited).clone() {
+        if let Some(status) = *lock_mutex(&self.inner.waited) {
             return ProcessChildWaitStatus::Exited(status);
         }
         let deadline = timeout_deadline(timeout);
@@ -4621,16 +4815,16 @@ impl ProcessChildValue {
     }
 
     fn try_wait_once(&self) -> io::Result<Option<StdExitStatus>> {
-        if let Some(status) = lock_mutex(&self.inner.waited).clone() {
+        if let Some(status) = *lock_mutex(&self.inner.waited) {
             return Ok(Some(status));
         }
         let mut child_slot = lock_mutex(&self.inner.child);
         let Some(child) = child_slot.as_mut() else {
-            return Ok(lock_mutex(&self.inner.waited).clone());
+            return Ok(*lock_mutex(&self.inner.waited));
         };
         match child.try_wait()? {
             Some(status) => {
-                *lock_mutex(&self.inner.waited) = Some(status.clone());
+                *lock_mutex(&self.inner.waited) = Some(status);
                 *child_slot = None;
                 Ok(Some(status))
             }
@@ -4883,12 +5077,8 @@ impl TcpStreamValue {
             }
             last_error
         };
-        Err(last_error.unwrap_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                "failed to connect to any socket address",
-            )
-        }))
+        Err(last_error
+            .unwrap_or_else(|| io::Error::other("failed to connect to any socket address")))
     }
 
     pub(crate) fn read_all(
@@ -5632,33 +5822,6 @@ fn complete_tls_client_handshake(
     Ok(())
 }
 
-#[cfg_attr(unix, allow(dead_code))]
-fn complete_tls_server_handshake(
-    stream: &mut rustls::StreamOwned<ServerConnection, StdTcpStream>,
-    deadline: Option<Instant>,
-    cancellation: Option<&CancellationContext>,
-) -> io::Result<()> {
-    while stream.conn.is_handshaking() {
-        check_deadline_and_cancellation(deadline, cancellation)?;
-        match stream.conn.complete_io(&mut stream.sock) {
-            Ok(_) => {}
-            Err(error) if is_retryable_network_error(&error) => {
-                #[cfg(unix)]
-                wait_for_fd_event(
-                    stream.sock.as_raw_fd(),
-                    libc::POLLIN | libc::POLLOUT,
-                    deadline,
-                    cancellation,
-                )?;
-                #[cfg(not(unix))]
-                return Err(error);
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
-}
-
 fn advance_tls_server_handshake(
     stream: &mut rustls::StreamOwned<ServerConnection, StdTcpStream>,
     deadline: Option<Instant>,
@@ -5808,10 +5971,14 @@ impl TlsStreamValue {
         let mut stream = lock_mutex(&self.inner.stream);
         if let Some(stream) = stream.take() {
             match stream {
-                TlsStreamKind::Client(stream) => {
+                TlsStreamKind::Client(mut stream) => {
+                    stream.conn.send_close_notify();
+                    let _ = stream.conn.complete_io(&mut stream.sock);
                     let _ = stream.sock.shutdown(Shutdown::Both);
                 }
-                TlsStreamKind::Server(stream) => {
+                TlsStreamKind::Server(mut stream) => {
+                    stream.conn.send_close_notify();
+                    let _ = stream.conn.complete_io(&mut stream.sock);
                     let _ = stream.sock.shutdown(Shutdown::Both);
                 }
             }
@@ -6013,6 +6180,27 @@ impl HttpResponseValue {
         Self::request_bytes(method, url, body.as_bytes(), headers, timeout, cancellation)
     }
 
+    #[cfg(test)]
+    pub(crate) fn request_text_with_ca(
+        method: &str,
+        url: &str,
+        body: &str,
+        headers: Vec<(String, String)>,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+        ca_pem_path: &str,
+    ) -> io::Result<Self> {
+        Self::request_bytes_with_ca(
+            method,
+            url,
+            body.as_bytes(),
+            headers,
+            timeout,
+            cancellation,
+            Some(ca_pem_path),
+        )
+    }
+
     pub(crate) fn request_bytes(
         method: &str,
         url: &str,
@@ -6021,17 +6209,29 @@ impl HttpResponseValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Self> {
+        Self::request_bytes_with_ca(method, url, body, headers, timeout, cancellation, None)
+    }
+
+    fn request_bytes_with_ca(
+        method: &str,
+        url: &str,
+        body: &[u8],
+        headers: Vec<(String, String)>,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+        ca_pem_path: Option<&str>,
+    ) -> io::Result<Self> {
         let url = Url::parse(url).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("invalid URL `{}`: {}", url, error),
             )
         })?;
-        if url.scheme() != "http" {
+        if !matches!(url.scheme(), "http" | "https") {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "Aurora HTTP requests currently require `http://` URLs, found `{}`",
+                    "Aurora HTTP requests require `http://` or `https://` URLs, found `{}`",
                     url
                 ),
             ));
@@ -6054,18 +6254,54 @@ impl HttpResponseValue {
             }
         };
         let request = build_http_request_bytes(method, &url, body, headers)?;
-        let stream = TcpStreamValue::connect(&host, timeout, cancellation)?;
         let deadline = deadline_from_timeout(timeout);
-        let response = {
-            let mut raw_stream = lock_mutex(&stream.inner.stream);
-            let Some(raw_stream) = raw_stream.as_mut() else {
-                return Err(closed_resource_error());
+        if url.scheme() == "http" {
+            let stream = TcpStreamValue::connect(&host, timeout, cancellation)?;
+            let response = {
+                let mut raw_stream = lock_mutex(&stream.inner.stream);
+                let Some(raw_stream) = raw_stream.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                write_all_with_deadline(raw_stream, &request, deadline, cancellation)?;
+                read_http_response_from_stream(raw_stream, deadline, cancellation)?
             };
-            write_all_with_deadline(raw_stream, &request, deadline, cancellation)?;
-            read_http_response_from_stream(raw_stream, deadline, cancellation)?
-        };
-        stream.close();
-        Ok(response)
+            stream.close();
+            return Ok(response);
+        }
+
+        #[cfg(unix)]
+        {
+            let server_name = url.host_str().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "HTTPS URL is missing a host")
+            })?;
+            let stream =
+                TlsStreamValue::connect(&host, server_name, ca_pem_path, timeout, cancellation)?;
+            let response = {
+                let mut stream = lock_mutex(&stream.inner.stream);
+                let Some(TlsStreamKind::Client(stream)) = stream.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                write_all_with_fd_deadline(
+                    stream,
+                    stream.sock.as_raw_fd(),
+                    &request,
+                    libc::POLLIN | libc::POLLOUT,
+                    deadline,
+                    cancellation,
+                )?;
+                read_http_response_from_stream(stream, deadline, cancellation)?
+            };
+            stream.close();
+            Ok(response)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (ca_pem_path, deadline);
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "HTTPS requests are supported on Aurora's Unix preview platforms",
+            ))
+        }
     }
 
     pub(crate) fn status(&self) -> i32 {
@@ -6131,7 +6367,7 @@ impl WebSocketListenerValue {
                                     return Err(websocket_error_to_io(error));
                                 }
                             };
-                        WebSocketStateKind::Plain(socket)
+                        WebSocketStateKind::Plain(Box::new(socket))
                     };
                     #[cfg(unix)]
                     websocket_set_nonblocking(&mut state, true)?;
@@ -6198,17 +6434,17 @@ impl WebSocketValue {
                 cancellation.as_ref(),
             )?;
             websocket_set_nonblocking(&mut state, true)?;
-            return Ok(Self {
+            Ok(Self {
                 inner: Arc::new(WebSocketState {
                     socket: Mutex::new(Some(state)),
                 }),
-            });
+            })
         }
 
         #[cfg(not(unix))]
         {
             let (socket, _) = tungstenite::connect(url).map_err(websocket_error_to_io)?;
-            let state = WebSocketStateKind::MaybeTls(socket);
+            let state = WebSocketStateKind::MaybeTls(Box::new(socket));
             let _ = timeout;
             Ok(Self {
                 inner: Arc::new(WebSocketState {
@@ -6221,7 +6457,7 @@ impl WebSocketValue {
     pub(crate) fn send_text(&self, text: &str, timeout: Option<StdDuration>) -> io::Result<()> {
         let mut socket = lock_mutex(&self.inner.socket);
         let deadline = deadline_from_timeout(timeout);
-        let mut message = Message::Text(text.to_string().into());
+        let mut message = Message::Text(text.to_string());
         match socket.as_mut() {
             Some(socket) => loop {
                 let result = match socket {
@@ -6266,7 +6502,7 @@ impl WebSocketValue {
     pub(crate) fn send_bytes(&self, bytes: &[u8], timeout: Option<StdDuration>) -> io::Result<()> {
         let mut socket = lock_mutex(&self.inner.socket);
         let deadline = deadline_from_timeout(timeout);
-        let mut message = Message::Binary(bytes.to_vec().into());
+        let mut message = Message::Binary(bytes.to_vec());
         match socket.as_mut() {
             Some(socket) => loop {
                 let result = match socket {
@@ -6335,7 +6571,7 @@ impl WebSocketValue {
             None => return Err(closed_resource_error()),
         };
         match message {
-            Message::Text(text) => Ok(Some(text.as_str().as_bytes().to_vec())),
+            Message::Text(text) => Ok(Some(text.as_bytes().to_vec())),
             Message::Binary(bytes) => Ok(Some(bytes.to_vec())),
             Message::Close(_) => Ok(None),
             _ => Ok(None),
@@ -6538,55 +6774,6 @@ impl TaskValue {
             runtime_scheduler().notify();
         });
         Self { inner }
-    }
-
-    pub(crate) fn join_result(&self) -> TaskExecutionResult {
-        loop {
-            if let Some(result) = self.completed_result() {
-                self.observe_result(&result);
-                return result;
-            }
-
-            if self.inner.lightweight {
-                if let Some(task_id) =
-                    with_current_lightweight_task_context(|context| context.task_id)
-                {
-                    {
-                        let mut state = lock_mutex(&self.inner.handle);
-                        match &mut *state {
-                            TaskHandle::Completed(result) => {
-                                let result = result.clone();
-                                drop(state);
-                                self.observe_result(&result);
-                                return result;
-                            }
-                            TaskHandle::Running { waiters } => {
-                                if !waiters.contains(&task_id) {
-                                    waiters.push(task_id);
-                                }
-                            }
-                        }
-                    }
-                    let _ = park_current_lightweight_task();
-                    continue;
-                }
-            }
-
-            let mut state = lock_mutex(&self.inner.handle);
-            loop {
-                match &*state {
-                    TaskHandle::Completed(result) => {
-                        let result = result.clone();
-                        drop(state);
-                        self.observe_result(&result);
-                        return result;
-                    }
-                    TaskHandle::Running { .. } => {
-                        state = wait_condvar(&self.inner.ready, state);
-                    }
-                }
-            }
-        }
     }
 
     pub(crate) fn wait_result_with_cancellation(
@@ -6794,6 +6981,263 @@ pub(crate) fn result_err(value: Value) -> Value {
         variant_name: "Err".to_string(),
         payloads: vec![value],
     })
+}
+
+static HOST_MONOTONIC_EPOCH: OnceLock<Instant> = OnceLock::new();
+static HOST_METRICS: OnceLock<Mutex<BTreeMap<String, i128>>> = OnceLock::new();
+
+fn host_string_arg(args: &[Value], index: usize, call: &str) -> Result<String> {
+    match args.get(index) {
+        Some(Value::String(value)) => Ok(value.clone()),
+        Some(other) => Err(Diagnostic::new(format!(
+            "`{call}` expects argument {} to be `String`, found `{}`",
+            index + 1,
+            other.render()
+        ))),
+        None => Err(Diagnostic::new(format!(
+            "`{call}` is missing argument {}",
+            index + 1
+        ))),
+    }
+}
+
+fn host_string_map_arg(
+    args: &[Value],
+    index: usize,
+    call: &str,
+) -> Result<BTreeMap<String, String>> {
+    let Some(Value::Map(map)) = args.get(index) else {
+        return Err(Diagnostic::new(format!(
+            "`{call}` expects argument {} to be `Map[String, String]`",
+            index + 1
+        )));
+    };
+    map.entries
+        .iter()
+        .map(|(key, value)| match (key, value) {
+            (Value::String(key), Value::String(value)) => Ok((key.clone(), value.clone())),
+            _ => Err(Diagnostic::new(format!(
+                "`{call}` expects `Map[String, String]`"
+            ))),
+        })
+        .collect()
+}
+
+fn host_string_map_value(entries: BTreeMap<String, String>) -> Value {
+    Value::Map(MapValue {
+        key_type: Type::named("String"),
+        value_type: Type::named("String"),
+        entries: entries
+            .into_iter()
+            .map(|(key, value)| (Value::String(key), Value::String(value)))
+            .collect(),
+    })
+}
+
+fn host_program_args() -> Vec<String> {
+    std::env::var("AURORA_PROGRAM_ARGS_JSON")
+        .ok()
+        .and_then(|encoded| serde_json::from_str::<Vec<String>>(&encoded).ok())
+        .unwrap_or_else(|| std::env::args().skip(1).collect())
+}
+
+fn host_expect_arity(name: &str, args: &[Value], expected: usize) -> Result<()> {
+    if args.len() == expected {
+        Ok(())
+    } else {
+        Err(Diagnostic::new(format!(
+            "`{name}` expects {expected} arguments, found {}",
+            args.len()
+        )))
+    }
+}
+
+fn host_millis_value(millis: u128, clock: &str) -> Result<Value> {
+    let millis = match i64::try_from(millis) {
+        Ok(millis) => millis,
+        Err(_) => {
+            return Err(Diagnostic::new(format!(
+                "{clock} does not fit in Aurora `int64`"
+            )))
+        }
+    };
+    Ok(Value::Int(IntegerValue::from_signed(i128::from(millis))))
+}
+
+pub(crate) fn evaluate_host_builtin(name: &str, args: Vec<Value>) -> Result<Value> {
+    match name {
+        "sys::args" => {
+            host_expect_arity(name, &args, 0)?;
+            Ok(Value::Vec(VecValue {
+                element_type: Type::named("String"),
+                elements: host_program_args().into_iter().map(Value::String).collect(),
+            }))
+        }
+        "sys::env" => {
+            host_expect_arity(name, &args, 1)?;
+            let name = host_string_arg(&args, 0, name)?;
+            Ok(std::env::var(name)
+                .ok()
+                .map(Value::String)
+                .map(option_some)
+                .unwrap_or_else(option_none))
+        }
+        "sys::current_dir" => {
+            host_expect_arity(name, &args, 0)?;
+            Ok(match std::env::current_dir() {
+                Ok(path) => result_ok(Value::String(path.to_string_lossy().to_string())),
+                Err(error) => result_err(io_error(error)),
+            })
+        }
+        "sys::unix_time_ms" => {
+            host_expect_arity(name, &args, 0)?;
+            let duration = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            {
+                Ok(duration) => duration,
+                Err(error) => {
+                    return Err(Diagnostic::new(format!(
+                        "system clock is before unix epoch: {error}"
+                    )))
+                }
+            };
+            host_millis_value(duration.as_millis(), "unix time")
+        }
+        "sys::monotonic_time_ms" => {
+            host_expect_arity(name, &args, 0)?;
+            let millis = HOST_MONOTONIC_EPOCH
+                .get_or_init(Instant::now)
+                .elapsed()
+                .as_millis();
+            host_millis_value(millis, "monotonic time")
+        }
+        "path::join" => {
+            host_expect_arity(name, &args, 2)?;
+            let base = host_string_arg(&args, 0, name)?;
+            let child = host_string_arg(&args, 1, name)?;
+            Ok(Value::String(
+                Path::new(&base).join(child).to_string_lossy().to_string(),
+            ))
+        }
+        "path::parent" | "path::file_name" | "path::extension" => {
+            host_expect_arity(name, &args, 1)?;
+            let path = host_string_arg(&args, 0, name)?;
+            let path = Path::new(&path);
+            let value = match name {
+                "path::parent" => path
+                    .parent()
+                    .map(|value| value.to_string_lossy().to_string()),
+                "path::file_name" => path
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string()),
+                "path::extension" => path
+                    .extension()
+                    .map(|value| value.to_string_lossy().to_string()),
+                _ => unreachable!(),
+            };
+            Ok(value
+                .map(Value::String)
+                .map(option_some)
+                .unwrap_or_else(option_none))
+        }
+        "path::is_absolute" => {
+            host_expect_arity(name, &args, 1)?;
+            Ok(Value::Bool(
+                Path::new(&host_string_arg(&args, 0, name)?).is_absolute(),
+            ))
+        }
+        "json::is_valid" => {
+            host_expect_arity(name, &args, 1)?;
+            Ok(Value::Bool(
+                serde_json::from_str::<serde_json::Value>(&host_string_arg(&args, 0, name)?)
+                    .is_ok(),
+            ))
+        }
+        "json::stringify_map" => {
+            host_expect_arity(name, &args, 1)?;
+            let value = host_string_map_arg(&args, 0, name)?;
+            Ok(match serde_json::to_string(&value) {
+                Ok(text) => result_ok(Value::String(text)),
+                Err(error) => result_err(Value::String(error.to_string())),
+            })
+        }
+        "json::parse_string_map" => {
+            host_expect_arity(name, &args, 1)?;
+            let text = host_string_arg(&args, 0, name)?;
+            Ok(
+                match serde_json::from_str::<BTreeMap<String, String>>(&text) {
+                    Ok(value) => result_ok(host_string_map_value(value)),
+                    Err(error) => result_err(Value::String(error.to_string())),
+                },
+            )
+        }
+        "toml::is_valid" => {
+            host_expect_arity(name, &args, 1)?;
+            Ok(Value::Bool(
+                toml::from_str::<toml::Value>(&host_string_arg(&args, 0, name)?).is_ok(),
+            ))
+        }
+        "toml::stringify_map" => {
+            host_expect_arity(name, &args, 1)?;
+            let value = host_string_map_arg(&args, 0, name)?;
+            Ok(match toml::to_string(&value) {
+                Ok(text) => result_ok(Value::String(text)),
+                Err(error) => result_err(Value::String(error.to_string())),
+            })
+        }
+        "toml::parse_string_map" => {
+            host_expect_arity(name, &args, 1)?;
+            let text = host_string_arg(&args, 0, name)?;
+            Ok(match toml::from_str::<BTreeMap<String, String>>(&text) {
+                Ok(value) => result_ok(host_string_map_value(value)),
+                Err(error) => result_err(Value::String(error.to_string())),
+            })
+        }
+        "metrics::increment" => {
+            host_expect_arity(name, &args, 2)?;
+            let metric = host_string_arg(&args, 0, name)?;
+            let Some(Value::Int(value)) = args.get(1) else {
+                return Err(Diagnostic::new(
+                    "`metrics.increment` expects `int64` for `value`",
+                ));
+            };
+            let value = value
+                .as_i128()
+                .ok_or_else(|| Diagnostic::new("metric increment does not fit in `int64`"))?;
+            let mut metrics = lock_mutex(HOST_METRICS.get_or_init(|| Mutex::new(BTreeMap::new())));
+            let entry = metrics.entry(metric).or_insert(0);
+            *entry = entry
+                .checked_add(value)
+                .ok_or_else(|| Diagnostic::new("metric value overflowed `int64`"))?;
+            Ok(Value::Unit)
+        }
+        "metrics::get" => {
+            host_expect_arity(name, &args, 1)?;
+            let metric = host_string_arg(&args, 0, name)?;
+            let metrics = lock_mutex(HOST_METRICS.get_or_init(|| Mutex::new(BTreeMap::new())));
+            Ok(Value::Int(IntegerValue::from_signed(
+                metrics.get(&metric).copied().unwrap_or(0),
+            )))
+        }
+        "metrics::reset" => {
+            host_expect_arity(name, &args, 0)?;
+            lock_mutex(HOST_METRICS.get_or_init(|| Mutex::new(BTreeMap::new()))).clear();
+            Ok(Value::Unit)
+        }
+        "log::debug" | "log::info" | "log::warn" | "log::error" | "trace::event" => {
+            host_expect_arity(name, &args, 2)?;
+            let message = host_string_arg(&args, 0, name)?;
+            let fields = host_string_map_arg(&args, 1, name)?;
+            let record = serde_json::json!({
+                "kind": if name == "trace::event" { "trace" } else { "log" },
+                "level": name.split_once("::").map(|(_, value)| value).unwrap_or(name),
+                "message": message,
+                "fields": fields,
+            });
+            eprintln!("{record}");
+            Ok(Value::Unit)
+        }
+        _ => Err(Diagnostic::new(format!("unknown host builtin `{name}`"))),
+    }
 }
 
 pub(crate) fn send_error_closed(value: Value) -> Value {

@@ -27,13 +27,8 @@ fn lower_type_ref(type_ref: &TypeRef) -> Type {
     if type_ref.name == "None" {
         return Type::Unit;
     }
-    let name = if type_ref.name == "str" {
-        "String"
-    } else {
-        &type_ref.name
-    };
     Type::Named(
-        name.to_string(),
+        type_ref.name.to_string(),
         type_ref.args.iter().map(lower_type_ref).collect(),
     )
 }
@@ -1264,12 +1259,209 @@ fn process_namespace() -> ModuleNamespace {
     }
 }
 
+fn function_only_namespace(name: &str, functions: Vec<FunctionInfo>) -> ModuleNamespace {
+    let functions = functions
+        .into_iter()
+        .map(|function| (function.decl.name.clone(), function))
+        .collect::<BTreeMap<_, _>>();
+    ModuleNamespace {
+        name: name.to_string(),
+        path: name.to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: functions.clone(),
+        classes: BTreeMap::new(),
+        enums: BTreeMap::new(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: functions,
+        all_classes: BTreeMap::new(),
+        all_enums: BTreeMap::new(),
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+    }
+}
+
+fn sys_namespace() -> ModuleNamespace {
+    function_only_namespace(
+        "sys",
+        vec![
+            function_info(
+                "sys",
+                "args",
+                Vec::new(),
+                type_ref("Vec", vec![type_ref("String", Vec::new())]),
+            ),
+            function_info(
+                "sys",
+                "env",
+                vec![value_param("name", type_ref("String", Vec::new()))],
+                type_ref("Option", vec![type_ref("String", Vec::new())]),
+            ),
+            function_info(
+                "sys",
+                "current_dir",
+                Vec::new(),
+                result_type_ref(type_ref("String", Vec::new())),
+            ),
+            function_info(
+                "sys",
+                "unix_time_ms",
+                Vec::new(),
+                type_ref("int64", Vec::new()),
+            ),
+            function_info(
+                "sys",
+                "monotonic_time_ms",
+                Vec::new(),
+                type_ref("int64", Vec::new()),
+            ),
+        ],
+    )
+}
+
+fn path_namespace() -> ModuleNamespace {
+    let string = || type_ref("String", Vec::new());
+    let optional_string = || type_ref("Option", vec![string()]);
+    function_only_namespace(
+        "path",
+        vec![
+            function_info(
+                "path",
+                "join",
+                vec![
+                    value_param("base", string()),
+                    value_param("child", string()),
+                ],
+                string(),
+            ),
+            function_info(
+                "path",
+                "parent",
+                vec![value_param("path", string())],
+                optional_string(),
+            ),
+            function_info(
+                "path",
+                "file_name",
+                vec![value_param("path", string())],
+                optional_string(),
+            ),
+            function_info(
+                "path",
+                "extension",
+                vec![value_param("path", string())],
+                optional_string(),
+            ),
+            function_info(
+                "path",
+                "is_absolute",
+                vec![value_param("path", string())],
+                type_ref("bool", Vec::new()),
+            ),
+        ],
+    )
+}
+
+fn serialization_namespace(name: &str) -> ModuleNamespace {
+    let result_string = || {
+        type_ref(
+            "Result",
+            vec![
+                type_ref("String", Vec::new()),
+                type_ref("String", Vec::new()),
+            ],
+        )
+    };
+    let result_map = || {
+        type_ref(
+            "Result",
+            vec![string_map_type_ref(), type_ref("String", Vec::new())],
+        )
+    };
+    function_only_namespace(
+        name,
+        vec![
+            function_info(
+                name,
+                "is_valid",
+                vec![value_param("text", type_ref("String", Vec::new()))],
+                type_ref("bool", Vec::new()),
+            ),
+            function_info(
+                name,
+                "stringify_map",
+                vec![value_param("value", string_map_type_ref())],
+                result_string(),
+            ),
+            function_info(
+                name,
+                "parse_string_map",
+                vec![value_param("text", type_ref("String", Vec::new()))],
+                result_map(),
+            ),
+        ],
+    )
+}
+
+fn telemetry_namespace(name: &str) -> ModuleNamespace {
+    let functions = match name {
+        "metrics" => vec![
+            function_info(
+                name,
+                "increment",
+                vec![
+                    value_param("name", type_ref("String", Vec::new())),
+                    value_param("value", type_ref("int64", Vec::new())),
+                ],
+                type_ref("None", Vec::new()),
+            ),
+            function_info(
+                name,
+                "get",
+                vec![value_param("name", type_ref("String", Vec::new()))],
+                type_ref("int64", Vec::new()),
+            ),
+            function_info(name, "reset", Vec::new(), type_ref("None", Vec::new())),
+        ],
+        "log" => ["debug", "info", "warn", "error"]
+            .into_iter()
+            .map(|level| {
+                function_info(
+                    name,
+                    level,
+                    vec![
+                        value_param("message", type_ref("String", Vec::new())),
+                        value_param("fields", string_map_type_ref()),
+                    ],
+                    type_ref("None", Vec::new()),
+                )
+            })
+            .collect(),
+        "trace" => vec![function_info(
+            name,
+            "event",
+            vec![
+                value_param("name", type_ref("String", Vec::new())),
+                value_param("fields", string_map_type_ref()),
+            ],
+            type_ref("None", Vec::new()),
+        )],
+        _ => unreachable!("unknown telemetry namespace"),
+    };
+    function_only_namespace(name, functions)
+}
+
 fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
     match name {
         "io" => Some(io_namespace()),
         "fs" => Some(fs_namespace()),
         "net" => Some(net_namespace()),
         "process" => Some(process_namespace()),
+        "sys" => Some(sys_namespace()),
+        "path" => Some(path_namespace()),
+        "json" | "toml" => Some(serialization_namespace(name)),
+        "log" | "metrics" | "trace" => Some(telemetry_namespace(name)),
         _ => None,
     }
 }
@@ -1282,12 +1474,12 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 }
 
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
-    ["io", "fs", "net"]
-        .into_iter()
-        .filter_map(|name| {
-            builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace))
-        })
-        .collect()
+    [
+        "io", "fs", "net", "process", "sys", "path", "json", "toml", "log", "metrics", "trace",
+    ]
+    .into_iter()
+    .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))
+    .collect()
 }
 
 pub(crate) fn builtin_imported_binding(
@@ -1310,9 +1502,6 @@ pub(crate) fn builtin_imported_binding(
     if let Some(enum_info) = namespace.enums.get(name) {
         return Ok(ImportedBinding::Enum(enum_info.clone()));
     }
-    if let Some(trait_info) = namespace.traits.get(name) {
-        return Ok(ImportedBinding::Trait(trait_info.clone()));
-    }
     Err(Diagnostic::at(
         span,
         format!(
@@ -1330,3 +1519,7 @@ pub(crate) fn io_error_type() -> Type {
 pub(crate) fn process_error_type() -> Type {
     Type::Named("process.Error".to_string(), Vec::new())
 }
+
+#[cfg(test)]
+#[path = "builtin_modules_tests.rs"]
+mod tests;

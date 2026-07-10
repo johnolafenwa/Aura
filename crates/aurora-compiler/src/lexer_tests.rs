@@ -320,3 +320,42 @@ fn lexer_decodes_extended_string_escape_sequences() {
         lex("text = \"\\u{110000}\"\n").expect_err("out-of-range unicode escape should fail");
     assert!(bad_unicode.message.contains("out of range"));
 }
+
+#[test]
+fn lexer_covers_extended_escape_brace_float_and_identifier_edges() {
+    let tokens = kinds(concat!(
+        "text = \"\\xAf\\u{ab}\\u{DE}\"\n",
+        "message = f\"literal }} and escaped {{ plus {call(text=\"a\\\\\\\"b\")}\"\n",
+        "floats = 1e+3 2E4 3. 4\n",
+        "names = _value Camel1\n",
+    ));
+    assert!(tokens.contains(&TokenKind::StringLiteral("\u{af}\u{ab}\u{de}".to_string())));
+    assert!(tokens.contains(&TokenKind::FStringLiteral(
+        "literal }} and escaped {{ plus {call(text=\"a\\\\\\\"b\")}".to_string()
+    )));
+    assert!(tokens.contains(&TokenKind::FloatLiteral(1000.0)));
+    assert!(tokens.contains(&TokenKind::FloatLiteral(20_000.0)));
+    assert!(tokens.contains(&TokenKind::IntLiteral(3)));
+    assert!(tokens.contains(&TokenKind::Dot));
+    assert!(tokens.contains(&TokenKind::Identifier("_value".to_string())));
+    assert!(tokens.contains(&TokenKind::Identifier("Camel1".to_string())));
+
+    for source in [
+        "text = \"\\x\"\n",
+        "text = \"\\x4\"\n",
+        "text = \"\\u\"\n",
+        "text = \"\\u{}\"\n",
+        "text = \"\\u{gg}\"\n",
+        "text = \"\\u{FFFFFFFFF}\"\n",
+        "value = 1e+\n",
+    ] {
+        let error = lex(source).expect_err("malformed literal should fail");
+        assert!(
+            error.message.contains("escape")
+                || error.message.contains("literal")
+                || error.message.contains("out of range"),
+            "unexpected diagnostic for {source:?}: {}",
+            error.message
+        );
+    }
+}

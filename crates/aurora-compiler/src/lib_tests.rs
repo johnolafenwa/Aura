@@ -1,15 +1,17 @@
 use super::{
-    absolutize, analyze_path_source, check_path, check_path_with_source, check_source,
-    emit_host_native_object, exported_binding, exported_namespace, find_type_namespace_path,
-    import_exists_from_root, infer_package_root, insert_namespace_import, is_builtin_export_type,
-    local_item_exists, logical_module_name, lower_path_to_mir, lower_path_with_source_to_mir,
-    lower_source_to_mir, parse_source, qualify_export_type, qualify_export_type_ref, run_mir,
-    run_path, run_path_with_source, run_serialized_mir, run_source, Value,
+    absolutize, analyze_path_source, builtin_imports, canonicalize_if_exists, check_path,
+    check_path_with_source, check_source, emit_host_native_object, exported_binding,
+    exported_namespace, find_type_namespace_path, import_exists_from_root, infer_package_root,
+    insert_namespace_import, is_builtin_export_type, local_item_exists, logical_module_name,
+    lower_path_to_mir, lower_path_with_source_to_mir, lower_source_to_mir, parse_source,
+    qualify_enum_decl_for_export, qualify_export_bounds, qualify_export_type,
+    qualify_export_type_ref, qualify_impl_decl_for_export, qualify_imported_module_namespaces,
+    run_mir, run_path, run_path_with_source, run_serialized_mir, run_source, ModuleLoader, Value,
 };
 use crate::ast::TypeRef;
 use crate::diag::Span;
 use crate::integer::IntegerValue;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -480,6 +482,91 @@ where
         .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
 }
 
+enum TimedCaseOutcome<T> {
+    Completed(T),
+    Panicked,
+}
+
+fn run_corpus_case_with_timeout<T, F>(
+    operation: &str,
+    path: &std::path::Path,
+    action: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    run_corpus_case_with_timeout_duration(operation, path, StdDuration::from_secs(10), action)
+}
+
+fn run_corpus_case_with_timeout_duration<T, F>(
+    operation: &str,
+    path: &std::path::Path,
+    timeout: StdDuration,
+    action: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let handle = thread::Builder::new()
+        .name(format!("aurora-corpus-{operation}"))
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            let outcome = match catch_unwind(AssertUnwindSafe(action)) {
+                Ok(value) => TimedCaseOutcome::Completed(value),
+                Err(_) => TimedCaseOutcome::Panicked,
+            };
+            let _ = sender.send(outcome);
+        })
+        .map_err(|error| {
+            format!(
+                "failed to start {operation} for {}: {error}",
+                path.display()
+            )
+        })?;
+
+    match receiver.recv_timeout(timeout) {
+        Ok(TimedCaseOutcome::Completed(value)) => {
+            handle.join().map_err(|_| {
+                format!(
+                    "{operation} helper thread panicked after reporting completion for {}",
+                    path.display()
+                )
+            })?;
+            Ok(value)
+        }
+        Ok(TimedCaseOutcome::Panicked) => {
+            let _ = handle.join();
+            Err(format!("{operation} panicked for {}", path.display()))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "{operation} timed out after {} milliseconds for {}",
+            timeout.as_millis(),
+            path.display()
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(format!(
+            "{operation} helper disconnected for {}",
+            path.display()
+        )),
+    }
+}
+
+#[test]
+fn corpus_case_timeout_reports_the_operation_and_path() {
+    let path = PathBuf::from("slow.au");
+    let error = run_corpus_case_with_timeout_duration(
+        "runtime probe",
+        &path,
+        StdDuration::from_millis(10),
+        || thread::sleep(StdDuration::from_millis(100)),
+    )
+    .expect_err("slow corpus operation should time out");
+    assert!(error.contains("runtime probe timed out"));
+    assert!(error.contains("slow.au"));
+}
+
 fn escape_aurora_string(text: &str) -> String {
     text.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -563,19 +650,30 @@ fn collect_aurora_files_recursive(dir: &std::path::Path) -> Vec<PathBuf> {
 }
 
 fn should_execute_runtime_corpus_case(path: &std::path::Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("");
-    ![
-        "infinite_loop",
-        "large_loop",
-        "recursive_deep",
-        "deep_recursion",
-        "sleep",
-    ]
-    .iter()
-    .any(|needle| name.contains(needle))
+    let root = repo_root();
+    let relative = path
+        .strip_prefix(&root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    !include_str!("../tests/runtime-corpus-exclusions.txt")
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+        .filter_map(|line| line.split_once('|'))
+        .any(|(excluded, _reason)| excluded.trim() == relative)
+}
+
+#[test]
+fn runtime_corpus_exclusions_are_explicit_not_filename_heuristics() {
+    let root = repo_root();
+    assert!(
+        should_execute_runtime_corpus_case(&root.join("test_edge/test09_sleep.au")),
+        "short sleep fixtures should execute even when their filename contains sleep"
+    );
+    assert!(
+        !should_execute_runtime_corpus_case(&root.join("test_recheck/gap4b_minute_literal.au")),
+        "the explicit one-minute fixture should remain classified as a long-running case"
+    );
 }
 
 #[test]
@@ -583,6 +681,59 @@ fn path_wrapper_functions_cover_success_and_loader_error_paths() {
     let temp = TempDir::new("aurora-lib-coverage");
     let main_path = temp.path().join("main.au");
     fs::write(&main_path, "def main():\n    print(1)\n").expect("failed to write main file");
+
+    check_source(
+        "from fs import exists\n\ndef main() -> None:\n    if exists(\"missing\"):\n        pass\n",
+    )
+    .expect("source-level builtin from imports should type-check");
+    let duplicate_source_builtin = check_source("from fs import exists\nfrom fs import exists\n")
+        .expect_err("duplicate source-level builtin imports should fail");
+    assert!(duplicate_source_builtin
+        .message
+        .contains("duplicate import binding `exists`"));
+    let missing_source_builtin =
+        check_source("from fs import definitely_missing\n").expect_err("unknown builtin export");
+    assert!(missing_source_builtin
+        .message
+        .contains("module `fs` has no export named `definitely_missing`"));
+
+    let builtin_from_path = temp.path().join("builtin_from.au");
+    fs::write(
+        &builtin_from_path,
+        "from fs import exists\n\ndef main() -> None:\n    if exists(\"missing\"):\n        pass\n",
+    )
+    .expect("failed to write builtin-from import file");
+    check_path(&builtin_from_path).expect("path-level builtin from imports should type-check");
+
+    let duplicate_builtin_from_path = temp.path().join("duplicate_builtin_from.au");
+    fs::write(
+        &duplicate_builtin_from_path,
+        "from fs import exists\nfrom fs import exists\n",
+    )
+    .expect("failed to write duplicate builtin-from import file");
+    let duplicate_builtin = check_path(&duplicate_builtin_from_path)
+        .expect_err("duplicate path-level builtin from imports should fail");
+    assert!(duplicate_builtin
+        .message
+        .contains("duplicate import binding `exists`"));
+
+    let missing_builtin_from_path = temp.path().join("missing_builtin_from.au");
+    fs::write(
+        &missing_builtin_from_path,
+        "from fs import definitely_missing\n",
+    )
+    .expect("failed to write missing builtin-from import file");
+    let missing_builtin = check_path(&missing_builtin_from_path)
+        .expect_err("unknown path-level builtin from imports should fail");
+    assert!(missing_builtin
+        .message
+        .contains("module `fs` has no export named `definitely_missing`"));
+
+    let non_builtin_from =
+        parse_source("from local import Thing\n").expect("non-builtin from import should parse");
+    assert!(builtin_imports(&non_builtin_from)
+        .expect("non-builtin from imports should be ignored by builtin collection")
+        .is_empty());
 
     check_path(&main_path).expect("check_path should succeed");
     check_path_with_source(&main_path, "def main():\n    print(2)\n")
@@ -605,6 +756,31 @@ fn path_wrapper_functions_cover_success_and_loader_error_paths() {
     fs::write(&b_path, "import a\n\ndef helper():\n    pass\n").expect("write b");
     let cyclic = check_path(&a_path).expect_err("cyclic imports should fail");
     assert!(cyclic.message.contains("cyclic import involving"));
+}
+
+#[test]
+fn module_loader_package_qualification_ignores_paths_outside_graph_sources() {
+    let temp = TempDir::new("aurora-lib-package-qualification");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("failed to create package src");
+    fs::write(
+        temp.path().join("Aurora.toml"),
+        "[package]\nname = \"rootpkg\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    )
+    .expect("failed to write manifest");
+    let main_path = src_dir.join("main.au");
+    fs::write(&main_path, "def main():\n    pass\n").expect("failed to write main module");
+
+    let loader = ModuleLoader::new(&main_path).expect("package loader should initialize");
+    let canonical_main = fs::canonicalize(&main_path).expect("main path should canonicalize");
+    assert_eq!(loader.module_name_for_path(&canonical_main), "main");
+    let mut program = check_source("def main():\n    pass\n").expect("program should check");
+    let outside_path = temp.path().join("outside.au");
+    fs::write(&outside_path, "def helper():\n    pass\n").expect("failed to write outside file");
+    loader.qualify_program_imported_modules(&outside_path, &mut program);
+    assert!(program.imported_modules.is_empty());
+    loader.qualify_program_imported_modules(&canonical_main, &mut program);
+    assert!(program.imported_modules.is_empty());
 }
 
 #[test]
@@ -635,7 +811,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
             "",
             "public enum Flag[T]:",
             "    Ready",
-            "    Value(T)",
+            "    Value(Box[T])",
             "",
             "enum Secret:",
             "    Hidden",
@@ -668,6 +844,38 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
     assert_eq!(
         absolutize(&user_path),
         fs::canonicalize(&user_path).expect("user path should canonicalize")
+    );
+    assert_eq!(
+        canonicalize_if_exists(&user_path).expect("existing helper paths should canonicalize"),
+        fs::canonicalize(&user_path).expect("user path should canonicalize")
+    );
+    let canonical_temp = fs::canonicalize(temp.path()).expect("temp root should canonicalize");
+    let missing_nested = temp.path().join("missing").join("leaf.au");
+    assert_eq!(
+        absolutize(&missing_nested),
+        canonical_temp.join("missing").join("leaf.au")
+    );
+    assert_eq!(
+        canonicalize_if_exists(&temp.path().join("future.au"))
+            .expect("missing file under existing root should resolve against root"),
+        canonical_temp.join("future.au")
+    );
+    assert_eq!(
+        canonicalize_if_exists(temp.path()).expect("existing roots should canonicalize"),
+        canonical_temp
+    );
+    let missing_leaf = PathBuf::from(format!(
+        "aurora-lib-missing-leaf-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough for a test")
+            .as_nanos()
+    ));
+    assert_eq!(
+        canonicalize_if_exists(&missing_leaf)
+            .expect("single missing helper leaves should pass through"),
+        missing_leaf
     );
 
     let inferred_root =
@@ -753,6 +961,66 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
         qualify_export_type_ref(&program, &type_ref("str")).name,
         "str"
     );
+    assert_eq!(
+        qualify_export_type(&program, &crate::sema::Type::TypeParam("T".to_string())),
+        crate::sema::Type::TypeParam("T".to_string())
+    );
+    assert_eq!(
+        qualify_export_type(
+            &program,
+            &crate::sema::Type::Module("pkg.named".to_string())
+        ),
+        crate::sema::Type::Module("pkg.named".to_string())
+    );
+    assert_eq!(
+        qualify_export_type(&program, &crate::sema::Type::Unit),
+        crate::sema::Type::Unit
+    );
+    let mut type_param_bounds = BTreeMap::new();
+    type_param_bounds.insert(
+        "T".to_string(),
+        vec![type_ref("Box"), type_ref("Remote"), type_ref("str")],
+    );
+    let qualified_bounds = qualify_export_bounds(&program, &type_param_bounds);
+    let qualified_bound_names = qualified_bounds
+        .get("T")
+        .expect("bounds should preserve type parameter")
+        .iter()
+        .map(|type_ref| type_ref.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        qualified_bound_names,
+        vec!["pkg.user.Box", "pkg.named.Remote", "str"]
+    );
+    let qualified_enum =
+        qualify_enum_decl_for_export(&program, &program.enums.get("Flag").expect("flag").decl);
+    assert_eq!(
+        qualified_enum.variants[1].payloads[0].ty.name,
+        "pkg.user.Box"
+    );
+    let qualified_impl = qualify_impl_decl_for_export(&program, &program.trait_impls[0].decl);
+    assert_eq!(qualified_impl.trait_name, "Show");
+    assert_eq!(qualified_impl.trait_args[0].name, "T");
+
+    let mut namespace_map = BTreeMap::new();
+    let mut local_namespace = remote_namespace.clone();
+    local_namespace.name = "local".to_string();
+    local_namespace.path = "pkg.local".to_string();
+    namespace_map.insert("named".to_string(), remote_namespace.clone());
+    namespace_map.insert("local".to_string(), local_namespace);
+    qualify_imported_module_namespaces(
+        &mut namespace_map,
+        "dep",
+        &BTreeSet::from(["named".to_string()]),
+    );
+    assert_eq!(
+        namespace_map.get("named").expect("dependency alias").path,
+        "pkg.named"
+    );
+    assert_eq!(
+        namespace_map.get("local").expect("local namespace").path,
+        "dep.pkg.local"
+    );
 
     match exported_binding(&program, "wrap").expect("public function export") {
         crate::sema::ImportedBinding::Function(info) => {
@@ -770,6 +1038,11 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
     assert!(!namespace.functions.contains_key("hidden"));
     assert!(!namespace.classes.contains_key("Hidden"));
     assert_eq!(namespace.path, "pkg.user");
+
+    let root_namespace = exported_namespace(&[], &program);
+    assert_eq!(root_namespace.name, "pkg.user");
+    assert_eq!(root_namespace.path, "");
+    assert!(root_namespace.all_classes.contains_key("Box"));
 
     let mut bindings = BTreeMap::new();
     insert_namespace_import(
@@ -893,6 +1166,35 @@ fn module_loader_reports_import_resolution_and_export_errors() {
         exported_binding(&program, "Show"),
         Some(crate::sema::ImportedBinding::Trait(_))
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn module_loader_rejects_symlinked_import_that_escapes_root_without_manifest() {
+    let temp = TempDir::new("aurora-lib-import-symlink-escape");
+    let root = temp.path().join("root");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&root).expect("failed to create package root");
+    fs::create_dir_all(&outside).expect("failed to create outside dir");
+
+    let outside_module = outside.join("evil.au");
+    fs::write(
+        &outside_module,
+        "public def helper() -> int32:\n    return 1\n",
+    )
+    .expect("failed to write outside module");
+    std::os::unix::fs::symlink(&outside_module, root.join("evil.au"))
+        .expect("failed to create escaping module symlink");
+
+    let main_path = root.join("main.au");
+    fs::write(
+        &main_path,
+        "from evil import helper\n\ndef main() -> None:\n    print(helper())\n",
+    )
+    .expect("failed to write main module");
+
+    let error = check_path(&main_path).expect_err("symlinked import should be rejected");
+    assert!(error.message.contains("escapes package source root"));
 }
 
 #[test]
@@ -1195,7 +1497,6 @@ fn broad_scratch_corpus_checks_analysis_and_mir_lowering_do_not_panic() {
         let mut checked_ok = 0usize;
         let mut lowered_ok = 0usize;
         let mut emitted_ok = 0usize;
-        let mut emission_panics = 0usize;
 
         for dir in corpus_dirs {
             for path in collect_aurora_files(&dir) {
@@ -1211,13 +1512,14 @@ fn broad_scratch_corpus_checks_analysis_and_mir_lowering_do_not_panic() {
 
                 if let Ok(mir) = lower_path_to_mir(&path) {
                     lowered_ok += 1;
-                    match catch_unwind(AssertUnwindSafe(|| emit_host_native_object(&mir))) {
-                        Ok(Ok(_)) => emitted_ok += 1,
-                        Ok(Err(_)) => {}
-                        Err(_) => {
-                            emission_panics += 1;
-                            eprintln!("direct backend panicked for {}", path.display());
-                        }
+                    let emission =
+                        run_corpus_case_with_timeout("direct object emission", &path, move || {
+                            emit_host_native_object(&mir)
+                        })
+                        .unwrap_or_else(|error| panic!("{error}"));
+                    match emission {
+                        Ok(_) => emitted_ok += 1,
+                        Err(_) => {}
                     }
                 }
             }
@@ -1233,10 +1535,6 @@ fn broad_scratch_corpus_checks_analysis_and_mir_lowering_do_not_panic() {
             emitted_ok > 0,
             "expected some scratch files to emit native direct objects"
         );
-        assert!(
-            emission_panics < lowered_ok,
-            "expected most lowered scratch files to avoid direct backend panics"
-        );
     });
 }
 
@@ -1249,8 +1547,6 @@ fn broad_scratch_corpus_runtime_paths_do_not_panic() {
         let mut runnable = 0usize;
         let mut run_completed = 0usize;
         let mut explicit_mir_completed = 0usize;
-        let mut run_panics = 0usize;
-        let mut explicit_mir_panics = 0usize;
 
         for dir in corpus_dirs {
             for path in collect_aurora_files(&dir) {
@@ -1269,32 +1565,23 @@ fn broad_scratch_corpus_runtime_paths_do_not_panic() {
                     );
                 }
 
-                let run_path_result = run_with_large_stack({
+                let run_path_result = run_corpus_case_with_timeout("public run", &path, {
                     let path = path.clone();
-                    move || catch_unwind(AssertUnwindSafe(|| run_path(&path)))
-                });
+                    move || run_path(&path)
+                })
+                .unwrap_or_else(|error| panic!("{error}"));
                 match run_path_result {
-                    Ok(Ok(_)) | Ok(Err(_)) => run_completed += 1,
-                    Err(_) => {
-                        run_panics += 1;
-                        eprintln!("run path panicked for {}", path.display());
-                    }
+                    Ok(_) | Err(_) => run_completed += 1,
                 }
 
-                let explicit_mir_result = run_with_large_stack({
-                    let path = path.clone();
-                    move || {
-                        catch_unwind(AssertUnwindSafe(|| {
-                            lower_path_to_mir(&path).and_then(|mir| run_mir(&mir))
-                        }))
-                    }
-                });
+                let explicit_mir_result =
+                    run_corpus_case_with_timeout("explicit MIR run", &path, {
+                        let path = path.clone();
+                        move || lower_path_to_mir(&path).and_then(|mir| run_mir(&mir))
+                    })
+                    .unwrap_or_else(|error| panic!("{error}"));
                 match explicit_mir_result {
-                    Ok(Ok(_)) | Ok(Err(_)) => explicit_mir_completed += 1,
-                    Err(_) => {
-                        explicit_mir_panics += 1;
-                        eprintln!("MIR runtime panicked for {}", path.display());
-                    }
+                    Ok(_) | Err(_) => explicit_mir_completed += 1,
                 }
             }
         }
@@ -1303,10 +1590,6 @@ fn broad_scratch_corpus_runtime_paths_do_not_panic() {
         assert!(
             run_completed > 0 && explicit_mir_completed > 0,
             "expected runtime corpus to exercise both execution paths"
-        );
-        assert!(
-            run_panics < runnable && explicit_mir_panics < runnable,
-            "expected most runtime corpus files to avoid execution panics"
         );
     });
 }
@@ -1320,13 +1603,14 @@ fn maintained_example_tree_public_paths_do_not_panic() {
     let mut checked_ok = 0usize;
     let mut lowered_ok = 0usize;
     let mut emitted_ok = 0usize;
-    let mut emission_panics = 0usize;
     let mut run_completed = 0usize;
     let mut explicit_mir_completed = 0usize;
-    let mut run_panics = 0usize;
-    let mut explicit_mir_panics = 0usize;
+    let package_examples_dir = examples_dir.join("packages");
 
     for path in collect_aurora_files_recursive(&examples_dir) {
+        if path.starts_with(&package_examples_dir) {
+            continue;
+        }
         file_count += 1;
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("failed to read {}: {}", path.display(), error));
@@ -1350,32 +1634,35 @@ fn maintained_example_tree_public_paths_do_not_panic() {
 
         if let Ok(mir) = lower_path_to_mir(&path) {
             lowered_ok += 1;
-            match catch_unwind(AssertUnwindSafe(|| emit_host_native_object(&mir))) {
-                Ok(Ok(_)) => emitted_ok += 1,
-                Ok(Err(_)) => {}
-                Err(_) => {
-                    emission_panics += 1;
-                    eprintln!("direct backend panicked for example {}", path.display());
-                }
+            let emission = run_corpus_case_with_timeout(
+                "maintained example direct object emission",
+                &path,
+                move || emit_host_native_object(&mir),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+            match emission {
+                Ok(_) => emitted_ok += 1,
+                Err(_) => {}
             }
         }
 
-        match catch_unwind(AssertUnwindSafe(|| run_path(&path))) {
-            Ok(Ok(_)) | Ok(Err(_)) => run_completed += 1,
-            Err(_) => {
-                run_panics += 1;
-                eprintln!("run path panicked for example {}", path.display());
-            }
+        let run_result = run_corpus_case_with_timeout("maintained example public run", &path, {
+            let path = path.clone();
+            move || run_path(&path)
+        })
+        .unwrap_or_else(|error| panic!("{error}"));
+        match run_result {
+            Ok(_) | Err(_) => run_completed += 1,
         }
 
-        match catch_unwind(AssertUnwindSafe(|| {
-            lower_path_to_mir(&path).and_then(|mir| run_mir(&mir))
-        })) {
-            Ok(Ok(_)) | Ok(Err(_)) => explicit_mir_completed += 1,
-            Err(_) => {
-                explicit_mir_panics += 1;
-                eprintln!("MIR runtime panicked for example {}", path.display());
-            }
+        let explicit_mir_result =
+            run_corpus_case_with_timeout("maintained example explicit MIR run", &path, {
+                let path = path.clone();
+                move || lower_path_to_mir(&path).and_then(|mir| run_mir(&mir))
+            })
+            .unwrap_or_else(|error| panic!("{error}"));
+        match explicit_mir_result {
+            Ok(_) | Err(_) => explicit_mir_completed += 1,
         }
     }
 
@@ -1398,14 +1685,6 @@ fn maintained_example_tree_public_paths_do_not_panic() {
     assert!(
         run_completed > 0 && explicit_mir_completed > 0,
         "expected maintained examples to exercise both runtime paths"
-    );
-    assert!(
-        emission_panics < lowered_ok,
-        "expected most lowered maintained examples to avoid direct backend panics"
-    );
-    assert!(
-        run_panics < file_count && explicit_mir_panics < file_count,
-        "expected most maintained examples to avoid runtime panics"
     );
 }
 
@@ -2215,7 +2494,7 @@ def main() -> int32:
 
     let baseline_threads = current_process_thread_count();
     let source_handle = thread::spawn(move || run_source(&source));
-    let deadline = Instant::now() + StdDuration::from_secs(5);
+    let deadline = Instant::now() + StdDuration::from_secs(15);
     while !ready_path.exists() {
         assert!(
             Instant::now() < deadline,

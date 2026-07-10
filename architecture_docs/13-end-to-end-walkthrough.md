@@ -134,9 +134,9 @@ The compiled binary still knows enough source metadata to render runtime diagnos
 
 If the file is open in VS Code:
 
-- the language server can ask `aura analyze` for diagnostics, symbols, hover, and definitions
-- it can ask `aura complete` for completions
-- if that fails for the current incomplete buffer, it can fall back to its lightweight JS analyzer
+- the language server multiplexes diagnostics, symbols, hover, definitions, and completions through one persistent `aura lsp` process
+- compiler recovery handles common incomplete-buffer states
+- if the compiler process is unavailable, the server uses lexical declaration recovery rather than a second semantic analyzer
 
 So the same compiler pipeline also powers editor features.
 

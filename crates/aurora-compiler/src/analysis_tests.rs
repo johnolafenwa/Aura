@@ -8,16 +8,20 @@ use super::{
     format_function_hover, format_method_hover, format_value_hover, format_variant_hover,
     infer_builtin_variant_call, lower_type_ref, placeholder_stmt_for_return_type, range_from_span,
     range_from_span_with_path, recover_checked_program_after_member_errors,
+    recover_checked_program_after_member_errors_with,
     recover_checked_program_after_parse_error_with, recover_checked_program_after_position,
     replace_dangling_member_stmt_with_recovery_stmt, sanitize_member_completion_source,
-    stmt_end_line, stmt_start_line, AnalysisBuilder,
+    stmt_end_line, stmt_start_line, AnalysisBuilder, TypeExt,
 };
 use crate::ast::{
-    Argument, ClassDecl, Expr, ExprKind, FunctionDecl, Item, PassStmt, ReceiverKind, ReturnStmt,
-    TypeRef, VariantPattern,
+    Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, Expr, ExprKind, FunctionDecl, Item,
+    PassStmt, ReceiverKind, ReturnStmt, TypeRef, VariantPattern,
 };
 use crate::diag::{Diagnostic, Span};
-use crate::sema::{ClassInfo, EnumInfo, EnumVariantInfo, FieldInfo, TraitBound, Type};
+use crate::sema::{
+    ClassInfo, EnumInfo, EnumVariantInfo, FieldInfo, FunctionSignature, MethodInfo, TraitBound,
+    Type,
+};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
@@ -329,6 +333,85 @@ fn compiler_top_level_completion_includes_keywords_and_builtins() {
     assert!(range.detail.contains("start: int32"));
 }
 
+fn completion_names_after_marker(source: &str, marker: &str) -> Vec<String> {
+    let line_index = source
+        .lines()
+        .position(|line| line.contains(marker))
+        .expect("source should contain completion marker");
+    let line_text = source.lines().nth(line_index).unwrap();
+    let character = line_text.find(marker).unwrap() + marker.len();
+
+    complete_source(source, line_index, character, Some('.'))
+        .expect("completion should work")
+        .into_iter()
+        .map(|item| item.name)
+        .collect()
+}
+
+#[test]
+fn compiler_completion_uses_nested_scopes_for_methods_match_for_and_trait_bounds() {
+    let source = [
+        "trait Show:",
+        "    def show(borrow self) -> String",
+        "",
+        "class Label:",
+        "    value: int32",
+        "    def collect(borrow self) -> int32:",
+        "        mut items: Vec[String] = [\"ready\"]",
+        "        for item in items:",
+        "            item.len()",
+        "        self.value",
+        "        return 0",
+        "",
+        "def unwrap(value: Option[String]) -> String:",
+        "    match value:",
+        "        case Option.Some(text):",
+        "            text.len()",
+        "            return text",
+        "        case Option.None:",
+        "            return \"\"",
+        "",
+        "def noop():",
+        "    pass",
+        "",
+        "def use_group():",
+        "    with TaskGroup() as group:",
+        "        group.start_soon(noop)",
+        "",
+        "def render[T: Show](value: T) -> String:",
+        "    value.show()",
+        "    return value.show()",
+        "",
+        "def after_branch(flag: bool) -> int32:",
+        "    label = \"ready\"",
+        "    if flag:",
+        "        branch = \"yes\"",
+        "    else:",
+        "        branch = \"no\"",
+        "    label.len()",
+        "    return 0",
+    ]
+    .join("\n");
+
+    let for_scope = completion_names_after_marker(&source, "item.");
+    assert!(for_scope.contains(&"len".to_string()));
+
+    let method_scope = completion_names_after_marker(&source, "self.");
+    assert!(method_scope.contains(&"value".to_string()));
+
+    let match_scope = completion_names_after_marker(&source, "text.");
+    assert!(match_scope.contains(&"len".to_string()));
+
+    let with_scope = completion_names_after_marker(&source, "group.");
+    assert!(with_scope.contains(&"start".to_string()));
+
+    let trait_bound_scope = completion_names_after_marker(&source, "value.");
+    assert!(trait_bound_scope.contains(&"show".to_string()));
+
+    let after_branch_scope = completion_names_after_marker(&source, "label.");
+    assert!(after_branch_scope.contains(&"len".to_string()));
+}
+
 #[test]
 fn analysis_recovery_helpers_cover_member_error_paths() {
     let source = [
@@ -357,6 +440,26 @@ fn analysis_recovery_helpers_cover_member_error_paths() {
         recover_checked_program_after_member_errors(&source, &mut check_program);
     assert!(recovered_after_members.is_some());
 
+    let too_many_dangling_members = [
+        "def main() -> int32:",
+        "    counter.",
+        "    counter.",
+        "    counter.",
+        "    counter.",
+        "    counter.",
+        "    counter.",
+        "    counter.",
+        "    counter.",
+        "    counter.",
+        "    return 0",
+    ]
+    .join("\n");
+    assert!(
+        recover_checked_program_after_member_errors(&too_many_dangling_members, &mut check_program)
+            .is_none(),
+        "recovery should stop after the bounded retry budget"
+    );
+
     let non_member = Diagnostic::at(Span::new(1, 1), "expected Colon, found Newline");
     assert!(recover_checked_program_after_parse_error_with(
         &source,
@@ -366,6 +469,26 @@ fn analysis_recovery_helpers_cover_member_error_paths() {
     .is_none());
     assert!(
         recover_checked_program_after_member_errors("def main(\n", &mut check_program).is_none()
+    );
+    assert!(
+        complete_source("def main(\n", 0, 1, None).is_err(),
+        "non-member completion requests should surface parse errors instead of recovering"
+    );
+}
+
+#[test]
+fn analysis_recovery_helpers_stop_when_replacement_makes_no_progress() {
+    fn no_progress(source: &str, _line: usize) -> String {
+        source.to_string()
+    }
+
+    let source = ["def main() -> None:", "    value."].join("\n");
+    let mut check_program = crate::check_source;
+
+    assert!(
+        recover_checked_program_after_member_errors_with(&source, &mut check_program, no_progress,)
+            .is_none(),
+        "member recovery should stop if the replacement leaves the candidate unchanged"
     );
 }
 
@@ -378,6 +501,9 @@ fn analysis_trait_impl_helpers_cover_generic_bound_resolution() {
         "trait Named:",
         "    def label(borrow self) -> String",
         "",
+        "trait Mapper[T]:",
+        "    def map(borrow self) -> T",
+        "",
         "class Box[T]:",
         "    value: T",
         "",
@@ -388,6 +514,10 @@ fn analysis_trait_impl_helpers_cover_generic_bound_resolution() {
         "impl[T: Show] Named for Box[T]:",
         "    def label(borrow self) -> String:",
         "        return self.value.show()",
+        "",
+        "impl Mapper[int32] for Box[int32]:",
+        "    def map(borrow self) -> int32:",
+        "        return self.value",
     ]
     .join("\n");
     let program = checked_program(&source);
@@ -427,6 +557,37 @@ fn analysis_trait_impl_helpers_cover_generic_bound_resolution() {
         &Type::Named("Box".to_string(), vec![Type::named("String")]),
         &bound,
     ));
+    let mapper_impl = program
+        .trait_impls
+        .iter()
+        .find(|info| info.trait_name == "Mapper")
+        .expect("Mapper impl should exist");
+    let mismatched_mapper_bound = TraitBound {
+        trait_name: "Mapper".to_string(),
+        trait_args: vec![Type::named("String")],
+    };
+    assert!(
+        builder
+            .trait_impl_substitutions_for_bound(
+                mapper_impl,
+                &Type::Named("Box".to_string(), vec![Type::named("int32")]),
+                &mismatched_mapper_bound,
+            )
+            .is_none(),
+        "trait argument mismatch should reject otherwise matching impls"
+    );
+    let matching_mapper_bound = TraitBound {
+        trait_name: "Mapper".to_string(),
+        trait_args: vec![Type::named("int32")],
+    };
+    let mapper_substitutions = builder
+        .trait_impl_substitutions_for_bound(
+            mapper_impl,
+            &Type::Named("Box".to_string(), vec![Type::named("int32")]),
+            &matching_mapper_bound,
+        )
+        .expect("matching trait arguments should keep the impl in scope");
+    assert!(mapper_substitutions.is_empty());
 
     let (_impl_info, method, resolved) = builder
         .trait_method_for_receiver(
@@ -542,10 +703,51 @@ fn analysis_scope_and_call_inference_helpers_cover_methods_assignments_and_built
 }
 
 #[test]
+fn completion_scope_walks_past_if_else_and_while_blocks() {
+    let source = [
+        "def scoped(flag: bool) -> int32:",
+        "    mut total = 0",
+        "    if flag:",
+        "        in_if = total",
+        "    else:",
+        "        in_else = total",
+        "    after_if = total",
+        "    while flag:",
+        "        in_while = total",
+        "        break",
+        "    after_while = total",
+        "    return after_while",
+        "",
+        "def main() -> int32:",
+        "    return scoped(false)",
+    ]
+    .join("\n");
+    let program = checked_program(&source);
+    let builder = AnalysisBuilder::new(&source, &program, Vec::new());
+
+    let scope_inside_else = builder.scope_for_line(5);
+    assert!(scope_inside_else.contains_key("total"));
+    assert!(scope_inside_else.contains_key("in_else"));
+    assert!(!scope_inside_else.contains_key("after_if"));
+
+    let scope_after_if = builder.scope_for_line(7);
+    assert!(scope_after_if.contains_key("total"));
+    assert!(scope_after_if.contains_key("after_if"));
+    assert!(!scope_after_if.contains_key("in_else"));
+
+    let scope_after_while = builder.scope_for_line(11);
+    assert!(scope_after_while.contains_key("after_while"));
+    assert!(!scope_after_while.contains_key("in_while"));
+}
+
+#[test]
 fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_surfaces() {
     let source = [
         "trait Show:",
         "    def show(borrow self) -> String",
+        "",
+        "trait Greeter:",
+        "    def greet(borrow self) -> String",
         "",
         "class User:",
         "    label: String",
@@ -555,6 +757,10 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         "",
         "impl Show for User:",
         "    def show(borrow self) -> String:",
+        "        return self.label.clone()",
+        "",
+        "impl Greeter for User:",
+        "    def greet(borrow self) -> String:",
         "        return self.label.clone()",
         "",
         "enum Status:",
@@ -642,6 +848,14 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         },
     );
     let builder = AnalysisBuilder::new(&source, &program, Vec::new());
+    assert!(builder.complete(100, 0, Some('.')).unwrap().is_empty());
+    let unresolved_completion_program = checked_program("def main():\n    pass\n");
+    let unresolved_completion_builder =
+        AnalysisBuilder::new("missing.", &unresolved_completion_program, Vec::new());
+    assert!(unresolved_completion_builder
+        .complete(0, "missing.".len(), Some('.'))
+        .unwrap()
+        .is_empty());
 
     let top_level_names = builder
         .top_level_completions()
@@ -655,6 +869,38 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     assert!(top_level_names.contains(&"SendError".to_string()));
     assert!(top_level_names.contains(&"pkg".to_string()));
 
+    let send_error_symbol = builder
+        .resolve_name("SendError", &BTreeMap::new())
+        .expect("builtin SendError should resolve");
+    assert!(send_error_symbol.hover.contains("SendError[T]"));
+    assert!(send_error_symbol.definition.is_none());
+
+    let trait_bound_names = builder
+        .trait_bound_member_completions(&[
+            TraitBound {
+                trait_name: "Missing".to_string(),
+                trait_args: Vec::new(),
+            },
+            TraitBound {
+                trait_name: "Show".to_string(),
+                trait_args: Vec::new(),
+            },
+            TraitBound {
+                trait_name: "Show".to_string(),
+                trait_args: Vec::new(),
+            },
+        ])
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        trait_bound_names
+            .iter()
+            .filter(|name| name.as_str() == "show")
+            .count(),
+        1
+    );
+
     let module_names = builder
         .member_completions(&Type::Module("pkg.tools".to_string()))
         .into_iter()
@@ -665,6 +911,19 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     assert!(module_names.contains(&"Remote".to_string()));
     assert!(module_names.contains(&"RemoteStatus".to_string()));
     assert!(module_names.contains(&"RemoteTrait".to_string()));
+    assert!(
+        builder
+            .resolve_member_type(&Type::Module("pkg.tools".to_string()), "missing")
+            .is_none(),
+        "unknown module members should not resolve"
+    );
+
+    let remote_trait_member = builder
+        .resolve_member_type(&Type::Module("pkg.tools".to_string()), "RemoteTrait")
+        .expect("qualified imported traits should resolve as module members");
+    assert!(remote_trait_member.hover.contains("trait RemoteTrait"));
+    assert!(remote_trait_member.definition.is_some());
+    assert_eq!(remote_trait_member.ty, None);
 
     let user_member_names = builder
         .member_completions(&Type::named("User"))
@@ -682,6 +941,55 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         .collect::<Vec<_>>();
     assert!(status_member_names.contains(&"Ready".to_string()));
     assert!(status_member_names.contains(&"Failed".to_string()));
+    let ready_member = builder
+        .resolve_member_type(&Type::named("Status"), "Ready")
+        .expect("enum variants should resolve as static members");
+    assert!(ready_member.hover.contains("Status"));
+    assert!(ready_member.hover.contains("Ready"));
+    assert!(ready_member.definition.is_some());
+    assert!(
+        builder
+            .resolve_member_type(&Type::named("Status"), "Missing")
+            .is_none(),
+        "unknown enum variants should not resolve"
+    );
+    let option_member_names = builder
+        .member_completions(&Type::named("Option"))
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<Vec<_>>();
+    assert!(option_member_names.contains(&"Some".to_string()));
+    assert!(option_member_names.contains(&"None".to_string()));
+    let local_status = builder
+        .resolve_match_variant_enum("Status")
+        .expect("local enum should resolve as a match variant enum");
+    assert!(local_status.hover.contains("enum Status"));
+    assert!(local_status.definition.is_some());
+    let inferred_status_variant = builder
+        .resolve_match_variant(
+            Some(&Type::named("Status")),
+            &VariantPattern {
+                enum_name: None,
+                variant_name: "Ready".to_string(),
+                subpatterns: Vec::new(),
+                span: Span::new(1, 1),
+            },
+        )
+        .expect("inferred user enum variants should resolve in match patterns");
+    assert!(inferred_status_variant
+        .hover
+        .contains("variant Ready -> Status"));
+    assert!(inferred_status_variant.definition.is_some());
+    let remote_status = builder
+        .resolve_match_variant_enum("pkg.tools.RemoteStatus")
+        .expect("qualified imported enum should resolve as a match variant enum");
+    assert!(remote_status.hover.contains("enum RemoteStatus"));
+    assert!(remote_status.definition.is_some());
+    assert!(builder
+        .resolve_match_variant_enum("SendError")
+        .expect("builtin SendError should resolve as a match variant enum")
+        .hover
+        .contains("SendError[T]"));
 
     let string_member_names = builder
         .member_completions(&Type::named("String"))
@@ -702,6 +1010,18 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         .collect::<Vec<_>>();
     assert!(map_entry_member_names.contains(&"key".to_string()));
     assert!(map_entry_member_names.contains(&"value".to_string()));
+    assert!(
+        builder
+            .resolve_member_type(
+                &Type::Named(
+                    "MapEntry".to_string(),
+                    vec![Type::named("String"), Type::named("int32")],
+                ),
+                "missing",
+            )
+            .is_none(),
+        "unknown MapEntry fields should not resolve"
+    );
 
     let task_group_member_names = builder
         .member_completions(&Type::named("TaskGroup"))
@@ -710,6 +1030,108 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         .collect::<Vec<_>>();
     assert!(task_group_member_names.contains(&"start".to_string()));
     assert!(task_group_member_names.contains(&"start_soon".to_string()));
+
+    let assert_resolved_member =
+        |receiver: Type, field: &str, hover_fragment: &str, expected_ty: Type| {
+            let member = builder
+                .resolve_member_type(&receiver, field)
+                .unwrap_or_else(|| panic!("expected {receiver}.{field} to resolve"));
+            assert!(
+                member.hover.contains(hover_fragment),
+                "hover for {receiver}.{field} should mention {hover_fragment}: {}",
+                member.hover
+            );
+            assert_eq!(member.definition, None);
+            assert_eq!(member.ty, Some(expected_ty), "{receiver}.{field}");
+        };
+    assert_resolved_member(
+        Type::named("TaskGroup"),
+        "start",
+        "Task[T]",
+        Type::Named("Task".to_string(), vec![Type::Unit]),
+    );
+    assert_resolved_member(
+        Type::named("TaskGroup"),
+        "start_soon",
+        "start_soon",
+        Type::Unit,
+    );
+    assert_resolved_member(Type::named("Option"), "Some", "Some", Type::named("Option"));
+    assert_resolved_member(Type::named("Option"), "None", "None", Type::named("Option"));
+    assert_resolved_member(Type::named("Result"), "Ok", "Ok", Type::named("Result"));
+    assert_resolved_member(Type::named("Result"), "Err", "Err", Type::named("Result"));
+    assert_resolved_member(
+        Type::named("SendError"),
+        "Closed",
+        "Closed",
+        Type::named("SendError"),
+    );
+    assert_resolved_member(
+        Type::named("QueueReceive"),
+        "Item",
+        "Item",
+        Type::named("QueueReceive"),
+    );
+    assert_resolved_member(
+        Type::named("QueueReceive"),
+        "TimedOut",
+        "TimedOut",
+        Type::named("QueueReceive"),
+    );
+    assert_resolved_member(
+        Type::named("TaskResult"),
+        "Ready",
+        "Ready",
+        Type::named("TaskResult"),
+    );
+    assert_resolved_member(
+        Type::named("TaskResult"),
+        "Error",
+        "Error",
+        Type::named("TaskResult"),
+    );
+    assert_resolved_member(
+        Type::named("TaskResult"),
+        "Cancelled",
+        "Cancelled",
+        Type::named("TaskResult"),
+    );
+    assert_resolved_member(
+        Type::named("WaitAny"),
+        "Ready",
+        "Ready",
+        Type::named("WaitAny"),
+    );
+    assert_resolved_member(
+        Type::named("WaitAny"),
+        "Error",
+        "Error",
+        Type::named("WaitAny"),
+    );
+    assert_resolved_member(
+        Type::named("WaitAny"),
+        "TimedOut",
+        "TimedOut",
+        Type::named("WaitAny"),
+    );
+    assert_resolved_member(
+        Type::named("WaitAll"),
+        "Ready",
+        "Ready",
+        Type::named("WaitAll"),
+    );
+    assert_resolved_member(
+        Type::named("WaitAll"),
+        "Error",
+        "Error",
+        Type::named("WaitAll"),
+    );
+    assert_resolved_member(
+        Type::named("WaitAll"),
+        "Cancelled",
+        "Cancelled",
+        Type::named("WaitAll"),
+    );
 
     let scope = BTreeMap::from([
         (
@@ -825,6 +1247,19 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
     assert_eq!(
         builder.infer_expr_type(
             &expr(ExprKind::Call {
+                callee: Box::new(expr(ExprKind::Name("wait_all".to_string()))),
+                args: vec![arg(expr(ExprKind::Name("tasks".to_string())))],
+            }),
+            &scope,
+        ),
+        Some(Type::Named(
+            "WaitAll".to_string(),
+            vec![Type::named("int32")],
+        ))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Call {
                 callee: Box::new(expr(ExprKind::Member {
                     object: Box::new(expr(ExprKind::Name("task".to_string()))),
                     field: "result".to_string(),
@@ -835,6 +1270,22 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         ),
         Some(Type::Named(
             "TaskResult".to_string(),
+            vec![Type::named("int32")],
+        ))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Call {
+                callee: Box::new(expr(ExprKind::Member {
+                    object: Box::new(expr(ExprKind::Name("task".to_string()))),
+                    field: "result_or_none".to_string(),
+                })),
+                args: Vec::new(),
+            }),
+            &scope,
+        ),
+        Some(Type::Named(
+            "Option".to_string(),
             vec![Type::named("int32")],
         ))
     );
@@ -867,6 +1318,224 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             &scope,
         ),
         Some(Type::named("int32"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Cast {
+                expr: Box::new(expr(ExprKind::Int(1))),
+                ty: type_ref("String"),
+            }),
+            &scope,
+        ),
+        Some(Type::named("String"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Unary {
+                op: crate::ast::UnaryOp::Not,
+                expr: Box::new(expr(ExprKind::Bool(false))),
+            }),
+            &scope,
+        ),
+        Some(Type::named("bool"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Unary {
+                op: crate::ast::UnaryOp::Neg,
+                expr: Box::new(expr(ExprKind::Float(1.5))),
+            }),
+            &scope,
+        ),
+        Some(Type::named("float64"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Group(Box::new(expr(ExprKind::Int(3))))),
+            &scope
+        ),
+        Some(Type::named("int32"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(&expr(ExprKind::Name("pkg".to_string())), &scope),
+        Some(Type::Module("pkg".to_string()))
+    );
+    assert_eq!(
+        builder.infer_expr_type(&expr(ExprKind::Name("Status".to_string())), &scope),
+        Some(Type::named("Status"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(&expr(ExprKind::Name("helper".to_string())), &scope),
+        Some(Type::named("int32"))
+    );
+    for builtin_name in [
+        "SendError",
+        "QueueReceive",
+        "TaskResult",
+        "WaitAny",
+        "WaitAll",
+        "Queue",
+        "TaskGroup",
+    ] {
+        assert_eq!(
+            builder.infer_expr_type(&expr(ExprKind::Name(builtin_name.to_string())), &scope),
+            Some(Type::named(builtin_name)),
+            "{builtin_name} should infer as a builtin type constructor"
+        );
+    }
+    for (builtin_name, args) in [
+        ("SendError", vec![type_ref("int32")]),
+        ("Queue", vec![type_ref("String")]),
+        ("Vec", vec![type_ref("int32")]),
+        ("Set", vec![type_ref("String")]),
+        ("Map", vec![type_ref("String"), type_ref("int32")]),
+        ("Task", vec![type_ref("int32")]),
+    ] {
+        assert_eq!(
+            builder.infer_expr_type(
+                &expr(ExprKind::Specialize {
+                    expr: Box::new(expr(ExprKind::Name(builtin_name.to_string()))),
+                    type_args: args.clone(),
+                }),
+                &scope,
+            ),
+            Some(Type::Named(
+                builtin_name.to_string(),
+                args.into_iter().map(|arg| lower_type_ref(&arg)).collect(),
+            )),
+            "{builtin_name} specialization should infer its generic type"
+        );
+    }
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Specialize {
+                expr: Box::new(expr(ExprKind::Name("helper".to_string()))),
+                type_args: vec![type_ref("int32")],
+            }),
+            &scope,
+        ),
+        Some(Type::named("int32"))
+    );
+    assert_eq!(Type::Unit.type_arguments(), &[]);
+    assert_eq!(Type::Module("pkg".to_string()).type_arguments(), &[]);
+    assert_eq!(Type::TypeParam("T".to_string()).type_arguments(), &[]);
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("numbers".to_string()))),
+                field: "len".to_string(),
+            }),
+            &scope,
+        ),
+        Some(Type::named("int32"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Match {
+                scrutinee: Box::new(expr(ExprKind::Name("numbers".to_string()))),
+                borrow_mode: None,
+                arms: vec![crate::ast::MatchExprArm {
+                    pattern: crate::ast::Pattern::Wildcard(Span::new(1, 1)),
+                    value: expr(ExprKind::Int(4)),
+                    span: Span::new(1, 1),
+                }],
+            }),
+            &scope,
+        ),
+        Some(Type::named("int32"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Try(Box::new(expr(ExprKind::Int(1))))),
+            &scope,
+        ),
+        None
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Index {
+                object: Box::new(expr(ExprKind::String("abc".to_string()))),
+                index: Box::new(expr(ExprKind::Int(0))),
+            }),
+            &scope,
+        ),
+        None
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Binary {
+                op: BinaryOp::And,
+                left: Box::new(expr(ExprKind::Bool(true))),
+                right: Box::new(expr(ExprKind::Bool(false))),
+            }),
+            &scope,
+        ),
+        Some(Type::named("bool"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(expr(ExprKind::Int(1))),
+                right: Box::new(expr(ExprKind::Int(1))),
+            }),
+            &scope,
+        ),
+        Some(Type::named("bool"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(expr(ExprKind::Int(1))),
+                right: Box::new(expr(ExprKind::Float(2.0))),
+            }),
+            &scope,
+        ),
+        Some(Type::named("float64"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(expr(ExprKind::String("left".to_string()))),
+                right: Box::new(expr(ExprKind::Int(2))),
+            }),
+            &scope,
+        ),
+        None
+    );
+    assert_eq!(
+        builder.infer_call_type(
+            &expr(ExprKind::Name("wait_any".to_string())),
+            &[arg(expr(ExprKind::Name("numbers".to_string())))],
+            &scope,
+        ),
+        None
+    );
+    assert_eq!(
+        builder.infer_call_type(
+            &expr(ExprKind::Name("wait_any".to_string())),
+            &[arg(expr(ExprKind::Int(1)))],
+            &scope,
+        ),
+        None
+    );
+    assert_eq!(
+        builder.infer_call_type(
+            &expr(ExprKind::Name("wait_all".to_string())),
+            &[arg(expr(ExprKind::Name("numbers".to_string())))],
+            &scope,
+        ),
+        None
+    );
+    assert_eq!(
+        builder.infer_call_type(
+            &expr(ExprKind::Name("wait_all".to_string())),
+            &[arg(expr(ExprKind::Int(1)))],
+            &scope,
+        ),
+        None
     );
     assert_eq!(
         builder.infer_call_type(
@@ -908,6 +1577,21 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         Some(Type::Named("Task".to_string(), vec![Type::named("int32")]))
     );
     assert_eq!(
+        builder.infer_call_type(
+            &expr(ExprKind::Specialize {
+                expr: Box::new(expr(ExprKind::Name("helper".to_string()))),
+                type_args: vec![type_ref("int32")],
+            }),
+            &[],
+            &scope,
+        ),
+        Some(Type::named("int32"))
+    );
+    assert_eq!(
+        builder.infer_call_type(&expr(ExprKind::Int(1)), &[], &scope),
+        None
+    );
+    assert_eq!(
         builder.infer_iterable_binding_type(
             &expr(ExprKind::Set(vec![expr(ExprKind::String("a".to_string()))])),
             &scope,
@@ -922,6 +1606,39 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             )),
             None,
             "Err",
+        ),
+        Some(Type::named("String"))
+    );
+    assert_eq!(
+        builder.match_binding_type(
+            Some(&Type::Named(
+                "Option".to_string(),
+                vec![Type::named("int32")],
+            )),
+            None,
+            "Some",
+        ),
+        Some(Type::named("int32"))
+    );
+    assert_eq!(
+        builder.match_binding_type(
+            Some(&Type::Named(
+                "Result".to_string(),
+                vec![Type::named("int32"), Type::named("String")],
+            )),
+            None,
+            "Ok",
+        ),
+        Some(Type::named("int32"))
+    );
+    assert_eq!(
+        builder.match_binding_type(
+            Some(&Type::Named(
+                "SendError".to_string(),
+                vec![Type::named("String")],
+            )),
+            None,
+            "Closed",
         ),
         Some(Type::named("String"))
     );
@@ -990,11 +1707,29 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
     );
 
     let builder = AnalysisBuilder::new(&source, &program, Vec::new());
+    assert_eq!(
+        builder.current_source_path().as_deref(),
+        Some("/tmp/main.au")
+    );
     let import_range = builder
         .find_imported_module_range("pkg.types")
         .expect("import range should fall back to current file");
     assert_eq!(import_range.file_path.as_deref(), Some("/tmp/main.au"));
     assert_eq!(import_range.line, 0);
+    assert!(
+        builder
+            .find_imported_module_range("pkg.types.inner")
+            .is_none(),
+        "longer target paths should not match shorter imports"
+    );
+    let mismatched_source_builder =
+        AnalysisBuilder::new("def other():\n    pass\n", &program, vec![]);
+    assert!(
+        mismatched_source_builder
+            .find_imported_module_range("pkg.types")
+            .is_none(),
+        "fallback import ranges require the token to be present on the source line"
+    );
 
     let option_symbol = builder
         .resolve_match_variant_enum("Option")
@@ -1046,6 +1781,69 @@ fn analysis_import_and_match_resolution_helpers_cover_fallbacks() {
     assert!(named_variant.definition.is_some());
     assert!(named_variant.hover.contains("Failed"));
     assert!(named_variant.hover.contains("String"));
+
+    let inferred_named_variant = builder
+        .resolve_match_variant(
+            Some(&Type::named("Status")),
+            &VariantPattern {
+                enum_name: None,
+                variant_name: "Failed".to_string(),
+                subpatterns: Vec::new(),
+                span: Span::new(10, 14),
+            },
+        )
+        .expect("scrutinee-inferred enum variants should resolve");
+    assert!(inferred_named_variant.definition.is_some());
+
+    let result_err_variant = builder
+        .resolve_match_variant(
+            Some(&Type::Named(
+                "Result".to_string(),
+                vec![Type::named("int32"), Type::named("String")],
+            )),
+            &VariantPattern {
+                enum_name: None,
+                variant_name: "Err".to_string(),
+                subpatterns: Vec::new(),
+                span: Span::new(12, 14),
+            },
+        )
+        .expect("builtin Result.Err should resolve");
+    assert!(result_err_variant.hover.contains("String"));
+
+    let send_cancelled_variant = builder
+        .resolve_match_variant(
+            Some(&Type::Named(
+                "SendError".to_string(),
+                vec![Type::named("int32")],
+            )),
+            &VariantPattern {
+                enum_name: None,
+                variant_name: "Cancelled".to_string(),
+                subpatterns: Vec::new(),
+                span: Span::new(13, 14),
+            },
+        )
+        .expect("builtin SendError.Cancelled should resolve");
+    assert!(send_cancelled_variant.hover.contains("int32"));
+
+    assert!(
+        builder
+            .resolve_match_variant(
+                Some(&Type::Named(
+                    "Option".to_string(),
+                    vec![Type::named("int32")],
+                )),
+                &VariantPattern {
+                    enum_name: None,
+                    variant_name: "Missing".to_string(),
+                    subpatterns: Vec::new(),
+                    span: Span::new(14, 14),
+                },
+            )
+            .is_none(),
+        "unknown builtin enum variants should fall through to named enum resolution"
+    );
 }
 
 #[test]
@@ -1145,6 +1943,12 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
     assert!(module_names.contains(&"Remote".to_string()));
     assert!(module_names.contains(&"RemoteStatus".to_string()));
     assert!(module_names.contains(&"RemoteTrait".to_string()));
+    assert!(
+        builder
+            .member_completions(&Type::Module("pkg.missing".to_string()))
+            .is_empty(),
+        "unknown module namespaces should complete to an empty member list"
+    );
 
     let enum_names = builder
         .member_completions(&Type::named("Status"))
@@ -1153,6 +1957,22 @@ fn analysis_completion_helpers_cover_top_level_module_and_enum_surfaces() {
         .collect::<Vec<_>>();
     assert!(enum_names.contains(&"Ready".to_string()));
     assert!(enum_names.contains(&"Failed".to_string()));
+
+    assert_eq!(
+        builder.match_binding_type(None, Some("Status"), "Failed"),
+        Some(Type::named("String"))
+    );
+    assert_eq!(
+        builder.match_binding_type(
+            Some(&Type::Named(
+                "SendError".to_string(),
+                vec![Type::named("int32")]
+            )),
+            None,
+            "Cancelled"
+        ),
+        Some(Type::named("int32"))
+    );
 }
 
 #[test]
@@ -1561,6 +2381,13 @@ fn analysis_records_variant_occurrences_inside_match_patterns() {
         "            return 1",
         "        case Status.Busy:",
         "            return 0",
+        "",
+        "def render_unqualified(status: Status) -> int32:",
+        "    match status:",
+        "        case Ready:",
+        "            return 1",
+        "        case Busy:",
+        "            return 0",
     ]
     .join("\n");
 
@@ -1573,10 +2400,108 @@ fn analysis_records_variant_occurrences_inside_match_patterns() {
             && occurrence.definition.is_some()
     }));
     assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 6
+            && occurrence.hover.contains("enum Status")
+            && occurrence.definition.is_some()
+    }));
+    assert!(analysis.occurrences.iter().any(|occurrence| {
         occurrence.line == 8
             && occurrence.hover.contains("variant Busy")
             && occurrence.definition.is_some()
     }));
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 13
+            && occurrence.hover.contains("variant Ready")
+            && occurrence.definition.is_some()
+    }));
+    assert!(analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 15
+            && occurrence.hover.contains("variant Busy")
+            && occurrence.definition.is_some()
+    }));
+}
+
+#[test]
+fn analysis_member_assignment_without_source_field_range_does_not_emit_occurrence() {
+    let assignment_source = [
+        "class Counter:",
+        "    value: int32",
+        "",
+        "def update():",
+        "    mut counter = Counter(value=0)",
+        "    counter.value = 1",
+    ]
+    .join("\n");
+    let assignment_analysis = analyze_source(&assignment_source);
+    assert!(assignment_analysis.diagnostics.is_empty());
+    assert!(assignment_analysis.occurrences.iter().any(|occurrence| {
+        occurrence.line == 5
+            && occurrence.hover.contains("field value")
+            && occurrence.definition.is_some()
+    }));
+
+    let source = [
+        "class Counter:",
+        "    value: int32",
+        "",
+        "def update(counter: Counter):",
+        "    pass",
+    ]
+    .join("\n");
+    let program = checked_program(&source);
+    let mut builder = AnalysisBuilder::new(&source, &program, Vec::new());
+    let function_decl = program
+        .module
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(function_decl) if function_decl.name == "update" => Some(function_decl),
+            _ => None,
+        })
+        .expect("update function should exist");
+    let function_info = program
+        .functions
+        .get("update")
+        .expect("update function info should exist");
+    let mut scope = builder.function_scope(function_decl, function_info);
+    let assignment = AssignStmt {
+        mutable: false,
+        target: AssignTarget::Member {
+            object: Box::new(expr(ExprKind::Name("counter".to_string()))),
+            field: "value".to_string(),
+        },
+        annotation: None,
+        op: None,
+        value: expr(ExprKind::Int(1)),
+        span: Span::new(5, 5),
+    };
+
+    builder.visit_assign(&assignment, &mut scope);
+
+    assert!(builder
+        .output
+        .occurrences
+        .iter()
+        .all(|occurrence| !occurrence.hover.contains("field value")));
+
+    let unresolved_receiver_assignment = AssignStmt {
+        mutable: false,
+        target: AssignTarget::Member {
+            object: Box::new(expr(ExprKind::Name("missing".to_string()))),
+            field: "value".to_string(),
+        },
+        annotation: None,
+        op: None,
+        value: expr(ExprKind::Int(2)),
+        span: Span::new(5, 5),
+    };
+    builder.visit_assign(&unresolved_receiver_assignment, &mut scope);
+
+    assert!(builder
+        .output
+        .occurrences
+        .iter()
+        .all(|occurrence| !occurrence.hover.contains("missing")));
 }
 
 #[test]
@@ -1679,6 +2604,25 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
 
     let option_variants = builtin_enum_variant_completions("Option");
     assert!(option_variants.iter().any(|item| item.name == "Some"));
+    assert!(builtin_enum_variant_completions("Result")
+        .iter()
+        .any(|item| item.name == "Err"));
+    assert!(builtin_enum_variant_completions("SendError")
+        .iter()
+        .any(|item| item.name == "Full"));
+    assert!(builtin_enum_variant_completions("QueueReceive")
+        .iter()
+        .any(|item| item.name == "Item"));
+    assert!(builtin_enum_variant_completions("TaskResult")
+        .iter()
+        .any(|item| item.name == "Ready"));
+    assert!(builtin_enum_variant_completions("WaitAny")
+        .iter()
+        .any(|item| item.name == "Error"));
+    assert!(builtin_enum_variant_completions("WaitAll")
+        .iter()
+        .any(|item| item.name == "Cancelled"));
+    assert!(builtin_enum_variant_completions("Unknown").is_empty());
     assert!(builtin_member_completions(&Type::Named(
         "Set".to_string(),
         vec![Type::named("int32")],
@@ -1816,8 +2760,19 @@ fn analysis_recovery_helpers_cover_placeholders_and_receiver_extraction() {
         .join("\n")
     );
     assert_eq!(
+        replace_dangling_member_stmt_with_recovery_stmt("value.", 0),
+        "pass"
+    );
+    assert_eq!(
         enclosing_function_return_placeholder(&source, 2),
         Some("return 0".to_string())
+    );
+    assert_eq!(
+        enclosing_function_return_placeholder(
+            "def main() -> bool:\n    if true:\n        value.",
+            2
+        ),
+        Some("return false".to_string())
     );
     assert_eq!(
         placeholder_stmt_for_return_type("Option[String]"),
@@ -1840,6 +2795,12 @@ fn analysis_recovery_helpers_cover_placeholders_and_receiver_extraction() {
         extract_receiver_before_dot(field_line, field_line.len()),
         Some("value".to_string())
     );
+    let spaced_field_line = "    value   .   ";
+    assert_eq!(
+        extract_receiver_before_dot(spaced_field_line, spaced_field_line.len()),
+        Some("value".to_string())
+    );
+    assert_eq!(extract_receiver_before_dot("      .   ", 10), None);
     assert_eq!(find_receiver_start("value.clone()", 10), Some(0));
     assert_eq!(find_receiver_start("(value.clone())", 13), Some(12));
 
@@ -1887,10 +2848,60 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         builtin_member_completions(&Type::Named("Task".to_string(), vec![Type::named("int32")]));
     assert!(task_completions.iter().any(|item| item.name == "result"));
 
+    let program = checked_program("def main():\n    pass\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let method_decl = function_decl("tick", "None");
+    let method_info = MethodInfo {
+        decl: method_decl.clone(),
+        signature: FunctionSignature {
+            params: vec![Type::named("int32")],
+            return_type: Type::Unit,
+            return_passing: ReceiverKind::Value,
+            return_borrow_source: None,
+        },
+        type_param_bounds: Default::default(),
+    };
+    let method_scope = builder.method_scope("Counter", &method_decl, &method_info);
+    assert_eq!(
+        method_scope
+            .get("self")
+            .expect("method scope should include self")
+            .definition,
+        range_from_span(method_decl.span, method_decl.name.len())
+    );
+    let vec_receiver = Type::Named("Vec".to_string(), vec![Type::named("int32")]);
+    assert_eq!(
+        builder
+            .resolve_member_type(&vec_receiver, "clone")
+            .expect("Vec.clone should resolve")
+            .ty,
+        Some(vec_receiver.clone())
+    );
+    let map_receiver = Type::Named(
+        "Map".to_string(),
+        vec![Type::named("String"), Type::named("int32")],
+    );
+    assert_eq!(
+        builder
+            .resolve_member_type(&map_receiver, "clone")
+            .expect("Map.clone should resolve")
+            .ty,
+        Some(map_receiver.clone())
+    );
+    let set_receiver = Type::Named("Set".to_string(), vec![Type::named("String")]);
+    assert_eq!(
+        builder
+            .resolve_member_type(&set_receiver, "clone")
+            .expect("Set.clone should resolve")
+            .ty,
+        Some(set_receiver.clone())
+    );
+
     assert_eq!(
         builtin_function_return_type("range"),
         Some(Type::named("Range"))
     );
+    assert_eq!(builtin_function_return_type("print"), Some(Type::Unit));
     assert_eq!(builtin_function_return_type("TaskGroup"), None);
     assert_eq!(
         builtin_function_return_type("cancelled"),
@@ -1899,6 +2910,10 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
     assert_eq!(builtin_function_return_type("after"), None);
     assert_eq!(builtin_function_return_type("wait_any"), None);
     assert_eq!(builtin_function_return_type("wait_all"), None);
+    assert_eq!(builtin_function_return_type("abs"), None);
+    assert_eq!(builtin_function_return_type("min"), None);
+    assert_eq!(builtin_function_return_type("max"), None);
+    assert_eq!(builtin_function_return_type("sqrt"), None);
     assert_eq!(builtin_function_return_type("sleep"), Some(Type::Unit));
     assert_eq!(
         builtin_function_return_type("parse_int32"),
@@ -1912,6 +2927,13 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         Some(Type::Named(
             "Result".to_string(),
             vec![Type::named("int64"), Type::named("String")],
+        ))
+    );
+    assert_eq!(
+        builtin_function_return_type("parse_float64"),
+        Some(Type::Named(
+            "Result".to_string(),
+            vec![Type::named("float64"), Type::named("String")],
         ))
     );
 
@@ -2000,13 +3022,510 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         while_stmt,
     ];
     assert_eq!(stmt_end_line(&stmts[0]), 5);
+    let empty_else_stmt = crate::ast::Stmt::If(crate::ast::IfStmt {
+        branches: vec![crate::ast::IfBranch {
+            condition: Expr {
+                kind: ExprKind::Bool(true),
+                span: Span::new(20, 8),
+            },
+            body: vec![crate::ast::Stmt::Pass(PassStmt {
+                span: Span::new(21, 9),
+            })],
+            span: Span::new(20, 5),
+        }],
+        else_body: Some(Vec::new()),
+        span: Span::new(20, 5),
+    });
+    assert_eq!(stmt_end_line(&empty_else_stmt), 21);
+    let no_else_stmt = crate::ast::Stmt::If(crate::ast::IfStmt {
+        branches: vec![crate::ast::IfBranch {
+            condition: Expr {
+                kind: ExprKind::Bool(false),
+                span: Span::new(22, 8),
+            },
+            body: vec![crate::ast::Stmt::Pass(PassStmt {
+                span: Span::new(23, 9),
+            })],
+            span: Span::new(22, 5),
+        }],
+        else_body: None,
+        span: Span::new(22, 5),
+    });
+    assert_eq!(stmt_end_line(&no_else_stmt), 23);
     assert_eq!(stmt_end_line(&stmts[1]), 8);
     assert_eq!(stmt_end_line(&stmts[2]), 10);
     assert_eq!(stmt_end_line(&stmts[3]), 12);
     assert_eq!(stmt_end_line(&stmts[4]), 14);
     assert_eq!(stmt_end_line(&stmts[5]), 16);
+    assert!(!block_contains_line(&[], 1));
+    let break_stmt = crate::ast::Stmt::Break(crate::ast::BreakStmt {
+        span: Span::new(17, 9),
+    });
+    let continue_stmt = crate::ast::Stmt::Continue(crate::ast::ContinueStmt {
+        span: Span::new(18, 9),
+    });
+    let expr_stmt = crate::ast::Stmt::Expr(crate::ast::ExprStmt {
+        expr: expr(ExprKind::Int(1)),
+        span: Span::new(19, 9),
+    });
+    assert_eq!(stmt_start_line(&break_stmt), 17);
+    assert_eq!(stmt_start_line(&continue_stmt), 18);
+    assert_eq!(stmt_start_line(&expr_stmt), 19);
+    assert_eq!(stmt_end_line(&break_stmt), 17);
+    assert_eq!(stmt_end_line(&continue_stmt), 18);
+    assert_eq!(stmt_end_line(&expr_stmt), 19);
     assert!(callable_contains_line(&stmts, 14));
     assert!(!block_contains_line(&stmts, 20));
+
+    let scope_builder = AnalysisBuilder::new("", &program, Vec::new());
+    let mut accumulated_scope = BTreeMap::new();
+    scope_builder.accumulate_scope_from_stmts(&stmts[..1], 4, &mut accumulated_scope);
+    scope_builder.accumulate_scope_from_stmts(
+        std::slice::from_ref(&no_else_stmt),
+        24,
+        &mut accumulated_scope,
+    );
+    scope_builder.accumulate_scope_from_stmts(&stmts, 5, &mut accumulated_scope);
+    scope_builder.accumulate_scope_from_stmts(&stmts, 6, &mut accumulated_scope);
+    scope_builder.accumulate_scope_from_stmts(&stmts, 16, &mut accumulated_scope);
+
+    let mut fallback_builder = AnalysisBuilder::new("", &program, Vec::new());
+    let mut fallback_scope = BTreeMap::new();
+    let fallback_assignment = AssignStmt {
+        mutable: false,
+        target: AssignTarget::Name("fresh".to_string()),
+        annotation: Some(type_ref("int32")),
+        op: None,
+        value: expr(ExprKind::Int(1)),
+        span: Span::new(30, 1),
+    };
+    fallback_builder.bind_assignment(&fallback_assignment, &mut fallback_scope);
+    assert_eq!(
+        fallback_scope
+            .get("fresh")
+            .expect("fresh binding should be inserted")
+            .definition,
+        range_from_span(Span::new(30, 1), "fresh".len())
+    );
+    let reassignment = AssignStmt {
+        mutable: false,
+        target: AssignTarget::Name("fresh".to_string()),
+        annotation: None,
+        op: None,
+        value: expr(ExprKind::Int(2)),
+        span: Span::new(31, 1),
+    };
+    fallback_builder.visit_assign(&reassignment, &mut fallback_scope);
+    let reassignment_range = range_from_span(Span::new(31, 1), "fresh".len());
+    assert!(fallback_builder
+        .output
+        .occurrences
+        .iter()
+        .any(|occurrence| {
+            occurrence.hover.contains("fresh: int32")
+                && occurrence.line == reassignment_range.line
+                && occurrence.start_character == reassignment_range.start_character
+                && occurrence.end_character == reassignment_range.end_character
+        }));
+
+    let mut scope = BTreeMap::new();
+    let no_payload_arm = crate::ast::MatchArm {
+        pattern: crate::ast::Pattern::Variant(VariantPattern {
+            enum_name: Some("Option".to_string()),
+            variant_name: "None".to_string(),
+            subpatterns: Vec::new(),
+            span: Span::new(21, 9),
+        }),
+        body: Vec::new(),
+        span: Span::new(21, 9),
+    };
+    scope_builder.bind_match_arm_scope(
+        &no_payload_arm,
+        Some(&Type::Named(
+            "Option".to_string(),
+            vec![Type::named("int32")],
+        )),
+        &mut scope,
+    );
+    assert!(scope.is_empty());
+    let non_binding_payload_arm = crate::ast::MatchArm {
+        pattern: crate::ast::Pattern::Variant(VariantPattern {
+            enum_name: Some("Option".to_string()),
+            variant_name: "Some".to_string(),
+            subpatterns: vec![crate::ast::Pattern::Wildcard(Span::new(22, 19))],
+            span: Span::new(22, 9),
+        }),
+        body: Vec::new(),
+        span: Span::new(22, 9),
+    };
+    scope_builder.bind_match_arm_scope(
+        &non_binding_payload_arm,
+        Some(&Type::Named(
+            "Option".to_string(),
+            vec![Type::named("int32")],
+        )),
+        &mut scope,
+    );
+    assert!(scope.is_empty());
+
+    assert_eq!(extract_receiver_ending_before("", 0), None);
+    assert_eq!(extract_receiver_ending_before("value", 5), None);
+    assert_eq!(extract_receiver_ending_before(".field", 1), None);
+    assert_eq!(
+        extract_receiver_ending_before("(value + other).field", 16),
+        Some("(value + other)")
+    );
+    assert_eq!(
+        extract_receiver_ending_before("value.   ", "value.   ".len()),
+        Some("value")
+    );
+    assert_eq!(
+        extract_receiver_ending_before("((value)).field", 10),
+        Some("((value))")
+    );
+    assert_eq!(find_receiver_start("value).field", 5), None);
+    assert_eq!(
+        sanitize_member_completion_source("def main():\n    value", 20, 0),
+        "def main():\n    value"
+    );
+    assert_eq!(
+        sanitize_member_completion_source("def main():\n    value", 1, 0),
+        "def main():\n    value"
+    );
+    assert_eq!(
+        sanitize_member_completion_source("def main():\n    value", 1, 10),
+        "def main():\n    value"
+    );
+    assert_eq!(
+        replace_dangling_member_stmt_with_recovery_stmt("def main():\n    value.", 20),
+        "def main():\n    value."
+    );
+    assert_eq!(enclosing_function_return_placeholder("value.", 0), None);
+    assert_eq!(
+        enclosing_function_return_placeholder("def main() -> int32:\n    value.", 10),
+        None
+    );
+    assert_eq!(placeholder_stmt_for_return_type("Custom"), None);
+}
+
+#[test]
+fn analysis_builtin_member_types_cover_io_network_and_process_surfaces() {
+    let program = checked_program("def main():\n    pass\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let named = |name: &str| Type::Named(name.to_string(), Vec::new());
+    let option = |payload: Type| Type::Named("Option".to_string(), vec![payload]);
+    let result = |ok: Type, err: Type| Type::Named("Result".to_string(), vec![ok, err]);
+    let vec_of = |payload: Type| Type::Named("Vec".to_string(), vec![payload]);
+    let string = Type::named("String");
+    let uint8 = Type::named("uint8");
+    let io_error = named("io.Error");
+    let process_error = named("process.Error");
+
+    let assert_member_type = |receiver: &str, field: &str, expected: Type| {
+        let member = builder
+            .resolve_member_type(&named(receiver), field)
+            .unwrap_or_else(|| panic!("expected builtin member {receiver}.{field}"));
+        assert!(
+            member.hover.contains(field),
+            "hover for {receiver}.{field} should mention the member name"
+        );
+        assert_eq!(member.ty, Some(expected), "{receiver}.{field}");
+    };
+
+    assert_member_type("process.Child", "stdin", option(named("process.Pipe")));
+    assert_member_type("process.Child", "stdout", option(named("process.Pipe")));
+    assert_member_type("process.Child", "stderr", option(named("process.Pipe")));
+    assert_member_type("process.Child", "wait", named("process.Wait"));
+    assert_member_type(
+        "process.Child",
+        "wait_or_none",
+        result(option(named("process.ExitStatus")), process_error.clone()),
+    );
+    assert_member_type(
+        "process.Child",
+        "wait_ok",
+        result(named("process.ExitStatus"), process_error.clone()),
+    );
+    assert_member_type(
+        "process.Child",
+        "kill",
+        result(Type::Unit, process_error.clone()),
+    );
+    assert_member_type(
+        "process.Child",
+        "terminate",
+        result(Type::Unit, process_error.clone()),
+    );
+    assert_member_type("process.Child", "close", Type::Unit);
+
+    assert_member_type(
+        "process.Pipe",
+        "read_all",
+        result(string.clone(), process_error.clone()),
+    );
+    assert_member_type(
+        "process.Pipe",
+        "read_line",
+        result(option(string.clone()), process_error.clone()),
+    );
+    assert_member_type(
+        "process.Pipe",
+        "read_bytes",
+        result(option(vec_of(uint8.clone())), process_error.clone()),
+    );
+    for field in ["write_all", "write_bytes", "flush"] {
+        assert_member_type(
+            "process.Pipe",
+            field,
+            result(Type::Unit, process_error.clone()),
+        );
+    }
+    assert_member_type("process.Pipe", "close", Type::Unit);
+
+    assert_member_type("process.Completed", "status", named("process.ExitStatus"));
+    assert_member_type("process.Completed", "success", Type::named("bool"));
+    assert_member_type("process.Completed", "stdout", string.clone());
+    assert_member_type("process.Completed", "stderr", string.clone());
+    assert_member_type("process.Completed", "stdout_bytes", vec_of(uint8.clone()));
+    assert_member_type("process.Completed", "stderr_bytes", vec_of(uint8.clone()));
+    assert_member_type(
+        "process.Completed",
+        "check",
+        result(Type::Unit, process_error.clone()),
+    );
+
+    for field in ["start", "stop"] {
+        assert_member_type(
+            "process.Supervisor",
+            field,
+            result(Type::Unit, process_error.clone()),
+        );
+    }
+    assert_member_type(
+        "process.Supervisor",
+        "wait",
+        named("process.SupervisorWait"),
+    );
+    assert_member_type(
+        "process.Supervisor",
+        "wait_or_none",
+        result(
+            option(named("process.SupervisorEvent")),
+            process_error.clone(),
+        ),
+    );
+    assert_member_type("process.Supervisor", "is_empty", Type::named("bool"));
+    assert_member_type("process.Supervisor", "close", Type::Unit);
+
+    assert_member_type(
+        "fs.File",
+        "read_all",
+        result(string.clone(), io_error.clone()),
+    );
+    assert_member_type(
+        "fs.File",
+        "read_bytes",
+        result(vec_of(uint8.clone()), io_error.clone()),
+    );
+    for field in ["write_all", "write_bytes", "flush"] {
+        assert_member_type("fs.File", field, result(Type::Unit, io_error.clone()));
+    }
+    assert_member_type("fs.File", "close", Type::Unit);
+
+    assert_member_type(
+        "net.TcpListener",
+        "accept",
+        result(named("net.TcpStream"), io_error.clone()),
+    );
+    assert_member_type(
+        "net.TcpListener",
+        "local_addr",
+        result(string.clone(), io_error.clone()),
+    );
+    assert_member_type("net.TcpListener", "close", Type::Unit);
+    for field in ["read_all", "local_addr", "peer_addr"] {
+        assert_member_type(
+            "net.TcpStream",
+            field,
+            result(string.clone(), io_error.clone()),
+        );
+    }
+    assert_member_type(
+        "net.TcpStream",
+        "read_line",
+        result(option(string.clone()), io_error.clone()),
+    );
+    assert_member_type(
+        "net.TcpStream",
+        "read_bytes",
+        result(option(vec_of(uint8.clone())), io_error.clone()),
+    );
+    assert_member_type(
+        "net.TcpStream",
+        "read_exact",
+        result(vec_of(uint8.clone()), io_error.clone()),
+    );
+    for field in [
+        "write_all",
+        "write_bytes",
+        "flush",
+        "shutdown_read",
+        "shutdown_write",
+        "shutdown_both",
+    ] {
+        assert_member_type("net.TcpStream", field, result(Type::Unit, io_error.clone()));
+    }
+    assert_member_type("net.TcpStream", "close", Type::Unit);
+
+    for field in ["send_text", "send_bytes"] {
+        assert_member_type("net.UdpSocket", field, result(Type::Unit, io_error.clone()));
+    }
+    assert_member_type(
+        "net.UdpSocket",
+        "recv",
+        result(option(vec_of(uint8.clone())), io_error.clone()),
+    );
+    assert_member_type(
+        "net.UdpSocket",
+        "recv_from",
+        result(option(named("net.UdpDatagram")), io_error.clone()),
+    );
+    for field in ["local_addr", "peer_addr"] {
+        assert_member_type(
+            "net.UdpSocket",
+            field,
+            result(string.clone(), io_error.clone()),
+        );
+    }
+    assert_member_type("net.UdpSocket", "close", Type::Unit);
+    assert_member_type("net.UdpDatagram", "address", string.clone());
+    assert_member_type("net.UdpDatagram", "bytes", vec_of(uint8.clone()));
+    assert_member_type(
+        "net.UdpDatagram",
+        "text",
+        result(string.clone(), io_error.clone()),
+    );
+
+    assert_member_type(
+        "net.HttpListener",
+        "accept",
+        result(named("net.HttpExchange"), io_error.clone()),
+    );
+    assert_member_type(
+        "net.HttpListener",
+        "local_addr",
+        result(string.clone(), io_error.clone()),
+    );
+    assert_member_type("net.HttpListener", "close", Type::Unit);
+    assert_member_type("net.HttpExchange", "method", string.clone());
+    assert_member_type("net.HttpExchange", "path", string.clone());
+    assert_member_type(
+        "net.HttpExchange",
+        "headers",
+        Type::Named("Map".to_string(), vec![string.clone(), string.clone()]),
+    );
+    assert_member_type(
+        "net.HttpExchange",
+        "body_text",
+        result(string.clone(), io_error.clone()),
+    );
+    assert_member_type("net.HttpExchange", "body_bytes", vec_of(uint8.clone()));
+    for field in ["respond_text", "respond_bytes"] {
+        assert_member_type(
+            "net.HttpExchange",
+            field,
+            result(Type::Unit, io_error.clone()),
+        );
+    }
+    assert_member_type("net.HttpResponse", "status", Type::named("int32"));
+    assert_member_type("net.HttpResponse", "reason", string.clone());
+    assert_member_type(
+        "net.HttpResponse",
+        "headers",
+        Type::Named("Map".to_string(), vec![string.clone(), string.clone()]),
+    );
+    assert_member_type(
+        "net.HttpResponse",
+        "text",
+        result(string.clone(), io_error.clone()),
+    );
+    assert_member_type("net.HttpResponse", "bytes", vec_of(uint8.clone()));
+
+    assert_member_type(
+        "net.WebSocketListener",
+        "accept",
+        result(named("net.WebSocket"), io_error.clone()),
+    );
+    assert_member_type(
+        "net.WebSocketListener",
+        "local_addr",
+        result(string.clone(), io_error.clone()),
+    );
+    for field in ["send_text", "send_bytes"] {
+        assert_member_type("net.WebSocket", field, result(Type::Unit, io_error.clone()));
+    }
+    assert_member_type(
+        "net.WebSocket",
+        "recv_text",
+        result(option(string.clone()), io_error.clone()),
+    );
+    assert_member_type(
+        "net.WebSocket",
+        "recv_bytes",
+        result(option(vec_of(uint8.clone())), io_error.clone()),
+    );
+    assert_member_type("net.WebSocket", "close", Type::Unit);
+
+    assert_member_type(
+        "net.UnixListener",
+        "accept",
+        result(named("net.UnixStream"), io_error.clone()),
+    );
+    assert_member_type("net.UnixListener", "close", Type::Unit);
+    assert_member_type(
+        "net.UnixStream",
+        "read_line",
+        result(option(string.clone()), io_error.clone()),
+    );
+    assert_member_type(
+        "net.UnixStream",
+        "read_exact",
+        result(vec_of(uint8.clone()), io_error.clone()),
+    );
+    assert_member_type(
+        "net.UnixStream",
+        "write_all",
+        result(Type::Unit, io_error.clone()),
+    );
+    assert_member_type("net.UnixStream", "close", Type::Unit);
+
+    assert_member_type(
+        "net.TlsListener",
+        "accept",
+        result(named("net.TlsStream"), io_error.clone()),
+    );
+    assert_member_type(
+        "net.TlsListener",
+        "local_addr",
+        result(string.clone(), io_error.clone()),
+    );
+    assert_member_type("net.TlsListener", "close", Type::Unit);
+    assert_member_type(
+        "net.TlsStream",
+        "read_line",
+        result(option(string.clone()), io_error.clone()),
+    );
+    assert_member_type(
+        "net.TlsStream",
+        "read_exact",
+        result(vec_of(uint8.clone()), io_error.clone()),
+    );
+    assert_member_type(
+        "net.TlsStream",
+        "write_all",
+        result(Type::Unit, io_error.clone()),
+    );
+    assert_member_type("net.TlsStream", "close", Type::Unit);
 }
 
 #[test]

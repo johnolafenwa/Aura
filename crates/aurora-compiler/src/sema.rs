@@ -121,6 +121,12 @@ pub struct TraitImplMethodInfo {
     pub type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
 }
 
+type TraitMethodMatch<'a> = (
+    &'a TraitImplInfo,
+    &'a TraitImplMethodInfo,
+    HashMap<String, Type>,
+);
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TraitBound {
     pub trait_name: String,
@@ -195,11 +201,23 @@ pub struct ModuleNamespace {
     pub imported_modules: BTreeMap<String, ModuleNamespace>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ModuleContext {
     pub module_name: String,
     pub imported_bindings: BTreeMap<String, ImportedBinding>,
     pub module_registry: BTreeMap<String, ModuleNamespace>,
+    pub is_entry_module: bool,
+}
+
+impl Default for ModuleContext {
+    fn default() -> Self {
+        Self {
+            module_name: String::new(),
+            imported_bindings: BTreeMap::new(),
+            module_registry: BTreeMap::new(),
+            is_entry_module: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -293,7 +311,7 @@ fn resolve_return_borrow_source(
     }
 
     if let Some(source) = explicit_source {
-        let Some((_name, _label, passing)) = candidates
+        let Some((_name, _label, _passing)) = candidates
             .iter()
             .find(|(name, label, _)| name == source || label.as_deref() == Some(source))
         else {
@@ -305,15 +323,6 @@ fn resolve_return_borrow_source(
                 ),
             ));
         };
-        if return_passing == ReceiverKind::BorrowMut && *passing != ReceiverKind::BorrowMut {
-            return Err(Diagnostic::at(
-                span,
-                format!(
-                    "borrow source `{}` must be `borrow mut` for a `borrow mut` return",
-                    source
-                ),
-            ));
-        }
         return Ok(Some(source.to_string()));
     }
 
@@ -1287,10 +1296,14 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         top_level_stmts: module.top_level_stmts.clone(),
     };
 
-    if !program.top_level_stmts.is_empty() && program.functions.contains_key("main") {
-        let main = program.functions.get("main").ok_or_else(|| {
+    let local_main = program
+        .functions
+        .get("main")
+        .filter(|function| function.module_name == program.module_name);
+    if context.is_entry_module && !program.top_level_stmts.is_empty() && local_main.is_some() {
+        let main = local_main.ok_or_else(|| {
             Diagnostic::new(
-                "internal error: `main` disappeared while validating top-level statements",
+                "internal error: local `main` disappeared while validating top-level statements",
             )
         })?;
         return Err(Diagnostic::at(
@@ -1299,7 +1312,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         ));
     }
 
-    if let Some(main) = program.functions.get("main") {
+    if let (true, Some(main)) = (context.is_entry_module, local_main) {
         if !main.signature.params.is_empty() {
             return Err(Diagnostic::at(
                 main.decl.span,
@@ -1341,9 +1354,15 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 false,
                 "trait method",
             )?;
+            checker
+                .with_module_name(&trait_info.module_name)
+                .check_trait_method(trait_info, method)?;
         }
     }
     for function in program.functions.values() {
+        if function.module_name != program.module_name {
+            continue;
+        }
         checker
             .with_module_name(&function.module_name)
             .check_function(&function.decl)?;
@@ -1365,7 +1384,16 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 trait_impl.type_param_bounds.clone(),
             )
             .check_trait_impl_supertraits(trait_impl)?;
+        let explicit_method_names = trait_impl
+            .decl
+            .methods
+            .iter()
+            .map(|method| method.name.as_str())
+            .collect::<BTreeSet<_>>();
         for method in trait_impl.methods.values() {
+            if !explicit_method_names.contains(method.decl.name.as_str()) {
+                continue;
+            }
             checker
                 .with_module_name(&trait_impl.module_name)
                 .check_trait_impl_method(
@@ -1531,13 +1559,12 @@ fn lower_type_with_self(
                 ),
             ));
         }
-    } else if is_builtin_type(type_name) || type_names.contains_key(type_name) {
-        if !args.is_empty() {
-            return Err(Diagnostic::at(
-                type_ref.span,
-                format!("`{}` does not take type arguments", type_name),
-            ));
-        }
+    } else if (is_builtin_type(type_name) || type_names.contains_key(type_name)) && !args.is_empty()
+    {
+        return Err(Diagnostic::at(
+            type_ref.span,
+            format!("`{}` does not take type arguments", type_name),
+        ));
     }
 
     if is_builtin_type(type_name) || type_names.contains_key(type_name) {
@@ -2245,6 +2272,18 @@ fn map_key_value_types(ty: &Type) -> Option<(&Type, &Type)> {
     }
 }
 
+fn required_ordered_arg<'a>(
+    ordered_args: &[Option<&'a Argument>],
+    index: usize,
+    span: crate::diag::Span,
+    message: impl Into<String>,
+) -> Result<&'a Argument> {
+    ordered_args
+        .get(index)
+        .and_then(|argument| *argument)
+        .ok_or_else(|| Diagnostic::at(span, message.into()))
+}
+
 fn is_builtin_io_resource_type(name: &str, args: &[Type]) -> bool {
     args.is_empty()
         && matches!(
@@ -2430,6 +2469,7 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new(
         module_name: &'a str,
         type_names: &'a BTreeMap<String, crate::diag::Span>,
@@ -2998,6 +3038,97 @@ impl<'a> FunctionChecker<'a> {
             }
         }
 
+        Ok(())
+    }
+
+    fn check_trait_method(
+        &self,
+        trait_info: &TraitInfo,
+        method_info: &TraitMethodInfo,
+    ) -> Result<()> {
+        let method = &method_info.decl;
+        if method.body.is_empty() {
+            return Ok(());
+        }
+
+        let trait_type_param_scope = type_param_scope(&trait_info.decl.type_params);
+        let self_placeholder = Type::TypeParam("Self".to_string());
+        let method_type_param_scope =
+            merged_type_param_scope(&trait_type_param_scope, &method.type_params);
+        let mut type_param_bounds = method_info.type_param_bounds.clone();
+        let self_bounds = type_param_bounds.entry("Self".to_string()).or_default();
+        self_bounds.push(TraitBound {
+            trait_name: trait_info.decl.name.clone(),
+            trait_args: trait_info
+                .decl
+                .type_params
+                .iter()
+                .cloned()
+                .map(Type::TypeParam)
+                .collect(),
+        });
+        let return_type = method_info.signature.return_type.clone();
+        let checker = self
+            .with_type_params(method_type_param_scope.clone(), type_param_bounds)
+            .with_return_type(
+                return_type.clone(),
+                method_info.signature.return_passing,
+                method_info.signature.return_borrow_source.clone(),
+            );
+        let mut locals = HashMap::new();
+        checker.seed_imported_modules(&mut locals);
+        if let Some(receiver_kind) = method.receiver {
+            locals.insert(
+                "self".to_string(),
+                LocalBinding {
+                    ty: self_placeholder,
+                    assignable: false,
+                    mutable_place: receiver_kind == ReceiverKind::BorrowMut,
+                    managed_resource: false,
+                    passing: receiver_kind,
+                    borrow_origin: (receiver_kind != ReceiverKind::Value)
+                        .then(|| "self".to_string()),
+                    borrow_label: None,
+                    match_borrow_mut_place: None,
+                    stale_match_borrow_mut_place: None,
+                    moved: false,
+                    moved_fields: BTreeSet::new(),
+                    frozen_places: BTreeSet::new(),
+                },
+            );
+        }
+        for (param, ty) in method
+            .params
+            .iter()
+            .zip(method_info.signature.params.iter())
+        {
+            locals.insert(
+                param.name.clone(),
+                LocalBinding {
+                    ty: ty.clone(),
+                    assignable: false,
+                    mutable_place: param.passing == ReceiverKind::BorrowMut,
+                    managed_resource: false,
+                    passing: param.passing,
+                    borrow_origin: (param.passing != ReceiverKind::Value)
+                        .then(|| param.name.clone()),
+                    borrow_label: param.borrow_label.clone(),
+                    match_borrow_mut_place: None,
+                    stale_match_borrow_mut_place: None,
+                    moved: false,
+                    moved_fields: BTreeSet::new(),
+                    frozen_places: BTreeSet::new(),
+                },
+            );
+        }
+
+        let flow = checker.check_block(&method.body, &mut locals, &return_type, 0, true)?;
+        if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
+            return Err(Diagnostic::at(
+                method.span,
+                format!("method `{}` is missing a return", method.name),
+            ));
+        }
         Ok(())
     }
 
@@ -3780,11 +3911,10 @@ impl<'a> FunctionChecker<'a> {
             loop_depth,
             allow_return,
         )
-        .map(|flow| {
+        .inspect(|&flow| {
             if flow != BlockFlow::AlwaysReturns {
                 self.merge_control_flow_moves(locals, &[&body_locals]);
             }
-            flow
         })
     }
 
@@ -4791,16 +4921,14 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        if let Some(expected_ty) = expected {
-                            if let Type::Named(expected_name, expected_args) = expected_ty {
-                                if self.canonical_enum_name(expected_name)
-                                    == self.canonical_enum_name(enum_name)
-                                {
-                                    return Ok(Type::Named(
-                                        enum_info.decl.name.clone(),
-                                        expected_args.clone(),
-                                    ));
-                                }
+                        if let Some(Type::Named(expected_name, expected_args)) = expected {
+                            if self.canonical_enum_name(expected_name)
+                                == self.canonical_enum_name(enum_name)
+                            {
+                                return Ok(Type::Named(
+                                    enum_info.decl.name.clone(),
+                                    expected_args.clone(),
+                                ));
                             }
                         }
                         if enum_info.decl.type_params.is_empty() {
@@ -5161,7 +5289,7 @@ impl<'a> FunctionChecker<'a> {
         if matches.is_empty() {
             return Ok(None);
         }
-        matches.sort_by(|left, right| right.0.cmp(&left.0));
+        matches.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
         let best_score = matches[0].0;
         let mut best_matches = matches
             .into_iter()
@@ -5333,12 +5461,12 @@ impl<'a> FunctionChecker<'a> {
                 let ordered_args = builtin.bind_args(args, span)?;
                 match builtin {
                     BuiltinFunction::Print => {
-                        let value_arg = ordered_args[0].ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                "internal error: `print` should bind exactly one argument",
-                            )
-                        })?;
+                        let value_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: `print` should bind exactly one argument",
+                        )?;
                         self.type_of_expr(&value_arg.value, locals)?;
                         Ok(Type::Unit)
                     }
@@ -5359,12 +5487,12 @@ impl<'a> FunctionChecker<'a> {
                     }
                     BuiltinFunction::Cancelled => Ok(Type::named("bool")),
                     BuiltinFunction::Sleep => {
-                        let duration_arg = ordered_args[0].ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                "internal error: `sleep` should bind exactly one argument",
-                            )
-                        })?;
+                        let duration_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: `sleep` should bind exactly one argument",
+                        )?;
                         let duration_ty = self.type_of_expr(&duration_arg.value, locals)?;
                         if duration_ty != Type::named("Duration") {
                             return Err(Diagnostic::at(
@@ -5378,15 +5506,15 @@ impl<'a> FunctionChecker<'a> {
                         Ok(Type::Unit)
                     }
                     BuiltinFunction::WaitAny | BuiltinFunction::WaitAll => {
-                        let tasks_arg = ordered_args[0].ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                format!(
-                                    "internal error: `{}` should bind the `tasks` argument",
-                                    builtin.name()
-                                ),
-                            )
-                        })?;
+                        let tasks_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            format!(
+                                "internal error: `{}` should bind the `tasks` argument",
+                                builtin.name()
+                            ),
+                        )?;
                         let tasks_ty = self.type_of_expr(&tasks_arg.value, locals)?;
                         let Type::Named(ref container_name, ref container_args) = tasks_ty else {
                             return Err(Diagnostic::at(
@@ -5455,12 +5583,12 @@ impl<'a> FunctionChecker<'a> {
                         ))
                     }
                     BuiltinFunction::Abs => {
-                        let value_arg = ordered_args[0].ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                "internal error: `abs` should bind exactly one argument",
-                            )
-                        })?;
+                        let value_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: `abs` should bind exactly one argument",
+                        )?;
                         let value_ty = self.type_of_expr(&value_arg.value, locals)?;
                         if !is_numeric_type(&value_ty) {
                             return Err(Diagnostic::at(
@@ -5474,15 +5602,15 @@ impl<'a> FunctionChecker<'a> {
                         Ok(value_ty)
                     }
                     BuiltinFunction::Min | BuiltinFunction::Max => {
-                        let left_arg = ordered_args[0].ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                format!(
-                                    "internal error: `{}` should bind a left argument",
-                                    builtin.name()
-                                ),
-                            )
-                        })?;
+                        let left_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            format!(
+                                "internal error: `{}` should bind a left argument",
+                                builtin.name()
+                            ),
+                        )?;
                         let left_ty = self.type_of_expr(&left_arg.value, locals)?;
                         if !is_numeric_type(&left_ty) {
                             return Err(Diagnostic::at(
@@ -5494,15 +5622,15 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        let right_arg = ordered_args[1].ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                format!(
-                                    "internal error: `{}` should bind a right argument",
-                                    builtin.name()
-                                ),
-                            )
-                        })?;
+                        let right_arg = required_ordered_arg(
+                            &ordered_args,
+                            1,
+                            span,
+                            format!(
+                                "internal error: `{}` should bind a right argument",
+                                builtin.name()
+                            ),
+                        )?;
                         let right_ty =
                             self.type_of_expr_hint(&right_arg.value, locals, Some(&left_ty))?;
                         if right_ty != left_ty {
@@ -5516,25 +5644,15 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
-                        if !is_numeric_type(&right_ty) {
-                            return Err(Diagnostic::at(
-                                right_arg.span,
-                                format!(
-                                    "`{}` expects numeric arguments, found `{}`",
-                                    builtin.name(),
-                                    right_ty
-                                ),
-                            ));
-                        }
                         Ok(left_ty)
                     }
                     BuiltinFunction::Sqrt => {
-                        let value_arg = ordered_args[0].ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                "internal error: `sqrt` should bind exactly one argument",
-                            )
-                        })?;
+                        let value_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: `sqrt` should bind exactly one argument",
+                        )?;
                         let value_ty = self.type_of_expr(&value_arg.value, locals)?;
                         if !matches!(
                             value_ty,
@@ -5553,12 +5671,12 @@ impl<'a> FunctionChecker<'a> {
                         Ok(value_ty)
                     }
                     BuiltinFunction::ParseInt32 => {
-                        let text_arg = ordered_args[0].ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                "internal error: `parse_int32` should bind exactly one argument",
-                            )
-                        })?;
+                        let text_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: `parse_int32` should bind exactly one argument",
+                        )?;
                         let text_ty = self.type_of_expr_hint(
                             &text_arg.value,
                             locals,
@@ -5576,12 +5694,12 @@ impl<'a> FunctionChecker<'a> {
                         ))
                     }
                     BuiltinFunction::ParseInt64 => {
-                        let text_arg = ordered_args[0].ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                "internal error: `parse_int64` should bind exactly one argument",
-                            )
-                        })?;
+                        let text_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: `parse_int64` should bind exactly one argument",
+                        )?;
                         let text_ty = self.type_of_expr_hint(
                             &text_arg.value,
                             locals,
@@ -5599,12 +5717,12 @@ impl<'a> FunctionChecker<'a> {
                         ))
                     }
                     BuiltinFunction::ParseFloat64 => {
-                        let text_arg = ordered_args[0].ok_or_else(|| {
-                            Diagnostic::at(
-                                span,
-                                "internal error: `parse_float64` should bind exactly one argument",
-                            )
-                        })?;
+                        let text_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: `parse_float64` should bind exactly one argument",
+                        )?;
                         let text_ty = self.type_of_expr_hint(
                             &text_arg.value,
                             locals,
@@ -5847,9 +5965,9 @@ impl<'a> FunctionChecker<'a> {
                         "bare enum variants require an expected enum type or a qualified form such as `Result.Ok(...)`",
                     ));
                 };
-                if !self
+                if self
                     .builtin_enum_variant_payload(expected_ty, enum_name, name)
-                    .is_some()
+                    .is_none()
                 {
                     return Err(Diagnostic::at(
                         span,
@@ -6060,16 +6178,14 @@ impl<'a> FunctionChecker<'a> {
                             )
                         })?;
                         if variant.payloads.is_empty() && args.is_empty() {
-                            if let Some(expected_ty) = expected {
-                                if let Type::Named(expected_name, expected_args) = expected_ty {
-                                    if self.canonical_enum_name(expected_name)
-                                        == self.canonical_enum_name(enum_name)
-                                    {
-                                        return Ok(Type::Named(
-                                            enum_info.decl.name.clone(),
-                                            expected_args.clone(),
-                                        ));
-                                    }
+                            if let Some(Type::Named(expected_name, expected_args)) = expected {
+                                if self.canonical_enum_name(expected_name)
+                                    == self.canonical_enum_name(enum_name)
+                                {
+                                    return Ok(Type::Named(
+                                        enum_info.decl.name.clone(),
+                                        expected_args.clone(),
+                                    ));
                                 }
                             }
                             if enum_info.decl.type_params.is_empty() {
@@ -6237,8 +6353,8 @@ impl<'a> FunctionChecker<'a> {
                             return Err(Diagnostic::at(
                                 span,
                                 format!(
-                                    "builtin resource `{}` must be created through its module functions",
-                                    format!("{}.{}", namespace.path, class.decl.name)
+                                    "builtin resource `{}.{}` must be created through its module functions",
+                                    namespace.path, class.decl.name
                                 ),
                             ));
                         }
@@ -7054,7 +7170,7 @@ impl<'a> FunctionChecker<'a> {
                                         &ordered_args,
                                         0,
                                         span,
-                                        &format!("`{}` requires exactly one argument", field),
+                                        format!("`{}` requires exactly one argument", field),
                                     )?;
                                     let actual = self.type_of_expr_hint(
                                         &send_arg.value,
@@ -7921,6 +8037,12 @@ impl<'a> FunctionChecker<'a> {
                                         ));
                                     }
                                     self.consume_value_expr(&text_arg.value, locals)?;
+                                    self.check_optional_builtin_timeout_argument(
+                                        &ordered_args,
+                                        1,
+                                        locals,
+                                        "write_all(timeout=...)",
+                                    )?;
                                     Ok(Type::Named(
                                         "Result".to_string(),
                                         vec![Type::Unit, crate::builtin_modules::io_error_type()],
@@ -11081,7 +11203,7 @@ impl<'a> FunctionChecker<'a> {
         }
         self.current_module_namespace()
             .and_then(|current| find_namespace_in_modules(&current.imported_modules, path))
-            .or_else(|| find_namespace_in_modules(&self.imported_modules, path))
+            .or_else(|| find_namespace_in_modules(self.imported_modules, path))
     }
 
     fn current_module_namespace(&self) -> Option<&ModuleNamespace> {
@@ -11467,7 +11589,7 @@ impl<'a> FunctionChecker<'a> {
         ty: &Type,
         method_name: &str,
         span: crate::diag::Span,
-    ) -> Result<Option<(&TraitImplInfo, &TraitImplMethodInfo, HashMap<String, Type>)>> {
+    ) -> Result<Option<TraitMethodMatch<'_>>> {
         let mut matches = Vec::new();
         for trait_impl in self.trait_impls_in_scope() {
             let Some(substitutions) = self.trait_impl_substitutions(trait_impl, ty) else {
@@ -11488,7 +11610,7 @@ impl<'a> FunctionChecker<'a> {
             return Ok(None);
         }
 
-        matches.sort_by(|left, right| right.0.cmp(&left.0));
+        matches.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
         let best_score = matches[0].0;
         let mut best_matches = matches
             .into_iter()
@@ -11616,6 +11738,7 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn type_check_callable_args(
         &self,
         callee_name: &str,
@@ -11646,6 +11769,7 @@ impl<'a> FunctionChecker<'a> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn type_check_callable_args_seeded(
         &self,
         callee_name: &str,
@@ -12266,17 +12390,6 @@ impl<'a> FunctionChecker<'a> {
             if payloads.len() == 1 && !named_payloads {
                 let argument =
                     self.variant_payload_argument(args, span, variant_name, enum_name)?;
-                if let Some(name) = argument.name.as_deref() {
-                    if name != "value" {
-                        return Err(Diagnostic::at(
-                            argument.span,
-                            format!(
-                                "single-payload variant `{}` of enum `{}` only accepts named argument `value=`",
-                                variant_name, enum_name
-                            ),
-                        ));
-                    }
-                }
                 return Ok(vec![argument]);
             }
             if !named_payloads {
@@ -12287,6 +12400,35 @@ impl<'a> FunctionChecker<'a> {
                         variant_name, enum_name
                     ),
                 ));
+            }
+            let payload_names = payloads
+                .iter()
+                .map(|payload| {
+                    payload.name.as_deref().ok_or_else(|| {
+                        Diagnostic::at(
+                            span,
+                            format!(
+                                "internal error: named enum payload metadata for `{}.{}` is missing its field name",
+                                enum_name, variant_name
+                            ),
+                        )
+                    })
+                })
+                .collect::<Result<BTreeSet<_>>>()?;
+            if args.len() > payloads.len() {
+                if let Some(extra) = args
+                    .iter()
+                    .filter_map(|argument| argument.name.as_deref())
+                    .find(|name| !payload_names.contains(name))
+                {
+                    return Err(Diagnostic::at(
+                        span,
+                        format!(
+                            "variant `{}` of enum `{}` has no payload named `{}`",
+                            variant_name, enum_name, extra
+                        ),
+                    ));
+                }
             }
             if args.len() != payloads.len() {
                 return Err(Diagnostic::at(
@@ -12302,20 +12444,10 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
             let mut ordered = Vec::with_capacity(payloads.len());
-            let mut used = BTreeSet::new();
             for payload in payloads {
-                let payload_name = payload
-                    .name
-                    .as_deref()
-                    .ok_or_else(|| {
-                        Diagnostic::at(
-                            span,
-                            format!(
-                                "internal error: named enum payload metadata for `{}.{}` is missing its field name",
-                                enum_name, variant_name
-                            ),
-                        )
-                    })?;
+                let payload_name = payload.name.as_deref().expect(
+                    "named enum payload metadata should have been validated before ordering",
+                );
                 let argument = args
                     .iter()
                     .find(|argument| argument.name.as_deref() == Some(payload_name))
@@ -12328,21 +12460,7 @@ impl<'a> FunctionChecker<'a> {
                             ),
                         )
                     })?;
-                used.insert(payload_name.to_string());
                 ordered.push(argument);
-            }
-            if let Some(extra) = args
-                .iter()
-                .filter_map(|argument| argument.name.as_deref())
-                .find(|name| !used.contains(*name))
-            {
-                return Err(Diagnostic::at(
-                    span,
-                    format!(
-                        "variant `{}` of enum `{}` has no payload named `{}`",
-                        variant_name, enum_name, extra
-                    ),
-                ));
             }
             return Ok(ordered);
         }

@@ -18,8 +18,29 @@ fn parse_pattern_from(source: &str) -> Result<Pattern> {
     parser.parse_pattern()
 }
 
+fn tokens_with_newline_after_first_indent(source: &str) -> Vec<Token> {
+    let mut tokens = lex(source).expect("source should lex");
+    let indent = tokens
+        .iter()
+        .position(|token| token.kind == TokenKind::Indent)
+        .expect("source should contain an indent");
+    let span = tokens[indent].span;
+    tokens.insert(
+        indent + 1,
+        Token {
+            kind: TokenKind::Newline,
+            span,
+        },
+    );
+    tokens
+}
+
 #[test]
 fn parse_expression_reports_trailing_tokens_and_primary_errors() {
+    let lex_error =
+        parse_expression("\"unterminated").expect_err("expected expression lexing failure");
+    assert!(lex_error.message.contains("unterminated string literal"));
+
     let trailing = parse_expression("1 2").expect_err("expected trailing-token parse failure");
     assert!(trailing
         .message
@@ -183,6 +204,41 @@ fn parse_structural_items_tolerate_blank_lines_and_pass() {
         }
         other => panic!("expected impl item, got {other:?}"),
     }
+}
+
+#[test]
+fn parser_skips_synthetic_newlines_inside_indented_item_blocks() {
+    let mut class_parser = Parser::new(tokens_with_newline_after_first_indent(
+        "class Box:\n    value: int32\n",
+    ));
+    let class_item = class_parser
+        .parse_item()
+        .expect("class parser should skip synthetic newlines");
+    assert!(matches!(class_item, Item::Class(_)));
+
+    let mut enum_parser = Parser::new(tokens_with_newline_after_first_indent(
+        "enum Flag:\n    On\n",
+    ));
+    let enum_item = enum_parser
+        .parse_item()
+        .expect("enum parser should skip synthetic newlines");
+    assert!(matches!(enum_item, Item::Enum(_)));
+
+    let mut trait_parser = Parser::new(tokens_with_newline_after_first_indent(
+        "trait Show:\n    def render(self)\n",
+    ));
+    let trait_item = trait_parser
+        .parse_item()
+        .expect("trait parser should skip synthetic newlines");
+    assert!(matches!(trait_item, Item::Trait(_)));
+
+    let mut impl_parser = Parser::new(tokens_with_newline_after_first_indent(
+        "impl Show for Box:\n    def render(self):\n        pass\n",
+    ));
+    let impl_item = impl_parser
+        .parse_item()
+        .expect("impl parser should skip synthetic newlines");
+    assert!(matches!(impl_item, Item::Impl(_)));
 }
 
 #[test]
@@ -742,6 +798,12 @@ fn parse_control_flow_patterns_and_helper_errors_cover_more_branches() {
         .message
         .contains("boolean/string/integer/float literals"));
 
+    let out_of_range_pattern = parse_pattern_from("-170141183460469231731687303715884105729")
+        .expect_err("negative pattern should fit the signed literal range");
+    assert!(out_of_range_pattern
+        .message
+        .contains("negative integer literal in pattern is outside the supported range"));
+
     let bad_member = parse_expression("value.1").expect_err("numeric member should fail");
     assert!(bad_member
         .message
@@ -801,6 +863,47 @@ fn offset_helpers_cover_fstring_expression_parts() {
     };
     assert_eq!(inner.span.line, 7);
     assert!(inner.span.column >= 3);
+
+    let mut specialized = parse_expression("f\"value={Box[Vec[int32]](items[0])}\"")
+        .expect("specialized f-string interpolation should parse");
+    offset_expr_span(&mut specialized, 9, 5);
+    let ExprKind::FString(specialized_parts) = &specialized.kind else {
+        panic!("expected specialized f-string expression");
+    };
+    let FormatPart::Expr(specialized_inner) = &specialized_parts[1] else {
+        panic!("expected specialized interpolation part");
+    };
+    let ExprKind::Call { callee, .. } = &specialized_inner.kind else {
+        panic!("expected specialized call inside interpolation");
+    };
+    let ExprKind::Specialize { type_args, .. } = &callee.kind else {
+        panic!("expected specialized callee inside interpolation");
+    };
+    assert_eq!(type_args[0].span.line, 9);
+    assert!(type_args[0].span.column >= 5);
+    assert_eq!(type_args[0].args[0].span.line, 9);
+    assert!(type_args[0].args[0].span.column >= type_args[0].span.column);
+
+    let mut type_ref = TypeRef {
+        name: "Box".to_string(),
+        args: vec![TypeRef {
+            name: "Vec".to_string(),
+            args: vec![TypeRef {
+                name: "int32".to_string(),
+                args: Vec::new(),
+                indirect: false,
+                span: Span::new(1, 11),
+            }],
+            indirect: false,
+            span: Span::new(1, 7),
+        }],
+        indirect: false,
+        span: Span::new(1, 3),
+    };
+    offset_type_ref_span(&mut type_ref, 12, 4);
+    assert_eq!(type_ref.span, Span::new(12, 7));
+    assert_eq!(type_ref.args[0].span, Span::new(12, 11));
+    assert_eq!(type_ref.args[0].args[0].span, Span::new(12, 15));
 }
 
 #[test]
@@ -921,6 +1024,83 @@ fn parse_match_expressions_in_argument_and_nested_block_positions() {
     };
     assert_eq!(arms.len(), 2);
     assert!(matches!(arms[0].value.kind, ExprKind::Match { .. }));
+}
+
+#[test]
+fn parser_additional_payload_borrow_return_and_match_expression_edges_are_covered() {
+    let mixed_payload = parse_item_from("enum Bad:\n    Value(first: int32, String)\n")
+        .expect_err("mixed named and positional payloads should fail");
+    assert!(mixed_payload
+        .message
+        .contains("enum variant payloads must be either all named or all positional"));
+
+    let borrowed_return = parse_item_from(
+        "def borrow_return(value: borrow [src] String) -> borrow mut [src] String:\n    return value\n",
+    )
+    .expect("borrowed parameter and return labels should parse");
+    let Item::Function(function) = borrowed_return else {
+        panic!("expected function item");
+    };
+    assert_eq!(function.params[0].passing, ReceiverKind::Borrow);
+    assert_eq!(function.params[0].borrow_label.as_deref(), Some("src"));
+    assert_eq!(function.return_passing, ReceiverKind::BorrowMut);
+    assert_eq!(function.return_borrow_source.as_deref(), Some("src"));
+
+    let match_expr = parse_expression(
+        [
+            "match borrow mut value:",
+            "    case Ready: 1",
+            "    case _: 2",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("borrow-mut match expression should parse");
+    let ExprKind::Match {
+        borrow_mode, arms, ..
+    } = &match_expr.kind
+    else {
+        panic!("expected match expression");
+    };
+    assert_eq!(*borrow_mode, Some(ReceiverKind::BorrowMut));
+    assert_eq!(arms.len(), 2);
+
+    let delimited_match_expr =
+        parse_expression("(match borrow value:\n    case Ready:\n        1\n)")
+            .expect("delimited multiline match expression should parse");
+    assert!(matches!(delimited_match_expr.kind, ExprKind::Group(_)));
+
+    let span = Span::new(1, 1);
+    let mut manual_match = Expr {
+        kind: ExprKind::Match {
+            scrutinee: Box::new(Expr {
+                kind: ExprKind::Name("value".to_string()),
+                span,
+            }),
+            borrow_mode: None,
+            arms: vec![MatchExprArm {
+                pattern: Pattern::Wildcard(span),
+                value: Expr {
+                    kind: ExprKind::Int(1),
+                    span,
+                },
+                span,
+            }],
+        },
+        span,
+    };
+    offset_expr_span(&mut manual_match, 4, 2);
+    let ExprKind::Match {
+        scrutinee, arms, ..
+    } = &manual_match.kind
+    else {
+        panic!("expected manual match expression");
+    };
+    assert_eq!(scrutinee.span.line, 4);
+    assert_eq!(scrutinee.span.column, 3);
+    assert_eq!(arms[0].span.line, 4);
+    assert_eq!(arms[0].span.column, 3);
+    assert_eq!(arms[0].value.span.column, 3);
 }
 
 #[test]
@@ -1176,4 +1356,194 @@ fn parser_additional_trait_impl_block_and_helper_edges_are_covered() {
         trait_decl.methods[1].body.as_slice(),
         [Stmt::Return(ReturnStmt { value: Some(_), .. })]
     ));
+}
+
+#[test]
+fn parser_skips_synthetic_newlines_inside_statement_and_expression_blocks() {
+    let mut function_parser = Parser::new(tokens_with_newline_after_first_indent(
+        "def main():\n    return 1\n",
+    ));
+    let function_item = function_parser
+        .parse_item()
+        .expect("function body should skip synthetic newlines");
+    assert!(matches!(function_item, Item::Function(_)));
+
+    let mut match_stmt_parser = Parser::new(tokens_with_newline_after_first_indent(
+        "match value:\n    case _:\n        pass\n",
+    ));
+    let match_stmt = match_stmt_parser
+        .parse_stmt()
+        .expect("match statement should skip synthetic newlines");
+    assert!(matches!(match_stmt, Stmt::Match(_)));
+
+    let mut match_expr_parser = Parser::new(tokens_with_newline_after_first_indent(
+        "match value:\n    case _: 1\n",
+    ));
+    let match_expr = match_expr_parser
+        .parse_expr()
+        .expect("match expression should skip synthetic newlines");
+    assert!(matches!(match_expr.kind, ExprKind::Match { .. }));
+}
+
+#[test]
+fn parser_internal_helpers_cover_member_names_patterns_and_delimited_match_cleanup() {
+    let member = parse_expression("object.from").expect("keyword member names should parse");
+    assert!(matches!(member.kind, ExprKind::Member { ref field, .. } if field == "from"));
+
+    let variant_pattern =
+        parse_pattern_from("Result.Ok(value, _)").expect("variant subpatterns should parse");
+    assert!(matches!(
+        variant_pattern,
+        Pattern::Variant(VariantPattern { subpatterns, .. }) if subpatterns.len() == 2
+    ));
+
+    let empty_variant_pattern =
+        parse_pattern_from("Result.Ok()").expect("empty variant subpatterns should parse");
+    assert!(matches!(
+        empty_variant_pattern,
+        Pattern::Variant(VariantPattern { subpatterns, .. }) if subpatterns.is_empty()
+    ));
+
+    let span = Span::new(1, 1);
+    for terminator in [TokenKind::RBracket, TokenKind::RBrace] {
+        let mut parser = Parser::new(vec![
+            Token {
+                kind: terminator,
+                span,
+            },
+            Token {
+                kind: TokenKind::Eof,
+                span,
+            },
+        ]);
+        parser
+            .expect_match_expr_arm_terminator()
+            .expect("closing delimiter should terminate a match expression arm");
+    }
+
+    let mut parser = Parser::new(vec![
+        Token {
+            kind: TokenKind::Dedent,
+            span,
+        },
+        Token {
+            kind: TokenKind::Identifier("next".to_string()),
+            span,
+        },
+        Token {
+            kind: TokenKind::Eof,
+            span,
+        },
+    ]);
+    parser.index = 1;
+    parser
+        .expect_match_expr_arm_terminator()
+        .expect("a consumed dedent should terminate a match expression arm");
+
+    let mut parser = Parser::new(vec![Token {
+        kind: TokenKind::Eof,
+        span,
+    }]);
+    parser
+        .expect_match_expr_arm_terminator()
+        .expect("EOF should terminate a match expression arm");
+
+    let mut parser = Parser::new(vec![
+        Token {
+            kind: TokenKind::Identifier("next".to_string()),
+            span,
+        },
+        Token {
+            kind: TokenKind::Eof,
+            span,
+        },
+    ]);
+    let error = parser
+        .expect_match_expr_arm_terminator()
+        .expect_err("non-terminator token should fail");
+    assert!(error.message.contains("expected Newline"));
+
+    let mut parser = Parser::new(vec![
+        Token {
+            kind: TokenKind::KwMatch,
+            span,
+        },
+        Token {
+            kind: TokenKind::Identifier("value".to_string()),
+            span,
+        },
+        Token {
+            kind: TokenKind::Colon,
+            span,
+        },
+        Token {
+            kind: TokenKind::Newline,
+            span,
+        },
+        Token {
+            kind: TokenKind::Indent,
+            span,
+        },
+        Token {
+            kind: TokenKind::Eof,
+            span,
+        },
+    ]);
+    let error = parser
+        .parse_expr()
+        .expect_err("unterminated match expression should report its missing end");
+    assert!(error.message.contains("expected end of match expression"));
+
+    let mut parser = Parser::new(vec![
+        Token {
+            kind: TokenKind::Newline,
+            span: Span::new(1, 1),
+        },
+        Token {
+            kind: TokenKind::Dedent,
+            span: Span::new(1, 1),
+        },
+        Token {
+            kind: TokenKind::Eof,
+            span: Span::new(1, 1),
+        },
+    ]);
+    parser.pending_delimited_match_expr_dedents = 1;
+    parser.consume_pending_delimited_match_expr_dedent(&TokenKind::RParen);
+    assert_eq!(parser.index, 2);
+    assert_eq!(parser.pending_delimited_match_expr_dedents, 0);
+
+    let mut parser = Parser::new(vec![
+        Token {
+            kind: TokenKind::Dedent,
+            span: Span::new(1, 1),
+        },
+        Token {
+            kind: TokenKind::Eof,
+            span: Span::new(1, 1),
+        },
+    ]);
+    parser.pending_delimited_match_expr_dedents = 1;
+    parser.consume_pending_delimited_match_expr_dedent(&TokenKind::RBracket);
+    assert_eq!(parser.index, 1);
+    assert_eq!(parser.pending_delimited_match_expr_dedents, 0);
+
+    let mut parser = Parser::new(vec![
+        Token {
+            kind: TokenKind::Newline,
+            span: Span::new(1, 1),
+        },
+        Token {
+            kind: TokenKind::Eof,
+            span: Span::new(1, 1),
+        },
+    ]);
+    parser.pending_delimited_match_expr_dedents = 1;
+    parser.consume_pending_delimited_match_expr_dedent(&TokenKind::RBrace);
+    assert_eq!(parser.index, 1);
+    assert_eq!(parser.pending_delimited_match_expr_dedents, 0);
+
+    parser.pending_delimited_match_expr_dedents = 1;
+    parser.consume_pending_delimited_match_expr_dedent(&TokenKind::Identifier("value".to_string()));
+    assert_eq!(parser.pending_delimited_match_expr_dedents, 1);
 }

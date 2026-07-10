@@ -4,12 +4,14 @@ Aurora is a systems programming language designed to have Python-like simplicity
 
 The goal is to build a systems programming language that is easy to learn and very effective for building agents and ML infrastructure.
 
+Aurora 0.1 is an advanced technical preview, not a production release. The canonical implemented contract is the [Status and Compatibility](docs/manual/status-and-compatibility.md) page and Manual; the original language proposal is historical design material. Supported hosts and pinned tools are listed in [SUPPORTED_PLATFORMS.md](SUPPORTED_PLATFORMS.md).
+
 ## Monorepo layout
 
 This repository is intended to evolve as a monorepo for the Aurora language and its associated tools.
 
 - `crates/`
-  - Rust compiler/runtime/bootstrap tooling
+  - Rust compiler, runtime, and CLI tooling
 - `tools/`
   - editor integrations and other developer tools
 - `package.json`
@@ -19,7 +21,7 @@ This repository is intended to evolve as a monorepo for the Aurora language and 
 - `tutorials/`
   - Markdown tutorials covering the implemented language subset
 - `docs/`
-  - language proposal and supporting documentation
+  - VitePress book, language proposal, and supporting documentation
 - `architecture_docs/`
   - implementation-focused architecture and component deep dives for the current Aurora system
 - `work/`
@@ -29,6 +31,7 @@ Compiler build and direct binary usage are documented in [crates/aura/README.md]
 Compiler library testing notes live in [crates/aurora-compiler/README.md](crates/aurora-compiler/README.md).
 The categorized example library is documented in [examples/README.md](examples/README.md).
 The tutorial track lives in [tutorials/README.md](tutorials/README.md).
+The VitePress book lives in [docs/index.md](docs/index.md) and includes the guided Learn track plus the API manual.
 The repo testing strategy is documented in [docs/testing_strategy.md](docs/testing_strategy.md).
 The forward-looking ML systems roadmap lives in [docs/ml_systems_support_plan.md](docs/ml_systems_support_plan.md).
 The implementation architecture guide lives in [architecture_docs/README.md](architecture_docs/README.md).
@@ -40,12 +43,12 @@ Current editor tooling:
 - `tools/aurora-language-server`
   - Aurora Language Server Protocol implementation
 
-Current bootstrap compiler workflow:
+Current compiler workflow:
 
 - `cargo run -p aura -- check examples/classes/point_distance.au`
   - parse and type check a program
 - `cargo run -p aura -- run examples/control_flow/while_break_continue.au`
-  - execute the MIR-backed bootstrap runtime
+  - execute the MIR runtime
 - `cargo run -p aura -- run examples/classes/methods.au`
   - execute user-defined instance and associated methods
 - `cargo run -p aura -- run examples/control_flow/match_literals.au`
@@ -118,6 +121,16 @@ Current bootstrap compiler workflow:
   - execute timeout-aware WebSocket listener/connect helpers on the nonblocking socket runtime
 - `cargo run -p aura -- run examples/io/unix_tls_roundtrip.au`
   - execute the Unix-socket and TLS surface on Unix hosts using bundled PEM assets
+- `cargo run -p aura -- run examples/agents/control_plane_foundations.au`
+  - execute typed JSON/TOML metadata, path helpers, counters, and structured log/trace events
+- `cargo run -p aura -- run app.au -- --model small`
+  - pass program arguments exposed through `sys.args()`
+- `cargo run -p aura -- new agent-app`
+  - create a manifest-rooted project without overwriting existing files
+- `cargo run -p aura -- fmt --check agent-app`
+  - verify Aurora source normalization
+- `cargo run -p aura -- test agent-app/tests`
+  - run package-aware Aurora test programs
 - `cargo run -p aura -- run examples/resources/with_resource.au`
   - execute deterministic scoped cleanup with `with`
 - `cargo run -p aura -- run examples/concurrency/task_group_start.au`
@@ -161,13 +174,36 @@ Current bootstrap compiler workflow:
 - `cat examples/modules/simple_import.au | cargo run -p aura -- check --stdin "$(pwd)/examples/modules/simple_import.au"`
   - type-check an editor-style buffer while still resolving local imports relative to the supplied path
 - `npm run coverage:compiler`
-  - measure current Rust compiler-library coverage with `cargo-llvm-cov`
+  - measure current Rust compiler coverage with `cargo-llvm-cov`, using the full Rust workspace test surface while reporting compiler production files
 - `npm run coverage:compiler:check`
   - enforce the current compiler coverage floor
+- `npm run test:rust`
+  - run the Rust test suite with one test thread and a larger test stack so direct-backend CLI binaries do not contend with each other and deep parser-limit regressions do not overflow the host test harness
 - `npm run coverage:lsp:check`
   - enforce the current LSP coverage floor
+- `npm run check:format`
+  - verify Rust formatting
+- `npm run check:clippy`
+  - run the Rust lint gate with warnings treated as errors
+- `npm run check:audit`
+  - run npm and RustSec vulnerability gates
+- `npm run check:hygiene`
+  - reject whitespace errors, tracked generated executables, editor metadata, and scratch evaluation corpora
+- `npm run docs:dev`
+  - start the VitePress Aurora book locally
+- `npm run docs:build`
+  - build the VitePress Aurora book
 - `npm run ci`
-  - run the current repo-quality gate locally
+  - run the current repo-quality gate locally, including formatting, serialized Rust tests, Node tests, coverage floors, docs build, audit, Clippy warnings-as-errors, and diff hygiene
+
+GitHub Actions:
+
+- `.github/workflows/ci.yml`
+  - runs the repo gate on Linux and macOS
+- `.github/workflows/docs.yml`
+  - builds the VitePress book and deploys it to GitHub Pages from `main`
+- `.github/workflows/release.yml`
+  - builds Linux and macOS CLI archives, packages the VS Code extension and docs, and publishes them to GitHub Releases for `v*` tags or manual release runs
 
 Current `build` status:
 
@@ -178,7 +214,7 @@ Current `build` status:
 - the built binary no longer reparses source or compiles a generated Rust runner at build time
 - the built binary no longer depends on the original `.au` source files at runtime
 - built binaries now render arithmetic runtime failures with file, line, and caret context from embedded source
-- the current build path still requires Cargo/Rust plus a host C compiler when producing artifacts
+- release archives include the Aurora native runtime and do not require Cargo or a source checkout; `aura build` still requires a host C compiler
 - manifest-aware commands now resolve local path dependencies, git dependencies, and workspace members when the entry file lives under a package with `Aurora.toml`
 - git dependencies support `git = "..."` with `rev`, `tag`, or `branch`, and default to `branch = "main"` when no selector is provided
 - the current package-system milestone writes a local `Aurora.lock` at the package root or workspace root, pinning resolved git revisions and recording relative paths for local path dependencies
@@ -202,7 +238,7 @@ Development install:
 6. Press `F5` to launch an Extension Development Host.
 7. Open an `.au` file such as `examples/classes/point_distance.au` in the Extension Development Host.
 
-The language server now prefers compiler-owned analysis from `aura analyze` and `aura complete` for diagnostics, document symbols, hover, go-to-definition, and completions. That compiler path now understands local module imports for file-backed and stdin-backed buffers, including cross-file definitions for imported symbols. It falls back to the in-repo JS analysis layer only when the compiler cannot analyze the current buffer at all.
+The language server keeps one persistent `aura lsp` compiler service for diagnostics, document symbols, hover, go-to-definition, and completions. That compiler path understands local modules and cross-file definitions and recovers common incomplete buffers. If the compiler process itself is unavailable, a small lexical JavaScript layer recovers declarations and top-level names without duplicating Aurora semantics.
 
 Packaged install:
 

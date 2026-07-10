@@ -31,7 +31,7 @@ When adding a new language feature, prefer starting with a failing fixture in on
 From the repo root:
 
 ```bash
-cargo test
+RUST_MIN_STACK=33554432 cargo test
 npm run coverage:compiler
 ```
 
@@ -40,8 +40,9 @@ That runs:
 - the compiler crate unit tests
 - the maintained example smoke tests
 - the fixture-based compiler tests
+- the CLI product tests that exercise compiler behavior through `aura`
 
-The coverage command uses `cargo-llvm-cov` to measure the current compiler-library baseline.
+The coverage command uses `cargo-llvm-cov` to measure the current compiler production-code baseline. It runs the workspace tests, excludes `crates/aura/**` from the report, and ignores extracted `src/*_tests.rs` helper modules.
 
 ## Coverage Direction
 

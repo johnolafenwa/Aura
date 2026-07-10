@@ -2,19 +2,21 @@
 
 **A readable, Python-inspired systems language with Rust-like memory safety and Go-like concurrency**
 
+> **Status: historical design proposal.** This document records the original target design and is not the implemented language specification. The canonical 0.1 contract is the maintained [Status and Compatibility](manual/status-and-compatibility.md) page plus the Manual and [Current Limits](manual/current-limits.md). When this proposal differs from those documents or the compiler fixtures, the maintained 0.1 sources win.
+
 ## Executive summary
 
-Aurora is a new programming language designed for developers who love Python’s readability but want the performance, safety, and deployment model of a modern compiled systems language.
+Aurora is a programming language designed for developers who love Python’s readability but want the performance, safety, and deployment model of a modern compiled systems language.
 
-Aurora is **not** a new Python runtime, **not** a CPython replacement, and **not** a compatibility layer for the Python ecosystem. It is a new language with:
+Aurora is **not** a Python runtime, **not** a CPython replacement, and **not** a compatibility layer for the Python ecosystem. It has:
 
 - Python-inspired, indentation-based syntax
 - static-only semantics
 - native compilation
 - ownership and borrowing for memory safety
 - lightweight runtime-managed tasks inspired by goroutines
-- channel-based concurrency and `select`
-- a first-party package manager and registry
+- structured concurrency through `TaskGroup`, `Task`, and `Queue[T]`
+- a first-party package and workspace manager; registry publishing remains future work
 - a standard library that feels familiar to Python developers where semantics genuinely align
 
 Aurora’s goal is to occupy a very specific design space:
@@ -1995,7 +1997,9 @@ Aurora does not use Python-style `__init__`.
 
 `match borrow value:` and `match borrow mut value:` borrow the scrutinee instead.
 
-## 23.9 Task and channel model
+## 23.9 Historical task and channel model
+
+The original design below used `Channel`, `spawn`, and `select`. It has been superseded in the implemented 0.1 surface by `Queue[T]`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `wait_any(...)`, and `wait_all(...)`. Aurora 0.1 has no detached-task form.
 
 Aurora uses structured concurrency in v1.
 
@@ -2033,7 +2037,7 @@ The same `with` construct is also used for managed task scopes such as `with tas
 
 There is no general-purpose `defer`.
 
-## 23.12 Control flow and tuples
+## 23.12 Control flow and proposed tuples
 
 Aurora uses Python-style `if`/`elif`/`else` and supports `while` loops in v1.
 
@@ -2041,9 +2045,9 @@ Conditions must have type `bool`.
 
 Loops support `break` and `continue`.
 
-Tuple syntax uses `(T1, T2, ...)` for types, `(v1, v2, ...)` for values, and `.0`, `.1`, ... for element access.
+Tuple syntax was proposed here but is not implemented in Aurora 0.1.
 
-## 23.13 Primitive types and attributes
+## 23.13 Primitive types and proposed attributes
 
 Aurora v1 primitive scalar types are `bool`, `int8`, `int16`, `int32`, `int64`, `int128`, `intsize`, `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize`, `float32`, and `float64`.
 
@@ -2051,7 +2055,7 @@ There is no bare `int` type in v1.
 
 Fixed-size owned arrays are deferred until after v1.
 
-Aurora supports a small built-in `@name` attribute syntax in v1, and `@test` is the canonical built-in attribute for the test runner.
+Attribute syntax and `@test` were proposed here but are not implemented in Aurora 0.1.
 
 ---
 

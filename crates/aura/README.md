@@ -134,12 +134,21 @@ aura deps update util
   - the maintained user-facing surface now also includes the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, `Set[T]`, bounded `Queue[T]`, scheduler-aware text/binary file I/O plus the maintained socket/networking and shell-free process/supervisor surface through `io`, `fs`, `net`, and `process`, specialized generic trait bounds, and the current operator-trait subset
   - local file imports and `public` module boundaries now work for file-backed programs
   - manifest-rooted packages now also resolve sibling path dependencies, git dependencies, and workspace members when the entry file lives under a package `src/`
+  - append `-- <program-args>...` to expose arguments through `sys.args()`
+- `aura new <project-path>`
+  - create `Aurora.toml` and `src/main.au`; existing paths are never overwritten
+- `aura fmt [--check] [path ...]`
+  - normalize line endings/trailing whitespace/final newlines, or verify without writing
+- `aura test [--timeout-ms N] [path ...]`
+  - run package-aware Aurora test programs; defaults to `tests/` and a 30-second per-file timeout
+- `aura lsp`
+  - run the persistent JSON-lines compiler service for editor tooling
 - `aura build -o <output> <file.au>`
   - compile a standalone native binary for a program
   - this accepts `--backend auto|direct`
   - `auto` is the default and uses the direct native backend for the maintained Aurora surface
   - `direct` forces the new low-level native backend for the full currently implemented Aurora language surface
-  - it relies on Cargo/Rust and a host C compiler for the current build step
+  - source-checkout builds can refresh the runtime through Cargo; packaged release builds use the bundled runtime and require only a host C compiler
   - file-backed and stdin-backed programs with local module imports and package dependencies now build correctly through this path
   - the maintained direct build path now also covers builtin scheduler-aware text/binary file I/O, poll-driven TCP/UDP/WebSocket/Unix/TLS socket I/O, higher-level HTTP helpers, and the shell-free `process` surface including supervised child processes with restart policies
 - `aura ast <file.au>`
@@ -190,7 +199,7 @@ When `aura check`, `aura run`, `aura ast`, or `aura mir` fails, the CLI now prin
 
 ## Current Limitation
 
-There is not yet a non-Cargo build system for the compiler itself.
+Building the Aurora compiler itself still uses Cargo. Installed release archives are relocatable and do not use Cargo when compiling an Aurora program.
 
 The supported build path today is:
 
@@ -202,7 +211,7 @@ The current `aura build` matrix is:
 1. `--backend auto` is the default
 2. `--backend direct` uses the true direct native backend for the full currently implemented Aurora language surface
 3. built binaries no longer depend on the original `.au` source files at runtime
-4. both backend paths still need Cargo/Rust and a host C compiler during the build step
+4. both backend paths need a host C compiler; installed archives load the bundled runtime and link manifest without Cargo or the source checkout
 
 The maintained execution architecture is now:
 

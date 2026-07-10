@@ -322,6 +322,9 @@ fn call_metadata_helpers_cover_argument_count_and_doc_surface() {
         BuiltinMember::TaskGroupStartSoon.detail(),
         "start_soon(function, ...) -> None"
     );
+    assert!(BuiltinMember::TaskResultOrNone
+        .docs()
+        .contains("Option.None"));
 }
 
 #[test]
@@ -522,6 +525,540 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
             .expect("member should bind");
         assert_eq!(bound.len(), 2);
     }
+}
+
+#[test]
+fn builtin_member_io_network_and_process_metadata_is_stable() {
+    let cases = [
+        ("fs.File", "read_all", BuiltinMember::FileReadAll),
+        ("fs.File", "read_bytes", BuiltinMember::FileReadBytes),
+        ("fs.File", "write_all", BuiltinMember::FileWriteAll),
+        ("fs.File", "write_bytes", BuiltinMember::FileWriteBytes),
+        ("fs.File", "flush", BuiltinMember::FileFlush),
+        ("fs.File", "close", BuiltinMember::FileClose),
+        (
+            "net.TcpListener",
+            "accept",
+            BuiltinMember::TcpListenerAccept,
+        ),
+        (
+            "net.TcpListener",
+            "local_addr",
+            BuiltinMember::TcpListenerLocalAddr,
+        ),
+        ("net.TcpListener", "close", BuiltinMember::TcpListenerClose),
+        ("net.TcpStream", "read_all", BuiltinMember::TcpStreamReadAll),
+        (
+            "net.TcpStream",
+            "read_line",
+            BuiltinMember::TcpStreamReadLine,
+        ),
+        (
+            "net.TcpStream",
+            "read_bytes",
+            BuiltinMember::TcpStreamReadBytes,
+        ),
+        (
+            "net.TcpStream",
+            "read_exact",
+            BuiltinMember::TcpStreamReadExact,
+        ),
+        (
+            "net.TcpStream",
+            "write_all",
+            BuiltinMember::TcpStreamWriteAll,
+        ),
+        (
+            "net.TcpStream",
+            "write_bytes",
+            BuiltinMember::TcpStreamWriteBytes,
+        ),
+        ("net.TcpStream", "flush", BuiltinMember::TcpStreamFlush),
+        (
+            "net.TcpStream",
+            "local_addr",
+            BuiltinMember::TcpStreamLocalAddr,
+        ),
+        (
+            "net.TcpStream",
+            "peer_addr",
+            BuiltinMember::TcpStreamPeerAddr,
+        ),
+        (
+            "net.TcpStream",
+            "shutdown_read",
+            BuiltinMember::TcpStreamShutdownRead,
+        ),
+        (
+            "net.TcpStream",
+            "shutdown_write",
+            BuiltinMember::TcpStreamShutdownWrite,
+        ),
+        (
+            "net.TcpStream",
+            "shutdown_both",
+            BuiltinMember::TcpStreamShutdownBoth,
+        ),
+        ("net.TcpStream", "close", BuiltinMember::TcpStreamClose),
+        (
+            "net.UdpSocket",
+            "send_text",
+            BuiltinMember::UdpSocketSendText,
+        ),
+        (
+            "net.UdpSocket",
+            "send_bytes",
+            BuiltinMember::UdpSocketSendBytes,
+        ),
+        ("net.UdpSocket", "recv", BuiltinMember::UdpSocketRecv),
+        (
+            "net.UdpSocket",
+            "recv_from",
+            BuiltinMember::UdpSocketRecvFrom,
+        ),
+        (
+            "net.UdpSocket",
+            "local_addr",
+            BuiltinMember::UdpSocketLocalAddr,
+        ),
+        (
+            "net.UdpSocket",
+            "peer_addr",
+            BuiltinMember::UdpSocketPeerAddr,
+        ),
+        ("net.UdpSocket", "close", BuiltinMember::UdpSocketClose),
+        (
+            "net.UdpDatagram",
+            "address",
+            BuiltinMember::UdpDatagramAddress,
+        ),
+        ("net.UdpDatagram", "bytes", BuiltinMember::UdpDatagramBytes),
+        ("net.UdpDatagram", "text", BuiltinMember::UdpDatagramText),
+        (
+            "net.HttpListener",
+            "accept",
+            BuiltinMember::HttpListenerAccept,
+        ),
+        (
+            "net.HttpListener",
+            "local_addr",
+            BuiltinMember::HttpListenerLocalAddr,
+        ),
+        (
+            "net.HttpListener",
+            "close",
+            BuiltinMember::HttpListenerClose,
+        ),
+        (
+            "net.HttpExchange",
+            "method",
+            BuiltinMember::HttpExchangeMethod,
+        ),
+        ("net.HttpExchange", "path", BuiltinMember::HttpExchangePath),
+        (
+            "net.HttpExchange",
+            "headers",
+            BuiltinMember::HttpExchangeHeaders,
+        ),
+        (
+            "net.HttpExchange",
+            "body_text",
+            BuiltinMember::HttpExchangeBodyText,
+        ),
+        (
+            "net.HttpExchange",
+            "body_bytes",
+            BuiltinMember::HttpExchangeBodyBytes,
+        ),
+        (
+            "net.HttpExchange",
+            "respond_text",
+            BuiltinMember::HttpExchangeRespondText,
+        ),
+        (
+            "net.HttpExchange",
+            "respond_bytes",
+            BuiltinMember::HttpExchangeRespondBytes,
+        ),
+        (
+            "net.HttpResponse",
+            "status",
+            BuiltinMember::HttpResponseStatus,
+        ),
+        (
+            "net.HttpResponse",
+            "reason",
+            BuiltinMember::HttpResponseReason,
+        ),
+        (
+            "net.HttpResponse",
+            "headers",
+            BuiltinMember::HttpResponseHeaders,
+        ),
+        ("net.HttpResponse", "text", BuiltinMember::HttpResponseText),
+        (
+            "net.HttpResponse",
+            "bytes",
+            BuiltinMember::HttpResponseBytes,
+        ),
+        (
+            "net.WebSocketListener",
+            "accept",
+            BuiltinMember::WebSocketListenerAccept,
+        ),
+        (
+            "net.WebSocketListener",
+            "local_addr",
+            BuiltinMember::WebSocketListenerLocalAddr,
+        ),
+        (
+            "net.WebSocket",
+            "send_text",
+            BuiltinMember::WebSocketSendText,
+        ),
+        (
+            "net.WebSocket",
+            "send_bytes",
+            BuiltinMember::WebSocketSendBytes,
+        ),
+        (
+            "net.WebSocket",
+            "recv_text",
+            BuiltinMember::WebSocketRecvText,
+        ),
+        (
+            "net.WebSocket",
+            "recv_bytes",
+            BuiltinMember::WebSocketRecvBytes,
+        ),
+        ("net.WebSocket", "close", BuiltinMember::WebSocketClose),
+        (
+            "net.UnixListener",
+            "accept",
+            BuiltinMember::UnixListenerAccept,
+        ),
+        (
+            "net.UnixListener",
+            "close",
+            BuiltinMember::UnixListenerClose,
+        ),
+        (
+            "net.UnixStream",
+            "read_line",
+            BuiltinMember::UnixStreamReadLine,
+        ),
+        (
+            "net.UnixStream",
+            "read_exact",
+            BuiltinMember::UnixStreamReadExact,
+        ),
+        (
+            "net.UnixStream",
+            "write_all",
+            BuiltinMember::UnixStreamWriteAll,
+        ),
+        ("net.UnixStream", "close", BuiltinMember::UnixStreamClose),
+        (
+            "net.TlsListener",
+            "accept",
+            BuiltinMember::TlsListenerAccept,
+        ),
+        (
+            "net.TlsListener",
+            "local_addr",
+            BuiltinMember::TlsListenerLocalAddr,
+        ),
+        ("net.TlsListener", "close", BuiltinMember::TlsListenerClose),
+        (
+            "net.TlsStream",
+            "read_line",
+            BuiltinMember::TlsStreamReadLine,
+        ),
+        (
+            "net.TlsStream",
+            "read_exact",
+            BuiltinMember::TlsStreamReadExact,
+        ),
+        (
+            "net.TlsStream",
+            "write_all",
+            BuiltinMember::TlsStreamWriteAll,
+        ),
+        ("net.TlsStream", "close", BuiltinMember::TlsStreamClose),
+        ("process.Child", "stdin", BuiltinMember::ProcessChildStdin),
+        ("process.Child", "stdout", BuiltinMember::ProcessChildStdout),
+        ("process.Child", "stderr", BuiltinMember::ProcessChildStderr),
+        ("process.Child", "wait", BuiltinMember::ProcessChildWait),
+        (
+            "process.Child",
+            "wait_or_none",
+            BuiltinMember::ProcessChildWaitOrNone,
+        ),
+        (
+            "process.Child",
+            "wait_ok",
+            BuiltinMember::ProcessChildWaitOk,
+        ),
+        ("process.Child", "kill", BuiltinMember::ProcessChildKill),
+        (
+            "process.Child",
+            "terminate",
+            BuiltinMember::ProcessChildTerminate,
+        ),
+        ("process.Child", "close", BuiltinMember::ProcessChildClose),
+        (
+            "process.Pipe",
+            "read_all",
+            BuiltinMember::ProcessPipeReadAll,
+        ),
+        (
+            "process.Pipe",
+            "read_line",
+            BuiltinMember::ProcessPipeReadLine,
+        ),
+        (
+            "process.Pipe",
+            "read_bytes",
+            BuiltinMember::ProcessPipeReadBytes,
+        ),
+        (
+            "process.Pipe",
+            "write_all",
+            BuiltinMember::ProcessPipeWriteAll,
+        ),
+        (
+            "process.Pipe",
+            "write_bytes",
+            BuiltinMember::ProcessPipeWriteBytes,
+        ),
+        ("process.Pipe", "flush", BuiltinMember::ProcessPipeFlush),
+        ("process.Pipe", "close", BuiltinMember::ProcessPipeClose),
+        (
+            "process.Completed",
+            "status",
+            BuiltinMember::ProcessCompletedStatus,
+        ),
+        (
+            "process.Completed",
+            "success",
+            BuiltinMember::ProcessCompletedSuccess,
+        ),
+        (
+            "process.Completed",
+            "stdout",
+            BuiltinMember::ProcessCompletedStdout,
+        ),
+        (
+            "process.Completed",
+            "stdout_bytes",
+            BuiltinMember::ProcessCompletedStdoutBytes,
+        ),
+        (
+            "process.Completed",
+            "stderr",
+            BuiltinMember::ProcessCompletedStderr,
+        ),
+        (
+            "process.Completed",
+            "stderr_bytes",
+            BuiltinMember::ProcessCompletedStderrBytes,
+        ),
+        (
+            "process.Completed",
+            "check",
+            BuiltinMember::ProcessCompletedCheck,
+        ),
+        (
+            "process.Supervisor",
+            "start",
+            BuiltinMember::ProcessSupervisorStart,
+        ),
+        (
+            "process.Supervisor",
+            "wait",
+            BuiltinMember::ProcessSupervisorWait,
+        ),
+        (
+            "process.Supervisor",
+            "wait_or_none",
+            BuiltinMember::ProcessSupervisorWaitOrNone,
+        ),
+        (
+            "process.Supervisor",
+            "stop",
+            BuiltinMember::ProcessSupervisorStop,
+        ),
+        (
+            "process.Supervisor",
+            "is_empty",
+            BuiltinMember::ProcessSupervisorIsEmpty,
+        ),
+        (
+            "process.Supervisor",
+            "close",
+            BuiltinMember::ProcessSupervisorClose,
+        ),
+    ];
+
+    for (receiver, name, member) in cases {
+        assert_eq!(BuiltinMember::resolve(receiver, name), Some(member));
+        assert_eq!(member.name(), name);
+        assert!(!member.detail().is_empty());
+        assert!(!member.docs().is_empty());
+    }
+}
+
+#[test]
+fn builtin_member_io_network_and_process_bindings_cover_argument_shapes() {
+    for member in [
+        BuiltinMember::FileReadAll,
+        BuiltinMember::FileReadBytes,
+        BuiltinMember::FileFlush,
+        BuiltinMember::FileClose,
+        BuiltinMember::TcpListenerLocalAddr,
+        BuiltinMember::TcpListenerClose,
+        BuiltinMember::TcpStreamFlush,
+        BuiltinMember::TcpStreamLocalAddr,
+        BuiltinMember::TcpStreamPeerAddr,
+        BuiltinMember::TcpStreamShutdownRead,
+        BuiltinMember::TcpStreamShutdownWrite,
+        BuiltinMember::TcpStreamShutdownBoth,
+        BuiltinMember::TcpStreamClose,
+        BuiltinMember::UdpSocketLocalAddr,
+        BuiltinMember::UdpSocketPeerAddr,
+        BuiltinMember::UdpSocketClose,
+        BuiltinMember::UdpDatagramAddress,
+        BuiltinMember::UdpDatagramBytes,
+        BuiltinMember::UdpDatagramText,
+        BuiltinMember::HttpListenerLocalAddr,
+        BuiltinMember::HttpListenerClose,
+        BuiltinMember::HttpExchangeMethod,
+        BuiltinMember::HttpExchangePath,
+        BuiltinMember::HttpExchangeHeaders,
+        BuiltinMember::HttpExchangeBodyText,
+        BuiltinMember::HttpExchangeBodyBytes,
+        BuiltinMember::HttpResponseStatus,
+        BuiltinMember::HttpResponseReason,
+        BuiltinMember::HttpResponseHeaders,
+        BuiltinMember::HttpResponseText,
+        BuiltinMember::HttpResponseBytes,
+        BuiltinMember::WebSocketListenerLocalAddr,
+        BuiltinMember::WebSocketClose,
+        BuiltinMember::UnixListenerClose,
+        BuiltinMember::UnixStreamClose,
+        BuiltinMember::TlsListenerLocalAddr,
+        BuiltinMember::TlsListenerClose,
+        BuiltinMember::TlsStreamClose,
+        BuiltinMember::ProcessChildStdin,
+        BuiltinMember::ProcessChildStdout,
+        BuiltinMember::ProcessChildStderr,
+        BuiltinMember::ProcessChildKill,
+        BuiltinMember::ProcessChildTerminate,
+        BuiltinMember::ProcessChildClose,
+        BuiltinMember::ProcessPipeReadAll,
+        BuiltinMember::ProcessPipeFlush,
+        BuiltinMember::ProcessPipeClose,
+        BuiltinMember::ProcessCompletedStatus,
+        BuiltinMember::ProcessCompletedSuccess,
+        BuiltinMember::ProcessCompletedStdout,
+        BuiltinMember::ProcessCompletedStdoutBytes,
+        BuiltinMember::ProcessCompletedStderr,
+        BuiltinMember::ProcessCompletedStderrBytes,
+        BuiltinMember::ProcessCompletedCheck,
+        BuiltinMember::ProcessSupervisorStop,
+        BuiltinMember::ProcessSupervisorIsEmpty,
+        BuiltinMember::ProcessSupervisorClose,
+    ] {
+        let bound = member
+            .bind_args(&[], Span::new(1, 1))
+            .expect("zero-argument member should bind");
+        assert!(bound.is_empty());
+    }
+
+    for member in [
+        BuiltinMember::TcpListenerAccept,
+        BuiltinMember::TcpStreamReadAll,
+        BuiltinMember::TcpStreamReadLine,
+        BuiltinMember::WebSocketRecvText,
+        BuiltinMember::WebSocketRecvBytes,
+        BuiltinMember::WebSocketListenerAccept,
+        BuiltinMember::HttpListenerAccept,
+        BuiltinMember::UnixListenerAccept,
+        BuiltinMember::UnixStreamReadLine,
+        BuiltinMember::TlsListenerAccept,
+        BuiltinMember::TlsStreamReadLine,
+        BuiltinMember::ProcessChildWait,
+        BuiltinMember::ProcessChildWaitOrNone,
+        BuiltinMember::ProcessChildWaitOk,
+        BuiltinMember::ProcessPipeReadLine,
+        BuiltinMember::ProcessSupervisorWait,
+        BuiltinMember::ProcessSupervisorWaitOrNone,
+    ] {
+        let bound = member
+            .bind_args(&[], Span::new(1, 1))
+            .expect("timeout-only member should bind with omitted timeout");
+        assert_eq!(bound.len(), 1);
+    }
+
+    for member in [BuiltinMember::FileWriteAll, BuiltinMember::FileWriteBytes] {
+        let args = [dummy_arg(None)];
+        let bound = member
+            .bind_args(&args, Span::new(1, 1))
+            .expect("single-argument file member should bind");
+        assert_eq!(bound.len(), 1);
+    }
+
+    for member in [
+        BuiltinMember::TcpStreamWriteAll,
+        BuiltinMember::UnixStreamWriteAll,
+        BuiltinMember::TlsStreamWriteAll,
+        BuiltinMember::ProcessPipeWriteAll,
+        BuiltinMember::WebSocketSendText,
+        BuiltinMember::TcpStreamWriteBytes,
+        BuiltinMember::WebSocketSendBytes,
+        BuiltinMember::ProcessPipeWriteBytes,
+        BuiltinMember::TcpStreamReadBytes,
+        BuiltinMember::UdpSocketRecv,
+        BuiltinMember::UdpSocketRecvFrom,
+        BuiltinMember::ProcessPipeReadBytes,
+        BuiltinMember::TcpStreamReadExact,
+        BuiltinMember::UnixStreamReadExact,
+        BuiltinMember::TlsStreamReadExact,
+    ] {
+        let args = [dummy_arg(None)];
+        let bound = member
+            .bind_args(&args, Span::new(1, 1))
+            .expect("single-required-plus-timeout member should bind");
+        assert_eq!(bound.len(), 2);
+    }
+
+    for member in [
+        BuiltinMember::UdpSocketSendText,
+        BuiltinMember::UdpSocketSendBytes,
+    ] {
+        let args = [dummy_arg(None), dummy_arg(None)];
+        let bound = member
+            .bind_args(&args, Span::new(1, 1))
+            .expect("address/value UDP member should bind");
+        assert_eq!(bound.len(), 3);
+    }
+
+    for member in [
+        BuiltinMember::HttpExchangeRespondText,
+        BuiltinMember::HttpExchangeRespondBytes,
+    ] {
+        let args = [dummy_arg(None), dummy_arg(None), dummy_arg(None)];
+        let bound = member
+            .bind_args(&args, Span::new(1, 1))
+            .expect("HTTP response member should bind");
+        assert_eq!(bound.len(), 3);
+    }
+
+    let supervisor_args = [dummy_arg(None), dummy_arg(None)];
+    let supervisor_start = BuiltinMember::ProcessSupervisorStart
+        .bind_args(&supervisor_args, Span::new(1, 1))
+        .expect("supervisor start should bind with optional process settings omitted");
+    assert_eq!(supervisor_start.len(), 11);
 }
 
 #[test]

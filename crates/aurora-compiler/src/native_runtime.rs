@@ -1,3 +1,5 @@
+#![cfg_attr(coverage, allow(dead_code))]
+
 use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -15,14 +17,14 @@ use crate::integer::IntegerValue;
 use crate::runtime_value::{
     cancel_current_lightweight_task_boundary, cast_numeric_value,
     current_lightweight_task_cancellation, current_lightweight_task_id,
-    decode_process_restart_policy, decode_process_stdio, fail_current_lightweight_task, io_error,
-    io_read_line, option_none, option_some, poll_cancellation, process_error_cancelled,
-    process_error_io, process_error_no_command, process_error_spawn, process_error_timed_out,
-    process_exit_status, process_stdio_inherit, process_stdio_null, process_stdio_pipe,
-    process_supervisor_wait_cancelled, process_supervisor_wait_event,
-    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
-    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, read_file_limited,
+    decode_process_restart_policy, decode_process_stdio, evaluate_host_builtin,
+    fail_current_lightweight_task, io_error, io_read_line, option_none, option_some,
+    poll_cancellation, process_error_cancelled, process_error_io, process_error_no_command,
+    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
+    process_stdio_null, process_stdio_pipe, process_supervisor_wait_cancelled,
+    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
+    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
+    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration,
     register_task_as_queue_producer_for_values, render_float, result_err, result_ok,
     run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
@@ -46,6 +48,7 @@ thread_local! {
     static DIRECT_CLEANUP_STACKS: RefCell<BTreeMap<u64, Vec<DirectCleanupRegistration>>> = const { RefCell::new(BTreeMap::new()) };
     static DIRECT_NEXT_CLEANUP_ID: Cell<i64> = const { Cell::new(1) };
     static DIRECT_CLEANUP_DRAINING: Cell<bool> = const { Cell::new(false) };
+    static DIRECT_PRIMARY_RUNTIME_DIAGNOSTIC: RefCell<Option<Diagnostic>> = const { RefCell::new(None) };
 }
 
 struct DirectCleanupRegistration {
@@ -53,6 +56,7 @@ struct DirectCleanupRegistration {
     thunk_ptr: i64,
     args: *mut i64,
     arg_count: usize,
+    call_depth: usize,
 }
 
 fn direct_cleanup_key() -> u64 {
@@ -74,6 +78,7 @@ fn next_direct_cleanup_id() -> i64 {
 fn push_direct_cleanup_registration(thunk_ptr: i64, args: *mut i64, arg_count: usize) -> i64 {
     let id = next_direct_cleanup_id();
     let cleanup_key = direct_cleanup_key();
+    let call_depth = DIRECT_CALL_DEPTH.with(|depth| depth.get());
     DIRECT_CLEANUP_STACKS.with(|stacks| {
         stacks
             .borrow_mut()
@@ -84,6 +89,7 @@ fn push_direct_cleanup_registration(thunk_ptr: i64, args: *mut i64, arg_count: u
                 thunk_ptr,
                 args,
                 arg_count,
+                call_depth,
             });
     });
     id
@@ -96,9 +102,7 @@ fn take_direct_cleanup_registration(id: i64) -> Option<DirectCleanupRegistration
     let cleanup_key = direct_cleanup_key();
     DIRECT_CLEANUP_STACKS.with(|stacks| {
         let mut stacks = stacks.borrow_mut();
-        let Some(stack) = stacks.get_mut(&cleanup_key) else {
-            return None;
-        };
+        let stack = stacks.get_mut(&cleanup_key)?;
         let registration = stack
             .iter()
             .rposition(|registration| registration.id == id)
@@ -126,6 +130,43 @@ impl Drop for DirectCallDepthGuard {
     fn drop(&mut self) {
         DIRECT_CALL_DEPTH.with(|depth| depth.set(self.previous));
     }
+}
+
+struct DirectPrimaryDiagnosticGuard {
+    installed: bool,
+}
+
+impl DirectPrimaryDiagnosticGuard {
+    fn install(diagnostic: Diagnostic) -> Self {
+        let installed = DIRECT_PRIMARY_RUNTIME_DIAGNOSTIC.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_some() {
+                false
+            } else {
+                *slot = Some(diagnostic);
+                true
+            }
+        });
+        Self { installed }
+    }
+}
+
+impl Drop for DirectPrimaryDiagnosticGuard {
+    fn drop(&mut self) {
+        if self.installed {
+            DIRECT_PRIMARY_RUNTIME_DIAGNOSTIC.with(|slot| {
+                *slot.borrow_mut() = None;
+            });
+        }
+    }
+}
+
+fn direct_primary_runtime_diagnostic() -> Option<Diagnostic> {
+    DIRECT_PRIMARY_RUNTIME_DIAGNOSTIC.with(|slot| slot.borrow().clone())
+}
+
+fn is_call_depth_diagnostic(diagnostic: &Diagnostic) -> bool {
+    diagnostic.message.starts_with("maximum call depth")
 }
 
 fn write_stdout(text: &str) {
@@ -319,13 +360,14 @@ fn release_ref_count(ref_count: &AtomicUsize) -> std::result::Result<bool, &'sta
 }
 
 unsafe fn with_value<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -> T {
-    let value = ptr
-        .as_ref()
-        .unwrap_or_else(|| runtime_error("direct runtime received a null opaque value pointer"));
-    let guard = value
-        .value
-        .read()
-        .unwrap_or_else(|_| runtime_error("direct runtime value lock was poisoned"));
+    let value = match ptr.as_ref() {
+        Some(value) => value,
+        None => runtime_error("direct runtime received a null opaque value pointer"),
+    };
+    let guard = match value.value.read() {
+        Ok(guard) => guard,
+        Err(_) => runtime_error("direct runtime value lock was poisoned"),
+    };
     read(&guard)
 }
 
@@ -334,13 +376,14 @@ unsafe fn value_ref(ptr: *mut OpaqueValue) -> Value {
 }
 
 unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> T) -> T {
-    let value = ptr
-        .as_ref()
-        .unwrap_or_else(|| runtime_error("direct runtime received a null opaque value pointer"));
-    let mut guard = value
-        .value
-        .write()
-        .unwrap_or_else(|_| runtime_error("direct runtime value lock was poisoned"));
+    let value = match ptr.as_ref() {
+        Some(value) => value,
+        None => runtime_error("direct runtime received a null opaque value pointer"),
+    };
+    let mut guard = match value.value.write() {
+        Ok(guard) => guard,
+        Err(_) => runtime_error("direct runtime value lock was poisoned"),
+    };
     write(&mut guard)
 }
 
@@ -354,6 +397,12 @@ unsafe fn consume_value(ptr: *mut OpaqueValue) -> Value {
         aurora_direct_release_value(ptr);
     }
     value
+}
+
+#[cfg(coverage)]
+#[doc(hidden)]
+pub unsafe fn aurora_direct_coverage_clone_value(ptr: *mut OpaqueValue) -> Value {
+    unsafe { value_ref(ptr) }
 }
 
 unsafe fn consume_opaque_buffer(buffer: *mut i64, count: usize) -> Vec<Value> {
@@ -705,7 +754,18 @@ fn drain_direct_cleanup_stack() {
     let cleanup_key = direct_cleanup_key();
     let registrations = DIRECT_CLEANUP_STACKS
         .with(|stacks| stacks.borrow_mut().remove(&cleanup_key).unwrap_or_default());
+    let skip_max_depth_cleanup = direct_primary_runtime_diagnostic()
+        .as_ref()
+        .is_some_and(is_call_depth_diagnostic);
     for registration in registrations.into_iter().rev() {
+        // Match the interpreter: a cleanup call captured at the saturated Aurora
+        // call depth cannot enter its `close` method during recursion unwinding.
+        if skip_max_depth_cleanup && registration.call_depth >= DIRECT_MAX_CALL_DEPTH {
+            unsafe {
+                release_direct_cleanup_args(registration.args, registration.arg_count);
+            }
+            continue;
+        }
         if registration.thunk_ptr != 0 {
             let thunk: NativeThunk =
                 unsafe { std::mem::transmute(registration.thunk_ptr as usize) };
@@ -720,8 +780,7 @@ fn drain_direct_cleanup_stack() {
     }
 }
 
-fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
-    drain_direct_cleanup_stack();
+fn emit_runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
     if TASK_RUNTIME_ERROR_CAPTURE.with(|capture| capture.get()) {
         std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
     }
@@ -731,6 +790,15 @@ fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
         render_runtime_diagnostic(diagnostic)
     );
     process::exit(1);
+}
+
+fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
+    if DIRECT_CLEANUP_DRAINING.with(|draining| draining.get()) {
+        emit_runtime_diagnostic_error(direct_primary_runtime_diagnostic().unwrap_or(diagnostic));
+    }
+    let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
+    drain_direct_cleanup_stack();
+    emit_runtime_diagnostic_error(diagnostic);
 }
 
 fn runtime_error(message: impl AsRef<str>) -> ! {
@@ -985,13 +1053,11 @@ fn eval_binary_value(
             (Value::Int(_), Value::Int(right)) if right.is_zero() => {
                 Err(Diagnostic::new("division by zero"))
             }
-            (Value::Int(left), Value::Int(right)) => match left.checked_div(right) {
-                Some(value) => Ok(Value::Int(value)),
-                None => Err(Diagnostic::new("integer overflow")),
-            },
-            (Value::Float(_), Value::Float(right)) if right == 0.0 => {
-                Err(Diagnostic::new("division by zero"))
-            }
+            (Value::Int(left), Value::Int(right)) => Ok(Value::Int(
+                left.checked_div(right)
+                    .expect("non-zero integer division is total"),
+            )),
+            (Value::Float(_), Value::Float(0.0)) => Err(Diagnostic::new("division by zero")),
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left / right)),
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `/` operands `{}` and `{}`",
@@ -1003,13 +1069,11 @@ fn eval_binary_value(
             (Value::Int(_), Value::Int(right)) if right.is_zero() => {
                 Err(Diagnostic::new("division by zero"))
             }
-            (Value::Int(left), Value::Int(right)) => match left.checked_rem(right) {
-                Some(value) => Ok(Value::Int(value)),
-                None => Err(Diagnostic::new("integer overflow")),
-            },
-            (Value::Float(_), Value::Float(right)) if right == 0.0 => {
-                Err(Diagnostic::new("division by zero"))
-            }
+            (Value::Int(left), Value::Int(right)) => Ok(Value::Int(
+                left.checked_rem(right)
+                    .expect("non-zero integer remainder is total"),
+            )),
+            (Value::Float(_), Value::Float(0.0)) => Err(Diagnostic::new("division by zero")),
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left % right)),
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `%` operands `{}` and `{}`",
@@ -1039,7 +1103,7 @@ fn eval_unary_value(value: Value, op: UnaryOp) -> std::result::Result<Value, Dia
     }
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_runtime_init(
     path_ptr: *const u8,
     path_len: usize,
@@ -1057,7 +1121,7 @@ pub extern "C-unwind" fn aurora_direct_runtime_init(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aurora_direct_run_root(thunk_ptr: i64) -> i32 {
     task_runtime_boundary(|| {
         if thunk_ptr == 0 {
@@ -1091,7 +1155,7 @@ pub unsafe extern "C-unwind" fn aurora_direct_run_root(thunk_ptr: i64) -> i32 {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aurora_direct_enter_call(
     line: i64,
     column: i64,
@@ -1117,7 +1181,7 @@ pub unsafe extern "C-unwind" fn aurora_direct_enter_call(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aurora_direct_exit_call() {
     task_runtime_boundary(|| {
         DIRECT_CALL_DEPTH.with(|slot| {
@@ -1129,14 +1193,14 @@ pub unsafe extern "C-unwind" fn aurora_direct_exit_call() {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_print_i64(value: i64) {
     task_runtime_boundary(|| {
         write_stdout(&format!("{}\n", value));
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_print_f64(value: f64) {
     task_runtime_boundary(|| {
         write_stdout(&render_float(value));
@@ -1144,7 +1208,7 @@ pub extern "C-unwind" fn aurora_direct_print_f64(value: f64) {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_print_bool(value: i64) {
     task_runtime_boundary(|| {
         write_stdout(render_bool(value));
@@ -1152,12 +1216,12 @@ pub extern "C-unwind" fn aurora_direct_print_bool(value: i64) {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_box_i64(value: i64) -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_value(Value::Int(IntegerValue::from_signed(value as i128))))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_box_uint_literal(
     ptr: *const u8,
     len: usize,
@@ -1172,22 +1236,22 @@ pub extern "C-unwind" fn aurora_direct_box_uint_literal(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_box_f64(value: f64) -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_value(Value::Float(value)))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_box_bool(value: i64) -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_value(Value::Bool(value != 0)))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_box_unit() -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_value(Value::Unit))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 /// # Safety
 ///
 /// `value` must be either null or a live `OpaqueValue` pointer allocated by the Aurora direct
@@ -1210,7 +1274,7 @@ pub unsafe extern "C-unwind" fn aurora_direct_retain_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 /// # Safety
 ///
 /// `value` must be either null or a live `OpaqueValue` pointer allocated by the Aurora direct
@@ -1233,7 +1297,7 @@ pub unsafe extern "C-unwind" fn aurora_direct_release_value(value: *mut OpaqueVa
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_literal(
     ptr: *const u8,
     len: usize,
@@ -1241,7 +1305,7 @@ pub extern "C-unwind" fn aurora_direct_string_literal(
     task_runtime_boundary(|| boxed_value(Value::String(decode_bytes(ptr, len))))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_stringify_value(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -1251,12 +1315,12 @@ pub extern "C-unwind" fn aurora_direct_stringify_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_duration_literal(value: i64) -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_value(Value::Duration(value as i128)))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_len(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::String(text) => match i64::try_from(text.len()) {
@@ -1270,7 +1334,7 @@ pub extern "C-unwind" fn aurora_direct_string_len(value: *mut OpaqueValue) -> i6
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_contains(
     value: *mut OpaqueValue,
     needle: *mut OpaqueValue,
@@ -1289,7 +1353,7 @@ pub extern "C-unwind" fn aurora_direct_string_contains(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_starts_with(
     value: *mut OpaqueValue,
     prefix: *mut OpaqueValue,
@@ -1308,7 +1372,7 @@ pub extern "C-unwind" fn aurora_direct_string_starts_with(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_ends_with(
     value: *mut OpaqueValue,
     suffix: *mut OpaqueValue,
@@ -1327,7 +1391,7 @@ pub extern "C-unwind" fn aurora_direct_string_ends_with(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_split(
     value: *mut OpaqueValue,
     separator: *mut OpaqueValue,
@@ -1352,7 +1416,7 @@ pub extern "C-unwind" fn aurora_direct_string_split(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_replace(
     value: *mut OpaqueValue,
     from: *mut OpaqueValue,
@@ -1375,7 +1439,7 @@ pub extern "C-unwind" fn aurora_direct_string_replace(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_to_lower(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -1388,7 +1452,7 @@ pub extern "C-unwind" fn aurora_direct_string_to_lower(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_to_upper(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -1401,7 +1465,7 @@ pub extern "C-unwind" fn aurora_direct_string_to_upper(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_strip_prefix(
     value: *mut OpaqueValue,
     prefix: *mut OpaqueValue,
@@ -1424,7 +1488,7 @@ pub extern "C-unwind" fn aurora_direct_string_strip_prefix(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_strip_suffix(
     value: *mut OpaqueValue,
     suffix: *mut OpaqueValue,
@@ -1447,7 +1511,7 @@ pub extern "C-unwind" fn aurora_direct_string_strip_suffix(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_trim(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::String(text) => boxed_value(Value::String(text.trim().to_string())),
@@ -1458,7 +1522,7 @@ pub extern "C-unwind" fn aurora_direct_string_trim(value: *mut OpaqueValue) -> *
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_join(
     separator: *mut OpaqueValue,
     parts: *mut OpaqueValue,
@@ -1486,7 +1550,7 @@ pub extern "C-unwind" fn aurora_direct_string_join(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_abs(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let value = unsafe { take_value(value) };
@@ -1509,7 +1573,7 @@ pub extern "C-unwind" fn aurora_direct_abs(value: *mut OpaqueValue) -> *mut Opaq
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_min(
     left: *mut OpaqueValue,
     right: *mut OpaqueValue,
@@ -1538,7 +1602,7 @@ pub extern "C-unwind" fn aurora_direct_min(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_max(
     left: *mut OpaqueValue,
     right: *mut OpaqueValue,
@@ -1567,7 +1631,7 @@ pub extern "C-unwind" fn aurora_direct_max(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_sqrt(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let value = unsafe { take_value(value) };
@@ -1581,7 +1645,7 @@ pub extern "C-unwind" fn aurora_direct_sqrt(value: *mut OpaqueValue) -> *mut Opa
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_parse_int32(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let value = unsafe { take_value(value) };
@@ -1600,7 +1664,7 @@ pub extern "C-unwind" fn aurora_direct_parse_int32(value: *mut OpaqueValue) -> *
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_parse_int64(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let value = unsafe { take_value(value) };
@@ -1619,7 +1683,7 @@ pub extern "C-unwind" fn aurora_direct_parse_int64(value: *mut OpaqueValue) -> *
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_parse_float64(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let value = unsafe { take_value(value) };
@@ -1639,7 +1703,7 @@ pub extern "C-unwind" fn aurora_direct_parse_float64(value: *mut OpaqueValue) ->
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_range_new(start: i64, end: i64) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::Range(RangeValue {
@@ -1649,7 +1713,7 @@ pub extern "C-unwind" fn aurora_direct_range_new(start: i64, end: i64) -> *mut O
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_range_current(range: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| match unsafe { value_ref(range) } {
         Value::Range(range) => match i64::try_from(range.start) {
@@ -1663,7 +1727,7 @@ pub extern "C-unwind" fn aurora_direct_range_current(range: *mut OpaqueValue) ->
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_range_end(range: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| match unsafe { value_ref(range) } {
         Value::Range(range) => match i64::try_from(range.end) {
@@ -1677,7 +1741,7 @@ pub extern "C-unwind" fn aurora_direct_range_end(range: *mut OpaqueValue) -> i64
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_range_advance(range: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(range) } {
         Value::Range(range) => boxed_value(Value::Range(RangeValue {
@@ -1794,7 +1858,7 @@ fn checked_vec_index_at(index: i64, line: i64, column: i64) -> usize {
     }
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_empty() -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::Vec(VecValue {
@@ -1804,7 +1868,7 @@ pub extern "C-unwind" fn aurora_direct_vec_empty() -> *mut OpaqueValue {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_len(vec: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| {
         match i64::try_from(with_vector(vec, |vector| vector.elements.len())) {
@@ -1814,12 +1878,12 @@ pub extern "C-unwind" fn aurora_direct_vec_len(vec: *mut OpaqueValue) -> i64 {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_is_empty(vec: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| i64::from(with_vector(vec, |vector| vector.elements.is_empty())))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_push_in_place(
     vec: *mut OpaqueValue,
     value: *mut OpaqueValue,
@@ -1837,7 +1901,7 @@ pub extern "C-unwind" fn aurora_direct_vec_push_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_pop_in_place(vec: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let value = with_vector_mut(vec, |vector| vector.elements.pop());
@@ -1848,7 +1912,7 @@ pub extern "C-unwind" fn aurora_direct_vec_pop_in_place(vec: *mut OpaqueValue) -
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_get(
     vec: *mut OpaqueValue,
     index: i64,
@@ -1860,7 +1924,7 @@ pub extern "C-unwind" fn aurora_direct_vec_get(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_set_in_place(
     vec: *mut OpaqueValue,
     index: i64,
@@ -1883,7 +1947,7 @@ pub extern "C-unwind" fn aurora_direct_vec_set_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_remove_in_place(
     vec: *mut OpaqueValue,
     index: i64,
@@ -1904,7 +1968,7 @@ pub extern "C-unwind" fn aurora_direct_vec_remove_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_swap_in_place(
     vec: *mut OpaqueValue,
     first: i64,
@@ -1928,20 +1992,18 @@ pub extern "C-unwind" fn aurora_direct_vec_swap_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_contains(
     vec: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
         let needle = unsafe { take_value(value) };
-        i64::from(with_vector(vec, |vector| {
-            vector.elements.iter().any(|candidate| *candidate == needle)
-        }))
+        i64::from(with_vector(vec, |vector| vector.elements.contains(&needle)))
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_insert_in_place(
     vec: *mut OpaqueValue,
     index: i64,
@@ -1964,7 +2026,7 @@ pub extern "C-unwind" fn aurora_direct_vec_insert_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_clear_in_place(
     vec: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -1974,7 +2036,7 @@ pub extern "C-unwind" fn aurora_direct_vec_clear_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_reverse_in_place(
     vec: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -1984,7 +2046,7 @@ pub extern "C-unwind" fn aurora_direct_vec_reverse_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_extend_in_place(
     vec: *mut OpaqueValue,
     other: *mut OpaqueValue,
@@ -1999,7 +2061,7 @@ pub extern "C-unwind" fn aurora_direct_vec_extend_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_index(
     vec: *mut OpaqueValue,
     index: i64,
@@ -2030,7 +2092,7 @@ pub extern "C-unwind" fn aurora_direct_vec_index(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_index_option(
     vec: *mut OpaqueValue,
     index: i64,
@@ -2042,7 +2104,7 @@ pub extern "C-unwind" fn aurora_direct_vec_index_option(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_vec_set_index_in_place(
     vec: *mut OpaqueValue,
     index: i64,
@@ -2080,7 +2142,7 @@ pub extern "C-unwind" fn aurora_direct_vec_set_index_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_empty() -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::Map(MapValue {
@@ -2091,7 +2153,7 @@ pub extern "C-unwind" fn aurora_direct_map_empty() -> *mut OpaqueValue {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_len(map: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(
         || match i64::try_from(with_map(map, |map| map.entries.len())) {
@@ -2101,12 +2163,12 @@ pub extern "C-unwind" fn aurora_direct_map_len(map: *mut OpaqueValue) -> i64 {
     )
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_is_empty(map: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| i64::from(with_map(map, |map| map.entries.is_empty())))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_get(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
@@ -2123,7 +2185,7 @@ pub extern "C-unwind" fn aurora_direct_map_get(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_set_in_place(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
@@ -2159,7 +2221,7 @@ pub extern "C-unwind" fn aurora_direct_map_set_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_remove_in_place(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
@@ -2181,7 +2243,7 @@ pub extern "C-unwind" fn aurora_direct_map_remove_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_contains_key(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
@@ -2196,7 +2258,7 @@ pub extern "C-unwind" fn aurora_direct_map_contains_key(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_keys(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let (key_type, elements) = with_map(map, |map| {
@@ -2215,7 +2277,7 @@ pub extern "C-unwind" fn aurora_direct_map_keys(map: *mut OpaqueValue) -> *mut O
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_values(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let (value_type, elements) = with_map(map, |map| {
@@ -2234,7 +2296,7 @@ pub extern "C-unwind" fn aurora_direct_map_values(map: *mut OpaqueValue) -> *mut
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_items(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let (element_type, elements) = with_map(map, |map| {
@@ -2264,12 +2326,12 @@ pub extern "C-unwind" fn aurora_direct_map_items(map: *mut OpaqueValue) -> *mut 
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_entries(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| aurora_direct_map_items(map))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_index(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
@@ -2296,7 +2358,7 @@ pub extern "C-unwind" fn aurora_direct_map_index(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_set_index_in_place(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
@@ -2322,7 +2384,7 @@ pub extern "C-unwind" fn aurora_direct_map_set_index_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_clear_in_place(
     map: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -2332,7 +2394,7 @@ pub extern "C-unwind" fn aurora_direct_map_clear_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_map_extend_in_place(
     map: *mut OpaqueValue,
     other: *mut OpaqueValue,
@@ -2359,7 +2421,7 @@ pub extern "C-unwind" fn aurora_direct_map_extend_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_set_empty() -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::Set(SetValue {
@@ -2369,7 +2431,7 @@ pub extern "C-unwind" fn aurora_direct_set_empty() -> *mut OpaqueValue {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_set_len(set: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(
         || match i64::try_from(with_set(set, |set| set.elements.len())) {
@@ -2379,25 +2441,23 @@ pub extern "C-unwind" fn aurora_direct_set_len(set: *mut OpaqueValue) -> i64 {
     )
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_set_is_empty(set: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| i64::from(with_set(set, |set| set.elements.is_empty())))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_set_contains(
     set: *mut OpaqueValue,
     value: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
         let needle = unsafe { take_value(value) };
-        i64::from(with_set(set, |set| {
-            set.elements.iter().any(|candidate| *candidate == needle)
-        }))
+        i64::from(with_set(set, |set| set.elements.contains(&needle)))
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_set_insert_in_place(
     set: *mut OpaqueValue,
     value: *mut OpaqueValue,
@@ -2409,7 +2469,7 @@ pub extern "C-unwind" fn aurora_direct_set_insert_in_place(
             if set.element_type == Type::named("Unknown") && inferred != Type::named("Unknown") {
                 set.element_type = inferred.clone();
             }
-            if set.elements.iter().any(|candidate| *candidate == value) {
+            if set.elements.contains(&value) {
                 false
             } else {
                 set.elements.push(value);
@@ -2420,7 +2480,7 @@ pub extern "C-unwind" fn aurora_direct_set_insert_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_set_remove_in_place(
     set: *mut OpaqueValue,
     value: *mut OpaqueValue,
@@ -2443,7 +2503,7 @@ pub extern "C-unwind" fn aurora_direct_set_remove_in_place(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_set_index_option(
     set: *mut OpaqueValue,
     index: i64,
@@ -2455,12 +2515,12 @@ pub extern "C-unwind" fn aurora_direct_set_index_option(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_clone_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_value(unsafe { value_ref(value) }))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unbox_i64(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::Int(value) => match value.as_i128().and_then(|value| i64::try_from(value).ok()) {
@@ -2474,7 +2534,7 @@ pub extern "C-unwind" fn aurora_direct_unbox_i64(value: *mut OpaqueValue) -> i64
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unbox_f64(value: *mut OpaqueValue) -> f64 {
     task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::Float(value) => value,
@@ -2485,7 +2545,7 @@ pub extern "C-unwind" fn aurora_direct_unbox_f64(value: *mut OpaqueValue) -> f64
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unbox_bool(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::Bool(value) => i64::from(value),
@@ -2496,7 +2556,7 @@ pub extern "C-unwind" fn aurora_direct_unbox_bool(value: *mut OpaqueValue) -> i6
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_print_value(value: *mut OpaqueValue) {
     task_runtime_boundary(|| {
         write_stdout(unsafe { value_ref(value) }.render().as_str());
@@ -2504,7 +2564,7 @@ pub extern "C-unwind" fn aurora_direct_print_value(value: *mut OpaqueValue) {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_value_as_condition(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::Bool(value) => i64::from(value),
@@ -2517,7 +2577,7 @@ pub extern "C-unwind" fn aurora_direct_value_as_condition(value: *mut OpaqueValu
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unary_value(
     op: i32,
     value: *mut OpaqueValue,
@@ -2535,7 +2595,7 @@ pub extern "C-unwind" fn aurora_direct_unary_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unary_value_at(
     op: i32,
     value: *mut OpaqueValue,
@@ -2558,7 +2618,7 @@ pub extern "C-unwind" fn aurora_direct_unary_value_at(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_binary_value(
     op: i32,
     left: *mut OpaqueValue,
@@ -2592,7 +2652,7 @@ pub extern "C-unwind" fn aurora_direct_binary_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_binary_value_at(
     op: i32,
     left: *mut OpaqueValue,
@@ -2631,7 +2691,7 @@ pub extern "C-unwind" fn aurora_direct_binary_value_at(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_cast_value(
     value: *mut OpaqueValue,
     target_ptr: *const u8,
@@ -2646,7 +2706,7 @@ pub extern "C-unwind" fn aurora_direct_cast_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_cast_value_at(
     value: *mut OpaqueValue,
     target_ptr: *const u8,
@@ -2666,7 +2726,7 @@ pub extern "C-unwind" fn aurora_direct_cast_value_at(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_value_type_matches(
     value: *mut OpaqueValue,
     type_ptr: *const u8,
@@ -2715,7 +2775,7 @@ pub extern "C-unwind" fn aurora_direct_value_type_matches(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_enum_variant(
     enum_ptr: *const u8,
     enum_len: usize,
@@ -2739,7 +2799,7 @@ pub extern "C-unwind" fn aurora_direct_enum_variant(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_variant_matches(
     value: *mut OpaqueValue,
     enum_ptr: *const u8,
@@ -2759,7 +2819,7 @@ pub extern "C-unwind" fn aurora_direct_variant_matches(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_variant_payload(
     value: *mut OpaqueValue,
     index: i64,
@@ -2779,7 +2839,7 @@ pub extern "C-unwind" fn aurora_direct_variant_payload(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_instance_new(
     class_ptr: *const u8,
     class_len: usize,
@@ -2802,7 +2862,7 @@ pub extern "C-unwind" fn aurora_direct_instance_new(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_instance_empty(
     class_ptr: *const u8,
     class_len: usize,
@@ -2815,7 +2875,7 @@ pub extern "C-unwind" fn aurora_direct_instance_empty(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_instance_get_field(
     value: *mut OpaqueValue,
     field_ptr: *const u8,
@@ -2844,7 +2904,7 @@ pub extern "C-unwind" fn aurora_direct_instance_get_field(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_instance_set_field(
     value: *mut OpaqueValue,
     field_ptr: *const u8,
@@ -2870,7 +2930,7 @@ pub extern "C-unwind" fn aurora_direct_instance_set_field(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_arg_buffer_new(count: i64) -> *mut i64 {
     task_runtime_boundary(|| {
         let count = match usize::try_from(count) {
@@ -2884,7 +2944,26 @@ pub extern "C-unwind" fn aurora_direct_arg_buffer_new(count: i64) -> *mut i64 {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_host_builtin(
+    name_ptr: *const u8,
+    name_len: usize,
+    args_ptr: *mut i64,
+    arg_count: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let name = decode_bytes(name_ptr, name_len);
+        let arg_count = usize::try_from(arg_count)
+            .unwrap_or_else(|_| runtime_error("invalid host builtin argument count"));
+        let args = unsafe { consume_opaque_buffer(args_ptr, arg_count) };
+        match evaluate_host_builtin(&name, args) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_arg_buffer_store(buffer: *mut i64, index: i64, value: i64) {
     task_runtime_boundary(|| {
         let index = match usize::try_from(index) {
@@ -2904,7 +2983,7 @@ pub extern "C-unwind" fn aurora_direct_arg_buffer_store(buffer: *mut i64, index:
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_register_cleanup(
     thunk_ptr: i64,
     args: *mut i64,
@@ -2922,7 +3001,7 @@ pub extern "C-unwind" fn aurora_direct_register_cleanup(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unregister_cleanup(id: i64) {
     task_runtime_boundary(|| {
         if let Some(registration) = take_direct_cleanup_registration(id) {
@@ -2933,7 +3012,7 @@ pub extern "C-unwind" fn aurora_direct_unregister_cleanup(id: i64) {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_refresh_cleanup(
     active: i64,
     id: i64,
@@ -2977,7 +3056,7 @@ pub extern "C-unwind" fn aurora_direct_refresh_cleanup(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_channel_new(capacity: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         if capacity.is_null() {
@@ -2996,7 +3075,7 @@ pub extern "C-unwind" fn aurora_direct_channel_new(capacity: *mut OpaqueValue) -
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_task_group_new() -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::TaskGroup(TaskGroupValue::new(
@@ -3005,7 +3084,7 @@ pub extern "C-unwind" fn aurora_direct_task_group_new() -> *mut OpaqueValue {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_cancelled() -> i64 {
     task_runtime_boundary(|| {
         if poll_cancellation(&current_cancellation()) {
@@ -3016,7 +3095,7 @@ pub extern "C-unwind" fn aurora_direct_cancelled() -> i64 {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_channel_send(
     channel: *mut OpaqueValue,
     value: *mut OpaqueValue,
@@ -3028,15 +3107,17 @@ pub extern "C-unwind" fn aurora_direct_channel_send(
             {
                 Ok(()) => boxed_value(result_ok(Value::Unit)),
                 Err(SendValueError::Closed(value)) => {
-                    boxed_value(result_err(send_error_closed(value)))
+                    boxed_value(result_err(send_error_closed(*value)))
                 }
                 Err(SendValueError::Cancelled(value)) => {
-                    boxed_value(result_err(send_error_cancelled(value)))
+                    boxed_value(result_err(send_error_cancelled(*value)))
                 }
                 Err(SendValueError::TimedOut(value)) => {
-                    boxed_value(result_err(send_error_timed_out(value)))
+                    boxed_value(result_err(send_error_timed_out(*value)))
                 }
-                Err(SendValueError::Full(value)) => boxed_value(result_err(send_error_full(value))),
+                Err(SendValueError::Full(value)) => {
+                    boxed_value(result_err(send_error_full(*value)))
+                }
             }
         }
         other => runtime_error(format!(
@@ -3046,7 +3127,7 @@ pub extern "C-unwind" fn aurora_direct_channel_send(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_channel_send_timeout_value(
     channel: *mut OpaqueValue,
     value: *mut OpaqueValue,
@@ -3066,15 +3147,17 @@ pub extern "C-unwind" fn aurora_direct_channel_send_timeout_value(
             ) {
                 Ok(()) => boxed_value(result_ok(Value::Unit)),
                 Err(SendValueError::Closed(value)) => {
-                    boxed_value(result_err(send_error_closed(value)))
+                    boxed_value(result_err(send_error_closed(*value)))
                 }
                 Err(SendValueError::Cancelled(value)) => {
-                    boxed_value(result_err(send_error_cancelled(value)))
+                    boxed_value(result_err(send_error_cancelled(*value)))
                 }
                 Err(SendValueError::TimedOut(value)) => {
-                    boxed_value(result_err(send_error_timed_out(value)))
+                    boxed_value(result_err(send_error_timed_out(*value)))
                 }
-                Err(SendValueError::Full(value)) => boxed_value(result_err(send_error_full(value))),
+                Err(SendValueError::Full(value)) => {
+                    boxed_value(result_err(send_error_full(*value)))
+                }
             },
             other => runtime_error(format!(
                 "expected `Queue`, found `{}`",
@@ -3084,7 +3167,7 @@ pub extern "C-unwind" fn aurora_direct_channel_send_timeout_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_channel_try_send(
     channel: *mut OpaqueValue,
     value: *mut OpaqueValue,
@@ -3092,14 +3175,16 @@ pub extern "C-unwind" fn aurora_direct_channel_try_send(
     task_runtime_boundary(|| match unsafe { value_ref(channel) } {
         Value::Channel(channel) => match channel.try_send_result(unsafe { take_value(value) }) {
             Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(SendValueError::Closed(value)) => boxed_value(result_err(send_error_closed(value))),
+            Err(SendValueError::Closed(value)) => {
+                boxed_value(result_err(send_error_closed(*value)))
+            }
             Err(SendValueError::TimedOut(value)) => {
-                boxed_value(result_err(send_error_timed_out(value)))
+                boxed_value(result_err(send_error_timed_out(*value)))
             }
             Err(SendValueError::Cancelled(value)) => {
-                boxed_value(result_err(send_error_cancelled(value)))
+                boxed_value(result_err(send_error_cancelled(*value)))
             }
-            Err(SendValueError::Full(value)) => boxed_value(result_err(send_error_full(value))),
+            Err(SendValueError::Full(value)) => boxed_value(result_err(send_error_full(*value))),
         },
         other => runtime_error(format!(
             "expected `Queue`, found `{}`",
@@ -3108,7 +3193,7 @@ pub extern "C-unwind" fn aurora_direct_channel_try_send(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_channel_recv(channel: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(channel) } {
         Value::Channel(channel) => boxed_value(
@@ -3126,7 +3211,7 @@ pub extern "C-unwind" fn aurora_direct_channel_recv(channel: *mut OpaqueValue) -
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_channel_recv_in_task_group(
     channel: *mut OpaqueValue,
     task_group: *mut OpaqueValue,
@@ -3155,7 +3240,7 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_in_task_group(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_channel_recv_with_registered_producers(
     channel: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -3175,7 +3260,7 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_with_registered_producers(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_channel_recv_timeout_value(
     channel: *mut OpaqueValue,
     duration: *mut OpaqueValue,
@@ -3206,7 +3291,7 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_timeout_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_channel_recv_or_none(
     channel: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -3239,7 +3324,7 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_or_none(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_channel_recv_or_none_timeout_value(
     channel: *mut OpaqueValue,
     duration: *mut OpaqueValue,
@@ -3270,7 +3355,7 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_or_none_timeout_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_channel_recv_or_value(
     channel: *mut OpaqueValue,
     default: *mut OpaqueValue,
@@ -3305,7 +3390,7 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_or_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_channel_recv_or_value_timeout_value(
     channel: *mut OpaqueValue,
     default: *mut OpaqueValue,
@@ -3338,7 +3423,7 @@ pub extern "C-unwind" fn aurora_direct_channel_recv_or_value_timeout_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_channel_close(
     channel: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -3354,7 +3439,7 @@ pub extern "C-unwind" fn aurora_direct_channel_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_task_join(task: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(task) } {
         Value::Task(task) => {
@@ -3374,7 +3459,7 @@ pub extern "C-unwind" fn aurora_direct_task_join(task: *mut OpaqueValue) -> *mut
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_task_join_timeout_value(
     task: *mut OpaqueValue,
     duration: *mut OpaqueValue,
@@ -3405,7 +3490,7 @@ pub extern "C-unwind" fn aurora_direct_task_join_timeout_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_task_join_or_none(
     task: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -3440,7 +3525,7 @@ pub extern "C-unwind" fn aurora_direct_task_join_or_none(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_task_join_or_none_timeout_value(
     task: *mut OpaqueValue,
     duration: *mut OpaqueValue,
@@ -3470,7 +3555,7 @@ pub extern "C-unwind" fn aurora_direct_task_join_or_none_timeout_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_task_join_or_value(
     task: *mut OpaqueValue,
     default: *mut OpaqueValue,
@@ -3507,7 +3592,7 @@ pub extern "C-unwind" fn aurora_direct_task_join_or_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_task_join_or_value_timeout_value(
     task: *mut OpaqueValue,
     default: *mut OpaqueValue,
@@ -3636,7 +3721,7 @@ fn wait_all_tasks(
     Ok(wait_all_ready(results))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_wait_any(tasks: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         match wait_any_tasks(
@@ -3649,7 +3734,7 @@ pub extern "C-unwind" fn aurora_direct_wait_any(tasks: *mut OpaqueValue) -> *mut
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_wait_any_timeout_value(
     tasks: *mut OpaqueValue,
     duration: *mut OpaqueValue,
@@ -3670,7 +3755,7 @@ pub extern "C-unwind" fn aurora_direct_wait_any_timeout_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_wait_all(tasks: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         match wait_all_tasks(
@@ -3683,7 +3768,7 @@ pub extern "C-unwind" fn aurora_direct_wait_all(tasks: *mut OpaqueValue) -> *mut
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_wait_all_timeout_value(
     tasks: *mut OpaqueValue,
     duration: *mut OpaqueValue,
@@ -3704,7 +3789,7 @@ pub extern "C-unwind" fn aurora_direct_wait_all_timeout_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_task_group_cancel(
     group: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -3742,7 +3827,7 @@ fn close_task_group(group: &TaskGroupValue, cancel_before: bool) {
     }
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_task_group_close(
     group: *mut OpaqueValue,
     cancel_before: i64,
@@ -3759,7 +3844,7 @@ pub extern "C-unwind" fn aurora_direct_task_group_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_close_value(
     value: *mut OpaqueValue,
     cancel_before: i64,
@@ -3789,7 +3874,7 @@ pub extern "C-unwind" fn aurora_direct_close_value(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_io_write(text: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(text) } {
         Value::String(text) => match write_stdout_result(&text) {
@@ -3803,7 +3888,7 @@ pub extern "C-unwind" fn aurora_direct_io_write(text: *mut OpaqueValue) -> *mut 
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_io_flush() -> *mut OpaqueValue {
     task_runtime_boundary(|| match flush_stdout_result() {
         Ok(()) => boxed_value(result_ok(Value::Unit)),
@@ -3811,7 +3896,7 @@ pub extern "C-unwind" fn aurora_direct_io_flush() -> *mut OpaqueValue {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_io_read_line() -> *mut OpaqueValue {
     task_runtime_boundary(|| match io_read_line() {
         Ok(Some(line)) => boxed_value(result_ok(option_some(Value::String(line)))),
@@ -3820,7 +3905,7 @@ pub extern "C-unwind" fn aurora_direct_io_read_line() -> *mut OpaqueValue {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fs_exists(path: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => boxed_value(Value::Bool(std::path::Path::new(&path).exists())),
@@ -3831,7 +3916,7 @@ pub extern "C-unwind" fn aurora_direct_fs_exists(path: *mut OpaqueValue) -> *mut
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fs_read_to_string(
     path: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -3854,7 +3939,7 @@ pub extern "C-unwind" fn aurora_direct_fs_read_to_string(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fs_read_bytes(path: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
@@ -3871,7 +3956,7 @@ pub extern "C-unwind" fn aurora_direct_fs_read_bytes(path: *mut OpaqueValue) -> 
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fs_write_string(
     path: *mut OpaqueValue,
     text: *mut OpaqueValue,
@@ -3901,7 +3986,7 @@ pub extern "C-unwind" fn aurora_direct_fs_write_string(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fs_write_bytes(
     path: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
@@ -3919,7 +4004,7 @@ pub extern "C-unwind" fn aurora_direct_fs_write_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fs_append_string(
     path: *mut OpaqueValue,
     text: *mut OpaqueValue,
@@ -3955,7 +4040,7 @@ pub extern "C-unwind" fn aurora_direct_fs_append_string(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fs_append_bytes(
     path: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
@@ -3979,7 +4064,7 @@ pub extern "C-unwind" fn aurora_direct_fs_append_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fs_create_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
@@ -3996,7 +4081,7 @@ pub extern "C-unwind" fn aurora_direct_fs_create_dir(path: *mut OpaqueValue) -> 
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
@@ -4023,7 +4108,7 @@ pub extern "C-unwind" fn aurora_direct_fs_read_dir(path: *mut OpaqueValue) -> *m
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fs_remove_file(path: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match run_blocking_io(
@@ -4040,7 +4125,7 @@ pub extern "C-unwind" fn aurora_direct_fs_remove_file(path: *mut OpaqueValue) ->
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fs_open(path: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match FileValue::open(&path) {
@@ -4054,7 +4139,7 @@ pub extern "C-unwind" fn aurora_direct_fs_open(path: *mut OpaqueValue) -> *mut O
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fs_create(path: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match FileValue::create(&path) {
@@ -4068,7 +4153,7 @@ pub extern "C-unwind" fn aurora_direct_fs_create(path: *mut OpaqueValue) -> *mut
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fs_append(path: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match FileValue::append(&path) {
@@ -4082,7 +4167,7 @@ pub extern "C-unwind" fn aurora_direct_fs_append(path: *mut OpaqueValue) -> *mut
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_file_read_all(file: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(file) } {
         Value::File(file) => match file.read_all() {
@@ -4096,7 +4181,7 @@ pub extern "C-unwind" fn aurora_direct_file_read_all(file: *mut OpaqueValue) -> 
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_file_read_bytes(file: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(file) } {
         Value::File(file) => match file.read_bytes() {
@@ -4110,7 +4195,7 @@ pub extern "C-unwind" fn aurora_direct_file_read_bytes(file: *mut OpaqueValue) -
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_file_write_all(
     file: *mut OpaqueValue,
     text: *mut OpaqueValue,
@@ -4136,7 +4221,7 @@ pub extern "C-unwind" fn aurora_direct_file_write_all(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_file_write_bytes(
     file: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
@@ -4156,7 +4241,7 @@ pub extern "C-unwind" fn aurora_direct_file_write_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_file_flush(file: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(file) } {
         Value::File(file) => match file.flush() {
@@ -4170,7 +4255,7 @@ pub extern "C-unwind" fn aurora_direct_file_flush(file: *mut OpaqueValue) -> *mu
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_file_close(file: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(file) } {
         Value::File(file) => {
@@ -4184,27 +4269,27 @@ pub extern "C-unwind" fn aurora_direct_file_close(file: *mut OpaqueValue) -> *mu
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_inherit() -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_value(process_stdio_inherit()))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_null() -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_value(process_stdio_null()))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_pipe() -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_value(process_stdio_pipe()))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_supervisor() -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_value(Value::ProcessSupervisor(ProcessSupervisorValue::new())))
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_start(
     command: *mut OpaqueValue,
     cwd: *mut OpaqueValue,
@@ -4235,7 +4320,7 @@ pub extern "C-unwind" fn aurora_direct_process_start(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_run(
     command: *mut OpaqueValue,
     cwd: *mut OpaqueValue,
@@ -4329,7 +4414,7 @@ pub extern "C-unwind" fn aurora_direct_process_run(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_child_stdin(
     child: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4348,7 +4433,7 @@ pub extern "C-unwind" fn aurora_direct_process_child_stdin(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_child_stdout(
     child: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4367,7 +4452,7 @@ pub extern "C-unwind" fn aurora_direct_process_child_stdout(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_child_stderr(
     child: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4386,7 +4471,7 @@ pub extern "C-unwind" fn aurora_direct_process_child_stderr(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_child_wait(
     child: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -4412,7 +4497,7 @@ pub extern "C-unwind" fn aurora_direct_process_child_wait(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_child_wait_or_none(
     child: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -4437,7 +4522,7 @@ pub extern "C-unwind" fn aurora_direct_process_child_wait_or_none(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_child_wait_ok(
     child: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -4459,7 +4544,7 @@ pub extern "C-unwind" fn aurora_direct_process_child_wait_ok(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_child_kill(
     child: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4475,7 +4560,7 @@ pub extern "C-unwind" fn aurora_direct_process_child_kill(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_child_terminate(
     child: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4491,7 +4576,7 @@ pub extern "C-unwind" fn aurora_direct_process_child_terminate(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_child_close(
     child: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4507,7 +4592,7 @@ pub extern "C-unwind" fn aurora_direct_process_child_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_pipe_read_all(
     pipe: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4523,7 +4608,7 @@ pub extern "C-unwind" fn aurora_direct_process_pipe_read_all(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_pipe_read_line(
     pipe: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -4546,7 +4631,7 @@ pub extern "C-unwind" fn aurora_direct_process_pipe_read_line(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_pipe_read_bytes(
     pipe: *mut OpaqueValue,
     max_bytes: *mut OpaqueValue,
@@ -4574,7 +4659,7 @@ pub extern "C-unwind" fn aurora_direct_process_pipe_read_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_pipe_write_all(
     pipe: *mut OpaqueValue,
     text: *mut OpaqueValue,
@@ -4598,7 +4683,7 @@ pub extern "C-unwind" fn aurora_direct_process_pipe_write_all(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_pipe_write_bytes(
     pipe: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
@@ -4622,7 +4707,7 @@ pub extern "C-unwind" fn aurora_direct_process_pipe_write_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_pipe_flush(
     pipe: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4638,7 +4723,7 @@ pub extern "C-unwind" fn aurora_direct_process_pipe_flush(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_pipe_close(
     pipe: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4654,7 +4739,7 @@ pub extern "C-unwind" fn aurora_direct_process_pipe_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_completed_status(
     completed: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4667,7 +4752,7 @@ pub extern "C-unwind" fn aurora_direct_process_completed_status(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_completed_success(
     completed: *mut OpaqueValue,
 ) -> i64 {
@@ -4680,7 +4765,7 @@ pub extern "C-unwind" fn aurora_direct_process_completed_success(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_completed_stdout(
     completed: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4696,7 +4781,7 @@ pub extern "C-unwind" fn aurora_direct_process_completed_stdout(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_completed_stderr(
     completed: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4712,7 +4797,7 @@ pub extern "C-unwind" fn aurora_direct_process_completed_stderr(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_completed_stdout_bytes(
     completed: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4727,7 +4812,7 @@ pub extern "C-unwind" fn aurora_direct_process_completed_stdout_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_completed_stderr_bytes(
     completed: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4742,7 +4827,7 @@ pub extern "C-unwind" fn aurora_direct_process_completed_stderr_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_completed_check(
     completed: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4758,7 +4843,7 @@ pub extern "C-unwind" fn aurora_direct_process_completed_check(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_supervisor_start(
     supervisor: *mut OpaqueValue,
     name: *mut OpaqueValue,
@@ -4814,7 +4899,7 @@ pub extern "C-unwind" fn aurora_direct_process_supervisor_start(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_supervisor_wait(
     supervisor: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -4839,7 +4924,7 @@ pub extern "C-unwind" fn aurora_direct_process_supervisor_wait(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_supervisor_wait_or_none(
     supervisor: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -4862,7 +4947,7 @@ pub extern "C-unwind" fn aurora_direct_process_supervisor_wait_or_none(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_supervisor_stop(
     supervisor: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4878,7 +4963,7 @@ pub extern "C-unwind" fn aurora_direct_process_supervisor_stop(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_supervisor_is_empty(
     supervisor: *mut OpaqueValue,
 ) -> i64 {
@@ -4891,7 +4976,7 @@ pub extern "C-unwind" fn aurora_direct_process_supervisor_is_empty(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_process_supervisor_close(
     supervisor: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -4907,7 +4992,7 @@ pub extern "C-unwind" fn aurora_direct_process_supervisor_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_connect(address: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(address) } {
         Value::String(address) => {
@@ -4923,7 +5008,7 @@ pub extern "C-unwind" fn aurora_direct_net_connect(address: *mut OpaqueValue) ->
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_connect_timeout(
     address: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -4945,7 +5030,7 @@ pub extern "C-unwind" fn aurora_direct_net_connect_timeout(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_listen(address: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(address) } {
         Value::String(address) => match TcpListenerValue::bind(&address) {
@@ -4959,7 +5044,7 @@ pub extern "C-unwind" fn aurora_direct_net_listen(address: *mut OpaqueValue) -> 
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_udp_bind(address: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(address) } {
         Value::String(address) => match UdpSocketValue::bind(&address) {
@@ -4973,7 +5058,7 @@ pub extern "C-unwind" fn aurora_direct_net_udp_bind(address: *mut OpaqueValue) -
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_unix_listen(path: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(path) } {
         Value::String(path) => match UnixListenerValue::bind(&path) {
@@ -4987,7 +5072,7 @@ pub extern "C-unwind" fn aurora_direct_net_unix_listen(path: *mut OpaqueValue) -
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_unix_connect(
     path: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5005,7 +5090,7 @@ pub extern "C-unwind" fn aurora_direct_net_unix_connect(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_unix_connect_timeout(
     path: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -5027,7 +5112,7 @@ pub extern "C-unwind" fn aurora_direct_net_unix_connect_timeout(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_tls_listen(
     address: *mut OpaqueValue,
     cert_pem_path: *mut OpaqueValue,
@@ -5046,7 +5131,7 @@ pub extern "C-unwind" fn aurora_direct_net_tls_listen(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_tls_connect(
     address: *mut OpaqueValue,
     server_name: *mut OpaqueValue,
@@ -5071,7 +5156,7 @@ pub extern "C-unwind" fn aurora_direct_net_tls_connect(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_tls_connect_timeout(
     address: *mut OpaqueValue,
     server_name: *mut OpaqueValue,
@@ -5105,7 +5190,7 @@ pub extern "C-unwind" fn aurora_direct_net_tls_connect_timeout(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_http_listen(
     address: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5121,7 +5206,7 @@ pub extern "C-unwind" fn aurora_direct_net_http_listen(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_http_request_text(
     method: *mut OpaqueValue,
     url: *mut OpaqueValue,
@@ -5149,7 +5234,7 @@ pub extern "C-unwind" fn aurora_direct_net_http_request_text(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_http_request_text_timeout(
     method: *mut OpaqueValue,
     url: *mut OpaqueValue,
@@ -5189,7 +5274,7 @@ pub extern "C-unwind" fn aurora_direct_net_http_request_text_timeout(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_http_request_bytes(
     method: *mut OpaqueValue,
     url: *mut OpaqueValue,
@@ -5219,7 +5304,7 @@ pub extern "C-unwind" fn aurora_direct_net_http_request_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_http_request_bytes_timeout(
     method: *mut OpaqueValue,
     url: *mut OpaqueValue,
@@ -5259,7 +5344,7 @@ pub extern "C-unwind" fn aurora_direct_net_http_request_bytes_timeout(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_websocket_listen(
     address: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5275,7 +5360,7 @@ pub extern "C-unwind" fn aurora_direct_net_websocket_listen(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_websocket_connect(
     url: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5291,7 +5376,7 @@ pub extern "C-unwind" fn aurora_direct_net_websocket_connect(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_net_websocket_connect_timeout(
     url: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -5311,7 +5396,7 @@ pub extern "C-unwind" fn aurora_direct_net_websocket_connect_timeout(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_listener_accept(
     listener: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -5333,7 +5418,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_listener_accept(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_listener_local_addr(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5349,7 +5434,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_listener_local_addr(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_listener_close(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5365,7 +5450,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_listener_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_stream_read_all(
     stream: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -5387,7 +5472,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_read_all(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_stream_read_line(
     stream: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -5410,7 +5495,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_read_line(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_stream_read_bytes(
     stream: *mut OpaqueValue,
     max_bytes: *mut OpaqueValue,
@@ -5438,7 +5523,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_read_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_stream_read_exact(
     stream: *mut OpaqueValue,
     count: *mut OpaqueValue,
@@ -5464,7 +5549,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_read_exact(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_stream_write_all(
     stream: *mut OpaqueValue,
     text: *mut OpaqueValue,
@@ -5494,7 +5579,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_write_all(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_stream_write_bytes(
     stream: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
@@ -5518,7 +5603,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_write_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_stream_shutdown_read(
     stream: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5534,7 +5619,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_shutdown_read(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_stream_shutdown_write(
     stream: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5550,7 +5635,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_shutdown_write(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_stream_shutdown_both(
     stream: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5566,7 +5651,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_shutdown_both(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_stream_flush(
     stream: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5582,7 +5667,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_flush(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_stream_local_addr(
     stream: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5598,7 +5683,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_local_addr(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_stream_peer_addr(
     stream: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5614,7 +5699,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_peer_addr(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tcp_stream_close(
     stream: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5630,7 +5715,7 @@ pub extern "C-unwind" fn aurora_direct_tcp_stream_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_udp_socket_send_text(
     socket: *mut OpaqueValue,
     address: *mut OpaqueValue,
@@ -5656,7 +5741,7 @@ pub extern "C-unwind" fn aurora_direct_udp_socket_send_text(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_udp_socket_send_bytes(
     socket: *mut OpaqueValue,
     address: *mut OpaqueValue,
@@ -5683,7 +5768,7 @@ pub extern "C-unwind" fn aurora_direct_udp_socket_send_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_udp_socket_recv(
     socket: *mut OpaqueValue,
     max_bytes: *mut OpaqueValue,
@@ -5710,7 +5795,7 @@ pub extern "C-unwind" fn aurora_direct_udp_socket_recv(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_udp_socket_recv_from(
     socket: *mut OpaqueValue,
     max_bytes: *mut OpaqueValue,
@@ -5740,7 +5825,7 @@ pub extern "C-unwind" fn aurora_direct_udp_socket_recv_from(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_udp_socket_local_addr(
     socket: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5756,7 +5841,7 @@ pub extern "C-unwind" fn aurora_direct_udp_socket_local_addr(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_udp_socket_peer_addr(
     socket: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5772,7 +5857,7 @@ pub extern "C-unwind" fn aurora_direct_udp_socket_peer_addr(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_udp_socket_close(
     socket: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5788,7 +5873,7 @@ pub extern "C-unwind" fn aurora_direct_udp_socket_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_udp_datagram_address(
     datagram: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5801,7 +5886,7 @@ pub extern "C-unwind" fn aurora_direct_udp_datagram_address(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_udp_datagram_bytes(
     datagram: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5814,7 +5899,7 @@ pub extern "C-unwind" fn aurora_direct_udp_datagram_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_udp_datagram_text(
     datagram: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5830,7 +5915,7 @@ pub extern "C-unwind" fn aurora_direct_udp_datagram_text(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_listener_accept(
     listener: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -5852,7 +5937,7 @@ pub extern "C-unwind" fn aurora_direct_http_listener_accept(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_listener_local_addr(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5868,7 +5953,7 @@ pub extern "C-unwind" fn aurora_direct_http_listener_local_addr(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_listener_close(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5884,7 +5969,7 @@ pub extern "C-unwind" fn aurora_direct_http_listener_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_exchange_method(
     exchange: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5897,7 +5982,7 @@ pub extern "C-unwind" fn aurora_direct_http_exchange_method(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_exchange_path(
     exchange: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5910,7 +5995,7 @@ pub extern "C-unwind" fn aurora_direct_http_exchange_path(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_exchange_headers(
     exchange: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5923,7 +6008,7 @@ pub extern "C-unwind" fn aurora_direct_http_exchange_headers(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_exchange_body_text(
     exchange: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5939,7 +6024,7 @@ pub extern "C-unwind" fn aurora_direct_http_exchange_body_text(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_exchange_body_bytes(
     exchange: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -5952,7 +6037,7 @@ pub extern "C-unwind" fn aurora_direct_http_exchange_body_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_exchange_respond_text(
     exchange: *mut OpaqueValue,
     status: *mut OpaqueValue,
@@ -5976,7 +6061,7 @@ pub extern "C-unwind" fn aurora_direct_http_exchange_respond_text(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_exchange_respond_bytes(
     exchange: *mut OpaqueValue,
     status: *mut OpaqueValue,
@@ -6002,7 +6087,7 @@ pub extern "C-unwind" fn aurora_direct_http_exchange_respond_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_response_status(response: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| match unsafe { value_ref(response) } {
         Value::HttpResponse(response) => i64::from(response.status()),
@@ -6013,7 +6098,7 @@ pub extern "C-unwind" fn aurora_direct_http_response_status(response: *mut Opaqu
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_response_reason(
     response: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -6026,7 +6111,7 @@ pub extern "C-unwind" fn aurora_direct_http_response_reason(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_response_headers(
     response: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -6039,7 +6124,7 @@ pub extern "C-unwind" fn aurora_direct_http_response_headers(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_response_text(
     response: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -6055,7 +6140,7 @@ pub extern "C-unwind" fn aurora_direct_http_response_text(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_http_response_bytes(
     response: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -6068,7 +6153,7 @@ pub extern "C-unwind" fn aurora_direct_http_response_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_websocket_listener_accept(
     listener: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -6088,7 +6173,7 @@ pub extern "C-unwind" fn aurora_direct_websocket_listener_accept(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_websocket_listener_local_addr(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -6104,7 +6189,7 @@ pub extern "C-unwind" fn aurora_direct_websocket_listener_local_addr(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_websocket_send_text(
     socket: *mut OpaqueValue,
     text: *mut OpaqueValue,
@@ -6126,7 +6211,7 @@ pub extern "C-unwind" fn aurora_direct_websocket_send_text(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_websocket_send_bytes(
     socket: *mut OpaqueValue,
     bytes: *mut OpaqueValue,
@@ -6148,7 +6233,7 @@ pub extern "C-unwind" fn aurora_direct_websocket_send_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_websocket_recv_text(
     socket: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -6169,7 +6254,7 @@ pub extern "C-unwind" fn aurora_direct_websocket_recv_text(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_websocket_recv_bytes(
     socket: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -6190,7 +6275,7 @@ pub extern "C-unwind" fn aurora_direct_websocket_recv_bytes(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_websocket_close(
     socket: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -6206,7 +6291,7 @@ pub extern "C-unwind" fn aurora_direct_websocket_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unix_listener_accept(
     listener: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -6228,7 +6313,7 @@ pub extern "C-unwind" fn aurora_direct_unix_listener_accept(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unix_listener_close(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -6244,7 +6329,7 @@ pub extern "C-unwind" fn aurora_direct_unix_listener_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unix_stream_read_line(
     stream: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -6267,7 +6352,7 @@ pub extern "C-unwind" fn aurora_direct_unix_stream_read_line(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unix_stream_read_exact(
     stream: *mut OpaqueValue,
     count: *mut OpaqueValue,
@@ -6293,7 +6378,7 @@ pub extern "C-unwind" fn aurora_direct_unix_stream_read_exact(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unix_stream_write_all(
     stream: *mut OpaqueValue,
     text: *mut OpaqueValue,
@@ -6317,7 +6402,7 @@ pub extern "C-unwind" fn aurora_direct_unix_stream_write_all(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unix_stream_close(
     stream: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -6333,7 +6418,7 @@ pub extern "C-unwind" fn aurora_direct_unix_stream_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tls_listener_accept(
     listener: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -6355,7 +6440,7 @@ pub extern "C-unwind" fn aurora_direct_tls_listener_accept(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tls_listener_local_addr(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -6371,7 +6456,7 @@ pub extern "C-unwind" fn aurora_direct_tls_listener_local_addr(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tls_listener_close(
     listener: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -6387,7 +6472,7 @@ pub extern "C-unwind" fn aurora_direct_tls_listener_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tls_stream_read_line(
     stream: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
@@ -6410,7 +6495,7 @@ pub extern "C-unwind" fn aurora_direct_tls_stream_read_line(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tls_stream_read_exact(
     stream: *mut OpaqueValue,
     count: *mut OpaqueValue,
@@ -6436,7 +6521,7 @@ pub extern "C-unwind" fn aurora_direct_tls_stream_read_exact(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tls_stream_write_all(
     stream: *mut OpaqueValue,
     text: *mut OpaqueValue,
@@ -6460,7 +6545,7 @@ pub extern "C-unwind" fn aurora_direct_tls_stream_write_all(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_tls_stream_close(
     stream: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -6476,7 +6561,7 @@ pub extern "C-unwind" fn aurora_direct_tls_stream_close(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_sleep_ms(duration: i64) {
     task_runtime_boundary(|| {
         let millis = match u64::try_from(duration) {
@@ -6490,7 +6575,7 @@ pub extern "C-unwind" fn aurora_direct_sleep_ms(duration: i64) {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_sleep_value(duration: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let millis = extract_duration_millis(unsafe { value_ref(duration) });
@@ -6506,7 +6591,7 @@ pub extern "C-unwind" fn aurora_direct_sleep_value(duration: *mut OpaqueValue) -
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
     thunk_ptr: i64,
     args_ptr: *const i64,
@@ -6563,12 +6648,12 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_sqrt_f64(value: f64) -> f64 {
     task_runtime_boundary(|| value.sqrt())
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fail_division_by_zero(line: i64, column: i64) -> ! {
     task_runtime_boundary(|| match runtime_span(line, column) {
         Some(span) => runtime_error_at(span, "division by zero"),
@@ -6576,7 +6661,7 @@ pub extern "C-unwind" fn aurora_direct_fail_division_by_zero(line: i64, column: 
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_fail_int32_overflow(
     value: i64,
     line: i64,
@@ -6591,6 +6676,5 @@ pub extern "C-unwind" fn aurora_direct_fail_int32_overflow(
     })
 }
 
-#[cfg(test)]
 #[path = "native_runtime_tests.rs"]
 mod tests;

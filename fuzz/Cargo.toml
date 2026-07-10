@@ -1,0 +1,30 @@
+[package]
+name = "aurora-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+aurora-compiler = { path = "../crates/aurora-compiler" }
+libfuzzer-sys = "0.4"
+serde_json = "1"
+
+[[bin]]
+name = "frontend"
+path = "fuzz_targets/frontend.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mir_runtime"
+path = "fuzz_targets/mir_runtime.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

@@ -6,6 +6,8 @@ node_modules/
 
 # Historical evaluation output belongs in fixtures or external archives, not Git.
 eval_aurora/
+/release/
+/aurora-*.tar.gz
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

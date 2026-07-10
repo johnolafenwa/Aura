@@ -154,6 +154,12 @@ The examples are organized by topic so they can serve both as quick references a
     - `7`
     - `9`
 
+### `agents/`
+
+- `control_plane_foundations.au`
+  - typed JSON/TOML metadata, path operations, process-local counters, and structured log/trace events
+  - prints the artifact path, deterministic JSON, TOML validity, and counter value
+
 ### `control_flow/`
 
 - `boolean_logic.au`

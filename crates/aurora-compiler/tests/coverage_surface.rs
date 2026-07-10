@@ -1,12 +1,19 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use aurora_compiler::call::BuiltinMember;
+use aurora_compiler::diag::Span;
+use aurora_compiler::mir::{BasicBlock, MirFunction, MirModule, Terminator};
+use aurora_compiler::sema::Type;
 use aurora_compiler::{
     analyze_path_source, analyze_source, check_path, check_source, complete_path_source,
-    complete_source, emit_host_native_object, lower_path_to_mir, lower_source_to_mir, run_mir,
-    run_path, run_source,
+    complete_source, emit_host_native_object, emit_host_native_object_with_metadata,
+    lower_path_to_mir, lower_source_to_mir, run_mir, run_path,
+    run_path_with_source_and_stdout_sink, run_path_with_stdout_sink, run_source,
+    run_source_with_stdout_sink, StdoutSink,
 };
 
 struct TempDir {
@@ -67,6 +74,18 @@ fn line_and_character(source: &str, needle: &str) -> (usize, usize) {
     (line, character + needle.chars().count())
 }
 
+fn capture_stdout_sink() -> (Arc<Mutex<String>>, StdoutSink) {
+    let captured = Arc::new(Mutex::new(String::new()));
+    let sink_capture = captured.clone();
+    let sink: StdoutSink = Arc::new(move |chunk| {
+        sink_capture
+            .lock()
+            .expect("capture sink lock should not be poisoned")
+            .push_str(chunk);
+    });
+    (captured, sink)
+}
+
 #[test]
 fn broad_surface_source_covers_public_compiler_entrypoints() {
     let source = r#"
@@ -100,6 +119,10 @@ class Resource:
 def worker(value: int32) -> int32:
     return value + 1
 
+def produce(queue: Queue[int32]) -> None:
+    queue.put(11)
+    queue.close()
+
 def summarize[T: Labelled](value: T) -> String:
     return value.label()
 
@@ -109,6 +132,13 @@ def parse_value(text: String) -> Result[int32, String]:
 def parse_and_offset(text: String) -> Result[int32, String]:
     parsed = try parse_value(text)
     return Result.Ok(parsed + 5)
+
+def print_int_option(value: Option[int32]) -> None:
+    match value:
+        case Some(inner):
+            print(inner)
+        case None:
+            print(-1)
 
 def main() -> int32:
     text = "  Aurora Repo  "
@@ -160,6 +190,16 @@ def main() -> int32:
     values.reverse()
     values.extend([5, 6])
     print(values == [3, 7, 8, 5, 6])
+    print_int_option(values.get(0))
+    mut range_total = 0
+    for number in range(values.len()):
+        range_total += number
+    print(range_total)
+    for value in borrow values:
+        print(value)
+    for value in borrow mut values:
+        value += 1
+    print(values[0])
     values.clear()
     print(values.is_empty())
 
@@ -197,6 +237,37 @@ def main() -> int32:
     with TaskGroup() as group:
         task = group.start(worker, 4)
         print(task.result())
+
+    stream = Queue[int32]()
+    with TaskGroup() as group:
+        group.start_soon(produce, stream)
+        for item in stream:
+            print(item)
+
+    empty_any = Vec[Task[int32]]()
+    match wait_any(empty_any, timeout=1ms):
+        case WaitAny.Ready(index, value):
+            print(index)
+            print(value)
+        case WaitAny.Error(index, message):
+            print(index)
+            print(message)
+        case WaitAny.TimedOut:
+            print("timedout")
+        case WaitAny.Cancelled:
+            print("cancelled")
+
+    empty_all = Vec[Task[int32]]()
+    match wait_all(empty_all, timeout=1ms):
+        case WaitAll.Ready(results):
+            print(results.len())
+        case WaitAll.Error(index, message):
+            print(index)
+            print(message)
+        case WaitAll.TimedOut:
+            print("timedout")
+        case WaitAll.Cancelled:
+            print("cancelled")
 
     with Resource() as resource:
         print(resource.closed)
@@ -258,6 +329,310 @@ def main() -> int32:
 
     let object = emit_host_native_object(&mir).expect("broad source should emit a native object");
     assert!(!object.is_empty());
+    let metadata_object = emit_host_native_object_with_metadata(&mir, "/tmp/broad.au", source)
+        .expect("broad source should emit a metadata-backed native object");
+    assert!(!metadata_object.is_empty());
+}
+
+#[test]
+fn public_native_codegen_rejects_invalid_mir_surface() {
+    let invalid_module = MirModule {
+        functions: vec![MirFunction {
+            name: "main".to_string(),
+            module_name: "<test>".to_string(),
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: Vec::new(),
+            return_type: Type::named("int32"),
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: Vec::new(),
+                terminator: Terminator::Unreachable,
+            }],
+        }],
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+    };
+    let error = emit_host_native_object(&invalid_module)
+        .expect_err("invalid MIR terminators should fail through the public native codegen API");
+    assert!(
+        error.contains("does not yet support MIR terminator"),
+        "unexpected native codegen error: {error}"
+    );
+}
+
+#[test]
+fn public_stdout_sink_wrappers_capture_source_path_and_path_override_output() {
+    let source = r#"
+def main() -> int32:
+    print("source")
+    return 0
+"#;
+    let (captured_source, source_sink) = capture_stdout_sink();
+    let source_output =
+        run_source_with_stdout_sink(source, source_sink).expect("source sink wrapper should run");
+    assert_eq!(source_output.stdout, "source\n");
+    assert_eq!(
+        captured_source
+            .lock()
+            .expect("captured source output should be readable")
+            .as_str(),
+        "source\n"
+    );
+
+    let temp = TempDir::new("aurora-stdout-sink");
+    let main_path = temp.write(
+        "main.au",
+        r#"def main() -> int32:
+    print("path")
+    return 0
+"#,
+    );
+    let (captured_path, path_sink) = capture_stdout_sink();
+    let path_output =
+        run_path_with_stdout_sink(&main_path, path_sink).expect("path sink wrapper should run");
+    assert_eq!(path_output.stdout, "path\n");
+    assert_eq!(
+        captured_path
+            .lock()
+            .expect("captured path output should be readable")
+            .as_str(),
+        "path\n"
+    );
+
+    let override_source = r#"def main() -> int32:
+    print("override")
+    return 0
+"#;
+    let (captured_override, override_sink) = capture_stdout_sink();
+    let override_output =
+        run_path_with_source_and_stdout_sink(&main_path, override_source, override_sink)
+            .expect("path-with-source sink wrapper should run");
+    assert_eq!(override_output.stdout, "override\n");
+    assert_eq!(
+        captured_override
+            .lock()
+            .expect("captured override output should be readable")
+            .as_str(),
+        "override\n"
+    );
+}
+
+#[test]
+fn public_from_imports_cover_builtin_module_export_resolution() {
+    let import_source = r#"
+from fs import exists, File
+from io import Error
+from process import Stdio
+
+def main() -> None:
+    pass
+"#;
+    check_source(import_source).expect("builtin function class and enum imports should resolve");
+
+    let run_source_text = r#"
+from fs import exists
+
+def main() -> int32:
+    print(exists(path="/path/that/should/not/exist"))
+    return 0
+"#;
+    let output = run_source(run_source_text).expect("builtin from-imported function should run");
+    assert_eq!(output.stdout, "false\n");
+
+    let missing_export = check_source(
+        r#"from fs import Missing
+
+def main() -> None:
+    pass
+"#,
+    )
+    .expect_err("missing builtin export should fail through from-import resolution");
+    assert!(
+        missing_export
+            .message
+            .contains("module `fs` has no export named `Missing`"),
+        "unexpected builtin import diagnostic: {}",
+        missing_export.message
+    );
+
+    let duplicate_source = check_source(
+        r#"from fs import exists
+from fs import exists
+
+def main() -> None:
+    pass
+"#,
+    )
+    .expect_err("duplicate builtin source imports should fail");
+    assert!(
+        duplicate_source
+            .message
+            .contains("duplicate import binding `exists`"),
+        "unexpected duplicate builtin source import diagnostic: {}",
+        duplicate_source.message
+    );
+
+    let temp = TempDir::new("aurora-builtin-from-import-duplicate");
+    let duplicate_path = temp.write(
+        "main.au",
+        r#"from fs import exists
+from fs import exists
+
+def main() -> None:
+    pass
+"#,
+    );
+    let duplicate_path_error =
+        check_path(&duplicate_path).expect_err("duplicate builtin path imports should fail");
+    assert!(
+        duplicate_path_error
+            .message
+            .contains("duplicate import binding `exists`"),
+        "unexpected duplicate builtin path import diagnostic: {}",
+        duplicate_path_error.message
+    );
+}
+
+#[test]
+fn imported_main_function_is_not_treated_as_the_local_entrypoint() {
+    let temp = TempDir::new("aurora-imported-main-entrypoint");
+    temp.write(
+        "helpers/entry.au",
+        r#"public def main(value: int32) -> int32:
+    return value + 3
+"#,
+    );
+    let main_path = temp.write(
+        "main.au",
+        r#"from helpers.entry import main
+
+print(main(4))
+"#,
+    );
+
+    let output = run_path(&main_path).expect("imported main should be callable from a script");
+    assert_eq!(output.stdout, "7\n");
+
+    let mir = lower_path_to_mir(&main_path).expect("imported main script should lower to MIR");
+    let mir_output = run_mir(&mir).expect("imported main script MIR should run");
+    assert_eq!(mir_output.stdout, output.stdout);
+
+    let object = emit_host_native_object(&mir)
+        .expect("direct backend should emit imported main script object");
+    assert!(!object.is_empty());
+}
+
+#[test]
+fn public_surface_covers_escape_diagnostics_argument_counts_and_builtin_member_metadata() {
+    let source = r#"
+def main() -> int32:
+    text = "\0\x41\u{1F600}"
+    label = f"\x42\u{43}"
+    braces = f"{{literal}}"
+    print(text.contains("A"))
+    print(label)
+    print(braces)
+    return 0
+"#;
+
+    let output = run_source(source).expect("escape and writeback source should run");
+    assert_eq!(output.stdout, "true\nBC\n{literal}\n");
+
+    let mir = lower_source_to_mir(source).expect("escape and writeback source should lower");
+    let mir_output = run_mir(&mir).expect("escape and writeback MIR should run");
+    assert_eq!(mir_output.stdout, output.stdout);
+
+    assert!(BuiltinMember::VecPush.requires_mutable_receiver());
+    assert!(BuiltinMember::MapSet.requires_mutable_receiver());
+    assert!(!BuiltinMember::VecLen.requires_mutable_receiver());
+    assert!(!BuiltinMember::StringContains.requires_mutable_receiver());
+
+    let invalid_escape_cases = [
+        (
+            "def main() -> None:\n    text = \"\\x4g\"\n",
+            "invalid hexadecimal escape sequence",
+        ),
+        (
+            "def main() -> None:\n    text = \"\\xg4\"\n",
+            "invalid hexadecimal escape sequence",
+        ),
+        (
+            "def main() -> None:\n    text = \"\\u{}\"\n",
+            "unicode escape sequences must include at least one hexadecimal digit",
+        ),
+        (
+            "def main() -> None:\n    text = \"\\u{110000}\"\n",
+            "unicode escape sequence is out of range",
+        ),
+        (
+            "def main() -> None:\n    text = \"\\u{100000000}\"\n",
+            "unicode escape sequence is out of range",
+        ),
+        (
+            "def main() -> None:\n    text = \"\\u{zz}\"\n",
+            "invalid unicode escape sequence",
+        ),
+        (
+            "def main() -> None:\n    text = \"\\u{12",
+            "unterminated string literal",
+        ),
+        (
+            "def main() -> None:\n    text = \"\\u1234\"\n",
+            "unicode escape sequences must use the form `\\u{...}`",
+        ),
+        (
+            "def main() -> None:\n    text = \"\\x",
+            "unsupported escape sequence `\\x`",
+        ),
+        (
+            "def main() -> None:\n    text = \"\\x4",
+            "unsupported escape sequence `\\x`",
+        ),
+        (
+            "def main() -> None:\n    text = \"\\x4\"\n",
+            "invalid hexadecimal escape sequence",
+        ),
+    ];
+    for (source, expected) in invalid_escape_cases {
+        let error = check_source(source).expect_err("invalid escape should fail through check");
+        assert!(
+            error.message.contains(expected),
+            "expected `{expected}`, got `{}`",
+            error.message
+        );
+    }
+
+    let arity_error = check_source("def main() -> None:\n    print(1, 2)\n")
+        .expect_err("too many builtin args should fail through check");
+    assert!(
+        arity_error
+            .message
+            .contains("`print` expects 1 argument, found 2"),
+        "unexpected arity diagnostic: {}",
+        arity_error.message
+    );
+
+    for (source, expected) in [
+        (
+            "def main() -> None:\n    value = 1e\n",
+            "invalid floating-point literal",
+        ),
+        (
+            "def main() -> None:\n    value = 1e99999\n",
+            "floating-point literal is out of range",
+        ),
+    ] {
+        let error = check_source(source).expect_err("invalid float literal should fail");
+        assert!(
+            error.message.contains(expected),
+            "expected `{expected}`, got `{}`",
+            error.message
+        );
+    }
 }
 
 #[test]

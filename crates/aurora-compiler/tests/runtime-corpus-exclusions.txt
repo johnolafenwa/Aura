@@ -1,0 +1,3 @@
+# Relative path | reason
+test_edge/test36_sleep_minutes.au | intentionally validates a two-minute duration literal
+test_recheck/gap4b_minute_literal.au | intentionally validates a one-minute duration literal

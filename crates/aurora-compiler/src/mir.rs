@@ -386,6 +386,7 @@ pub fn lower(program: &Program) -> MirModule {
     let mut functions = program
         .functions
         .values()
+        .filter(|function| function.module_name == program.module_name)
         .map(|function| {
             lower_function(
                 program,
@@ -746,6 +747,7 @@ fn lower_receiver_kind(receiver: ReceiverKind) -> MirReceiverKind {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_function(
     program: &Program,
     name: &str,
@@ -1671,7 +1673,7 @@ impl<'a> Lowerer<'a> {
         match pattern {
             Pattern::Wildcard(_) => {
                 self.terminate(Terminator::Goto(self.label(success_block)));
-                collect_writeback.then(|| PatternWriteback::Use(scrutinee))
+                collect_writeback.then_some(PatternWriteback::Use(scrutinee))
             }
             Pattern::Binding(binding) => {
                 let target = if let Some(ty) = scrutinee_ty.cloned() {
@@ -1688,7 +1690,7 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Use(scrutinee),
                 });
                 self.terminate(Terminator::Goto(self.label(success_block)));
-                collect_writeback.then(|| PatternWriteback::Use(Operand::Place(target)))
+                collect_writeback.then_some(PatternWriteback::Use(Operand::Place(target)))
             }
             Pattern::Literal(pattern) => {
                 let condition = self.lower_literal_pattern_condition(
@@ -1702,7 +1704,7 @@ impl<'a> Lowerer<'a> {
                     then_label: self.label(success_block),
                     else_label: self.label(failure_block),
                 });
-                collect_writeback.then(|| PatternWriteback::Use(scrutinee))
+                collect_writeback.then_some(PatternWriteback::Use(scrutinee))
             }
             Pattern::Variant(pattern) => {
                 let resolved_enum_name = self.resolve_pattern_enum_name(pattern, scrutinee_ty);
@@ -1740,12 +1742,8 @@ impl<'a> Lowerer<'a> {
                 let mut payload_writebacks = Vec::new();
                 for (index, subpattern) in pattern.subpatterns.iter().enumerate() {
                     self.switch_to(next_block);
-                    let payload_ty = payload_types.get(index).cloned();
-                    let payload_target = if let Some(ty) = payload_ty.clone() {
-                        self.new_typed_temp(ty)
-                    } else {
-                        self.new_temp()
-                    };
+                    let payload_ty = payload_types[index].clone();
+                    let payload_target = self.new_typed_temp(payload_ty.clone());
                     self.emit(Instruction::Assign {
                         target: payload_target.clone(),
                         value: Rvalue::VariantPayload {
@@ -1762,7 +1760,7 @@ impl<'a> Lowerer<'a> {
                     if let Some(writeback) = self.lower_pattern(
                         subpattern,
                         Operand::Place(payload_target),
-                        payload_ty.as_ref(),
+                        Some(&payload_ty),
                         subpattern_success,
                         failure_block,
                         collect_writeback,
@@ -2245,14 +2243,9 @@ impl<'a> Lowerer<'a> {
             ExprKind::Bool(value) => Operand::Bool(*value),
             ExprKind::String(value) => Operand::String(value.clone()),
             ExprKind::List(elements) => {
-                let element_type = self
-                    .infer_expr_type(expr)
-                    .and_then(|ty| match ty {
-                        Type::Named(name, args) if name == "Vec" && args.len() == 1 => {
-                            Some(args[0].clone())
-                        }
-                        _ => None,
-                    })
+                let element_type = elements
+                    .first()
+                    .and_then(|element| self.infer_expr_type(element))
                     .unwrap_or_else(|| Type::named("Unknown"));
                 let temp = self.new_temp_for_expr(expr);
                 let elements = elements
@@ -2269,14 +2262,9 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Set(elements) => {
-                let element_type = self
-                    .infer_expr_type(expr)
-                    .and_then(|ty| match ty {
-                        Type::Named(name, args) if name == "Set" && args.len() == 1 => {
-                            Some(args[0].clone())
-                        }
-                        _ => None,
-                    })
+                let element_type = elements
+                    .first()
+                    .and_then(|element| self.infer_expr_type(element))
                     .unwrap_or_else(|| Type::named("Unknown"));
                 let temp = self.new_temp_for_expr(expr);
                 let elements = elements
@@ -2293,13 +2281,13 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Map(entries) => {
-                let (key_type, value_type) = self
-                    .infer_expr_type(expr)
-                    .and_then(|ty| match ty {
-                        Type::Named(name, args) if name == "Map" && args.len() == 2 => {
-                            Some((args[0].clone(), args[1].clone()))
-                        }
-                        _ => None,
+                let (key_type, value_type) = entries
+                    .first()
+                    .and_then(|entry| {
+                        Some((
+                            self.infer_expr_type(&entry.key)?,
+                            self.infer_expr_type(&entry.value)?,
+                        ))
                     })
                     .unwrap_or_else(|| (Type::named("Unknown"), Type::named("Unknown")));
                 let temp = self.new_temp_for_expr(expr);
@@ -3205,7 +3193,12 @@ impl<'a> Lowerer<'a> {
                 } else {
                     self.lower_args(args)
                 };
-                let callee_name = if self.program.functions.contains_key(name) {
+                let callee_name = if self
+                    .program
+                    .functions
+                    .get(name)
+                    .is_some_and(|function| function.module_name == self.program.module_name)
+                {
                     name.clone()
                 } else if let Some(function_info) = resolved_function {
                     if function_info.module_name == self.program.module_name {
@@ -3575,15 +3568,15 @@ impl<'a> Lowerer<'a> {
                                 )
                             });
                         }
-                        if name == "Some" && args.len() == 1 {
-                            return self.infer_option_some_call_type(&args[0].value);
-                        }
                         if self.resolve_class_info(name).is_some() {
                             return self.infer_class_constructor_type(
                                 name,
                                 args,
                                 explicit_type_args,
                             );
+                        }
+                        if name == "Some" && args.len() == 1 {
+                            return self.infer_option_some_call_type(&args[0].value);
                         }
                         self.resolve_function_info(name).map(|function| {
                             if let Some(type_args) = explicit_type_args {
@@ -4001,9 +3994,7 @@ impl<'a> Lowerer<'a> {
                 .trait_impls_in_scope()
                 .filter(|trait_impl| trait_impl.trait_name == trait_name)
                 .filter_map(|trait_impl| {
-                    let Some(trait_method) = trait_impl.methods.get(field) else {
-                        return None;
-                    };
+                    let trait_method = trait_impl.methods.get(field)?;
                     let mut type_params = BTreeSet::new();
                     collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
                     for trait_arg in &trait_impl.trait_args {

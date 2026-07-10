@@ -8,7 +8,7 @@ The goal is not just high test counts. The goal is early failure when language b
 
 ### 1. Test First
 
-For new language features and bug fixes:
+For language features and bug fixes:
 
 1. add a failing test or fixture first
 2. implement the feature or fix
@@ -59,7 +59,7 @@ CLI tests should verify:
 - command success
 - command failure
 - annotated diagnostics
-- stable command semantics for `check`, `run`, `ast`, `ast-json`, `analyze`, `complete`, and `mir`
+- stable command semantics for `check`, `run`, `build`, `new`, `fmt`, `test`, `ast`, `ast-json`, `analyze`, `complete`, `lsp`, and `mir`
 
 ### Language Server: `tools/aurora-language-server`
 
@@ -105,7 +105,8 @@ Current direction:
 Current repo commands:
 
 - compiler and examples
-  - `cargo test`
+  - `npm run test:rust`
+  - equivalent to `RUST_MIN_STACK=33554432 cargo test -- --test-threads=1`
 - compiler coverage
   - `npm run coverage:compiler`
   - `npm run coverage:compiler:check`
@@ -114,22 +115,39 @@ Current repo commands:
   - `npm run coverage:lsp:check`
 - full repo gate
   - `npm run ci`
+- native/MIR behavior parity
+  - `npm run test:backend-parity`
+- scheduler verification
+  - `npm run test:scheduler-model`
+  - `npm run test:scheduler-stress`
+- weekly safety/performance workflow
+  - parser/checker/MIR fuzz targets under `fuzz/`
+  - AddressSanitizer tests for the runtime FFI and generated direct binaries
+  - compiler pipeline benchmark artifact
+- hygiene and release-readiness checks
+  - `npm run check:format`
+  - `npm run check:clippy`
+  - `npm run check:audit` (npm advisory audit plus RustSec `cargo audit`)
+  - `npm run check:hygiene`
+  - `npm run docs:build`
 
 Current enforced floor:
 
 - compiler
-  - lines: `89%`
-  - functions: `89%`
-  - regions: `90%`
+  - lines: `96.01%`
+  - functions: `96.71%`
+  - regions: `93.94%`
 - language server
-  - statements: `91%`
-  - branches: `83%`
+  - statements: `100%`
+  - branches: `100%`
   - functions: `100%`
-  - lines: `91%`
+  - lines: `100%`
 
-These are baseline non-regression gates, not the final target. The project is still moving toward enforced 100% coverage as the implementation stabilizes.
+These are non-regression gates, not a roadmap to 100% compiler coverage. During the 0.1 hardening cycle the compiler floor is frozen at this level; new behavior still requires focused tests, but distribution, safety validation, and editor responsiveness take priority over marginal coverage gains.
 
-Compiler coverage now ignores sibling `crates/aurora-compiler/src/*_tests.rs` files that exist only to hold extracted unit-test scaffolding. The compiler gate is intended to measure production compiler code, not relocated test harness modules.
+Compiler coverage now runs the full Rust workspace test surface while reporting only compiler production code. It ignores sibling `crates/aurora-compiler/src/*_tests.rs` files that exist only to hold extracted unit-test scaffolding, and it excludes `crates/aura/**` from the reported files so CLI product tests can exercise compiler behavior without counting CLI source in the compiler floor.
+
+The GitHub Actions surface mirrors the local gate: CI runs on Linux and macOS, the docs workflow builds and deploys the VitePress book to GitHub Pages, and the release workflow builds platform CLI archives plus the VS Code extension and static docs archive for GitHub Releases.
 
 ## Workflow For A New Feature
 

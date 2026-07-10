@@ -1,0 +1,15 @@
+import io
+import sys
+
+def main() -> int32:
+    args: Vec[String] = sys.args()
+    home: Option[String] = sys.env("HOME")
+    cwd: Result[String, io.Error] = sys.current_dir()
+    wall: int64 = sys.unix_time_ms()
+    monotonic: int64 = sys.monotonic_time_ms()
+    print(args.len())
+    print(home)
+    print(cwd)
+    print(wall)
+    print(monotonic)
+    return 0

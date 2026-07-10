@@ -76,22 +76,10 @@ impl GitSelector {
         }
         if let Some(tag) = tag {
             validate_git_selector_literal(dependency_name, "tag", &tag)?;
-            if tag.trim().is_empty() {
-                return Err(Diagnostic::new(format!(
-                    "dependency `{}` has an empty git tag",
-                    dependency_name
-                )));
-            }
             return Ok(Self::Tag(tag));
         }
         let branch = branch.unwrap_or_else(|| "main".to_string());
         validate_git_selector_literal(dependency_name, "branch", &branch)?;
-        if branch.trim().is_empty() {
-            return Err(Diagnostic::new(format!(
-                "dependency `{}` has an empty git branch",
-                dependency_name
-            )));
-        }
         Ok(Self::Branch(branch))
     }
 
@@ -172,11 +160,17 @@ impl PackageGraph {
         }
         let root_source_root = packages
             .get(&root_package_name)
-            .ok_or_else(|| Diagnostic::new("internal error: root package should be resolved"))?
+            .expect("root package should be resolved")
             .canonical_source_root
             .clone();
 
-        if !normalized_entry.starts_with(&root_source_root) {
+        let root_tests_root = root_manifest_dir.join("tests");
+        let is_test_entry = normalized_entry.starts_with(&root_tests_root)
+            && normalized_entry
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("au");
+        if !normalized_entry.starts_with(&root_source_root) && !is_test_entry {
             return Err(Diagnostic::new(format!(
                 "entry `{}` is outside package source root `{}`",
                 normalized_entry.display(),
@@ -196,11 +190,24 @@ impl PackageGraph {
             .values()
             .filter(|package| path.starts_with(&package.canonical_source_root))
             .max_by_key(|package| package.canonical_source_root.as_os_str().len())
+            .or_else(|| {
+                self.packages.values().find(|package| {
+                    package.external_prefix.is_none()
+                        && path.starts_with(package.manifest_dir.join("tests"))
+                })
+            })
     }
 
     pub fn module_name_for_path(&self, path: &Path) -> Option<String> {
         let package = self.source_for_path(path)?;
-        let relative = path.strip_prefix(&package.canonical_source_root).ok()?;
+        let (relative, test_module) = match path.strip_prefix(&package.canonical_source_root) {
+            Ok(relative) => (relative, false),
+            Err(_) if package.external_prefix.is_none() => (
+                path.strip_prefix(package.manifest_dir.join("tests")).ok()?,
+                true,
+            ),
+            Err(_) => return None,
+        };
         let mut without_extension = relative.to_path_buf();
         without_extension.set_extension("");
         let logical = without_extension
@@ -208,6 +215,11 @@ impl PackageGraph {
             .map(|segment| segment.to_string_lossy().to_string())
             .collect::<Vec<_>>()
             .join(".");
+        let logical = if test_module && !logical.is_empty() {
+            format!("tests.{logical}")
+        } else {
+            logical
+        };
         Some(match &package.external_prefix {
             Some(prefix) if !logical.is_empty() => format!("{}.{}", prefix, logical),
             Some(prefix) => prefix.clone(),
@@ -500,12 +512,8 @@ impl PackageResolver {
                         } else {
                             self.locked_packages.get(&name)
                         };
-                        let git_source = git.ok_or_else(|| {
-                            Diagnostic::new(format!(
-                                "dependency `{}` must specify `git = ...` for git resolution",
-                                name
-                            ))
-                        })?;
+                        let git_source =
+                            git.expect("validated git dependencies should carry a git source");
                         let resolved = resolve_git_dependency(
                             &manifest_dir,
                             &name,
@@ -624,7 +632,7 @@ struct ParsedPackageManifest {
 }
 
 fn find_enclosing_package_manifest_dir(entry_path: &Path) -> Result<Option<PathBuf>> {
-    let entry_dir = entry_path.parent().unwrap_or_else(|| Path::new("."));
+    let entry_dir = entry_path.parent().unwrap_or(Path::new("."));
     for ancestor in entry_dir.ancestors() {
         let manifest_path = ancestor.join(MANIFEST_NAME);
         if !manifest_path.exists() {
@@ -648,9 +656,9 @@ fn find_workspace_root(package_manifest_dir: &Path) -> Result<Option<PathBuf>> {
         let Some(workspace) = raw.workspace else {
             continue;
         };
-        let Ok(relative_member_path) = package_manifest_dir.strip_prefix(ancestor) else {
-            continue;
-        };
+        let relative_member_path = package_manifest_dir
+            .strip_prefix(ancestor)
+            .expect("package manifest ancestors should prefix the manifest directory");
         let relative_member_path = normalize_relative_path(relative_member_path);
         if workspace
             .members
@@ -712,7 +720,7 @@ fn resolve_package_graph_for_update(
         }
         let root_source_root = packages
             .get(&root_package_name)
-            .ok_or_else(|| Diagnostic::new("internal error: resolved root package should exist"))?
+            .expect("resolved root package should exist")
             .canonical_source_root
             .clone();
         let updated_packages = resolver.refreshed_packages.into_iter().collect::<Vec<_>>();
@@ -752,9 +760,7 @@ fn resolve_package_graph_for_update(
             root_source_root = resolver
                 .packages
                 .get(&package_name)
-                .ok_or_else(|| {
-                    Diagnostic::new("internal error: resolved workspace member should exist")
-                })?
+                .expect("resolved workspace member should exist")
                 .canonical_source_root
                 .clone();
         }
@@ -1060,12 +1066,10 @@ fn parse_ls_remote_revision(source: &str, reference: &str, output: &str) -> Resu
             source, reference
         )));
     };
-    let Some(rev) = line.split_whitespace().next() else {
-        return Err(Diagnostic::new(format!(
-            "could not parse git revision for `{}` from `{}`",
-            reference, source
-        )));
-    };
+    let rev = line
+        .split_whitespace()
+        .next()
+        .expect("non-empty ls-remote output should contain a revision field");
     validate_git_revision_literal(reference, rev)?;
     Ok(rev.to_string())
 }
@@ -1089,21 +1093,18 @@ fn ensure_git_checkout(source: &str, rev: &str) -> Result<PathBuf> {
         }
 
         if checkout_dir.exists() {
-            fs::remove_dir_all(&checkout_dir).map_err(|error| {
-                Diagnostic::new(format!(
+            if let Err(error) = fs::remove_dir_all(&checkout_dir) {
+                return Err(Diagnostic::new(format!(
                     "failed to reset git checkout cache `{}`: {}",
                     checkout_dir.display(),
                     error
-                ))
-            })?;
+                )));
+            }
         }
 
-        let parent = checkout_dir.parent().ok_or_else(|| {
-            Diagnostic::new(format!(
-                "internal error: git checkout cache path `{}` has no parent",
-                checkout_dir.display()
-            ))
-        })?;
+        let parent = checkout_dir
+            .parent()
+            .expect("git checkout cache paths should have parent directories");
         match fs::create_dir_all(parent) {
             Ok(()) => return materialize_git_checkout(source, rev, &checkout_dir),
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -1132,12 +1133,9 @@ fn ensure_git_checkout(source: &str, rev: &str) -> Result<PathBuf> {
 }
 
 fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Result<PathBuf> {
-    let parent = checkout_dir.parent().ok_or_else(|| {
-        Diagnostic::new(format!(
-            "internal error: git checkout cache path `{}` has no parent",
-            checkout_dir.display()
-        ))
-    })?;
+    let parent = checkout_dir
+        .parent()
+        .expect("git checkout cache paths should have parent directories");
     let temp_checkout = unique_temp_path(parent, rev)?;
     if temp_checkout.exists() {
         let _ = fs::remove_dir_all(&temp_checkout);
@@ -1261,18 +1259,14 @@ fn run_command_with_timeout(
     let mut child = command
         .spawn()
         .map_err(|error| Diagnostic::new(format!("failed to run `{}`: {}", display_name, error)))?;
-    let stdout = child.stdout.take().ok_or_else(|| {
-        Diagnostic::new(format!(
-            "internal error: `{}` stdout was not captured",
-            display_name
-        ))
-    })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
-        Diagnostic::new(format!(
-            "internal error: `{}` stderr was not captured",
-            display_name
-        ))
-    })?;
+    let stdout = child
+        .stdout
+        .take()
+        .expect("commands configured with piped stdout should expose stdout");
+    let stderr = child
+        .stderr
+        .take()
+        .expect("commands configured with piped stderr should expose stderr");
     let stdout_handle = pipe_reader_thread(stdout);
     let stderr_handle = pipe_reader_thread(stderr);
     let started = Instant::now();
@@ -1336,28 +1330,37 @@ fn run_git_command(current_dir: Option<&Path>, args: Vec<String>) -> Result<Stri
 fn reject_symlinks_in_tree(root: &Path) -> Result<()> {
     let mut pending = vec![root.to_path_buf()];
     while let Some(path) = pending.pop() {
-        let entries = fs::read_dir(&path).map_err(|error| {
-            Diagnostic::new(format!(
-                "failed to inspect git checkout `{}` for symlinks: {}",
-                path.display(),
-                error
-            ))
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                Diagnostic::new(format!(
-                    "failed to inspect an entry under git checkout `{}`: {}",
+        let entries = match fs::read_dir(&path) {
+            Ok(entries) => entries,
+            Err(error) => {
+                return Err(Diagnostic::new(format!(
+                    "failed to inspect git checkout `{}` for symlinks: {}",
                     path.display(),
                     error
-                ))
-            })?;
-            let file_type = entry.file_type().map_err(|error| {
-                Diagnostic::new(format!(
-                    "failed to inspect git checkout entry `{}`: {}",
-                    entry.path().display(),
-                    error
-                ))
-            })?;
+                )));
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    return Err(Diagnostic::new(format!(
+                        "failed to inspect an entry under git checkout `{}`: {}",
+                        path.display(),
+                        error
+                    )));
+                }
+            };
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) => {
+                    return Err(Diagnostic::new(format!(
+                        "failed to inspect git checkout entry `{}`: {}",
+                        entry.path().display(),
+                        error
+                    )));
+                }
+            };
             if file_type.is_symlink() {
                 return Err(Diagnostic::new(format!(
                     "refusing to use git checkout `{}` because it contains symlinked content at `{}`",
@@ -1445,13 +1448,16 @@ fn canonicalize_if_exists(path: &Path) -> Result<PathBuf> {
         existing_ancestor = parent;
     }
 
-    let canonical_ancestor = fs::canonicalize(existing_ancestor).map_err(|error| {
-        Diagnostic::new(format!(
-            "failed to resolve path `{}`: {}",
-            existing_ancestor.display(),
-            error
-        ))
-    })?;
+    let canonical_ancestor = match fs::canonicalize(existing_ancestor) {
+        Ok(canonical) => canonical,
+        Err(error) => {
+            return Err(Diagnostic::new(format!(
+                "failed to resolve path `{}`: {}",
+                existing_ancestor.display(),
+                error
+            )));
+        }
+    };
     let Ok(suffix) = path.strip_prefix(existing_ancestor) else {
         return Ok(path.to_path_buf());
     };
@@ -1645,18 +1651,18 @@ fn write_atomic_file(path: &Path, contents: &[u8], noun: &str, target: &str) -> 
                     noun, target, error
                 ))
             })?;
-        file.write_all(contents).map_err(|error| {
-            Diagnostic::new(format!(
+        if let Err(error) = file.write_all(contents) {
+            return Err(Diagnostic::new(format!(
                 "failed to write temporary {} for {}: {}",
                 noun, target, error
-            ))
-        })?;
-        file.flush().map_err(|error| {
-            Diagnostic::new(format!(
+            )));
+        }
+        if let Err(error) = file.flush() {
+            return Err(Diagnostic::new(format!(
                 "failed to flush temporary {} for {}: {}",
                 noun, target, error
-            ))
-        })?;
+            )));
+        }
         replace_file(&temp_path, path).map_err(|error| {
             Diagnostic::new(format!("failed to place {} {}: {}", noun, target, error))
         })?;
@@ -1861,15 +1867,13 @@ fn read_cached_git_revision(checkout_dir: &Path) -> Result<Option<String>> {
 }
 
 fn unix_time_nanos() -> Result<u128> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .map_err(|error| {
-            Diagnostic::new(format!(
-                "failed to read the system clock while creating a temporary path: {}",
-                error
-            ))
-        })
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => Ok(duration.as_nanos()),
+        Err(error) => Err(Diagnostic::new(format!(
+            "failed to read the system clock while creating a temporary path: {}",
+            error
+        ))),
+    }
 }
 
 fn unsupported_version_dependency(name: &str, version: Option<&str>) -> Diagnostic {
@@ -1881,106 +1885,8 @@ fn unsupported_version_dependency(name: &str, version: Option<&str>) -> Diagnost
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    struct TempDir {
-        path: PathBuf,
-    }
-
-    impl TempDir {
-        fn new(prefix: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "{}-{}-{}",
-                prefix,
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("system time should be after unix epoch")
-                    .as_nanos()
-            ));
-            fs::create_dir_all(&path).expect("failed to create temp dir");
-            Self { path }
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-
-    #[test]
-    fn configured_git_command_disables_interactive_prompts() {
-        let args = vec!["status".to_string()];
-        let command = configured_git_command(None, &args);
-        let envs = command
-            .get_envs()
-            .map(|(key, value)| {
-                (
-                    key.to_string_lossy().to_string(),
-                    value.map(|value| value.to_string_lossy().to_string()),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(
-            envs.get("GIT_TERMINAL_PROMPT"),
-            Some(&Some("0".to_string()))
-        );
-        assert_eq!(envs.get("GIT_ASKPASS"), Some(&Some(String::new())));
-        assert_eq!(envs.get("SSH_ASKPASS"), Some(&Some(String::new())));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn command_timeout_terminates_hung_git_helpers() {
-        let mut command = Command::new("sh");
-        command.args(["-c", "sleep 5"]);
-        let started = Instant::now();
-        let error =
-            run_command_with_timeout(command, "git test-timeout", StdDuration::from_millis(50))
-                .expect_err("hung commands should time out");
-        assert!(error.message.contains("timed out"));
-        assert!(
-            started.elapsed() < StdDuration::from_secs(2),
-            "timeout helper should not wait for the child sleep to finish"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reject_symlinks_in_tree_reports_symlinked_entries() {
-        let temp = TempDir::new("aurora-package-symlink-tree");
-        let root = temp.path.join("checkout");
-        fs::create_dir_all(root.join("src")).expect("failed to create checkout root");
-        fs::write(root.join("Aurora.toml"), "[package]\nname = \"pkg\"\n").expect("manifest");
-        std::os::unix::fs::symlink("/tmp", root.join("src").join("escape"))
-            .expect("failed to create symlink");
-
-        let error = reject_symlinks_in_tree(&root).expect_err("symlinked content should fail");
-        assert!(error.message.contains("contains symlinked content"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn read_cached_git_revision_rejects_symlinked_markers() {
-        let temp = TempDir::new("aurora-package-symlink-marker");
-        let root = temp.path.join("checkout");
-        fs::create_dir_all(&root).expect("failed to create checkout root");
-        fs::write(root.join("Aurora.toml"), "[package]\nname = \"pkg\"\n").expect("manifest");
-        let target = temp.path.join("outside.rev");
-        fs::write(&target, "1234567").expect("failed to write outside marker");
-        std::os::unix::fs::symlink(&target, root.join(".aurora-cache-rev"))
-            .expect("failed to create symlinked marker");
-
-        let error =
-            read_cached_git_revision(&root).expect_err("symlinked revision marker should fail");
-        assert!(error
-            .message
-            .contains("failed to inspect git checkout marker"));
-    }
-}
+#[path = "package_tests.rs"]
+mod tests;
 
 fn relative_path_from(base: &Path, target: &Path) -> PathBuf {
     let base_components = base.components().collect::<Vec<_>>();

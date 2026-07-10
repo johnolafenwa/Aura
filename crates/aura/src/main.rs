@@ -1,13 +1,13 @@
 use std::fs;
 use std::io::Write;
-use std::io::{self, Read};
+use std::io::{self, BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
 use aurora_compiler::{
     analyze_path_source, check_path, check_path_with_source, complete_path_source,
     emit_host_native_object_with_metadata, lower_path_to_mir, lower_path_with_source_to_mir,
-    parse_source, run_path_with_source_and_stdout_sink, run_path_with_stdout_sink,
+    parse_source, run_path, run_path_with_source_and_stdout_sink, run_path_with_stdout_sink,
     update_git_dependencies_in_working_dir, Diagnostic, MirModule, Value,
 };
 use serde_json::Value as JsonValue;
@@ -24,6 +24,18 @@ enum BuildBackend {
     Direct,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectedBuildBackend {
+    Direct,
+    MirRuntime,
+}
+
+#[derive(Debug)]
+struct BuildOutcome {
+    selected: SelectedBuildBackend,
+    fallback_reason: Option<String>,
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let Some(command) = args.next() else {
@@ -32,6 +44,10 @@ fn main() {
     match command.as_str() {
         "help" | "--help" | "-h" => print_usage_and_exit(0),
         "version" | "--version" | "-V" => print_version_and_exit(),
+        "lsp" => handle_lsp_service(),
+        "new" => handle_new_command(args.collect()),
+        "fmt" => handle_fmt_command(args.collect()),
+        "test" => handle_test_command(args.collect()),
         "deps" => {
             let remaining = args.collect::<Vec<_>>();
             handle_deps_command(remaining);
@@ -54,7 +70,18 @@ fn main() {
             }
         }
         "run" => {
-            let input = read_input(&mut args);
+            let remaining = args.collect::<Vec<_>>();
+            let delimiter = remaining.iter().position(|argument| argument == "--");
+            let (input_args, program_args) = match delimiter {
+                Some(index) => (&remaining[..index], &remaining[index + 1..]),
+                None => (remaining.as_slice(), &[][..]),
+            };
+            let input = read_input(&mut input_args.iter().cloned());
+            let encoded_args = serde_json::to_string(program_args).unwrap_or_else(|error| {
+                eprintln!("failed to encode program arguments: {error}");
+                process::exit(1);
+            });
+            std::env::set_var("AURORA_PROGRAM_ARGS_JSON", encoded_args);
             let stdout_sink = std::sync::Arc::new(|chunk: &str| write_stdout(chunk));
             let result = if input.from_stdin {
                 run_path_with_source_and_stdout_sink(
@@ -88,15 +115,33 @@ fn main() {
             };
             match result {
                 Ok(mir) => {
-                    if let Err(message) = build_binary_with_backend(
+                    match build_binary_with_backend(
                         &input.path,
                         &input.source,
                         &mir,
                         &output_path,
                         backend,
                     ) {
-                        eprintln!("{}", message);
-                        process::exit(1);
+                        Ok(outcome) => {
+                            if let Some(reason) = outcome.fallback_reason {
+                                eprintln!(
+                                    "aura: direct backend failed; using MIR runtime fallback:\n{}",
+                                    reason
+                                );
+                            }
+                            eprintln!(
+                                "aura: built `{}` with {} backend",
+                                output_path.display(),
+                                match outcome.selected {
+                                    SelectedBuildBackend::Direct => "direct",
+                                    SelectedBuildBackend::MirRuntime => "MIR runtime",
+                                }
+                            );
+                        }
+                        Err(message) => {
+                            eprintln!("{}", message);
+                            process::exit(1);
+                        }
                     }
                 }
                 Err(error) => {
@@ -193,6 +238,364 @@ fn main() {
             }
         }
         _ => print_usage_and_exit(2),
+    }
+}
+
+fn handle_new_command(args: Vec<String>) {
+    let [path] = args.as_slice() else {
+        eprintln!("usage: aura new <project-path>");
+        process::exit(2);
+    };
+    let project = PathBuf::from(path);
+    if project.exists() {
+        eprintln!(
+            "refusing to overwrite existing path `{}`",
+            project.display()
+        );
+        process::exit(1);
+    }
+    let Some(package_name) = project.file_name().and_then(|name| name.to_str()) else {
+        eprintln!("project path must end in a valid UTF-8 package name");
+        process::exit(2);
+    };
+    let valid_name = package_name.chars().enumerate().all(|(index, character)| {
+        character.is_ascii_alphanumeric() || character == '_' || (character == '-' && index > 0)
+    }) && package_name
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_alphabetic());
+    if !valid_name {
+        eprintln!(
+            "package name `{package_name}` must start with a letter and contain only ASCII letters, digits, `_`, or `-`"
+        );
+        process::exit(2);
+    }
+    let manifest_name = package_name.replace('-', "_");
+
+    let source_dir = project.join("src");
+    let tests_dir = project.join("tests");
+    if let Err(error) =
+        fs::create_dir_all(&source_dir).and_then(|()| fs::create_dir_all(&tests_dir))
+    {
+        eprintln!("failed to create `{}`: {error}", source_dir.display());
+        process::exit(1);
+    }
+    let manifest =
+        format!("[package]\nname = \"{manifest_name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n");
+    if let Err(error) = fs::write(project.join("Aurora.toml"), manifest)
+        .and_then(|()| fs::write(project.join(".gitignore"), "target/\n"))
+        .and_then(|()| {
+            fs::write(
+                source_dir.join("main.au"),
+                "def main() -> int32:\n    print(\"Hello from Aurora\")\n    return 0\n",
+            )
+        })
+        .and_then(|()| {
+            fs::write(
+                tests_dir.join("smoke.au"),
+                "def main() -> int32:\n    return 0\n",
+            )
+        })
+    {
+        let _ = fs::remove_dir_all(&project);
+        eprintln!(
+            "failed to create Aurora project `{}`: {error}",
+            project.display()
+        );
+        process::exit(1);
+    }
+    write_stdout(&format!("created `{}`\n", project.display()));
+}
+
+fn handle_fmt_command(args: Vec<String>) {
+    let mut check_only = false;
+    let mut inputs = Vec::new();
+    for argument in args {
+        if argument == "--check" {
+            check_only = true;
+        } else if argument.starts_with('-') {
+            eprintln!("unknown aura fmt option `{argument}`");
+            process::exit(2);
+        } else {
+            inputs.push(PathBuf::from(argument));
+        }
+    }
+    if inputs.is_empty() {
+        inputs.push(PathBuf::from("."));
+    }
+    let paths = collect_aurora_source_paths(&inputs).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        process::exit(1);
+    });
+    let mut changed = Vec::new();
+    for path in paths {
+        let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+            eprintln!("failed to read `{}`: {error}", path.display());
+            process::exit(1);
+        });
+        let formatted = format_aurora_source(&source);
+        if let Err(error) = parse_source(&formatted) {
+            eprintln!(
+                "{}",
+                error.render_with_source(&path.display().to_string(), &formatted)
+            );
+            process::exit(1);
+        }
+        if source != formatted {
+            changed.push(path.clone());
+            if !check_only {
+                fs::write(&path, formatted).unwrap_or_else(|error| {
+                    eprintln!("failed to write `{}`: {error}", path.display());
+                    process::exit(1);
+                });
+            }
+        }
+    }
+    if check_only && !changed.is_empty() {
+        for path in changed {
+            eprintln!("would format `{}`", path.display());
+        }
+        process::exit(1);
+    }
+}
+
+fn format_aurora_source(source: &str) -> String {
+    let mut formatted = source
+        .lines()
+        .map(|line| line.trim_end_matches([' ', '\t', '\r']))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !formatted.is_empty() {
+        formatted.push('\n');
+    }
+    formatted
+}
+
+fn collect_aurora_source_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+    fn visit(path: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
+        if path.is_file() {
+            if path.extension().and_then(|extension| extension.to_str()) == Some("au") {
+                paths.push(path.to_path_buf());
+            }
+            return Ok(());
+        }
+        if !path.is_dir() {
+            return Err(format!(
+                "Aurora source path `{}` does not exist",
+                path.display()
+            ));
+        }
+        for entry in fs::read_dir(path)
+            .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?
+        {
+            let entry = entry.map_err(|error| {
+                format!("failed to read entry under `{}`: {error}", path.display())
+            })?;
+            let child = entry.path();
+            let name = child
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
+            if child.is_dir()
+                && (name.starts_with('.') || matches!(name, "target" | "node_modules"))
+            {
+                continue;
+            }
+            visit(&child, paths)?;
+        }
+        Ok(())
+    }
+
+    let mut paths = Vec::new();
+    for input in inputs {
+        visit(input, &mut paths)?;
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn handle_test_command(args: Vec<String>) {
+    std::env::set_var("AURORA_PROGRAM_ARGS_JSON", "[]");
+    let mut timeout_ms = 30_000u64;
+    let mut inputs = Vec::new();
+    let mut args = args.into_iter();
+    while let Some(argument) = args.next() {
+        if argument == "--timeout-ms" {
+            timeout_ms = args
+                .next()
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or_else(|| {
+                    eprintln!("aura test --timeout-ms requires a positive integer");
+                    process::exit(2);
+                });
+        } else if argument.starts_with('-') {
+            eprintln!("unknown aura test option `{argument}`");
+            process::exit(2);
+        } else {
+            inputs.push(PathBuf::from(argument));
+        }
+    }
+    let inputs = if inputs.is_empty() {
+        vec![PathBuf::from("tests")]
+    } else {
+        inputs
+    };
+    let paths = collect_aurora_source_paths(&inputs).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        process::exit(1);
+    });
+    if paths.is_empty() {
+        eprintln!("no Aurora test files found");
+        process::exit(1);
+    }
+
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    for path in paths {
+        let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+            eprintln!("failed to read `{}`: {error}", path.display());
+            process::exit(1);
+        });
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let test_path = path.clone();
+        std::thread::Builder::new()
+            .name(format!("aura-test-{}", path.display()))
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                let _ = sender.send(run_path(&test_path));
+            })
+            .unwrap_or_else(|error| {
+                eprintln!("failed to start test `{}`: {error}", path.display());
+                process::exit(1);
+            });
+        match receiver.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                failed += 1;
+                eprintln!("FAILED {} (timed out after {timeout_ms}ms)", path.display());
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                failed += 1;
+                eprintln!("FAILED {} (test worker disconnected)", path.display());
+            }
+            Ok(Ok(output)) => {
+                let success = match output.value {
+                    Value::Int(code) => code.as_i128() == Some(0),
+                    _ => true,
+                };
+                if success {
+                    passed += 1;
+                    write_stdout(&format!("ok {}\n", path.display()));
+                } else {
+                    failed += 1;
+                    eprintln!("FAILED {} (non-zero main return)", path.display());
+                }
+            }
+            Ok(Err(error)) => {
+                failed += 1;
+                eprintln!(
+                    "FAILED {}\n{}",
+                    path.display(),
+                    error.render_with_source(&path.display().to_string(), &source)
+                );
+            }
+        }
+    }
+    write_stdout(&format!("{passed} passed; {failed} failed\n"));
+    if failed > 0 {
+        process::exit(1);
+    }
+}
+
+fn handle_lsp_service() {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+
+    for line in stdin.lock().lines() {
+        let response = match line {
+            Ok(line) => lsp_response_for_line(&line),
+            Err(error) => serde_json::json!({
+                "id": JsonValue::Null,
+                "error": format!("failed to read LSP compiler request: {error}")
+            }),
+        };
+        let write_result = serde_json::to_writer(&mut writer, &response)
+            .map_err(io::Error::other)
+            .and_then(|_| writer.write_all(b"\n"))
+            .and_then(|_| writer.flush());
+        if let Err(error) = write_result {
+            if error.kind() == io::ErrorKind::BrokenPipe {
+                return;
+            }
+            eprintln!("failed to write LSP compiler response: {error}");
+            process::exit(1);
+        }
+    }
+}
+
+fn lsp_response_for_line(line: &str) -> JsonValue {
+    let request = match serde_json::from_str::<JsonValue>(line) {
+        Ok(request) => request,
+        Err(error) => {
+            return serde_json::json!({
+                "id": JsonValue::Null,
+                "error": format!("invalid LSP compiler request JSON: {error}")
+            });
+        }
+    };
+    let id = request.get("id").cloned().unwrap_or(JsonValue::Null);
+    let result = lsp_result_for_request(&request);
+    match result {
+        Ok(result) => serde_json::json!({ "id": id, "result": result }),
+        Err(error) => serde_json::json!({ "id": id, "error": error }),
+    }
+}
+
+fn lsp_result_for_request(request: &JsonValue) -> Result<JsonValue, String> {
+    let method = request
+        .get("method")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| "LSP compiler request requires string field `method`".to_string())?;
+    let path = request
+        .get("path")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| "LSP compiler request requires string field `path`".to_string())?;
+    let source = request
+        .get("source")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| "LSP compiler request requires string field `source`".to_string())?;
+
+    match method {
+        "analyze" => serde_json::to_value(analyze_path_source(Path::new(path), source))
+            .map_err(|error| format!("failed to serialize compiler analysis: {error}")),
+        "complete" => {
+            let line = request
+                .get("line")
+                .and_then(JsonValue::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| {
+                    "completion request requires non-negative integer field `line`".to_string()
+                })?;
+            let character = request
+                .get("character")
+                .and_then(JsonValue::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| {
+                    "completion request requires non-negative integer field `character`".to_string()
+                })?;
+            let trigger = request
+                .get("trigger")
+                .and_then(JsonValue::as_str)
+                .and_then(|value| value.chars().next());
+            let completions =
+                complete_path_source(Path::new(path), source, line, character, trigger)
+                    .map_err(|error| error.render_with_source(path, source))?;
+            serde_json::to_value(completions)
+                .map_err(|error| format!("failed to serialize compiler completions: {error}"))
+        }
+        _ => Err(format!("unknown LSP compiler request method `{method}`")),
     }
 }
 
@@ -374,12 +777,38 @@ fn build_binary_with_backend(
     mir: &MirModule,
     output_path: &Path,
     backend: BuildBackend,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<BuildOutcome, String> {
+    select_build_backend(
+        backend,
+        || build_direct_native_binary(path, source, mir, output_path),
+        || build_mir_runtime_binary(path, source, mir, output_path),
+    )
+}
+
+fn select_build_backend(
+    backend: BuildBackend,
+    direct: impl FnOnce() -> std::result::Result<(), String>,
+    mir_runtime: impl FnOnce() -> std::result::Result<(), String>,
+) -> std::result::Result<BuildOutcome, String> {
     match backend {
-        BuildBackend::Direct => build_direct_native_binary(path, source, mir, output_path),
-        BuildBackend::Auto => match build_direct_native_binary(path, source, mir, output_path) {
-            Ok(()) => Ok(()),
-            Err(_) => build_mir_runtime_binary(path, source, mir, output_path),
+        BuildBackend::Direct => direct().map(|()| BuildOutcome {
+            selected: SelectedBuildBackend::Direct,
+            fallback_reason: None,
+        }),
+        BuildBackend::Auto => match direct() {
+            Ok(()) => Ok(BuildOutcome {
+                selected: SelectedBuildBackend::Direct,
+                fallback_reason: None,
+            }),
+            Err(direct_error) => match mir_runtime() {
+                Ok(()) => Ok(BuildOutcome {
+                    selected: SelectedBuildBackend::MirRuntime,
+                    fallback_reason: Some(direct_error),
+                }),
+                Err(mir_error) => Err(format!(
+                    "both native build backends failed\n\ndirect backend:\n{direct_error}\n\nMIR runtime backend:\n{mir_error}"
+                )),
+            },
         },
     }
 }
@@ -632,7 +1061,7 @@ fn emit_mir_runtime_launcher_source(mir_json: &[u8], source_path: &[u8], source:
         let mut rendered = String::new();
         rendered.push_str(&format!("static const uint8_t {}[] = {{", name));
         if bytes.is_empty() {
-            rendered.push_str("0");
+            rendered.push('0');
         } else {
             for (index, byte) in bytes.iter().enumerate() {
                 if index > 0 {
@@ -677,6 +1106,12 @@ struct NativeRuntimeArtifacts {
 }
 
 fn ensure_native_runtime_artifacts() -> std::result::Result<NativeRuntimeArtifacts, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to locate the running aura executable: {}", error))?;
+    if let Some(installed) = resolve_installed_runtime_artifacts_from_executable(&executable)? {
+        return Ok(installed);
+    }
+
     let staticlib = build_native_runtime_staticlib()?
         .or_else(|| resolve_static_library_path(repo_root(), current_profile()).ok())
         .ok_or_else(|| {
@@ -704,10 +1139,60 @@ fn ensure_native_runtime_artifacts() -> std::result::Result<NativeRuntimeArtifac
     })
 }
 
+fn resolve_installed_runtime_artifacts_from_executable(
+    executable: &Path,
+) -> std::result::Result<Option<NativeRuntimeArtifacts>, String> {
+    let Some(prefix) = executable.parent().and_then(Path::parent) else {
+        return Ok(None);
+    };
+    let runtime_dir = prefix.join("lib").join("aurora");
+    let staticlib = runtime_dir.join(static_library_file_name());
+    let manifest = runtime_dir.join("native-link-args.json");
+    let staticlib_exists = staticlib.is_file();
+    let manifest_exists = manifest.is_file();
+
+    if !staticlib_exists && !manifest_exists {
+        return Ok(None);
+    }
+    if !staticlib_exists || !manifest_exists {
+        return Err(format!(
+            "incomplete Aurora runtime installation in `{}`: expected both `{}` and `{}`",
+            runtime_dir.display(),
+            staticlib.display(),
+            manifest.display()
+        ));
+    }
+
+    let manifest_bytes = fs::read(&manifest).map_err(|error| {
+        format!(
+            "failed to read Aurora runtime link manifest `{}`: {}",
+            manifest.display(),
+            error
+        )
+    })?;
+    let native_link_args =
+        serde_json::from_slice::<Vec<String>>(&manifest_bytes).map_err(|error| {
+            format!(
+                "invalid Aurora runtime link manifest `{}`: {}",
+                manifest.display(),
+                error
+            )
+        })?;
+
+    Ok(Some(NativeRuntimeArtifacts {
+        staticlib,
+        native_link_args,
+    }))
+}
+
 fn build_native_runtime_staticlib() -> std::result::Result<Option<PathBuf>, String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let mut command = Command::new(cargo);
     command.current_dir(repo_root());
+    configure_native_runtime_cargo(
+        &mut command,
+        std::env::var_os("LLVM_PROFILE_FILE").is_some(),
+    );
     command
         .arg("build")
         .arg("-q")
@@ -737,6 +1222,10 @@ fn query_native_runtime_link_args() -> std::result::Result<Vec<String>, String> 
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let mut command = Command::new(cargo);
     command.current_dir(repo_root());
+    configure_native_runtime_cargo(
+        &mut command,
+        std::env::var_os("LLVM_PROFILE_FILE").is_some(),
+    );
     command
         .arg("rustc")
         .arg("-q")
@@ -761,6 +1250,33 @@ fn query_native_runtime_link_args() -> std::result::Result<Vec<String>, String> 
     Ok(parse_native_static_libs(&String::from_utf8_lossy(
         &output.stderr,
     )))
+}
+
+fn configure_native_runtime_cargo(command: &mut Command, coverage_active: bool) {
+    if !coverage_active {
+        return;
+    }
+
+    for variable in [
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_LLVM_COV",
+        "CARGO_LLVM_COV_BUILD_DIR",
+        "CARGO_LLVM_COV_SHOW_ENV",
+        "CARGO_LLVM_COV_TARGET_DIR",
+        "LLVM_PROFILE_FILE",
+        "RUSTC_WRAPPER",
+        "RUSTDOCFLAGS",
+        "RUSTFLAGS",
+        "__CARGO_LLVM_COV_RUSTC_WRAPPER",
+        "__CARGO_LLVM_COV_RUSTC_WRAPPER_CRATE_NAMES",
+        "__CARGO_LLVM_COV_RUSTC_WRAPPER_RUSTFLAGS",
+    ] {
+        command.env_remove(variable);
+    }
+    command.env(
+        "CARGO_TARGET_DIR",
+        repo_root().join("target/native-runtime-uninstrumented"),
+    );
 }
 
 fn parse_static_library_artifact_path(stdout: &[u8]) -> Option<PathBuf> {
@@ -895,10 +1411,15 @@ fn write_stdout(text: &str) {
 fn usage_text() -> &'static str {
     "usage: aura <check|run|build|ast|ast-json|mir|analyze> <file.au>\n\
        or: aura <check|run|build|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
+       or: aura run <file.au> [-- <program-args>...]\n\
        or: aura build [-o <output>] [--backend auto|direct] <file.au>\n\
        or: aura build [-o <output>] [--backend auto|direct] --stdin <virtual-path>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
+       or: aura lsp\n\
+       or: aura new <project-path>\n\
+       or: aura fmt [--check] [path ...]\n\
+       or: aura test [--timeout-ms <n>] [path ...]\n\
        or: aura deps update [package]\n\
        or: aura help\n\
        or: aura version"
@@ -923,12 +1444,15 @@ mod tests {
     use std::fs;
     use std::io;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::{
-        parse_static_library_artifact_path, resolve_static_library_path, write_unique_temp_file,
-        write_unique_temp_file_with_writer,
+        configure_native_runtime_cargo, parse_static_library_artifact_path,
+        resolve_installed_runtime_artifacts_from_executable, resolve_static_library_path,
+        select_build_backend, write_unique_temp_file, write_unique_temp_file_with_writer,
+        BuildBackend, SelectedBuildBackend,
     };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
@@ -965,6 +1489,92 @@ mod tests {
         assert_eq!(resolved, primary);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn coverage_builds_isolate_uninstrumented_native_runtime_artifacts() {
+        let mut command = Command::new("cargo");
+        command.env("LLVM_PROFILE_FILE", "coverage.profraw");
+        command.env("RUSTC_WRAPPER", "cargo-llvm-cov");
+        configure_native_runtime_cargo(&mut command, true);
+
+        let environments = command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().to_string(),
+                    value.map(|value| value.to_string_lossy().to_string()),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(environments.get("LLVM_PROFILE_FILE"), Some(&None));
+        assert_eq!(environments.get("RUSTC_WRAPPER"), Some(&None));
+        assert!(environments
+            .get("CARGO_TARGET_DIR")
+            .and_then(Option::as_ref)
+            .is_some_and(|path| path.ends_with("target/native-runtime-uninstrumented")));
+    }
+
+    #[test]
+    fn installed_runtime_artifacts_resolve_relative_to_packaged_executable() {
+        let root = unique_temp_dir("installed-runtime");
+        let executable = root.join("bin").join("aura");
+        let runtime_dir = root.join("lib").join("aurora");
+        fs::create_dir_all(executable.parent().expect("binary should have a parent"))
+            .expect("bin dir should exist");
+        fs::create_dir_all(&runtime_dir).expect("runtime dir should exist");
+        fs::write(&executable, b"test executable").expect("test executable should write");
+        let staticlib = runtime_dir.join("libaurora_compiler.a");
+        fs::write(&staticlib, b"test runtime").expect("test runtime should write");
+        fs::write(
+            runtime_dir.join("native-link-args.json"),
+            br#"["-framework","Security","-lc"]"#,
+        )
+        .expect("runtime manifest should write");
+
+        let artifacts = resolve_installed_runtime_artifacts_from_executable(&executable)
+            .expect("installed runtime manifest should be valid")
+            .expect("installed runtime should resolve");
+        assert_eq!(artifacts.staticlib, staticlib);
+        assert_eq!(
+            artifacts.native_link_args,
+            vec!["-framework", "Security", "-lc"]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn auto_backend_reports_direct_failure_when_falling_back() {
+        let outcome = select_build_backend(
+            BuildBackend::Auto,
+            || Err("direct failed".to_string()),
+            || Ok(()),
+        )
+        .expect("MIR fallback should succeed");
+        assert_eq!(outcome.selected, SelectedBuildBackend::MirRuntime);
+        assert_eq!(outcome.fallback_reason.as_deref(), Some("direct failed"));
+
+        let error = select_build_backend(
+            BuildBackend::Auto,
+            || Err("direct failed".to_string()),
+            || Err("MIR failed".to_string()),
+        )
+        .expect_err("both backend failures should be preserved");
+        assert!(error.contains("direct failed"));
+        assert!(error.contains("MIR failed"));
+    }
+
+    #[test]
+    fn forced_direct_backend_never_invokes_fallback() {
+        let outcome = select_build_backend(
+            BuildBackend::Direct,
+            || Ok(()),
+            || panic!("forced direct mode must not invoke MIR fallback"),
+        )
+        .expect("direct backend should succeed");
+        assert_eq!(outcome.selected, SelectedBuildBackend::Direct);
+        assert!(outcome.fallback_reason.is_none());
     }
 
     #[test]

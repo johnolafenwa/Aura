@@ -266,6 +266,7 @@ struct NativeCodegen<'a> {
     instance_set_field: FuncId,
     arg_buffer_new: FuncId,
     arg_buffer_store: FuncId,
+    host_builtin: FuncId,
     channel_new: FuncId,
     channel_send: FuncId,
     channel_send_timeout_value: FuncId,
@@ -468,10 +469,14 @@ fn ordered_named_args<'a>(
     let mut next_positional = 0usize;
     for argument in args {
         if let Some(name) = argument.name.as_deref() {
-            let Some(index) = expected_names
-                .iter()
-                .position(|candidate| *candidate == name)
-            else {
+            let mut index = None;
+            for (candidate_index, candidate) in expected_names.iter().enumerate() {
+                if *candidate == name {
+                    index = Some(candidate_index);
+                    break;
+                }
+            }
+            let Some(index) = index else {
                 return Err(format!(
                     "direct backend does not recognize builtin argument `{}`",
                     name
@@ -495,12 +500,14 @@ fn ordered_named_args<'a>(
         values[next_positional] = Some(argument);
         next_positional += 1;
     }
-    values
-        .into_iter()
-        .map(|value| {
-            value.ok_or_else(|| "direct backend is missing a builtin argument".to_string())
-        })
-        .collect()
+    let mut ordered = Vec::with_capacity(values.len());
+    for value in values {
+        let Some(value) = value else {
+            return Err("direct backend is missing a builtin argument".to_string());
+        };
+        ordered.push(value);
+    }
+    Ok(ordered)
 }
 
 fn ordered_optional_named_args<'a>(
@@ -511,10 +518,14 @@ fn ordered_optional_named_args<'a>(
     let mut next_positional = 0usize;
     for argument in args {
         if let Some(name) = argument.name.as_deref() {
-            let Some(index) = expected_names
-                .iter()
-                .position(|candidate| *candidate == name)
-            else {
+            let mut index = None;
+            for (candidate_index, candidate) in expected_names.iter().enumerate() {
+                if *candidate == name {
+                    index = Some(candidate_index);
+                    break;
+                }
+            }
+            let Some(index) = index else {
                 return Err(format!(
                     "direct backend does not recognize builtin argument `{}`",
                     name
@@ -539,6 +550,24 @@ fn ordered_optional_named_args<'a>(
         next_positional += 1;
     }
     Ok(values)
+}
+
+fn required_named_arg<'a>(
+    argument: Option<&'a MirArg>,
+    message: &str,
+) -> std::result::Result<&'a MirArg, String> {
+    argument.ok_or(message.to_string())
+}
+
+fn required_direct_field_slice(
+    ty: &DirectType,
+    field: &str,
+) -> std::result::Result<(usize, usize, DirectType), String> {
+    ty.field_slice(field).ok_or(format!(
+        "direct backend does not know field `{}` on `{}`",
+        field,
+        render_direct_type(ty)
+    ))
 }
 
 impl<'a> NativeCodegen<'a> {
@@ -680,6 +709,7 @@ impl<'a> NativeCodegen<'a> {
             instance_set_field => ("aurora_direct_instance_set_field", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             arg_buffer_new => ("aurora_direct_arg_buffer_new", [types::I64], Some(types::I64)),
             arg_buffer_store => ("aurora_direct_arg_buffer_store", [types::I64, types::I64, types::I64], None),
+            host_builtin => ("aurora_direct_host_builtin", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             channel_new => ("aurora_direct_channel_new", [types::I64], Some(types::I64)),
             channel_send => ("aurora_direct_channel_send", [types::I64, types::I64], Some(types::I64)),
             channel_send_timeout_value => ("aurora_direct_channel_send_timeout_value", [types::I64, types::I64, types::I64], Some(types::I64)),
@@ -1037,6 +1067,7 @@ impl<'a> NativeCodegen<'a> {
             instance_set_field,
             arg_buffer_new,
             arg_buffer_store,
+            host_builtin,
             channel_new,
             channel_send,
             channel_send_timeout_value,
@@ -1350,39 +1381,6 @@ impl<'a> NativeCodegen<'a> {
         }
 
         for block in &function.blocks {
-            for instruction in &block.instructions {
-                if let Instruction::Assign { target, value } = instruction {
-                    if target.contains('.') {
-                        continue;
-                    }
-                    if variables.contains_key(target) {
-                        continue;
-                    }
-                    let ty = match infer_rvalue_type(
-                        value,
-                        &variable_types,
-                        &self.function_return_types,
-                        &self.classes,
-                    ) {
-                        Some(ty) => ty,
-                        None => {
-                            return Err(format!(
-                                "direct backend could not infer direct type for temporary `{}` in `{}`",
-                                target, function.name
-                            ));
-                        }
-                    };
-                    declare_root_variables(
-                        &mut builder,
-                        &mut variable_index,
-                        &mut variables,
-                        &mut variable_types,
-                        target.clone(),
-                        ty,
-                        None,
-                    );
-                }
-            }
             if let Terminator::ForRange { binding, .. } = &block.terminator {
                 if !variables.contains_key(binding) {
                     declare_root_variables(
@@ -1396,6 +1394,68 @@ impl<'a> NativeCodegen<'a> {
                     );
                 }
             }
+        }
+
+        let temporary_assignments = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .filter_map(|instruction| {
+                let Instruction::Assign { target, value } = instruction else {
+                    return None;
+                };
+                if target.contains('.') {
+                    return None;
+                }
+                if variables.contains_key(target)
+                    && !variable_types
+                        .get(target)
+                        .is_some_and(direct_type_contains_unknown)
+                {
+                    return None;
+                }
+                Some((target, value))
+            })
+            .collect::<Vec<_>>();
+        for _ in 0..=temporary_assignments.len() {
+            let mut changed = false;
+            for (target, value) in &temporary_assignments {
+                let Some(inferred) = infer_rvalue_type(
+                    value,
+                    &variable_types,
+                    &self.function_return_types,
+                    &self.classes,
+                ) else {
+                    continue;
+                };
+                if variable_types.get(*target) != Some(&inferred) {
+                    variable_types.insert((*target).clone(), inferred);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        for (target, _) in temporary_assignments {
+            if variables.contains_key(target) {
+                continue;
+            }
+            let ty = variable_types.get(target).cloned().ok_or_else(|| {
+                format!(
+                    "direct backend could not infer direct type for temporary `{}` in `{}`",
+                    target, function.name
+                )
+            })?;
+            declare_root_variables(
+                &mut builder,
+                &mut variable_index,
+                &mut variables,
+                &mut variable_types,
+                target.clone(),
+                ty,
+                None,
+            );
         }
 
         let mut cleanup_places = Vec::<String>::new();
@@ -1747,6 +1807,9 @@ impl<'a> NativeCodegen<'a> {
         let arg_buffer_store = self
             .object
             .declare_func_in_func(self.arg_buffer_store, builder.func);
+        let host_builtin = self
+            .object
+            .declare_func_in_func(self.host_builtin, builder.func);
         let channel_new = self
             .object
             .declare_func_in_func(self.channel_new, builder.func);
@@ -2256,6 +2319,7 @@ impl<'a> NativeCodegen<'a> {
             writeback_locals,
             classes: self.classes.clone(),
             trait_impls: self.trait_impls.clone(),
+            return_type: function.return_type.clone(),
             owned_opaque_temporaries: HashSet::new(),
             object: &mut self.object,
             string_data: &mut self.string_data,
@@ -2362,6 +2426,7 @@ impl<'a> NativeCodegen<'a> {
             instance_set_field,
             arg_buffer_new,
             arg_buffer_store,
+            host_builtin,
             channel_new,
             channel_send,
             channel_send_timeout_value,
@@ -2667,7 +2732,7 @@ impl<'a> NativeCodegen<'a> {
         let thunk_id = *self
             .cleanup_thunks
             .get(&(function.name.clone(), place.to_string()))
-            .ok_or_else(|| {
+            .ok_or({
                 format!(
                     "direct backend could not find cleanup thunk for `{}` in `{}`",
                     place, function.name
@@ -2697,13 +2762,12 @@ impl<'a> NativeCodegen<'a> {
                     .and_then(|class| class.methods.iter().find(|method| method.name == "close"))
                     .cloned();
                 if let Some(method) = close_method {
-                    let target_id =
-                        *self.functions.get(&method.function_name).ok_or_else(|| {
-                            format!(
-                                "direct backend could not find cleanup close method `{}`",
-                                method.function_name
-                            )
-                        })?;
+                    let target_id = *self.functions.get(&method.function_name).ok_or({
+                        format!(
+                            "direct backend could not find cleanup close method `{}`",
+                            method.function_name
+                        )
+                    })?;
                     let target_ref = self.object.declare_func_in_func(target_id, builder.func);
                     let lowered = unbox_thunk_value(self, &mut builder, raw, &place_ty)?;
                     let inst = builder.ins().call(target_ref, &lowered);
@@ -2736,13 +2800,12 @@ impl<'a> NativeCodegen<'a> {
                     _ => None,
                 };
                 if let Some(method) = close_method {
-                    let target_id =
-                        *self.functions.get(&method.function_name).ok_or_else(|| {
-                            format!(
-                                "direct backend could not find cleanup close method `{}`",
-                                method.function_name
-                            )
-                        })?;
+                    let target_id = *self.functions.get(&method.function_name).ok_or({
+                        format!(
+                            "direct backend could not find cleanup close method `{}`",
+                            method.function_name
+                        )
+                    })?;
                     let target_ref = self.object.declare_func_in_func(target_id, builder.func);
                     let retain_value = self
                         .object
@@ -2877,6 +2940,7 @@ struct FunctionCompiler<'a> {
     writeback_locals: Vec<(String, DirectType)>,
     classes: HashMap<String, MirClass>,
     trait_impls: Vec<MirTraitImpl>,
+    return_type: Type,
     owned_opaque_temporaries: HashSet<Value>,
     object: &'a mut ObjectModule,
     string_data: &'a mut HashMap<Vec<u8>, DataId>,
@@ -2983,6 +3047,7 @@ struct FunctionCompiler<'a> {
     instance_set_field: cranelift_codegen::ir::FuncRef,
     arg_buffer_new: cranelift_codegen::ir::FuncRef,
     arg_buffer_store: cranelift_codegen::ir::FuncRef,
+    host_builtin: cranelift_codegen::ir::FuncRef,
     channel_new: cranelift_codegen::ir::FuncRef,
     channel_send: cranelift_codegen::ir::FuncRef,
     channel_send_timeout_value: cranelift_codegen::ir::FuncRef,
@@ -3151,6 +3216,20 @@ struct FunctionCompiler<'a> {
 }
 
 impl<'a> FunctionCompiler<'a> {
+    fn local_type(&self, name: &str) -> std::result::Result<DirectType, String> {
+        self.variable_types.get(name).cloned().ok_or(format!(
+            "direct backend does not know local type for `{}`",
+            name
+        ))
+    }
+
+    fn local_vars(&self, name: &str) -> std::result::Result<Vec<Variable>, String> {
+        self.variables
+            .get(name)
+            .cloned()
+            .ok_or(format!("direct backend does not know local `{}`", name))
+    }
+
     fn is_opaque_value(&self, value: &ValueRef) -> bool {
         matches!(value.ty, DirectType::Opaque(_))
     }
@@ -3193,17 +3272,11 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn release_root_if_opaque(&mut self, name: &str) -> std::result::Result<(), String> {
-        let ty = self
-            .variable_types
-            .get(name)
-            .ok_or_else(|| format!("direct backend does not know local type for `{}`", name))?;
+        let ty = self.local_type(name)?;
         if !matches!(ty, DirectType::Opaque(_)) {
             return Ok(());
         }
-        let vars = self
-            .variables
-            .get(name)
-            .ok_or_else(|| format!("direct backend does not know local `{}`", name))?;
+        let vars = self.local_vars(name)?;
         let current = self.builder.use_var(vars[0]);
         self.release_opaque_handle(current);
         Ok(())
@@ -3320,7 +3393,13 @@ impl<'a> FunctionCompiler<'a> {
                         )?,
                         _ => self.compile_rvalue(value)?,
                     };
-                    let coerced = self.coerce_value(compiled, &target_ty)?;
+                    let assignment_span = match value {
+                        Rvalue::Unary { span, .. }
+                        | Rvalue::Cast { span, .. }
+                        | Rvalue::Binary { span, .. } => Some(*span),
+                        _ => None,
+                    };
+                    let coerced = self.coerce_value_at(compiled, &target_ty, assignment_span)?;
                     self.store_place(target, coerced)?;
                 }
             }
@@ -4142,8 +4221,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                 }
             }
-            let tasks_arg = tasks_arg
-                .ok_or_else(|| format!("direct backend expected `{name}(tasks, timeout=...)`"))?;
+            let tasks_arg = required_named_arg(
+                tasks_arg,
+                &format!("direct backend expected `{name}(tasks, timeout=...)`"),
+            )?;
             let tasks = self.load_operand(&tasks_arg.value)?;
             let tasks = self.ensure_opaque(tasks)?;
             let task_payload_ty =
@@ -4159,7 +4240,7 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         _ => Type::named("Unknown"),
                     })
-                    .unwrap_or_else(|| Type::named("Unknown"));
+                    .unwrap_or(Type::named("Unknown"));
             let inst = if let Some(timeout_arg) = timeout_arg {
                 let timeout = self.load_operand(&timeout_arg.value)?;
                 let timeout = self.ensure_opaque(timeout)?;
@@ -4233,6 +4314,35 @@ impl<'a> FunctionCompiler<'a> {
                 | "net::websocket_connect_timeout"
         ) {
             return self.compile_builtin_io_named_call(name, args);
+        }
+        if matches!(
+            name,
+            "sys::args"
+                | "sys::env"
+                | "sys::current_dir"
+                | "sys::unix_time_ms"
+                | "sys::monotonic_time_ms"
+                | "path::join"
+                | "path::parent"
+                | "path::file_name"
+                | "path::extension"
+                | "path::is_absolute"
+                | "json::is_valid"
+                | "json::stringify_map"
+                | "json::parse_string_map"
+                | "toml::is_valid"
+                | "toml::stringify_map"
+                | "toml::parse_string_map"
+                | "metrics::increment"
+                | "metrics::get"
+                | "metrics::reset"
+                | "log::debug"
+                | "log::info"
+                | "log::warn"
+                | "log::error"
+                | "trace::event"
+        ) {
+            return self.compile_host_builtin_named_call(name, args);
         }
         if name == "abs" {
             let [argument] = args else {
@@ -4351,7 +4461,7 @@ impl<'a> FunctionCompiler<'a> {
         let func_ref = *self
             .function_refs
             .get(name)
-            .ok_or_else(|| format!("direct backend does not know function `{}`", name))?;
+            .ok_or(format!("direct backend does not know function `{}`", name))?;
         let mut lowered_args = Vec::new();
         let expected = self
             .function_param_types
@@ -4380,6 +4490,105 @@ impl<'a> FunctionCompiler<'a> {
         let (result, writebacks) = self.split_call_results(name, results)?;
         self.apply_writeback_places(&writeback_places, writebacks)?;
         Ok(result)
+    }
+
+    fn compile_host_builtin_named_call(
+        &mut self,
+        name: &str,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let expected_names: &[&str] = match name {
+            "sys::args"
+            | "sys::current_dir"
+            | "sys::unix_time_ms"
+            | "sys::monotonic_time_ms"
+            | "metrics::reset" => &[],
+            "sys::env" | "metrics::get" => &["name"],
+            "path::parent" | "path::file_name" | "path::extension" | "path::is_absolute" => {
+                &["path"]
+            }
+            "json::is_valid"
+            | "json::parse_string_map"
+            | "toml::is_valid"
+            | "toml::parse_string_map" => &["text"],
+            "json::stringify_map" | "toml::stringify_map" => &["value"],
+            "path::join" => &["base", "child"],
+            "metrics::increment" => &["name", "value"],
+            "log::debug" | "log::info" | "log::warn" | "log::error" => &["message", "fields"],
+            "trace::event" => &["name", "fields"],
+            _ => return Err(format!("unknown host builtin `{name}`")),
+        };
+        let bound = ordered_optional_named_args(expected_names, args)?;
+        let count = self
+            .builder
+            .ins()
+            .iconst(types::I64, expected_names.len() as i64);
+        let buffer_call = self.builder.ins().call(self.arg_buffer_new, &[count]);
+        let buffer = self.builder.inst_results(buffer_call)[0];
+        for (index, argument) in bound.into_iter().enumerate() {
+            let argument = required_named_arg(
+                argument,
+                &format!(
+                    "direct backend is missing argument {} for `{name}`",
+                    index + 1
+                ),
+            )?;
+            let loaded = self.load_operand(&argument.value)?;
+            let loaded = self.ensure_opaque(loaded)?;
+            let index = self.builder.ins().iconst(types::I64, index as i64);
+            self.builder
+                .ins()
+                .call(self.arg_buffer_store, &[buffer, index, loaded.values[0]]);
+        }
+        let (name_ptr, name_len) = self.string_constant(name.as_bytes())?;
+        let call = self
+            .builder
+            .ins()
+            .call(self.host_builtin, &[name_ptr, name_len, buffer, count]);
+
+        let string = Type::named("String");
+        let string_map = Type::Named(
+            "Map".to_string(),
+            vec![Type::named("String"), Type::named("String")],
+        );
+        let string_result = Type::Named(
+            "Result".to_string(),
+            vec![Type::named("String"), Type::named("String")],
+        );
+        let semantic_type = match name {
+            "sys::args" => Type::Named("Vec".to_string(), vec![string.clone()]),
+            "sys::env" | "path::parent" | "path::file_name" | "path::extension" => {
+                Type::Named("Option".to_string(), vec![string.clone()])
+            }
+            "sys::current_dir" => Type::Named(
+                "Result".to_string(),
+                vec![
+                    string.clone(),
+                    Type::Named("io.Error".to_string(), Vec::new()),
+                ],
+            ),
+            "sys::unix_time_ms" | "sys::monotonic_time_ms" | "metrics::get" => Type::named("int64"),
+            "path::join" => string,
+            "path::is_absolute" | "json::is_valid" | "toml::is_valid" => Type::named("bool"),
+            "json::stringify_map" | "toml::stringify_map" => string_result,
+            "json::parse_string_map" | "toml::parse_string_map" => Type::Named(
+                "Result".to_string(),
+                vec![string_map, Type::named("String")],
+            ),
+            "metrics::increment" | "metrics::reset" | "log::debug" | "log::info" | "log::warn"
+            | "log::error" | "trace::event" => Type::Unit,
+            _ => unreachable!(),
+        };
+        let result = self.owned_opaque_result(
+            self.builder.inst_results(call).to_vec(),
+            semantic_type.clone(),
+        );
+        let target = ensure_direct_type(
+            &semantic_type,
+            &self.classes,
+            &format!("return value of `{name}`"),
+        )?;
+        self.coerce_value(result, &target)
     }
 
     fn compile_range(&mut self, args: &[MirArg]) -> std::result::Result<ValueRef, String> {
@@ -4436,9 +4645,10 @@ impl<'a> FunctionCompiler<'a> {
                 ty: int_ty.clone(),
             }
         };
-        let stop_arg = stop_arg.ok_or_else(|| {
-            "direct backend expected `range()` to receive a `stop` argument".to_string()
-        })?;
+        let stop_arg = required_named_arg(
+            stop_arg,
+            "direct backend expected `range()` to receive a `stop` argument",
+        )?;
         let stop = self.load_operand(&stop_arg.value)?;
         let stop = self.coerce_value(stop, &int_ty)?;
         let inst = self
@@ -4567,8 +4777,8 @@ impl<'a> FunctionCompiler<'a> {
                 lowered_args.push(self.lower_optional_opaque_arg(*argument)?);
                 continue;
             }
-            let argument = argument
-                .ok_or_else(|| "direct backend is missing a builtin argument".to_string())?;
+            let argument =
+                required_named_arg(*argument, "direct backend is missing a builtin argument")?;
             let loaded = self.load_operand(&argument.value)?;
             let value = self.ensure_opaque(loaded)?;
             lowered_args.push(value.values[0]);
@@ -4937,12 +5147,10 @@ impl<'a> FunctionCompiler<'a> {
 
                 let mut values = Vec::new();
                 for field in &class_ty.fields {
-                    let operand = by_name.get(&field.name).ok_or_else(|| {
-                        format!(
-                            "direct backend construction for `{}` is missing field `{}`",
-                            class_name, field.name
-                        )
-                    })?;
+                    let operand = by_name.get(&field.name).ok_or(format!(
+                        "direct backend construction for `{}` is missing field `{}`",
+                        class_name, field.name
+                    ))?;
                     let value = self.load_operand(operand)?;
                     let coerced = self.coerce_value(value, &field.ty)?;
                     values.extend(coerced.values);
@@ -4962,30 +5170,24 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn call_result_type(&self, name: &str) -> std::result::Result<DirectType, String> {
-        self.function_return_types
-            .get(name)
-            .cloned()
-            .ok_or_else(|| format!("direct backend does not know return type for `{}`", name))
+        self.function_return_types.get(name).cloned().ok_or(format!(
+            "direct backend does not know return type for `{}`",
+            name
+        ))
     }
 
     fn type_of_place(&self, place: &str) -> std::result::Result<DirectType, String> {
         let mut segments = place.split('.');
         let root = segments
             .next()
-            .ok_or_else(|| "direct backend encountered an empty place".to_string())?;
-        let mut ty = self
-            .variable_types
-            .get(root)
-            .cloned()
-            .ok_or_else(|| format!("direct backend does not know local `{}`", root))?;
+            .ok_or("direct backend encountered an empty place".to_string())?;
+        let mut ty = self.local_type(root)?;
         for field in segments {
-            ty = direct_field_type(&ty, field, &self.classes).ok_or_else(|| {
-                format!(
-                    "direct backend does not know field `{}` on `{}`",
-                    field,
-                    render_direct_type(&ty)
-                )
-            })?;
+            ty = direct_field_type(&ty, field, &self.classes).ok_or(format!(
+                "direct backend does not know field `{}` on `{}`",
+                field,
+                render_direct_type(&ty)
+            ))?;
         }
         Ok(ty)
     }
@@ -5058,7 +5260,7 @@ impl<'a> FunctionCompiler<'a> {
         let mut segments = place.split('.');
         let root = segments
             .next()
-            .ok_or_else(|| "direct backend encountered an empty place".to_string())?;
+            .ok_or("direct backend encountered an empty place".to_string())?;
         let mut value = self.load_root(root)?;
         for field in segments {
             value = self.extract_field(value, field)?;
@@ -5067,16 +5269,8 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn load_root(&mut self, name: &str) -> std::result::Result<ValueRef, String> {
-        let vars = self
-            .variables
-            .get(name)
-            .ok_or_else(|| format!("direct backend does not know local `{}`", name))?
-            .clone();
-        let ty = self
-            .variable_types
-            .get(name)
-            .cloned()
-            .ok_or_else(|| format!("direct backend does not know local type for `{}`", name))?;
+        let vars = self.local_vars(name)?;
+        let ty = self.local_type(name)?;
         let values = vars
             .into_iter()
             .map(|var| self.builder.use_var(var))
@@ -5095,13 +5289,7 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         match &object.ty {
             DirectType::PlainClass(_) => {
-                let (start, end, field_ty) = object.ty.field_slice(field).ok_or_else(|| {
-                    format!(
-                        "direct backend does not know field `{}` on `{}`",
-                        field,
-                        render_direct_type(&object.ty)
-                    )
-                })?;
+                let (start, end, field_ty) = required_direct_field_slice(&object.ty, field)?;
                 Ok(ValueRef {
                     values: object.values[start..end].to_vec(),
                     ty: field_ty,
@@ -5137,10 +5325,19 @@ impl<'a> FunctionCompiler<'a> {
         value: ValueRef,
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
+        self.coerce_value_at(value, target, None)
+    }
+
+    fn coerce_value_at(
+        &mut self,
+        value: ValueRef,
+        target: &DirectType,
+        span: Option<Span>,
+    ) -> std::result::Result<ValueRef, String> {
         if &value.ty == target {
             let value = self.normalize_scalar_value(value)?;
             if matches!(target.scalar_kind(), Some(ScalarKind::Int32)) {
-                self.emit_int32_bounds_check(value.values[0], None)?;
+                self.emit_int32_bounds_check(value.values[0], span)?;
             }
             return Ok(value);
         }
@@ -5160,7 +5357,7 @@ impl<'a> FunctionCompiler<'a> {
                 let boxed = self.ensure_opaque(value)?;
                 let (target_ptr, target_len) =
                     self.string_constant(target_ty.to_string().as_bytes())?;
-                let (line, column) = self.span_values(None);
+                let (line, column) = self.span_values(span);
                 let inst = self.builder.ins().call(
                     self.cast_value,
                     &[boxed.values[0], target_ptr, target_len, line, column],
@@ -5212,7 +5409,7 @@ impl<'a> FunctionCompiler<'a> {
                             ty: DirectType::Opaque(Type::named("Unknown")),
                         };
                         self.mark_temporary_opaque_owned(&field_value);
-                        let coerced = self.coerce_value(field_value, &field.ty)?;
+                        let coerced = self.coerce_value_at(field_value, &field.ty, span)?;
                         values.extend(coerced.values);
                     }
                     ValueRef {
@@ -5223,7 +5420,7 @@ impl<'a> FunctionCompiler<'a> {
                 DirectType::Opaque(_) => unreachable!("opaque target handled earlier"),
             };
             if matches!(target.scalar_kind(), Some(ScalarKind::Int32)) {
-                self.emit_int32_bounds_check(result.values[0], None)?;
+                self.emit_int32_bounds_check(result.values[0], span)?;
             }
             return Ok(result);
         }
@@ -5383,9 +5580,7 @@ impl<'a> FunctionCompiler<'a> {
                 root,
                 ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
-                    ty: self.variable_types.get(root).cloned().ok_or_else(|| {
-                        format!("direct backend does not know local type for `{}`", root)
-                    })?,
+                    ty: self.local_type(root)?,
                 },
             )
         } else {
@@ -5404,13 +5599,7 @@ impl<'a> FunctionCompiler<'a> {
         new_value: ValueRef,
     ) -> std::result::Result<ValueRef, String> {
         let (head, rest) = split_field_path_segments(segments)?;
-        let (start, end, field_ty) = current.ty.field_slice(head).ok_or_else(|| {
-            format!(
-                "direct backend does not know field `{}` on `{}`",
-                head,
-                render_direct_type(&current.ty)
-            )
-        })?;
+        let (start, end, field_ty) = required_direct_field_slice(&current.ty, head)?;
 
         let replacement = if rest.is_empty() {
             self.coerce_value(new_value, &field_ty)?
@@ -5433,17 +5622,9 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn store_root(&mut self, name: &str, value: ValueRef) -> std::result::Result<(), String> {
-        let expected = self
-            .variable_types
-            .get(name)
-            .cloned()
-            .ok_or_else(|| format!("direct backend does not know local type for `{}`", name))?;
+        let expected = self.local_type(name)?;
         let value = self.coerce_value(value, &expected)?;
-        let vars = self
-            .variables
-            .get(name)
-            .cloned()
-            .ok_or_else(|| format!("direct backend does not know local `{}`", name))?;
+        let vars = self.local_vars(name)?;
         if matches!(expected, DirectType::Opaque(_)) {
             let stored = if self.temporary_owns_opaque(&value) {
                 self.clear_temporary_opaque_owned(&value);
@@ -5455,7 +5636,7 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.def_var(vars[0], stored);
             return Ok(());
         }
-        for (var, compiled) in vars.into_iter().zip(value.values.into_iter()) {
+        for (var, compiled) in vars.into_iter().zip(value.values) {
             self.builder.def_var(var, compiled);
         }
         Ok(())
@@ -5613,6 +5794,38 @@ impl<'a> FunctionCompiler<'a> {
         ))
     }
 
+    fn compile_enum_variant_from_values(
+        &mut self,
+        enum_name: &str,
+        variant_name: &str,
+        payloads: Vec<ValueRef>,
+        target: Type,
+    ) -> std::result::Result<ValueRef, String> {
+        let (enum_ptr, enum_len) = self.string_constant(enum_name.as_bytes())?;
+        let (variant_ptr, variant_len) = self.string_constant(variant_name.as_bytes())?;
+        let count = self.builder.ins().iconst(types::I64, payloads.len() as i64);
+        let buffer = if payloads.is_empty() {
+            self.builder.ins().iconst(types::I64, 0)
+        } else {
+            let buffer_inst = self.builder.ins().call(self.arg_buffer_new, &[count]);
+            let buffer = self.builder.inst_results(buffer_inst)[0];
+            for (index, payload) in payloads.into_iter().enumerate() {
+                let payload = self.ensure_opaque(payload)?;
+                let transferred = self.transfer_opaque_arg(&payload);
+                let index = self.builder.ins().iconst(types::I64, index as i64);
+                self.builder
+                    .ins()
+                    .call(self.arg_buffer_store, &[buffer, index, transferred]);
+            }
+            buffer
+        };
+        let inst = self.builder.ins().call(
+            self.enum_variant,
+            &[enum_ptr, enum_len, variant_ptr, variant_len, buffer, count],
+        );
+        Ok(self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), target))
+    }
+
     fn variant_matches_value(
         &mut self,
         value: Value,
@@ -5654,6 +5867,25 @@ impl<'a> FunctionCompiler<'a> {
         try_value: &Operand,
     ) -> std::result::Result<(), String> {
         let loaded = self.load_operand(try_value)?;
+        let (source_error_ty, target_error_ty) = match (&loaded.ty, &self.return_type) {
+            (
+                DirectType::Opaque(Type::Named(source_name, source_args)),
+                Type::Named(target_name, target_args),
+            ) if source_name == "Result"
+                && source_args.len() == 2
+                && target_name == "Result"
+                && target_args.len() == 2 =>
+            {
+                (source_args[1].clone(), target_args[1].clone())
+            }
+            _ => {
+                return Err(format!(
+                    "direct backend `try` for `{target}` requires Result types, found operand `{}` and return `{}`",
+                    render_direct_type(&loaded.ty),
+                    self.return_type
+                ))
+            }
+        };
         let value = self.ensure_opaque(loaded)?;
         let ok = self.variant_matches_value(value.values[0], "Result", "Ok")?;
         let ok_block = self.builder.create_block();
@@ -5670,14 +5902,101 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(ok_block);
 
         self.builder.switch_to_block(err_block);
+        let error_result = if source_error_ty == target_error_ty {
+            value.clone()
+        } else {
+            let mut payload = self.compile_variant_payload(value.clone(), 0)?;
+            payload.ty = direct_type(&source_error_ty, &self.classes)
+                .unwrap_or(DirectType::Opaque(source_error_ty.clone()));
+            let converted =
+                self.convert_try_error_via_from(payload, &source_error_ty, &target_error_ty)?;
+            self.compile_enum_variant_from_values(
+                "Result",
+                "Err",
+                vec![converted],
+                self.return_type.clone(),
+            )?
+        };
         self.emit_pending_cleanups(true)?;
-        let return_values = self.build_return_values(value.clone())?;
+        let return_values = self.build_return_values(error_result)?;
         self.builder.ins().return_(&return_values);
         self.builder.seal_block(err_block);
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
         Ok(())
+    }
+
+    fn convert_try_error_via_from(
+        &mut self,
+        payload: ValueRef,
+        source_ty: &Type,
+        target_ty: &Type,
+    ) -> std::result::Result<ValueRef, String> {
+        let method = self
+            .trait_impls
+            .iter()
+            .filter(|trait_impl| {
+                trait_impl.trait_name == "From" && trait_impl.trait_args.len() == 1
+            })
+            .filter_map(|trait_impl| {
+                let mut type_params = BTreeSet::new();
+                collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
+                for trait_arg in &trait_impl.trait_args {
+                    collect_type_params_from_type(trait_arg, &mut type_params);
+                }
+                let mut substitutions = HashMap::new();
+                if !crate::sema::type_pattern_matches(
+                    &trait_impl.for_type,
+                    target_ty,
+                    &type_params,
+                    &mut substitutions,
+                ) || crate::sema::substitute_type(&trait_impl.trait_args[0], &substitutions)
+                    != *source_ty
+                {
+                    return None;
+                }
+                let method = trait_impl.methods.iter().find(|method| method.name == "from")?;
+                Some((
+                    crate::sema::trait_impl_specificity_parts(
+                        &trait_impl.for_type,
+                        &trait_impl.trait_args,
+                    ),
+                    method.clone(),
+                ))
+            })
+            .max_by_key(|(specificity, _)| *specificity)
+            .map(|(_, method)| method)
+            .ok_or_else(|| {
+                format!(
+                    "direct backend could not find `From[{source_ty}] for {target_ty}` required by `try`"
+                )
+            })?;
+        let function_name = method.function_name;
+        let expected = self
+            .function_param_types
+            .get(&function_name)
+            .and_then(|parameters| parameters.first())
+            .cloned()
+            .unwrap_or(DirectType::Opaque(source_ty.clone()));
+        let payload = self.coerce_value(payload, &expected)?;
+        let arguments = if matches!(payload.ty, DirectType::Opaque(_)) {
+            vec![self.transfer_opaque_arg(&payload)]
+        } else {
+            payload.values
+        };
+        let function = *self.function_refs.get(&function_name).ok_or_else(|| {
+            format!("direct backend does not know From function `{function_name}`")
+        })?;
+        let inst = self.builder.ins().call(function, &arguments);
+        let results = self.builder.inst_results(inst).to_vec();
+        let (converted, writebacks) = self.split_call_results(&function_name, results)?;
+        if !writebacks.is_empty() {
+            return Err(
+                "direct backend From conversion unexpectedly returned writebacks".to_string(),
+            );
+        }
+        Ok(converted)
     }
 
     fn set_cleanup_active(&mut self, place: &str, active: bool) -> std::result::Result<(), String> {
@@ -5917,7 +6236,7 @@ impl<'a> FunctionCompiler<'a> {
                 values.len()
             ));
         }
-        for (place, value) in places.iter().zip(values.into_iter()) {
+        for (place, value) in places.iter().zip(values) {
             self.store_place(place, value)?;
         }
         Ok(())
@@ -5989,10 +6308,9 @@ impl<'a> FunctionCompiler<'a> {
                     .cloned()
             })
             .or_else(|| {
-                self.find_trait_method_for_class_name(class_name, field)
-                    .cloned()
+                find_trait_method_for_class_name(&self.trait_impls, class_name, field).cloned()
             })
-            .ok_or_else(|| {
+            .ok_or({
                 format!(
                     "direct backend does not know method `{}.{}`",
                     class_name, field
@@ -6005,15 +6323,12 @@ impl<'a> FunctionCompiler<'a> {
                 class_name, field
             ));
         }
-        let func_ref = *self
-            .function_refs
-            .get(&method_function_name)
-            .ok_or_else(|| {
-                format!(
-                    "direct backend does not know function `{}`",
-                    method_function_name
-                )
-            })?;
+        let func_ref = *self.function_refs.get(&method_function_name).ok_or({
+            format!(
+                "direct backend does not know function `{}`",
+                method_function_name
+            )
+        })?;
         let expected = self
             .function_param_types
             .get(&method_function_name)
@@ -6021,10 +6336,7 @@ impl<'a> FunctionCompiler<'a> {
             .unwrap_or_default();
         let mut lowered_args = Vec::new();
         let mut writeback_places = Vec::new();
-        let receiver_expected = expected
-            .first()
-            .cloned()
-            .unwrap_or_else(|| object.ty.clone());
+        let receiver_expected = expected.first().cloned().unwrap_or(object.ty.clone());
         let receiver = self.coerce_value(object.clone(), &receiver_expected)?;
         if matches!(receiver.ty, DirectType::Opaque(_)) {
             lowered_args.push(self.transfer_opaque_arg(&receiver));
@@ -6302,7 +6614,7 @@ impl<'a> FunctionCompiler<'a> {
                 let element_ty = class_args
                     .first()
                     .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"));
+                    .unwrap_or(Type::named("Unknown"));
                 let element_direct_ty =
                     ensure_direct_type(&element_ty, &self.classes, "Vec element")?;
                 return match field {
@@ -6391,7 +6703,7 @@ impl<'a> FunctionCompiler<'a> {
                                 vec![class_args
                                     .first()
                                     .cloned()
-                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                                    .unwrap_or(Type::named("Unknown"))],
                             ),
                         ))
                     }
@@ -6416,7 +6728,7 @@ impl<'a> FunctionCompiler<'a> {
                                 vec![class_args
                                     .first()
                                     .cloned()
-                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                                    .unwrap_or(Type::named("Unknown"))],
                             ),
                         ))
                     }
@@ -6483,7 +6795,7 @@ impl<'a> FunctionCompiler<'a> {
                                 vec![class_args
                                     .first()
                                     .cloned()
-                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                                    .unwrap_or(Type::named("Unknown"))],
                             ),
                         ))
                     }
@@ -6550,7 +6862,7 @@ impl<'a> FunctionCompiler<'a> {
                                 vec![class_args
                                     .first()
                                     .cloned()
-                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                                    .unwrap_or(Type::named("Unknown"))],
                             ),
                         ))
                     }
@@ -6678,11 +6990,8 @@ impl<'a> FunctionCompiler<'a> {
                 let key_ty = class_args
                     .first()
                     .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"));
-                let value_ty = class_args
-                    .get(1)
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"));
+                    .unwrap_or(Type::named("Unknown"));
+                let value_ty = class_args.get(1).cloned().unwrap_or(Type::named("Unknown"));
                 let key_direct_ty = ensure_direct_type(&key_ty, &self.classes, "Map key")?;
                 let value_direct_ty = ensure_direct_type(&value_ty, &self.classes, "Map value")?;
                 return match field {
@@ -6949,7 +7258,7 @@ impl<'a> FunctionCompiler<'a> {
                 let element_ty = class_args
                     .first()
                     .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"));
+                    .unwrap_or(Type::named("Unknown"));
                 let element_direct_ty =
                     ensure_direct_type(&element_ty, &self.classes, "Set element")?;
                 return match field {
@@ -7410,10 +7719,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "read_bytes" => {
                         let bound = ordered_optional_named_args(&["max_bytes", "timeout"], args)?;
-                        let count = bound[0].ok_or_else(|| {
-                            "direct backend expected `read_bytes()` to receive `max_bytes`"
-                                .to_string()
-                        })?;
+                        let count = required_named_arg(
+                            bound[0],
+                            "direct backend expected `read_bytes()` to receive `max_bytes`",
+                        )?;
                         let loaded_count = self.load_operand(&count.value)?;
                         let count = self
                             .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
@@ -7442,9 +7751,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "write_all" => {
                         let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
-                        let argument = bound[0].ok_or_else(|| {
-                            "direct backend expected `write_all()` to receive `text`".to_string()
-                        })?;
+                        let argument = required_named_arg(
+                            bound[0],
+                            "direct backend expected `write_all()` to receive `text`",
+                        )?;
                         let loaded = self.load_operand(&argument.value)?;
                         let text = self.ensure_opaque(loaded)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
@@ -7465,9 +7775,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "write_bytes" => {
                         let bound = ordered_optional_named_args(&["bytes", "timeout"], args)?;
-                        let argument = bound[0].ok_or_else(|| {
-                            "direct backend expected `write_bytes()` to receive `bytes`".to_string()
-                        })?;
+                        let argument = required_named_arg(
+                            bound[0],
+                            "direct backend expected `write_bytes()` to receive `bytes`",
+                        )?;
                         let loaded = self.load_operand(&argument.value)?;
                         let bytes = self.ensure_opaque(loaded)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
@@ -7664,9 +7975,13 @@ impl<'a> FunctionCompiler<'a> {
                             args,
                         )?;
                         let required = |index: usize, label: &str| {
-                            bound[index].ok_or_else(|| {
-                                format!("direct backend expected `start()` to receive `{}`", label)
-                            })
+                            required_named_arg(
+                                bound[index],
+                                &format!(
+                                    "direct backend expected `start()` to receive `{}`",
+                                    label
+                                ),
+                            )
                         };
                         let name_loaded = self.load_operand(&required(0, "name")?.value)?;
                         let name = self.ensure_opaque(name_loaded)?;
@@ -7988,10 +8303,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "read_bytes" => {
                         let bound = ordered_optional_named_args(&["max_bytes", "timeout"], args)?;
-                        let count = bound[0].ok_or_else(|| {
-                            "direct backend expected `read_bytes()` to receive `max_bytes`"
-                                .to_string()
-                        })?;
+                        let count = required_named_arg(
+                            bound[0],
+                            "direct backend expected `read_bytes()` to receive `max_bytes`",
+                        )?;
                         let loaded_count = self.load_operand(&count.value)?;
                         let count = self
                             .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
@@ -8020,9 +8335,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "read_exact" => {
                         let bound = ordered_optional_named_args(&["count", "timeout"], args)?;
-                        let count = bound[0].ok_or_else(|| {
-                            "direct backend expected `read_exact()` to receive `count`".to_string()
-                        })?;
+                        let count = required_named_arg(
+                            bound[0],
+                            "direct backend expected `read_exact()` to receive `count`",
+                        )?;
                         let loaded_count = self.load_operand(&count.value)?;
                         let count = self
                             .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
@@ -8045,9 +8361,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "write_all" => {
                         let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
-                        let argument = bound[0].ok_or_else(|| {
-                            "direct backend expected `write_all()` to receive `text`".to_string()
-                        })?;
+                        let argument = required_named_arg(
+                            bound[0],
+                            "direct backend expected `write_all()` to receive `text`",
+                        )?;
                         let loaded = self.load_operand(&argument.value)?;
                         let text = self.ensure_opaque(loaded)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
@@ -8065,9 +8382,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "write_bytes" => {
                         let bound = ordered_optional_named_args(&["bytes", "timeout"], args)?;
-                        let argument = bound[0].ok_or_else(|| {
-                            "direct backend expected `write_bytes()` to receive `bytes`".to_string()
-                        })?;
+                        let argument = required_named_arg(
+                            bound[0],
+                            "direct backend expected `write_bytes()` to receive `bytes`",
+                        )?;
                         let loaded = self.load_operand(&argument.value)?;
                         let bytes = self.ensure_opaque(loaded)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
@@ -8227,12 +8545,14 @@ impl<'a> FunctionCompiler<'a> {
                     "send_text" => {
                         let bound =
                             ordered_optional_named_args(&["address", "text", "timeout"], args)?;
-                        let address = bound[0].ok_or_else(|| {
-                            "direct backend expected `send_text()` to receive `address`".to_string()
-                        })?;
-                        let text = bound[1].ok_or_else(|| {
-                            "direct backend expected `send_text()` to receive `text`".to_string()
-                        })?;
+                        let address = required_named_arg(
+                            bound[0],
+                            "direct backend expected `send_text()` to receive `address`",
+                        )?;
+                        let text = required_named_arg(
+                            bound[1],
+                            "direct backend expected `send_text()` to receive `text`",
+                        )?;
                         let loaded_address = self.load_operand(&address.value)?;
                         let address = self.ensure_opaque(loaded_address)?;
                         let loaded_text = self.load_operand(&text.value)?;
@@ -8253,13 +8573,14 @@ impl<'a> FunctionCompiler<'a> {
                     "send_bytes" => {
                         let bound =
                             ordered_optional_named_args(&["address", "bytes", "timeout"], args)?;
-                        let address = bound[0].ok_or_else(|| {
-                            "direct backend expected `send_bytes()` to receive `address`"
-                                .to_string()
-                        })?;
-                        let bytes = bound[1].ok_or_else(|| {
-                            "direct backend expected `send_bytes()` to receive `bytes`".to_string()
-                        })?;
+                        let address = required_named_arg(
+                            bound[0],
+                            "direct backend expected `send_bytes()` to receive `address`",
+                        )?;
+                        let bytes = required_named_arg(
+                            bound[1],
+                            "direct backend expected `send_bytes()` to receive `bytes`",
+                        )?;
                         let loaded_address = self.load_operand(&address.value)?;
                         let address = self.ensure_opaque(loaded_address)?;
                         let loaded_bytes = self.load_operand(&bytes.value)?;
@@ -8284,9 +8605,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "recv" => {
                         let bound = ordered_optional_named_args(&["max_bytes", "timeout"], args)?;
-                        let count = bound[0].ok_or_else(|| {
-                            "direct backend expected `recv()` to receive `max_bytes`".to_string()
-                        })?;
+                        let count = required_named_arg(
+                            bound[0],
+                            "direct backend expected `recv()` to receive `max_bytes`",
+                        )?;
                         let loaded_count = self.load_operand(&count.value)?;
                         let count = self
                             .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
@@ -8315,10 +8637,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "recv_from" => {
                         let bound = ordered_optional_named_args(&["max_bytes", "timeout"], args)?;
-                        let count = bound[0].ok_or_else(|| {
-                            "direct backend expected `recv_from()` to receive `max_bytes`"
-                                .to_string()
-                        })?;
+                        let count = required_named_arg(
+                            bound[0],
+                            "direct backend expected `recv_from()` to receive `max_bytes`",
+                        )?;
                         let loaded_count = self.load_operand(&count.value)?;
                         let count = self
                             .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
@@ -8697,9 +9019,10 @@ impl<'a> FunctionCompiler<'a> {
                 return match field {
                     "send_text" => {
                         let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
-                        let text = bound[0].ok_or_else(|| {
-                            "direct backend expected `send_text()` to receive `text`".to_string()
-                        })?;
+                        let text = required_named_arg(
+                            bound[0],
+                            "direct backend expected `send_text()` to receive `text`",
+                        )?;
                         let loaded_text = self.load_operand(&text.value)?;
                         let text = self.ensure_opaque(loaded_text)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
@@ -8717,9 +9040,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "send_bytes" => {
                         let bound = ordered_optional_named_args(&["bytes", "timeout"], args)?;
-                        let bytes = bound[0].ok_or_else(|| {
-                            "direct backend expected `send_bytes()` to receive `bytes`".to_string()
-                        })?;
+                        let bytes = required_named_arg(
+                            bound[0],
+                            "direct backend expected `send_bytes()` to receive `bytes`",
+                        )?;
                         let loaded_bytes = self.load_operand(&bytes.value)?;
                         let bytes = self.ensure_opaque(loaded_bytes)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
@@ -8843,9 +9167,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "read_exact" => {
                         let bound = ordered_optional_named_args(&["count", "timeout"], args)?;
-                        let count = bound[0].ok_or_else(|| {
-                            "direct backend expected `read_exact()` to receive `count`".to_string()
-                        })?;
+                        let count = required_named_arg(
+                            bound[0],
+                            "direct backend expected `read_exact()` to receive `count`",
+                        )?;
                         let loaded_count = self.load_operand(&count.value)?;
                         let count = self
                             .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
@@ -8868,9 +9193,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "write_all" => {
                         let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
-                        let text = bound[0].ok_or_else(|| {
-                            "direct backend expected `write_all()` to receive `text`".to_string()
-                        })?;
+                        let text = required_named_arg(
+                            bound[0],
+                            "direct backend expected `write_all()` to receive `text`",
+                        )?;
                         let loaded_text = self.load_operand(&text.value)?;
                         let text = self.ensure_opaque(loaded_text)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
@@ -8968,9 +9294,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "read_exact" => {
                         let bound = ordered_optional_named_args(&["count", "timeout"], args)?;
-                        let count = bound[0].ok_or_else(|| {
-                            "direct backend expected `read_exact()` to receive `count`".to_string()
-                        })?;
+                        let count = required_named_arg(
+                            bound[0],
+                            "direct backend expected `read_exact()` to receive `count`",
+                        )?;
                         let loaded_count = self.load_operand(&count.value)?;
                         let count = self
                             .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
@@ -8993,9 +9320,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "write_all" => {
                         let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
-                        let text = bound[0].ok_or_else(|| {
-                            "direct backend expected `write_all()` to receive `text`".to_string()
-                        })?;
+                        let text = required_named_arg(
+                            bound[0],
+                            "direct backend expected `write_all()` to receive `text`",
+                        )?;
                         let loaded_text = self.load_operand(&text.value)?;
                         let text = self.ensure_opaque(loaded_text)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
@@ -9040,7 +9368,7 @@ impl<'a> FunctionCompiler<'a> {
                 let element_ty = class_args
                     .first()
                     .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"));
+                    .unwrap_or(Type::named("Unknown"));
                 let element_direct_ty =
                     ensure_direct_type(&element_ty, &self.classes, "Queue element")?;
                 return match field {
@@ -9161,7 +9489,7 @@ impl<'a> FunctionCompiler<'a> {
                                 vec![class_args
                                     .first()
                                     .cloned()
-                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                                    .unwrap_or(Type::named("Unknown"))],
                             ),
                         ))
                     }
@@ -9185,7 +9513,7 @@ impl<'a> FunctionCompiler<'a> {
                                 vec![class_args
                                     .first()
                                     .cloned()
-                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                                    .unwrap_or(Type::named("Unknown"))],
                             ),
                         ))
                     }
@@ -9207,7 +9535,7 @@ impl<'a> FunctionCompiler<'a> {
                                 vec![class_args
                                     .first()
                                     .cloned()
-                                    .unwrap_or_else(|| Type::named("Unknown"))],
+                                    .unwrap_or(Type::named("Unknown"))],
                             ),
                         ))
                     }
@@ -9247,9 +9575,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "get_or" => {
                         let bound = ordered_optional_named_args(&["default", "timeout"], args)?;
-                        let default = bound[0].ok_or_else(|| {
-                            "direct backend expected `get_or()` to receive `default`".to_string()
-                        })?;
+                        let default = required_named_arg(
+                            bound[0],
+                            "direct backend expected `get_or()` to receive `default`",
+                        )?;
                         let loaded = self.load_operand(&default.value)?;
                         let loaded = self.ensure_opaque(loaded)?;
                         let inst = match bound[1] {
@@ -9271,7 +9600,7 @@ impl<'a> FunctionCompiler<'a> {
                             class_args
                                 .first()
                                 .cloned()
-                                .unwrap_or_else(|| Type::named("Unknown")),
+                                .unwrap_or(Type::named("Unknown")),
                         ))
                     }
                     "close" => {
@@ -9370,9 +9699,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "result_or" => {
                         let bound = ordered_optional_named_args(&["default", "timeout"], args)?;
-                        let default = bound[0].ok_or_else(|| {
-                            "direct backend expected `result_or()` to receive `default`".to_string()
-                        })?;
+                        let default = required_named_arg(
+                            bound[0],
+                            "direct backend expected `result_or()` to receive `default`",
+                        )?;
                         let loaded = self.load_operand(&default.value)?;
                         let loaded = self.ensure_opaque(loaded)?;
                         let inst = match bound[1] {
@@ -9523,11 +9853,10 @@ impl<'a> FunctionCompiler<'a> {
         class_name: &str,
         fields: &[crate::mir::MirFieldInit],
     ) -> std::result::Result<ValueRef, String> {
-        let class = self
-            .classes
-            .get(class_name)
-            .cloned()
-            .ok_or_else(|| format!("direct backend does not know class `{}`", class_name))?;
+        let class = self.classes.get(class_name).cloned().ok_or(format!(
+            "direct backend does not know class `{}`",
+            class_name
+        ))?;
         let (class_ptr, class_len) = self.string_constant(class_name.as_bytes())?;
         let init = self
             .builder
@@ -9544,7 +9873,7 @@ impl<'a> FunctionCompiler<'a> {
                 .iter()
                 .find(|candidate| candidate.name == field.name)
                 .map(|candidate| candidate.ty.clone())
-                .ok_or_else(|| {
+                .ok_or({
                     format!(
                         "direct backend construction for `{}` is missing field metadata for `{}`",
                         class_name, field.name
@@ -9577,7 +9906,7 @@ impl<'a> FunctionCompiler<'a> {
         function: &str,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
-        let thunk_ref = *self.function_thunk_refs.get(function).ok_or_else(|| {
+        let thunk_ref = *self.function_thunk_refs.get(function).ok_or({
             format!(
                 "direct backend does not know task-start thunk for `{}`",
                 function
@@ -9622,16 +9951,7 @@ impl<'a> FunctionCompiler<'a> {
             ],
         );
         let ty = if returns_handle {
-            let return_ty = self
-                .function_return_types
-                .get(function)
-                .cloned()
-                .ok_or_else(|| {
-                    format!(
-                        "direct backend does not know return type for `{}`",
-                        function
-                    )
-                })?;
+            let return_ty = self.call_result_type(function)?;
             DirectType::Opaque(Type::Named(
                 "Task".to_string(),
                 vec![direct_type_to_type(&return_ty)],
@@ -9720,7 +10040,7 @@ impl<'a> FunctionCompiler<'a> {
         let mut candidates = Vec::new();
         for class in self.classes.values() {
             if let Some(method) = class.methods.iter().find(|method| method.name == field) {
-                candidates.push((Type::named(&class.name), method.clone()));
+                candidates.push((usize::MAX, Type::named(&class.name), method.clone()));
             }
         }
         for trait_impl in &self.trait_impls {
@@ -9729,10 +10049,21 @@ impl<'a> FunctionCompiler<'a> {
                 .iter()
                 .find(|method| method.name == field)
             {
-                candidates.push((trait_impl.for_type.clone(), method.clone()));
+                candidates.push((
+                    crate::sema::trait_impl_specificity_parts(
+                        &trait_impl.for_type,
+                        &trait_impl.trait_args,
+                    ),
+                    trait_impl.for_type.clone(),
+                    method.clone(),
+                ));
             }
         }
+        candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
         candidates
+            .into_iter()
+            .map(|(_, ty, method)| (ty, method))
+            .collect()
     }
 
     fn find_trait_method(&self, ty: &Type, field: &str) -> Option<&MirMethod> {
@@ -9749,47 +10080,6 @@ impl<'a> FunctionCompiler<'a> {
                 &type_params,
                 &mut substitutions,
             ) {
-                continue;
-            }
-            let Some(method) = trait_impl
-                .methods
-                .iter()
-                .find(|method| method.name == field)
-            else {
-                continue;
-            };
-            let specificity = crate::sema::trait_impl_specificity_parts(
-                &trait_impl.for_type,
-                &trait_impl.trait_args,
-            );
-            if best.is_none() || specificity > best_specificity {
-                best = Some(method);
-                best_specificity = specificity;
-                ambiguous = false;
-            } else if specificity == best_specificity {
-                ambiguous = true;
-            }
-        }
-        if ambiguous {
-            None
-        } else {
-            best
-        }
-    }
-
-    fn find_trait_method_for_class_name(
-        &self,
-        class_name: &str,
-        field: &str,
-    ) -> Option<&MirMethod> {
-        let mut best = None;
-        let mut best_specificity = 0usize;
-        let mut ambiguous = false;
-        for trait_impl in &self.trait_impls {
-            let Type::Named(name, _) = &trait_impl.for_type else {
-                continue;
-            };
-            if name != class_name {
                 continue;
             }
             let Some(method) = trait_impl
@@ -9885,12 +10175,11 @@ fn unit_value(builder: &mut FunctionBuilder<'_>) -> ValueRef {
 
 fn find_method<'a>(class: Option<&'a MirClass>, field: &str) -> Option<&'a MirMethod> {
     let class = class?;
-    for method in &class.methods {
-        if method.name == field {
-            return Some(method);
-        }
-    }
-    None
+    class
+        .methods
+        .iter()
+        .find(|&method| method.name == field)
+        .map(|v| v as _)
 }
 
 fn declare_runtime_function(
@@ -10069,15 +10358,15 @@ fn cleanup_place_type(
     let mut segments = place.split('.');
     let root = segments
         .next()
-        .ok_or_else(|| "direct backend encountered an empty cleanup place".to_string())?;
-    let mut ty = root_types.get(root).cloned().ok_or_else(|| {
+        .ok_or("direct backend encountered an empty cleanup place".to_string())?;
+    let mut ty = root_types.get(root).cloned().ok_or({
         format!(
             "direct backend does not know cleanup place `{}` in `{}`",
             place, function.name
         )
     })?;
     for field in segments {
-        ty = direct_field_type(&ty, field, classes).ok_or_else(|| {
+        ty = direct_field_type(&ty, field, classes).ok_or({
             format!(
                 "direct backend does not know cleanup field `{}` on `{}`",
                 field,
@@ -10113,6 +10402,24 @@ fn declare_root_variables(
     }
     variables.insert(name.clone(), declared);
     variable_types.insert(name, ty);
+}
+
+fn direct_type_contains_unknown(ty: &DirectType) -> bool {
+    fn type_contains_unknown(ty: &Type) -> bool {
+        match ty {
+            Type::Named(name, args) => name == "Unknown" || args.iter().any(type_contains_unknown),
+            Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+        }
+    }
+
+    match ty {
+        DirectType::Scalar(_) => false,
+        DirectType::PlainClass(class) => class
+            .fields
+            .iter()
+            .any(|field| direct_type_contains_unknown(&field.ty)),
+        DirectType::Opaque(ty) => type_contains_unknown(ty),
+    }
 }
 
 fn collect_cleanup_places(function: &MirFunction) -> Vec<String> {
@@ -10325,7 +10632,7 @@ fn ensure_direct_type(
     classes: &HashMap<String, MirClass>,
     context: &str,
 ) -> std::result::Result<DirectType, String> {
-    direct_type(ty, classes).ok_or_else(|| {
+    direct_type(ty, classes).ok_or({
         format!(
             "direct backend does not yet support {} with type `{}`",
             context, ty
@@ -10407,6 +10714,44 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
     }
 }
 
+fn host_builtin_return_type(name: &str) -> Option<Type> {
+    let string = Type::named("String");
+    let string_map = Type::Named(
+        "Map".to_string(),
+        vec![Type::named("String"), Type::named("String")],
+    );
+    let string_result = Type::Named(
+        "Result".to_string(),
+        vec![Type::named("String"), Type::named("String")],
+    );
+    match name {
+        "sys::args" => Some(Type::Named("Vec".to_string(), vec![string.clone()])),
+        "sys::env" | "path::parent" | "path::file_name" | "path::extension" => {
+            Some(Type::Named("Option".to_string(), vec![string.clone()]))
+        }
+        "sys::current_dir" => Some(Type::Named(
+            "Result".to_string(),
+            vec![
+                string.clone(),
+                Type::Named("io.Error".to_string(), Vec::new()),
+            ],
+        )),
+        "sys::unix_time_ms" | "sys::monotonic_time_ms" | "metrics::get" => {
+            Some(Type::named("int64"))
+        }
+        "path::join" => Some(string),
+        "path::is_absolute" | "json::is_valid" | "toml::is_valid" => Some(Type::named("bool")),
+        "json::stringify_map" | "toml::stringify_map" => Some(string_result),
+        "json::parse_string_map" | "toml::parse_string_map" => Some(Type::Named(
+            "Result".to_string(),
+            vec![string_map, Type::named("String")],
+        )),
+        "metrics::increment" | "metrics::reset" | "log::debug" | "log::info" | "log::warn"
+        | "log::error" | "trace::event" => Some(Type::Unit),
+        _ => None,
+    }
+}
+
 fn infer_rvalue_type(
     rvalue: &Rvalue,
     variable_types: &HashMap<String, DirectType>,
@@ -10470,6 +10815,9 @@ fn infer_rvalue_type(
                 Some(DirectType::Scalar(ScalarKind::Bool))
             }
             CallTarget::Name(name) if name == "sleep" => Some(DirectType::Scalar(ScalarKind::Unit)),
+            CallTarget::Name(name) if host_builtin_return_type(name).is_some() => {
+                direct_type(&host_builtin_return_type(name)?, classes)
+            }
             CallTarget::Name(name) if matches!(name.as_str(), "wait_any" | "wait_all") => {
                 let task_payload = args
                     .first()
@@ -10487,7 +10835,7 @@ fn infer_rvalue_type(
                         }
                         _ => Type::named("Unknown"),
                     })
-                    .unwrap_or_else(|| Type::named("Unknown"));
+                    .unwrap_or(Type::named("Unknown"));
                 Some(DirectType::Opaque(Type::Named(
                     if name == "wait_any" {
                         "WaitAny".to_string()
@@ -10792,9 +11140,8 @@ fn infer_rvalue_type(
         ))),
         Rvalue::Construct { class_name, .. } => direct_type(&Type::named(class_name), classes),
         Rvalue::Member { object, field } => {
-            match infer_operand_type(object, variable_types, classes)? {
-                ty => direct_field_type(&ty, field, classes),
-            }
+            let ty = infer_operand_type(object, variable_types, classes)?;
+            direct_field_type(&ty, field, classes)
         }
         Rvalue::EnumVariant { enum_name, .. } => Some(DirectType::Opaque(Type::named(enum_name))),
         Rvalue::VariantPayload {
@@ -10821,6 +11168,45 @@ fn infer_rvalue_type(
                 Some(DirectType::Scalar(ScalarKind::Unit))
             }
         }
+    }
+}
+
+fn find_trait_method_for_class_name<'a>(
+    trait_impls: &'a [MirTraitImpl],
+    class_name: &str,
+    field: &str,
+) -> Option<&'a MirMethod> {
+    let mut best = None;
+    let mut best_specificity = 0usize;
+    let mut ambiguous = false;
+    for trait_impl in trait_impls {
+        let Type::Named(name, _) = &trait_impl.for_type else {
+            continue;
+        };
+        if name != class_name {
+            continue;
+        }
+        let Some(method) = trait_impl
+            .methods
+            .iter()
+            .find(|method| method.name == field)
+        else {
+            continue;
+        };
+        let specificity =
+            crate::sema::trait_impl_specificity_parts(&trait_impl.for_type, &trait_impl.trait_args);
+        if best.is_none() || specificity > best_specificity {
+            best = Some(method);
+            best_specificity = specificity;
+            ambiguous = false;
+        } else if specificity == best_specificity {
+            ambiguous = true;
+        }
+    }
+    if ambiguous {
+        None
+    } else {
+        best
     }
 }
 
@@ -10895,10 +11281,7 @@ fn builtin_opaque_member_return_type(
         | ("Vec", "__index_option") => direct_type(
             &Type::Named(
                 "Option".to_string(),
-                vec![args
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
+                vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
             ),
             classes,
         ),
@@ -10912,30 +11295,21 @@ fn builtin_opaque_member_return_type(
         ("Map", "get") | ("Map", "set") | ("Map", "remove") => direct_type(
             &Type::Named(
                 "Option".to_string(),
-                vec![args
-                    .get(1)
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
+                vec![args.get(1).cloned().unwrap_or(Type::named("Unknown"))],
             ),
             classes,
         ),
         ("Map", "keys") => direct_type(
             &Type::Named(
                 "Vec".to_string(),
-                vec![args
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
+                vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
             ),
             classes,
         ),
         ("Map", "values") => direct_type(
             &Type::Named(
                 "Vec".to_string(),
-                vec![args
-                    .get(1)
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
+                vec![args.get(1).cloned().unwrap_or(Type::named("Unknown"))],
             ),
             classes,
         ),
@@ -10945,12 +11319,8 @@ fn builtin_opaque_member_return_type(
                 vec![Type::Named(
                     "MapEntry".to_string(),
                     vec![
-                        args.first()
-                            .cloned()
-                            .unwrap_or_else(|| Type::named("Unknown")),
-                        args.get(1)
-                            .cloned()
-                            .unwrap_or_else(|| Type::named("Unknown")),
+                        args.first().cloned().unwrap_or(Type::named("Unknown")),
+                        args.get(1).cloned().unwrap_or(Type::named("Unknown")),
                     ],
                 )],
             ),
@@ -10971,10 +11341,7 @@ fn builtin_opaque_member_return_type(
         ("Set", "__index_option") => direct_type(
             &Type::Named(
                 "Option".to_string(),
-                vec![args
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
+                vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
             ),
             classes,
         ),
@@ -10985,10 +11352,7 @@ fn builtin_opaque_member_return_type(
                     Type::Unit,
                     Type::Named(
                         "SendError".to_string(),
-                        vec![args
-                            .first()
-                            .cloned()
-                            .unwrap_or_else(|| Type::named("Unknown"))],
+                        vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
                     ),
                 ],
             ),
@@ -10998,10 +11362,7 @@ fn builtin_opaque_member_return_type(
             direct_type(
                 &Type::Named(
                     "QueueReceive".to_string(),
-                    vec![args
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| Type::named("Unknown"))],
+                    vec![args.first().cloned().unwrap_or(Type::named("Unknown"))],
                 ),
                 classes,
             )
@@ -11057,6 +11418,29 @@ fn builtin_opaque_member_return_type(
         }
         ("process.Child", "wait") => direct_type(
             &Type::Named("process.Wait".to_string(), Vec::new()),
+            classes,
+        ),
+        ("process.Child", "wait_or_none") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named(
+                        "Option".to_string(),
+                        vec![Type::Named("process.ExitStatus".to_string(), Vec::new())],
+                    ),
+                    Type::Named("process.Error".to_string(), Vec::new()),
+                ],
+            ),
+            classes,
+        ),
+        ("process.Child", "wait_ok") => direct_type(
+            &Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Named("process.ExitStatus".to_string(), Vec::new()),
+                    Type::Named("process.Error".to_string(), Vec::new()),
+                ],
+            ),
             classes,
         ),
         ("process.Child", "kill") | ("process.Child", "terminate") => direct_type(
@@ -11569,8 +11953,7 @@ fn enum_variant_payload_types_for_target(
         payload_types
             .iter()
             .map(|payload_ty| {
-                direct_type(payload_ty, classes)
-                    .unwrap_or_else(|| DirectType::Opaque(payload_ty.clone()))
+                direct_type(payload_ty, classes).unwrap_or(DirectType::Opaque(payload_ty.clone()))
             })
             .collect::<Vec<_>>(),
     )
@@ -11697,7 +12080,7 @@ fn box_thunk_value(
     ty: &DirectType,
 ) -> std::result::Result<Value, String> {
     match ty {
-        DirectType::Opaque(_) => values.first().copied().ok_or_else(|| {
+        DirectType::Opaque(_) => values.first().copied().ok_or({
             format!(
                 "task-start thunk expected an opaque value for `{}`",
                 render_direct_type(ty)
@@ -11820,7 +12203,7 @@ fn release_direct_call_results(
         .function_return_types
         .get(function_name)
         .cloned()
-        .ok_or_else(|| {
+        .ok_or({
             format!(
                 "direct backend does not know return type for `{}`",
                 function_name

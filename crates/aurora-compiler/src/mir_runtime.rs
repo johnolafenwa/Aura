@@ -15,8 +15,8 @@ use crate::mir::{
     MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::runtime_value::{
-    cast_numeric_value, decode_process_restart_policy, decode_process_stdio, io_error,
-    io_read_line, option_none, option_some, poll_cancellation, process_error_cancelled,
+    cast_numeric_value, decode_process_restart_policy, decode_process_stdio, evaluate_host_builtin,
+    io_error, io_read_line, option_none, option_some, poll_cancellation, process_error_cancelled,
     process_error_io, process_error_no_command, process_error_spawn, process_error_timed_out,
     process_exit_status, process_stdio_inherit, process_stdio_null, process_stdio_pipe,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
@@ -52,7 +52,7 @@ pub fn run_with_stdout_sink(
     stdout_sink: Option<StdoutSink>,
 ) -> Result<RunOutput> {
     let module = module.clone();
-    thread::Builder::new()
+    let handle = match thread::Builder::new()
         .stack_size(MIR_RUNTIME_STACK_SIZE)
         .spawn(move || {
             let result = panic::catch_unwind(AssertUnwindSafe(move || {
@@ -93,10 +93,19 @@ pub fn run_with_stdout_sink(
                     "Aurora MIR runtime panicked while executing the program",
                 )),
             }
-        })
-        .map_err(|error| Diagnostic::new(format!("failed to start MIR runtime thread: {}", error)))?
-        .join()
-        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+        }) {
+        Ok(handle) => handle,
+        Err(error) => {
+            return Err(Diagnostic::new(format!(
+                "failed to start MIR runtime thread: {}",
+                error
+            )));
+        }
+    };
+    match handle.join() {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 fn module_uses_lightweight_tasks(module: &MirModule) -> bool {
@@ -133,9 +142,10 @@ fn rvalue_uses_lightweight_tasks(value: &Rvalue) -> bool {
 }
 
 fn lock_stdout(stdout: &Arc<Mutex<String>>) -> std::sync::MutexGuard<'_, String> {
-    stdout
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    match stdout.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> Result<RunOutput> {
@@ -164,6 +174,19 @@ const MAX_RUNTIME_BLOCKS: usize = 1_000_000;
 const MAX_RUNTIME_INSTRUCTIONS: usize = 1_000_000;
 const MAX_RUNTIME_TERMINATOR_ARMS: usize = 1_000_000;
 
+#[derive(Clone, Copy)]
+struct RuntimeModuleLimits {
+    max_blocks: usize,
+    max_instructions: usize,
+    max_terminator_arms: usize,
+}
+
+const DEFAULT_RUNTIME_MODULE_LIMITS: RuntimeModuleLimits = RuntimeModuleLimits {
+    max_blocks: MAX_RUNTIME_BLOCKS,
+    max_instructions: MAX_RUNTIME_INSTRUCTIONS,
+    max_terminator_arms: MAX_RUNTIME_TERMINATOR_ARMS,
+};
+
 fn render_runtime_error(path: &str, source: &str, error: &Diagnostic) -> String {
     error.render_with_source(path, source)
 }
@@ -184,33 +207,40 @@ fn validate_embedded_runtime_length(name: &str, len: usize) -> std::result::Resu
 }
 
 fn validate_runtime_module_complexity(module: &MirModule) -> Result<()> {
+    validate_runtime_module_complexity_with_limits(module, DEFAULT_RUNTIME_MODULE_LIMITS)
+}
+
+fn validate_runtime_module_complexity_with_limits(
+    module: &MirModule,
+    limits: RuntimeModuleLimits,
+) -> Result<()> {
     let mut total_blocks = 0usize;
     let mut total_instructions = 0usize;
     let mut total_arms = 0usize;
     for function in module.functions.iter().chain(module.top_level.iter()) {
         total_blocks = total_blocks.saturating_add(function.blocks.len());
-        if total_blocks > MAX_RUNTIME_BLOCKS {
+        if total_blocks > limits.max_blocks {
             return Err(Diagnostic::new(format!(
                 "embedded MIR exceeds the supported block limit of {}",
-                MAX_RUNTIME_BLOCKS
+                limits.max_blocks
             )));
         }
         for block in &function.blocks {
             total_instructions = total_instructions.saturating_add(block.instructions.len());
-            if total_instructions > MAX_RUNTIME_INSTRUCTIONS {
+            if total_instructions > limits.max_instructions {
                 return Err(Diagnostic::new(format!(
                     "embedded MIR exceeds the supported instruction limit of {}",
-                    MAX_RUNTIME_INSTRUCTIONS
+                    limits.max_instructions
                 )));
             }
             total_arms = total_arms.saturating_add(match &block.terminator {
                 Terminator::Match { arms, .. } => arms.len(),
                 _ => 0,
             });
-            if total_arms > MAX_RUNTIME_TERMINATOR_ARMS {
+            if total_arms > limits.max_terminator_arms {
                 return Err(Diagnostic::new(format!(
                     "embedded MIR exceeds the supported branching-arm limit of {}",
-                    MAX_RUNTIME_TERMINATOR_ARMS
+                    limits.max_terminator_arms
                 )));
             }
         }
@@ -219,13 +249,31 @@ fn validate_runtime_module_complexity(module: &MirModule) -> Result<()> {
 }
 
 fn run_serialized_mir_entrypoint(mir_json: &[u8], source_path: &str, source: &str) -> i32 {
+    let mut stdout = io::stdout().lock();
+    let mut stderr = io::stderr().lock();
+    run_serialized_mir_entrypoint_with_streams(
+        mir_json,
+        source_path,
+        source,
+        &mut stdout,
+        &mut stderr,
+    )
+}
+
+fn run_serialized_mir_entrypoint_with_streams(
+    mir_json: &[u8],
+    source_path: &str,
+    source: &str,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> i32 {
     match run_serialized_mir(mir_json, source_path, source) {
         Ok(output) => {
-            if let Err(error) = write_stream(io::stdout().lock(), &output.stdout) {
+            if let Err(error) = write_stream(&mut *stdout, &output.stdout) {
                 if error.kind() == io::ErrorKind::BrokenPipe {
                     return 0;
                 }
-                let _ = writeln!(io::stderr().lock(), "failed to write to stdout: {}", error);
+                let _ = writeln!(&mut *stderr, "failed to write to stdout: {}", error);
                 return 1;
             }
             if let Value::Int(code) = output.value {
@@ -234,21 +282,17 @@ fn run_serialized_mir_entrypoint(mir_json: &[u8], source_path: &str, source: &st
             0
         }
         Err(error) => {
-            if let Some(stdout) = error.partial_stdout() {
-                if let Err(write_error) = write_stream(io::stdout().lock(), stdout) {
+            if let Some(partial_stdout) = error.partial_stdout() {
+                if let Err(write_error) = write_stream(&mut *stdout, partial_stdout) {
                     if write_error.kind() == io::ErrorKind::BrokenPipe {
                         return 0;
                     }
-                    let _ = writeln!(
-                        io::stderr().lock(),
-                        "failed to write to stdout: {}",
-                        write_error
-                    );
+                    let _ = writeln!(&mut *stderr, "failed to write to stdout: {}", write_error);
                     return 1;
                 }
             }
             let rendered = render_runtime_error(source_path, source, &error);
-            let _ = writeln!(io::stderr().lock(), "{}", rendered);
+            let _ = writeln!(&mut *stderr, "{}", rendered);
             1
         }
     }
@@ -385,13 +429,13 @@ impl Env {
 
     fn read_member(&self, place: &str, field: &str) -> Result<Value> {
         let segments = split_place_segments(place)?;
-        let Some((root, rest)) = segments.split_first() else {
-            return Err(Diagnostic::new("empty MIR place"));
+        let (root, rest) = segments
+            .split_first()
+            .expect("split_place_segments rejects empty MIR places");
+        let mut current = match self.values.get(root) {
+            Some(value) => value,
+            None => return Err(Diagnostic::new(format!("unknown MIR place `{}`", place))),
         };
-        let mut current = self
-            .values
-            .get(root)
-            .ok_or_else(|| Diagnostic::new(format!("unknown MIR place `{}`", place)))?;
         let mut index = 0usize;
         while index < rest.len() {
             let segment = &rest[index];
@@ -401,12 +445,15 @@ impl Env {
                     segment, place
                 )));
             };
-            current = instance.fields.get(segment).ok_or_else(|| {
-                Diagnostic::new(format!(
-                    "class `{}` has no field `{}` in MIR place `{}`",
-                    instance.class_name, segment, place
-                ))
-            })?;
+            current = match instance.fields.get(segment) {
+                Some(value) => value,
+                None => {
+                    return Err(Diagnostic::new(format!(
+                        "class `{}` has no field `{}` in MIR place `{}`",
+                        instance.class_name, segment, place
+                    )));
+                }
+            };
             index += 1;
         }
         let Value::Instance(instance) = current else {
@@ -415,19 +462,20 @@ impl Env {
                 field, place
             )));
         };
-        instance.fields.get(field).cloned().ok_or_else(|| {
-            Diagnostic::new(format!(
+        match instance.fields.get(field).cloned() {
+            Some(value) => Ok(value),
+            None => Err(Diagnostic::new(format!(
                 "class `{}` has no field `{}` in MIR place `{}`",
                 instance.class_name, field, place
-            ))
-        })
+            ))),
+        }
     }
 
     fn read_place(&self, place: &str) -> Result<Value> {
         let segments = split_place_segments(place)?;
-        let Some((root, rest)) = segments.split_first() else {
-            return Err(Diagnostic::new("empty MIR place"));
-        };
+        let (root, rest) = segments
+            .split_first()
+            .expect("split_place_segments rejects empty MIR places");
         let mut value = match self.values.get(root).cloned() {
             Some(value) => value,
             None => return Err(Diagnostic::new(format!("unknown MIR place `{}`", place))),
@@ -457,9 +505,9 @@ impl Env {
 
     fn write_place(&mut self, place: &str, value: Value) -> Result<()> {
         let segments = split_place_segments(place)?;
-        let Some((root, rest)) = segments.split_first() else {
-            return Err(Diagnostic::new("empty MIR place"));
-        };
+        let (root, rest) = segments
+            .split_first()
+            .expect("split_place_segments rejects empty MIR places");
 
         if rest.is_empty() {
             self.values.insert((*root).to_string(), value);
@@ -841,11 +889,9 @@ impl MirRuntime {
         let resolved_args = class
             .type_params
             .iter()
-            .map(|type_param| {
-                substitutions
-                    .get(type_param)
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))
+            .map(|type_param| match substitutions.get(type_param).cloned() {
+                Some(ty) => ty,
+                None => Type::named("Unknown"),
             })
             .collect();
         Some(Type::Named(instance.class_name.clone(), resolved_args))
@@ -858,9 +904,7 @@ impl MirRuntime {
                 Type::Named(name, args) if name == "Option" && args == vec![Type::Unit] => {
                     Type::Named(name, vec![Type::named("Unknown")])
                 }
-                Type::Named(name, args)
-                    if name == "Result" && args.iter().any(|arg| *arg == Type::Unit) =>
-                {
+                Type::Named(name, args) if name == "Result" && args.contains(&Type::Unit) => {
                     Type::Named(
                         name,
                         args.into_iter()
@@ -936,11 +980,12 @@ impl MirRuntime {
     fn resolve_place_type(&self, place: &str, env: &Env) -> Option<Type> {
         let segments = split_place_segments(place).ok()?;
         let (root, rest) = segments.split_first()?;
-        let mut current = env.place_type(root).cloned().or_else(|| {
-            env.read_place(root)
-                .ok()
-                .and_then(|value| self.infer_runtime_value_type(&value))
-        })?;
+        let mut current = if let Some(ty) = env.place_type(root).cloned() {
+            ty
+        } else {
+            let value = env.read_place(root).ok()?;
+            self.infer_runtime_value_type(&value)?
+        };
 
         let mut index = 0usize;
         while index < rest.len() {
@@ -996,9 +1041,10 @@ impl MirRuntime {
                         function.name
                     )));
                 };
-                let receiver_ty = self
-                    .infer_runtime_value_type(&receiver)
-                    .unwrap_or_else(|| Type::named("Unknown"));
+                let receiver_ty = match self.infer_runtime_value_type(&receiver) {
+                    Some(ty) => ty,
+                    None => Type::named("Unknown"),
+                };
                 env.define_typed("self", receiver_ty, receiver);
             }
 
@@ -1513,7 +1559,7 @@ impl MirRuntime {
                 let mut values = Vec::new();
                 for operand in elements {
                     let value = self.evaluate_operand(operand, env)?;
-                    if !values.iter().any(|candidate| *candidate == value) {
+                    if !values.contains(&value) {
                         values.push(value);
                     }
                 }
@@ -1907,6 +1953,37 @@ impl MirRuntime {
                     };
                 }
 
+                let host_arg_names: Option<&[&str]> = match name.as_str() {
+                    "sys::args"
+                    | "sys::current_dir"
+                    | "sys::unix_time_ms"
+                    | "sys::monotonic_time_ms"
+                    | "metrics::reset" => Some(&[]),
+                    "sys::env" | "metrics::get" => Some(&["name"]),
+                    "path::parent" | "path::file_name" | "path::extension"
+                    | "path::is_absolute" => Some(&["path"]),
+                    "json::is_valid"
+                    | "json::parse_string_map"
+                    | "toml::is_valid"
+                    | "toml::parse_string_map" => Some(&["text"]),
+                    "json::stringify_map" | "toml::stringify_map" => Some(&["value"]),
+                    "path::join" => Some(&["base", "child"]),
+                    "metrics::increment" => Some(&["name", "value"]),
+                    "log::debug" | "log::info" | "log::warn" | "log::error" => {
+                        Some(&["message", "fields"])
+                    }
+                    "trace::event" => Some(&["name", "fields"]),
+                    _ => None,
+                };
+                if let Some(arg_names) = host_arg_names {
+                    let values = evaluate_named_args(args, env)?;
+                    let bound = bind_builtin_args(arg_names, values)?;
+                    return evaluate_host_builtin(
+                        name,
+                        bound.into_iter().map(|argument| argument.value).collect(),
+                    );
+                }
+
                 if matches!(
                     name.as_str(),
                     "fs::read_to_string"
@@ -1976,173 +2053,112 @@ impl MirRuntime {
                 let receiver = self.evaluate_operand(object, env)?;
 
                 match &receiver {
-                    Value::Vec(vector) => {
-                        return self.evaluate_vec_method(
-                            vector.clone(),
-                            field,
-                            receiver_place.as_deref(),
-                            args,
-                            env,
-                        );
-                    }
-                    Value::Map(map) => {
-                        return self.evaluate_map_method(
-                            map.clone(),
-                            field,
-                            receiver_place.as_deref(),
-                            args,
-                            env,
-                        );
-                    }
+                    Value::Vec(vector) => self.evaluate_vec_method(
+                        vector.clone(),
+                        field,
+                        receiver_place.as_deref(),
+                        args,
+                        env,
+                    ),
+                    Value::Map(map) => self.evaluate_map_method(
+                        map.clone(),
+                        field,
+                        receiver_place.as_deref(),
+                        args,
+                        env,
+                    ),
                     Value::Float(value) if field == "sqrt" => {
                         if !args.is_empty() {
                             return Err(Diagnostic::new("`sqrt` does not take arguments"));
                         }
-                        return Ok(Value::Float(value.sqrt()));
+                        Ok(Value::Float(value.sqrt()))
                     }
                     Value::Int(value) if field == "to_string" => {
                         if !args.is_empty() {
                             return Err(Diagnostic::new("`to_string` does not take arguments"));
                         }
-                        return Ok(Value::String(value.to_string()));
+                        Ok(Value::String(value.to_string()))
                     }
                     Value::Float(value) if field == "to_string" => {
                         if !args.is_empty() {
                             return Err(Diagnostic::new("`to_string` does not take arguments"));
                         }
-                        return Ok(Value::String(Value::Float(*value).render()));
+                        Ok(Value::String(Value::Float(*value).render()))
                     }
                     Value::Bool(value) if field == "to_string" => {
                         if !args.is_empty() {
                             return Err(Diagnostic::new("`to_string` does not take arguments"));
                         }
-                        return Ok(Value::String(value.to_string()));
+                        Ok(Value::String(value.to_string()))
                     }
                     Value::String(value) => {
-                        return self.evaluate_string_method(value.clone(), field, args, env);
+                        self.evaluate_string_method(value.clone(), field, args, env)
                     }
-                    Value::Set(set) => {
-                        return self.evaluate_set_method(
-                            set.clone(),
-                            field,
-                            receiver_place.as_deref(),
-                            args,
-                            env,
-                        );
-                    }
+                    Value::Set(set) => self.evaluate_set_method(
+                        set.clone(),
+                        field,
+                        receiver_place.as_deref(),
+                        args,
+                        env,
+                    ),
                     Value::Channel(channel) => {
-                        return self.evaluate_channel_method(channel.clone(), field, args, env);
+                        self.evaluate_channel_method(channel.clone(), field, args, env)
                     }
-                    Value::Task(task) => {
-                        return self.evaluate_task_method(task.clone(), field, args, env);
-                    }
+                    Value::Task(task) => self.evaluate_task_method(task.clone(), field, args, env),
                     Value::TaskGroup(group) => {
-                        return self.evaluate_task_group_method(group.clone(), field, args, env);
+                        self.evaluate_task_group_method(group.clone(), field, args, env)
                     }
-                    Value::File(file) => {
-                        return self.evaluate_file_method(file.clone(), field, args, env);
-                    }
+                    Value::File(file) => self.evaluate_file_method(file.clone(), field, args, env),
                     Value::TcpListener(listener) => {
-                        return self.evaluate_tcp_listener_method(
-                            listener.clone(),
-                            field,
-                            args,
-                            env,
-                        );
+                        self.evaluate_tcp_listener_method(listener.clone(), field, args, env)
                     }
                     Value::TcpStream(stream) => {
-                        return self.evaluate_tcp_stream_method(stream.clone(), field, args, env);
+                        self.evaluate_tcp_stream_method(stream.clone(), field, args, env)
                     }
                     Value::UdpSocket(socket) => {
-                        return self.evaluate_udp_socket_method(socket.clone(), field, args, env);
+                        self.evaluate_udp_socket_method(socket.clone(), field, args, env)
                     }
                     Value::UdpDatagram(datagram) => {
-                        return self.evaluate_udp_datagram_method(
-                            datagram.clone(),
-                            field,
-                            args,
-                            env,
-                        );
+                        self.evaluate_udp_datagram_method(datagram.clone(), field, args, env)
                     }
                     Value::HttpListener(listener) => {
-                        return self.evaluate_http_listener_method(
-                            listener.clone(),
-                            field,
-                            args,
-                            env,
-                        );
+                        self.evaluate_http_listener_method(listener.clone(), field, args, env)
                     }
                     Value::HttpExchange(exchange) => {
-                        return self.evaluate_http_exchange_method(
-                            exchange.clone(),
-                            field,
-                            args,
-                            env,
-                        );
+                        self.evaluate_http_exchange_method(exchange.clone(), field, args, env)
                     }
                     Value::HttpResponse(response) => {
-                        return self.evaluate_http_response_method(
-                            response.clone(),
-                            field,
-                            args,
-                            env,
-                        );
+                        self.evaluate_http_response_method(response.clone(), field, args, env)
                     }
                     Value::WebSocketListener(listener) => {
-                        return self.evaluate_websocket_listener_method(
-                            listener.clone(),
-                            field,
-                            args,
-                            env,
-                        );
+                        self.evaluate_websocket_listener_method(listener.clone(), field, args, env)
                     }
                     Value::WebSocket(socket) => {
-                        return self.evaluate_websocket_method(socket.clone(), field, args, env);
+                        self.evaluate_websocket_method(socket.clone(), field, args, env)
                     }
                     Value::UnixListener(listener) => {
-                        return self.evaluate_unix_listener_method(
-                            listener.clone(),
-                            field,
-                            args,
-                            env,
-                        );
+                        self.evaluate_unix_listener_method(listener.clone(), field, args, env)
                     }
                     Value::UnixStream(stream) => {
-                        return self.evaluate_unix_stream_method(stream.clone(), field, args, env);
+                        self.evaluate_unix_stream_method(stream.clone(), field, args, env)
                     }
                     Value::TlsListener(listener) => {
-                        return self.evaluate_tls_listener_method(
-                            listener.clone(),
-                            field,
-                            args,
-                            env,
-                        );
+                        self.evaluate_tls_listener_method(listener.clone(), field, args, env)
                     }
                     Value::TlsStream(stream) => {
-                        return self.evaluate_tls_stream_method(stream.clone(), field, args, env);
+                        self.evaluate_tls_stream_method(stream.clone(), field, args, env)
                     }
                     Value::ProcessChild(child) => {
-                        return self.evaluate_process_child_method(child.clone(), field, args, env);
+                        self.evaluate_process_child_method(child.clone(), field, args, env)
                     }
                     Value::ProcessPipe(pipe) => {
-                        return self.evaluate_process_pipe_method(pipe.clone(), field, args, env);
+                        self.evaluate_process_pipe_method(pipe.clone(), field, args, env)
                     }
                     Value::ProcessCompleted(completed) => {
-                        return self.evaluate_process_completed_method(
-                            completed.clone(),
-                            field,
-                            args,
-                            env,
-                        );
+                        self.evaluate_process_completed_method(completed.clone(), field, args, env)
                     }
-                    Value::ProcessSupervisor(supervisor) => {
-                        return self.evaluate_process_supervisor_method(
-                            supervisor.clone(),
-                            field,
-                            args,
-                            env,
-                        );
-                    }
+                    Value::ProcessSupervisor(supervisor) => self
+                        .evaluate_process_supervisor_method(supervisor.clone(), field, args, env),
                     Value::Instance(instance) => {
                         let resolved_receiver_ty = receiver_place
                             .as_ref()
@@ -2385,14 +2401,14 @@ impl MirRuntime {
                 let timeout = expect_optional_timeout(Some(&bound[1].value), "put(timeout=...)")?;
                 match channel.send_with_timeout(value, timeout, Some(&self.cancellation)) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
-                    Err(SendValueError::Closed(value)) => Ok(result_err(send_error_closed(value))),
+                    Err(SendValueError::Closed(value)) => Ok(result_err(send_error_closed(*value))),
                     Err(SendValueError::Cancelled(value)) => {
-                        Ok(result_err(send_error_cancelled(value)))
+                        Ok(result_err(send_error_cancelled(*value)))
                     }
                     Err(SendValueError::TimedOut(value)) => {
-                        Ok(result_err(send_error_timed_out(value)))
+                        Ok(result_err(send_error_timed_out(*value)))
                     }
-                    Err(SendValueError::Full(value)) => Ok(result_err(send_error_full(value))),
+                    Err(SendValueError::Full(value)) => Ok(result_err(send_error_full(*value))),
                 }
             }
             "try_put" => {
@@ -2406,13 +2422,13 @@ impl MirRuntime {
                 };
                 match channel.try_send_result(value) {
                     Ok(()) => Ok(result_ok(Value::Unit)),
-                    Err(SendValueError::Closed(value)) => Ok(result_err(send_error_closed(value))),
-                    Err(SendValueError::Full(value)) => Ok(result_err(send_error_full(value))),
+                    Err(SendValueError::Closed(value)) => Ok(result_err(send_error_closed(*value))),
+                    Err(SendValueError::Full(value)) => Ok(result_err(send_error_full(*value))),
                     Err(SendValueError::Cancelled(value)) => {
-                        Ok(result_err(send_error_cancelled(value)))
+                        Ok(result_err(send_error_cancelled(*value)))
                     }
                     Err(SendValueError::TimedOut(value)) => {
-                        Ok(result_err(send_error_timed_out(value)))
+                        Ok(result_err(send_error_timed_out(*value)))
                     }
                 }
             }
@@ -5274,14 +5290,11 @@ impl MirRuntime {
                     Some(span) => Diagnostic::at(span, "division by zero"),
                     None => Diagnostic::new("division by zero"),
                 }),
-                (Value::Int(left), Value::Int(right)) => match left.checked_div(right) {
-                    Some(value) => Ok(Value::Int(value)),
-                    None => Err(match span {
-                        Some(span) => Diagnostic::at(span, "integer overflow"),
-                        None => Diagnostic::new("integer overflow"),
-                    }),
-                },
-                (Value::Float(_left), Value::Float(right)) if right == 0.0 => Err(match span {
+                (Value::Int(left), Value::Int(right)) => Ok(Value::Int(
+                    left.checked_div(right)
+                        .expect("non-zero integer division is total"),
+                )),
+                (Value::Float(_left), Value::Float(0.0)) => Err(match span {
                     Some(span) => Diagnostic::at(span, "division by zero"),
                     None => Diagnostic::new("division by zero"),
                 }),
@@ -5295,14 +5308,11 @@ impl MirRuntime {
                     Some(span) => Diagnostic::at(span, "division by zero"),
                     None => Diagnostic::new("division by zero"),
                 }),
-                (Value::Int(left), Value::Int(right)) => match left.checked_rem(right) {
-                    Some(value) => Ok(Value::Int(value)),
-                    None => Err(match span {
-                        Some(span) => Diagnostic::at(span, "integer overflow"),
-                        None => Diagnostic::new("integer overflow"),
-                    }),
-                },
-                (Value::Float(_left), Value::Float(right)) if right == 0.0 => Err(match span {
+                (Value::Int(left), Value::Int(right)) => Ok(Value::Int(
+                    left.checked_rem(right)
+                        .expect("non-zero integer remainder is total"),
+                )),
+                (Value::Float(_left), Value::Float(0.0)) => Err(match span {
                     Some(span) => Diagnostic::at(span, "division by zero"),
                     None => Diagnostic::new("division by zero"),
                 }),

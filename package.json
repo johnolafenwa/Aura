@@ -2,21 +2,40 @@
   "name": "aurora-monorepo",
   "private": true,
   "version": "0.1.0",
+  "packageManager": "npm@11.4.2",
+  "engines": {
+    "node": "22.14.0"
+  },
   "workspaces": [
     "tools/*"
   ],
   "scripts": {
-    "coverage:compiler": "cargo llvm-cov -p aurora-compiler --ignore-filename-regex 'crates/aurora-compiler/src/.*_tests\\\\.rs$'",
-    "coverage:compiler:check": "cargo llvm-cov -p aurora-compiler --ignore-filename-regex 'crates/aurora-compiler/src/.*_tests\\\\.rs$' --fail-under-lines 89 --fail-under-functions 89 --fail-under-regions 90",
+    "coverage:compiler": "bash scripts/coverage-compiler.sh",
+    "coverage:compiler:check": "bash scripts/coverage-compiler.sh --check",
+    "test:rust": "RUST_MIN_STACK=33554432 cargo test -- --test-threads=1",
+    "test:backend-parity": "cargo test -p aura --test backend_parity -- --ignored --test-threads=1 --nocapture",
+    "test:scheduler-stress": "bash scripts/stress-scheduler.sh",
+    "test:scheduler-model": "cargo test -p aurora-compiler --test scheduler_model",
+    "bench:compiler": "cargo bench -p aurora-compiler --bench compiler_pipeline",
+    "check:format": "cargo fmt --all --check",
+    "check:clippy": "cargo clippy -p aurora-compiler -p aura -- -D warnings",
+    "check:hygiene": "bash scripts/check-hygiene.sh",
+    "check:audit": "npm audit --audit-level=moderate && cargo audit",
     "build:extension": "npm --prefix tools/vscode-aurora run build",
     "package:extension": "npm --prefix tools/vscode-aurora run package:vsix",
     "check:lsp": "npm --prefix tools/aurora-language-server run check",
     "test:lsp": "npm --prefix tools/aurora-language-server test",
     "coverage:lsp": "npm --prefix tools/aurora-language-server run coverage",
     "coverage:lsp:check": "npm --prefix tools/aurora-language-server run coverage:check",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
     "check:extension": "npm --prefix tools/vscode-aurora run check",
     "test:extension": "npm --prefix tools/vscode-aurora test",
-    "ci": "cargo test && npm run test:lsp && npm run check:extension && npm run test:extension && npm run coverage:compiler:check && npm run coverage:lsp:check",
+    "ci": "npm run check:format && npm run test:rust && npm run test:backend-parity && npm run test:lsp && npm run check:extension && npm run test:extension && npm run coverage:compiler:check && npm run coverage:lsp:check && npm run docs:build && npm run check:audit && npm run check:clippy && npm run check:hygiene",
     "postinstall": "npm run build:extension"
+  },
+  "devDependencies": {
+    "vitepress": "2.0.0-alpha.17"
   }
 }

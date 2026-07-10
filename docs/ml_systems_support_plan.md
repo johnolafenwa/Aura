@@ -1,6 +1,6 @@
 # Aurora ML Systems Support Plan
 
-Status: forward-looking roadmap, not current language surface.
+Status: Phase 1 control-plane baseline implemented; later phases remain forward-looking.
 
 This document describes how Aurora can become a strong ML systems language without trying to replace Python or PyTorch for model training.
 
@@ -16,6 +16,11 @@ Aurora already has useful foundations for that direction:
 - file, socket, HTTP, WebSocket, Unix-socket, and TLS I/O
 - a MIR runtime plus a direct native backend
 - ownership, borrowing, cleanup, and package support
+- shell-free process execution, pipes, timeouts, process groups, and supervisors
+- program arguments, environment, paths, working-directory access, and clocks
+- typed `Map[String, String]` JSON/TOML codecs
+- structured log/trace records and process-local counters
+- certificate-validated HTTPS plus chunked HTTP framing
 
 See:
 
@@ -54,13 +59,12 @@ Those may become future integrations, but they are not the first milestone.
 
 ## Problem Statement
 
-Today Aurora can coordinate services and move files or bytes, but it is still missing the core boundaries a production ML systems language needs:
+Aurora now has a usable first control-plane boundary, but it is still missing the data-plane and exporter depth a production ML systems language needs:
 
-- no public subprocess/process supervision API
 - no maintained host-side dense-array surface for local numeric work
 - no maintained zero-copy shared-memory transport surface
-- no maintained structured serialization story for service payloads and artifacts
-- no first-class observability surface for logs, metrics, tracing, and profiling
+- no nested/schema-derived class and enum codecs or binary serialization format
+- no external metrics exporter, scoped trace spans, or profiler integration
 - no public tensor or device handle model for the later accelerator-aware path
 
 That means Aurora can already act as a control-plane language, but it cannot yet act as a strong local ML runtime boundary between Python workers, model servers, accelerators, and artifact pipelines.
@@ -411,15 +415,20 @@ That means completions, hover text, diagnostics, and definition links must stay 
 
 ## Phase 1: ML Control-Plane Foundation
 
+Status: baseline complete in Aurora 0.1.
+
 Primary goal: make Aurora strong for service orchestration and Python worker supervision.
 
 Deliverables:
 
-- process/subprocess API
-- scheduler-aware child I/O
-- structured logs
-- metrics and tracing baseline
-- JSON codecs and typed request/response helpers
+- implemented: process/subprocess API and supervision
+- implemented: scheduler-aware child I/O
+- implemented: structured JSON log and trace events
+- implemented: process-local counter metrics baseline
+- implemented: typed string-map JSON/TOML codecs
+- implemented: args/environment/path/time host APIs and HTTPS/chunked HTTP
+
+Follow-on depth within this phase includes nested/schema-derived codecs, metrics exporters, scoped spans, profiling, redirect/pooling HTTP behavior, and higher-level custom-CA HTTP configuration.
 
 Success criteria:
 
@@ -534,13 +543,12 @@ Suggested future example categories:
 
 If Aurora can only fund a small number of milestones first, the recommended order is:
 
-1. subprocess/process supervision
-2. structured serialization
-3. observability
-4. host-side array / tensor-lite support
-5. zero-copy/shared-memory transport
-6. tensor/device handle interop
-7. full tensor, placement-aware execution, and distributed runtime work
+1. host-side array / tensor-lite support
+2. schema-derived and binary serialization depth
+3. zero-copy/shared-memory transport
+4. production observability exporters and profiling
+5. tensor/device handle interop
+6. full tensor, placement-aware execution, and distributed runtime work
 
 That order intentionally makes Aurora strong at ML systems operations and practical local data processing before Aurora becomes ambitious about full accelerator-native tensor execution.
 

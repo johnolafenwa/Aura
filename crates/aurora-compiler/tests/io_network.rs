@@ -287,6 +287,14 @@ def serve_http(listener: net.HttpListener) -> Result[None, io.Error]:
             try request.respond_text(200, request.method() + ":" + request.path() + ":" + body + ":" + headers["X-Test"], {{"Content-Type": "text/plain"}})
             return Result.Ok(None)
 
+def serve_http_bytes(listener: net.HttpListener) -> Result[None, io.Error]:
+    with server_listener = listener:
+        exchange = try server_listener.accept(timeout=1s)
+        with request = exchange:
+            body = request.body_bytes()
+            try request.respond_bytes(202, body, {{"Content-Type": "application/octet-stream"}})
+            return Result.Ok(None)
+
 def serve_ws(listener: net.WebSocketListener) -> Result[None, io.Error]:
     with server_listener = listener:
         socket = try server_listener.accept(timeout=1s)
@@ -336,7 +344,7 @@ def run() -> Result[None, io.Error]:
         http_addr = try http_listener.local_addr()
         http_task = group.start(serve_http, http_listener)
         headers: Map[String, String] = {{"X-Test": "ok"}}
-        response = try net.http_request_text_timeout("POST", "http://" + http_addr + "/hello", "body", headers, 1s)
+        response = try net.http_request_text("POST", "http://" + http_addr + "/hello", "body", headers.clone())
         with http_response = response:
             print(http_response.status())
             print(try http_response.text())
@@ -351,6 +359,26 @@ def run() -> Result[None, io.Error]:
                 return Result.Ok(None)
             case TaskResult.TimedOut:
                 print("http task timed out")
+                return Result.Ok(None)
+
+        http_bytes_listener = try net.http_listen("127.0.0.1:0")
+        http_bytes_addr = try http_bytes_listener.local_addr()
+        http_bytes_task = group.start(serve_http_bytes, http_bytes_listener)
+        bytes_response = try net.http_request_bytes("POST", "http://" + http_bytes_addr + "/bytes", [1 as uint8, 2 as uint8], headers)
+        with received_bytes = bytes_response:
+            print(received_bytes.status())
+            print(received_bytes.bytes().len())
+        match http_bytes_task.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Error(_message):
+                print("http bytes task failed")
+                return Result.Ok(None)
+            case TaskResult.Cancelled:
+                print("http bytes task cancelled")
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                print("http bytes task timed out")
                 return Result.Ok(None)
 
         ws_listener = try net.websocket_listen("127.0.0.1:0")
@@ -394,7 +422,7 @@ def main() -> int32:
         run_path_with_source(&entry, &source).expect("advanced builtin io/net modules should run");
     assert_eq!(
         output.stdout,
-        "4\n65\n67\nudp:ping\nping\n200\nPOST:/hello:body:ok\nws:hi\n"
+        "4\n65\n67\nudp:ping\nping\n200\nPOST:/hello:body:ok\n202\n2\nws:hi\n"
     );
 }
 
@@ -441,9 +469,12 @@ def serve_tls(listener: net.TlsListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
-            _payload = try server_stream.read_exact(5, timeout=2s)
-            try server_stream.write_all("tls:ping!", timeout=2s)
-            return Result.Ok(None)
+            match try server_stream.read_line(timeout=2s):
+                case Option.Some(text):
+                    try server_stream.write_all("tls:" + text + "\n", timeout=2s)
+                    return Result.Ok(None)
+                case Option.None:
+                    return Result.Ok(None)
 
 def run() -> Result[None, io.Error]:
     with TaskGroup() as group:
@@ -475,9 +506,12 @@ def run() -> Result[None, io.Error]:
         tls_task = group.start(serve_tls, tls_listener)
         stream = try net.tls_connect_timeout(tls_addr, "localhost", "{cert_path}", 2s)
         with tls_client = stream:
-            try tls_client.write_all("ping!", timeout=2s)
-            reply = try tls_client.read_exact(9, timeout=2s)
-            print(reply.len())
+            try tls_client.write_all("ping!\n", timeout=2s)
+            match try tls_client.read_line(timeout=2s):
+                case Option.Some(text):
+                    print(text)
+                case Option.None:
+                    return Result.Ok(None)
         match tls_task.result():
             case TaskResult.Ready(result):
                 try result
@@ -509,5 +543,5 @@ def main() -> int32:
     let output =
         run_path_with_source(&entry, &source).expect("unix/tls builtin modules should run");
     let _ = fs::remove_file(&unix_path);
-    assert_eq!(output.stdout, "unix:ping\n9\n");
+    assert_eq!(output.stdout, "unix:ping\ntls:ping!\n");
 }

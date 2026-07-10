@@ -122,21 +122,6 @@ pub fn bind_call_arguments<'arg, 'param>(
             CallConvention::PositionalOnly | CallConvention::PositionalOrNamed => {}
         }
 
-        debug_assert!(
-            ordered_args[next_positional].is_none(),
-            "internal error: positional argument binding attempted to reuse parameter slot {} in {}",
-            next_positional,
-            callee_name
-        );
-        if ordered_args[next_positional].is_some() {
-            return Err(Diagnostic::at(
-                argument.span,
-                format!(
-                    "internal error: argument binding reused parameter slot `{}` in {}",
-                    params[next_positional].name, callee_name
-                ),
-            ));
-        }
         ordered_args[next_positional] = Some(argument);
         next_positional += 1;
     }
@@ -380,11 +365,7 @@ impl BuiltinFunction {
         }
     }
 
-    pub fn bind_args<'arg>(
-        self,
-        args: &'arg [Argument],
-        span: Span,
-    ) -> Result<Vec<Option<&'arg Argument>>> {
+    pub fn bind_args(self, args: &[Argument], span: Span) -> Result<Vec<Option<&Argument>>> {
         match self {
             Self::Print => bind_call_arguments(
                 "`print`",
@@ -1374,11 +1355,7 @@ impl BuiltinMember {
         }
     }
 
-    pub fn bind_args<'arg>(
-        self,
-        args: &'arg [Argument],
-        span: Span,
-    ) -> Result<Vec<Option<&'arg Argument>>> {
+    pub fn bind_args(self, args: &[Argument], span: Span) -> Result<Vec<Option<&Argument>>> {
         match self {
             Self::FloatSqrt
             | Self::ScalarToString

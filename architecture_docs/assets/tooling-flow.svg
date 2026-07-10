@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="360" viewBox="0 0 1400 360" role="img" aria-labelledby="title desc">
   <title id="title">Aurora editor and tooling flow</title>
-  <desc id="desc">VS Code talks to a language server, which prefers compiler-backed analysis and falls back to a JavaScript analyzer.</desc>
+  <desc id="desc">VS Code talks to a language server, which uses a persistent compiler service and lexical recovery only when that service is unavailable.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#2d3e50" />
@@ -33,7 +33,7 @@
 
   <rect class="box accentB" x="650" y="60" width="270" height="100" />
   <text class="label" x="700" y="96">Compiler Bridge</text>
-  <text class="text" x="676" y="120">Runs `aura analyze` / `aura complete`</text>
+  <text class="text" x="676" y="120">Persistent `aura lsp` JSON-lines service</text>
   <text class="text" x="676" y="142">against the active workspace compiler.</text>
 
   <rect class="box accentB" x="650" y="210" width="270" height="100" />
@@ -52,5 +52,5 @@
   <line class="line" x1="920" y1="110" x2="1000" y2="160" />
 
   <text class="text" x="1000" y="248">Preferred path: compiler-backed analysis.</text>
-  <text class="text" x="1000" y="270">Fallback path: in-repo JS analysis for incomplete buffers.</text>
+  <text class="text" x="1000" y="270">Recovery path: lexical declarations only if compiler unavailable.</text>
 </svg>

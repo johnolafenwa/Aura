@@ -13,6 +13,17 @@ fn aura_bin() -> &'static str {
     env!("CARGO_BIN_EXE_aura")
 }
 
+fn generated_binary(path: &PathBuf) -> Command {
+    let mut command = Command::new(path);
+    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        #[cfg(unix)]
+        command.env("LLVM_PROFILE_FILE", "/dev/null");
+        #[cfg(windows)]
+        command.env("LLVM_PROFILE_FILE", "NUL");
+    }
+    command
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -72,7 +83,7 @@ fn assert_default_backend_example_runs(example: &str, binary_name: &str, expecte
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run built binary");
 
@@ -123,7 +134,7 @@ fn assert_direct_backend_example_runs(example: &str, binary_name: &str, expected
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run direct-backend binary");
 
@@ -166,7 +177,7 @@ fn build_and_run_direct_source(
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run direct-backend binary");
 
@@ -194,7 +205,7 @@ fn build_and_run_default_source(
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run default-backend binary");
 
@@ -231,7 +242,7 @@ fn assert_run_and_direct_source_stdout(prefix: &str, source: &str, expected_stdo
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let direct = Command::new(&output_path)
+    let direct = generated_binary(&output_path)
         .output()
         .expect("failed to run direct-backend binary");
     assert!(
@@ -380,7 +391,7 @@ fn build_direct_source_with_timeout(
         "direct backend build should succeed, stderr was:\n{}",
         String::from_utf8_lossy(&build.stderr)
     );
-    let child = Command::new(&output_path)
+    let child = generated_binary(&output_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -406,6 +417,220 @@ fn ast_exits_cleanly_when_stdout_pipe_closes() {
 
     let status = child.wait().expect("failed to wait for aura ast");
     assert!(status.success(), "ast should exit cleanly on broken pipe");
+}
+
+#[test]
+fn lsp_service_handles_multiple_requests_in_one_process() {
+    let mut child = Command::new(aura_bin())
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to start aura lsp service");
+    let input = [
+        serde_json::json!({
+            "id": 1,
+            "method": "analyze",
+            "path": "/virtual/main.au",
+            "source": "def main() -> int32:\n    return 0\n"
+        }),
+        serde_json::json!({
+            "id": 2,
+            "method": "complete",
+            "path": "/virtual/main.au",
+            "source": "def main() -> int32:\n    value: String = \"hi\"\n    value.\n    return 0\n",
+            "line": 2,
+            "character": 10,
+            "trigger": "."
+        }),
+    ]
+    .into_iter()
+    .map(|request| request.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    child
+        .stdin
+        .take()
+        .expect("lsp stdin should be piped")
+        .write_all(format!("{input}\n").as_bytes())
+        .expect("lsp requests should write");
+
+    let output = child
+        .wait_with_output()
+        .expect("lsp service should exit after stdin closes");
+    assert!(
+        output.status.success(),
+        "lsp service should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let responses = String::from_utf8(output.stdout)
+        .expect("lsp responses should be utf-8")
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid response JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0]["id"], 1);
+    assert!(responses[0]["result"]["diagnostics"].is_array());
+    assert_eq!(responses[1]["id"], 2);
+    assert!(responses[1]["result"]
+        .as_array()
+        .expect("completion result should be an array")
+        .iter()
+        .any(|item| item["name"] == "len"));
+}
+
+#[test]
+fn new_fmt_and_test_commands_cover_the_project_workflow() {
+    let temp = TempDir::new("aurora-project-workflow");
+    let create = Command::new(aura_bin())
+        .current_dir(temp.path())
+        .args(["new", "agent-app"])
+        .output()
+        .expect("failed to run aura new");
+    assert!(
+        create.status.success(),
+        "aura new should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let project = temp.path().join("agent-app");
+    assert!(project.join("Aurora.toml").is_file());
+    assert!(project.join("src/main.au").is_file());
+    assert!(project.join("tests/smoke.au").is_file());
+    assert_eq!(
+        fs::read_to_string(project.join(".gitignore")).expect("gitignore should read"),
+        "target/\n"
+    );
+
+    fs::write(
+        project.join("src/main.au"),
+        "def main() -> int32:   \r\n    print(\"ready\")\t\r\n    return 0\r\n",
+    )
+    .expect("unformatted source should write");
+    let check = Command::new(aura_bin())
+        .current_dir(&project)
+        .args(["fmt", "--check", "src/main.au"])
+        .output()
+        .expect("failed to run aura fmt --check");
+    assert!(
+        !check.status.success(),
+        "unformatted source should fail --check"
+    );
+
+    let format = Command::new(aura_bin())
+        .current_dir(&project)
+        .args(["fmt", "src/main.au"])
+        .output()
+        .expect("failed to run aura fmt");
+    assert!(format.status.success(), "aura fmt should succeed");
+    assert_eq!(
+        fs::read_to_string(project.join("src/main.au")).expect("formatted source should read"),
+        "def main() -> int32:\n    print(\"ready\")\n    return 0\n"
+    );
+
+    fs::write(
+        project.join("src/helpers.au"),
+        "public def answer() -> int32:\n    return 42\n",
+    )
+    .expect("project helper source should write");
+    fs::write(
+        project.join("tests/smoke.au"),
+        "from helpers import answer\n\ndef main() -> int32:\n    print(answer())\n    return 0\n",
+    )
+    .expect("test source should write");
+    let tests = Command::new(aura_bin())
+        .current_dir(&project)
+        .arg("test")
+        .output()
+        .expect("failed to run aura test");
+    assert!(
+        tests.status.success(),
+        "aura test should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&tests.stderr)
+    );
+    assert!(String::from_utf8_lossy(&tests.stdout).contains("1 passed; 0 failed"));
+
+    fs::write(
+        project.join("tests/slow.au"),
+        "def main() -> int32:\n    sleep(1s)\n    return 0\n",
+    )
+    .expect("slow test source should write");
+    let timed_out = Command::new(aura_bin())
+        .current_dir(&project)
+        .args(["test", "--timeout-ms", "10", "tests/slow.au"])
+        .output()
+        .expect("failed to run timed-out aura test");
+    assert!(!timed_out.status.success(), "timed-out test should fail");
+    assert!(String::from_utf8_lossy(&timed_out.stderr).contains("timed out after 10ms"));
+
+    let recreate = Command::new(aura_bin())
+        .current_dir(temp.path())
+        .args(["new", "agent-app"])
+        .output()
+        .expect("failed to rerun aura new");
+    assert!(
+        !recreate.status.success(),
+        "aura new must not overwrite a project"
+    );
+}
+
+#[test]
+fn run_and_built_programs_receive_arguments_and_environment() {
+    let source = r#"import sys
+
+def main() -> int32:
+    for argument in sys.args():
+        print(argument)
+    match sys.env("AURORA_CLI_TEST_VALUE"):
+        case Option.Some(value):
+            print(value)
+        case Option.None:
+            return 1
+    return 0
+"#;
+    let (temp, source_path) = write_temp_source("aurora-program-args", source);
+    let interpreted = Command::new(aura_bin())
+        .args(["run", source_path.to_str().expect("UTF-8 temp path"), "--"])
+        .args(["alpha", "beta"])
+        .env("AURORA_CLI_TEST_VALUE", "from-env")
+        .output()
+        .expect("failed to run aura program with arguments");
+    assert!(
+        interpreted.status.success(),
+        "aura run should accept program arguments, stderr was:\n{}",
+        String::from_utf8_lossy(&interpreted.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&interpreted.stdout),
+        "alpha\nbeta\nfrom-env\n"
+    );
+
+    let output_path = temp.path().join("program");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build argument-aware program");
+    assert!(
+        build.status.success(),
+        "argument-aware direct build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let direct = generated_binary(&output_path)
+        .args(["alpha", "beta"])
+        .env("AURORA_CLI_TEST_VALUE", "from-env")
+        .output()
+        .expect("failed to run built program with arguments");
+    assert!(
+        direct.status.success(),
+        "built program should accept arguments, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&direct.stdout),
+        "alpha\nbeta\nfrom-env\n"
+    );
 }
 
 #[test]
@@ -1549,7 +1774,7 @@ fn build_produces_a_runnable_binary() {
     );
     assert!(output_path.exists(), "build should create an output binary");
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run built output");
 
@@ -1589,7 +1814,7 @@ def main() -> int32:\n    mut current: int32 = 1\n    if current < 5:\n        c
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run direct-backend binary");
 
@@ -1679,7 +1904,7 @@ fn build_with_direct_backend_supports_point_example() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run direct-backend point binary");
 
@@ -1740,7 +1965,7 @@ fn build_with_auto_backend_falls_back_for_rich_match_example() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run auto-backend rich match binary");
 
@@ -1935,7 +2160,7 @@ fn build_with_direct_backend_caps_fs_read_to_string_and_read_bytes() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run direct-backend binary");
     assert!(
@@ -2523,7 +2748,7 @@ fn build_with_direct_backend_supports_vec_literals_and_iteration() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run vec direct-backend binary");
 
@@ -2613,7 +2838,7 @@ fn built_direct_binaries_render_runtime_errors_with_source_context() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run direct-backend binary");
 
@@ -2925,7 +3150,7 @@ fn built_default_binaries_render_runtime_errors_with_source_context() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run default-backend binary");
 
@@ -3107,7 +3332,7 @@ fn build_supports_task_result_returning_plain_classes() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run built binary");
 
@@ -3139,7 +3364,7 @@ fn build_produces_runnable_concurrency_binary() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run built concurrency output");
 
@@ -3193,7 +3418,7 @@ fn build_from_stdin_produces_runnable_module_binary() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run built stdin module program");
 
@@ -3232,7 +3457,7 @@ fn built_binary_runs_after_source_file_is_removed() {
 
     fs::remove_file(&source_path).expect("failed to remove source after build");
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run built binary after source removal");
 
@@ -3264,7 +3489,7 @@ fn built_binary_exits_cleanly_when_stdout_pipe_closes() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let mut child = Command::new(&output_path)
+    let mut child = generated_binary(&output_path)
         .stdout(Stdio::piped())
         .spawn()
         .expect("failed to spawn built binary");
@@ -3938,7 +4163,7 @@ fn module_qualified_spawn_target_runs_across_commands() {
             String::from_utf8_lossy(&build.stderr)
         );
 
-        let run = Command::new(&output_path)
+        let run = generated_binary(&output_path)
             .output()
             .expect("failed to run built task binary");
         assert!(
@@ -4020,7 +4245,7 @@ fn build_produces_runnable_binary_for_program_with_local_modules() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run built module program");
 
@@ -4073,7 +4298,7 @@ def main() -> int32:
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run built specialized trait impl program");
 
@@ -4130,7 +4355,7 @@ def main() -> int32:
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run nested generic trait bound program");
 
@@ -4176,7 +4401,7 @@ def main() -> int32:
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run = Command::new(&output_path)
+    let run = generated_binary(&output_path)
         .output()
         .expect("failed to run built trait impl associated method program");
 
@@ -4214,6 +4439,14 @@ def serve_http(listener: net.HttpListener) -> Result[None, io.Error]:
             body = try request.body_text()
             headers = request.headers()
             try request.respond_text(200, request.method() + ":" + request.path() + ":" + body + ":" + headers["X-Test"], {{"Content-Type": "text/plain"}})
+            return Result.Ok(None)
+
+def serve_http_bytes(listener: net.HttpListener) -> Result[None, io.Error]:
+    with server_listener = listener:
+        exchange = try server_listener.accept(timeout=1s)
+        with request = exchange:
+            body = request.body_bytes()
+            try request.respond_bytes(202, body, {{"Content-Type": "application/octet-stream"}})
             return Result.Ok(None)
 
 def serve_ws(listener: net.WebSocketListener) -> Result[None, io.Error]:
@@ -4266,11 +4499,28 @@ def run() -> Result[None, io.Error]:
         http_addr = try http_listener.local_addr()
         http_task = group.start(serve_http, http_listener)
         headers: Map[String, String] = {{"X-Test": "ok"}}
-        response = try net.http_request_text_timeout("POST", "http://" + http_addr + "/hello", "body", headers, 1s)
+        response = try net.http_request_text("POST", "http://" + http_addr + "/hello", "body", headers.clone())
         with http_response = response:
             print(http_response.status())
             print(try http_response.text())
         match http_task.result():
+            case TaskResult.Ready(result):
+                try result
+            case TaskResult.Error(_message):
+                return Result.Ok(None)
+            case TaskResult.Cancelled:
+                return Result.Ok(None)
+            case TaskResult.TimedOut:
+                return Result.Ok(None)
+
+        http_bytes_listener = try net.http_listen("127.0.0.1:0")
+        http_bytes_addr = try http_bytes_listener.local_addr()
+        http_bytes_task = group.start(serve_http_bytes, http_bytes_listener)
+        bytes_response = try net.http_request_bytes("POST", "http://" + http_bytes_addr + "/bytes", [1 as uint8, 2 as uint8], headers)
+        with received_bytes = bytes_response:
+            print(received_bytes.status())
+            print(received_bytes.bytes().len())
+        match http_bytes_task.result():
             case TaskResult.Ready(result):
                 try result
             case TaskResult.Error(_message):
@@ -4322,7 +4572,7 @@ def main() -> int32:
     );
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
-        "4\n65\n67\nudp:ping\nping\n200\nPOST:/hello:body:ok\nws:hi\n"
+        "4\n65\n67\nudp:ping\nping\n200\nPOST:/hello:body:ok\n202\n2\nws:hi\n"
     );
 }
 
@@ -4538,7 +4788,7 @@ def main() -> int32:
         "direct backend build should succeed, stderr was:\n{}",
         String::from_utf8_lossy(&build.stderr)
     );
-    let direct = Command::new(&output_path)
+    let direct = generated_binary(&output_path)
         .output()
         .expect("failed to run direct unread task failure binary");
     assert!(
@@ -4656,7 +4906,7 @@ def main() -> int32:
         "direct backend build should succeed, stderr was:\n{}",
         String::from_utf8_lossy(&build.stderr)
     );
-    let direct = Command::new(&output_path)
+    let direct = generated_binary(&output_path)
         .output()
         .expect("failed to run direct vec insert binary");
     assert!(
@@ -4711,7 +4961,7 @@ def main() -> int32:
         "direct backend build should succeed, stderr was:\n{}",
         String::from_utf8_lossy(&build.stderr)
     );
-    let direct = Command::new(&output_path)
+    let direct = generated_binary(&output_path)
         .output()
         .expect("failed to run direct vec set binary");
     assert!(
@@ -4766,7 +5016,7 @@ def main() -> int32:
         "direct backend build should succeed, stderr was:\n{}",
         String::from_utf8_lossy(&build.stderr)
     );
-    let direct = Command::new(&output_path)
+    let direct = generated_binary(&output_path)
         .output()
         .expect("failed to run direct vec remove binary");
     assert!(
@@ -4822,7 +5072,7 @@ def main() -> int32:
         "direct backend build should succeed, stderr was:\n{}",
         String::from_utf8_lossy(&build.stderr)
     );
-    let direct = Command::new(&output_path)
+    let direct = generated_binary(&output_path)
         .output()
         .expect("failed to run direct vec swap binary");
     assert!(
@@ -5022,6 +5272,45 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_backend_preserves_body_trap_when_cleanup_also_traps() {
+    let source = r#"
+class Resource:
+    name: String
+
+    def close(borrow mut self):
+        print("close " + self.name)
+        print(1 / 0)
+
+def boom() -> int32:
+    print("body")
+    return 1 / 0
+
+def main() -> int32:
+    with resource = Resource(name="A"):
+        return boom()
+    return 0
+"#;
+
+    let (_, run) = build_and_run_direct_source("aurora-direct-primary-trap-diagnostic", source);
+    assert!(
+        !run.status.success(),
+        "direct binary should fail when the body traps"
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "body\nclose A\n");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("return 1 / 0"),
+        "direct backend should report the primary body trap, stderr was:\n{}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("print(1 / 0)"),
+        "cleanup trap should not replace the primary body trap, stderr was:\n{}",
+        stderr
+    );
+}
+
+#[test]
 fn direct_backend_recursion_limit_uses_source_diagnostic() {
     let source = r#"
 def recurse(value: int32) -> int32:
@@ -5046,6 +5335,73 @@ def main() -> int32:
         stderr.contains("-->") && !stderr.contains("direct backend"),
         "stderr should render with source context and avoid backend-specific wording, stderr was:\n{}",
         stderr
+    );
+}
+
+#[test]
+fn direct_backend_recursion_with_with_frames_matches_run_cleanup_count() {
+    let source = r#"
+class Resource:
+    def close(borrow mut self):
+        print("CLOSE_REC")
+
+def recurse(value: int32) -> int32:
+    with resource = Resource():
+        return recurse(value + 1)
+
+def main() -> int32:
+    return recurse(0)
+"#;
+
+    let (temp, source_path) = write_temp_source("aurora-recursion-with-cleanup-count", source);
+    let run = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run");
+    assert!(!run.status.success(), "aura run should fail on recursion");
+
+    let run_stdout = String::from_utf8_lossy(&run.stdout);
+    let run_close_count = run_stdout
+        .lines()
+        .filter(|line| *line == "CLOSE_REC")
+        .count();
+    assert_eq!(
+        run_close_count, 254,
+        "aura run should preserve the established cleanup count"
+    );
+
+    let output_path = temp.path().join("out");
+    let build = Command::new(aura_bin())
+        .arg("build")
+        .arg("--backend")
+        .arg("direct")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build --backend direct");
+    assert!(
+        build.status.success(),
+        "direct backend build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let direct = generated_binary(&output_path)
+        .output()
+        .expect("failed to run direct binary");
+    assert!(
+        !direct.status.success(),
+        "direct binary should fail on recursion"
+    );
+    let direct_stdout = String::from_utf8_lossy(&direct.stdout);
+    let direct_close_count = direct_stdout
+        .lines()
+        .filter(|line| *line == "CLOSE_REC")
+        .count();
+    assert_eq!(
+        direct_close_count, run_close_count,
+        "direct backend should unwind the same number of with frames as aura run"
     );
 }
 
@@ -5424,9 +5780,12 @@ def serve_tls(listener: net.TlsListener) -> Result[None, io.Error]:
     with server_listener = listener:
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
-            _payload = try server_stream.read_exact(5, timeout=2s)
-            try server_stream.write_all("tls:ping!", timeout=2s)
-            return Result.Ok(None)
+            match try server_stream.read_line(timeout=2s):
+                case Option.Some(text):
+                    try server_stream.write_all("tls:" + text + "\n", timeout=2s)
+                    return Result.Ok(None)
+                case Option.None:
+                    return Result.Ok(None)
 
 def run() -> Result[None, io.Error]:
     with TaskGroup() as group:
@@ -5455,9 +5814,12 @@ def run() -> Result[None, io.Error]:
         tls_task = group.start(serve_tls, tls_listener)
         stream = try net.tls_connect_timeout(tls_addr, "localhost", "{cert_path}", 2s)
         with tls_client = stream:
-            try tls_client.write_all("ping!", timeout=2s)
-            reply = try tls_client.read_exact(9, timeout=2s)
-            print(reply.len())
+            try tls_client.write_all("ping!\n", timeout=2s)
+            match try tls_client.read_line(timeout=2s):
+                case Option.Some(text):
+                    print(text)
+                case Option.None:
+                    return Result.Ok(None)
         match tls_task.result():
             case TaskResult.Ready(result):
                 try result
@@ -5490,5 +5852,8 @@ def main() -> int32:
         "direct backend unix/tls binary should exit successfully, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "unix:ping\n9\n");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "unix:ping\ntls:ping!\n"
+    );
 }

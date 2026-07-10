@@ -92,29 +92,76 @@ impl IntegerValue {
     }
 
     pub fn to_exact_f64(self) -> Option<f64> {
-        match self {
-            Self::Signed(value) => {
-                let float = value as f64;
-                ((float as i128) == value).then_some(float)
-            }
-            Self::Unsigned(value) => {
-                let float = value as f64;
-                ((float as u128) == value).then_some(float)
-            }
-        }
+        let (sign, magnitude) = self.sign_magnitude();
+        let float = Self::exact_unsigned_f64(magnitude)?;
+        Some(match sign {
+            IntegerSign::Negative => -float,
+            IntegerSign::Zero | IntegerSign::Positive => float,
+        })
     }
 
     pub fn to_exact_f32(self) -> Option<f32> {
-        match self {
-            Self::Signed(value) => {
-                let float = value as f32;
-                ((float as i128) == value).then_some(float)
-            }
-            Self::Unsigned(value) => {
-                let float = value as f32;
-                ((float as u128) == value).then_some(float)
-            }
+        let (sign, magnitude) = self.sign_magnitude();
+        let float = Self::exact_unsigned_f32(magnitude)?;
+        Some(match sign {
+            IntegerSign::Negative => -float,
+            IntegerSign::Zero | IntegerSign::Positive => float,
+        })
+    }
+
+    fn exact_unsigned_f64(value: u128) -> Option<f64> {
+        if value == 0 {
+            return Some(0.0);
         }
+        let float = value as f64;
+        let bits = float.to_bits();
+        let exponent_bits = ((bits >> 52) & 0x7ff) as i32;
+        debug_assert_ne!(exponent_bits, 0);
+        let exponent = exponent_bits - 1023;
+        let significand = (bits & ((1_u64 << 52) - 1)) | (1_u64 << 52);
+        let reconstructed = if exponent >= 52 {
+            let shift = (exponent - 52) as u32;
+            let significand = significand as u128;
+            if significand > (u128::MAX >> shift) {
+                return None;
+            }
+            significand << shift
+        } else {
+            debug_assert!(exponent >= 0);
+            let shift = (52 - exponent) as u32;
+            let mask = (1_u64 << shift) - 1;
+            debug_assert_eq!(significand & mask, 0);
+            (significand >> shift) as u128
+        };
+        (reconstructed == value).then_some(float)
+    }
+
+    fn exact_unsigned_f32(value: u128) -> Option<f32> {
+        if value == 0 {
+            return Some(0.0);
+        }
+        let float = value as f32;
+        let bits = float.to_bits();
+        let exponent_bits = ((bits >> 23) & 0xff) as i32;
+        if exponent_bits == 0xff {
+            return None;
+        }
+        debug_assert_ne!(exponent_bits, 0);
+        let exponent = exponent_bits - 127;
+        let significand = (bits & ((1_u32 << 23) - 1)) | (1_u32 << 23);
+        let reconstructed = if exponent >= 23 {
+            let shift = (exponent - 23) as u32;
+            let significand = significand as u128;
+            debug_assert!(shift <= 104);
+            significand << shift
+        } else {
+            debug_assert!(exponent >= 0);
+            let shift = (23 - exponent) as u32;
+            let mask = (1_u32 << shift) - 1;
+            debug_assert_eq!(significand & mask, 0);
+            (significand >> shift) as u128
+        };
+        (reconstructed == value).then_some(float)
     }
 
     pub fn as_i128(self) -> Option<i128> {
@@ -187,7 +234,7 @@ impl IntegerValue {
         }
         let (left_sign, left_mag) = self.sign_magnitude();
         let (right_sign, right_mag) = rhs.sign_magnitude();
-        let magnitude = left_mag.checked_div(right_mag)?;
+        let magnitude = left_mag / right_mag;
         let sign = if magnitude == 0 {
             IntegerSign::Zero
         } else if left_sign == right_sign {
@@ -204,7 +251,7 @@ impl IntegerValue {
         }
         let (left_sign, left_mag) = self.sign_magnitude();
         let (_, right_mag) = rhs.sign_magnitude();
-        let magnitude = left_mag.checked_rem(right_mag)?;
+        let magnitude = left_mag % right_mag;
         Self::from_sign_and_magnitude(left_sign, magnitude)
     }
 
@@ -311,17 +358,15 @@ pub fn integer_type_bounds(ty: &Type) -> Option<IntegerBounds> {
 pub fn minimal_signed_type_for_negative_literal(value: u128) -> Option<Type> {
     let negative = IntegerValue::from_literal(value).checked_neg()?;
     let int32 = Type::named("int32");
-    if let Some(int32_bounds) = integer_type_bounds(&int32) {
-        if negative.fits_bounds(int32_bounds) {
-            return Some(int32);
-        }
+    let int32_bounds = integer_type_bounds(&int32).expect("int32 bounds should be defined");
+    if negative.fits_bounds(int32_bounds) {
+        return Some(int32);
     }
 
     let int64 = Type::named("int64");
-    if let Some(int64_bounds) = integer_type_bounds(&int64) {
-        if negative.fits_bounds(int64_bounds) {
-            return Some(int64);
-        }
+    let int64_bounds = integer_type_bounds(&int64).expect("int64 bounds should be defined");
+    if negative.fits_bounds(int64_bounds) {
+        return Some(int64);
     }
 
     Some(Type::named("int128"))

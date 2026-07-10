@@ -1,11 +1,22 @@
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn aura_bin() -> &'static str {
     env!("CARGO_BIN_EXE_aura")
+}
+
+fn generated_binary(path: &PathBuf) -> Command {
+    let mut command = Command::new(path);
+    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        #[cfg(unix)]
+        command.env("LLVM_PROFILE_FILE", "/dev/null");
+        #[cfg(windows)]
+        command.env("LLVM_PROFILE_FILE", "NUL");
+    }
+    command
 }
 
 fn repo_root() -> PathBuf {
@@ -53,6 +64,26 @@ impl TempDir {
 impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) {
+    fs::create_dir_all(destination).expect("failed to create destination directory");
+    for entry in fs::read_dir(source).expect("failed to read source directory") {
+        let entry = entry.expect("failed to read directory entry");
+        let entry_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry.file_type().expect("failed to read entry file type");
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry_path, &destination_path);
+        } else if file_type.is_file() {
+            fs::copy(&entry_path, &destination_path).expect("failed to copy fixture file");
+        } else {
+            panic!(
+                "unsupported maintained package example entry `{}`",
+                entry_path.display()
+            );
+        }
     }
 }
 
@@ -226,7 +257,7 @@ fn manifest_aware_cli_commands_support_path_dependencies() {
         "build should succeed for manifest-aware packages, stderr was:\n{}",
         String::from_utf8_lossy(&build.stderr)
     );
-    let built = Command::new(&build_path)
+    let built = generated_binary(&build_path)
         .output()
         .expect("failed to run built package binary");
     assert!(
@@ -337,15 +368,18 @@ fn manifest_aware_stdin_analysis_and_completion_support_path_dependencies() {
 #[test]
 fn maintained_package_examples_run_through_cli_commands() {
     let repo = repo_root();
+    let temp = TempDir::new("aurora-cli-maintained-package-examples");
+    let local_path_dependencies = temp.path().join("local_path_dependencies");
+    let workspace = temp.path().join("workspace");
+    copy_dir_recursive(
+        &repo.join("examples/packages/local_path_dependencies"),
+        &local_path_dependencies,
+    );
+    copy_dir_recursive(&repo.join("examples/packages/workspace"), &workspace);
+
     let package_examples = [
-        (
-            repo.join("examples/packages/local_path_dependencies/app/src/main.au"),
-            "12\n",
-        ),
-        (
-            repo.join("examples/packages/workspace/app/src/main.au"),
-            "8\n",
-        ),
+        (local_path_dependencies.join("app/src/main.au"), "12\n"),
+        (workspace.join("app/src/main.au"), "8\n"),
     ];
 
     for (main_path, expected_stdout) in package_examples {
@@ -384,7 +418,7 @@ fn maintained_package_examples_run_through_cli_commands() {
             main_path.display(),
             String::from_utf8_lossy(&build.stderr)
         );
-        let built = Command::new(&output_path)
+        let built = generated_binary(&output_path)
             .output()
             .expect("failed to run built package example");
         assert!(
@@ -493,7 +527,7 @@ def main() -> int32:
         "build should succeed for manifest-aware git packages, stderr was:\n{}",
         String::from_utf8_lossy(&build.stderr)
     );
-    let built = Command::new(&build_path)
+    let built = generated_binary(&build_path)
         .output()
         .expect("failed to run built package binary");
     assert!(built.status.success());

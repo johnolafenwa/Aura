@@ -39,6 +39,79 @@ pub use sema::{ImportedBinding, ModuleContext, ModuleNamespace, Program};
 use ast::{ImportKind, Item};
 pub use package::DependencyUpdateResult;
 use package::PackageGraph;
+
+#[cfg(coverage)]
+#[doc(hidden)]
+pub mod native_runtime_coverage {
+    pub use super::native_runtime::{
+        aurora_direct_binary_value, aurora_direct_binary_value_at, aurora_direct_box_bool,
+        aurora_direct_box_i64, aurora_direct_cast_value, aurora_direct_channel_new,
+        aurora_direct_channel_recv, aurora_direct_channel_send_timeout_value,
+        aurora_direct_channel_try_send, aurora_direct_close_value,
+        aurora_direct_coverage_clone_value, aurora_direct_duration_literal,
+        aurora_direct_enum_variant, aurora_direct_file_close, aurora_direct_file_flush,
+        aurora_direct_file_read_all, aurora_direct_file_write_all, aurora_direct_fs_append_string,
+        aurora_direct_fs_create, aurora_direct_fs_create_dir, aurora_direct_fs_open,
+        aurora_direct_fs_read_dir, aurora_direct_http_listener_accept,
+        aurora_direct_http_listener_close, aurora_direct_http_listener_local_addr,
+        aurora_direct_http_response_bytes, aurora_direct_http_response_headers,
+        aurora_direct_http_response_reason, aurora_direct_http_response_status,
+        aurora_direct_http_response_text, aurora_direct_instance_get_field,
+        aurora_direct_instance_new, aurora_direct_io_flush, aurora_direct_io_write,
+        aurora_direct_map_clear_in_place, aurora_direct_map_contains_key, aurora_direct_map_empty,
+        aurora_direct_map_entries, aurora_direct_map_extend_in_place, aurora_direct_map_get,
+        aurora_direct_map_index, aurora_direct_map_is_empty, aurora_direct_map_items,
+        aurora_direct_map_keys, aurora_direct_map_len, aurora_direct_map_remove_in_place,
+        aurora_direct_map_set_in_place, aurora_direct_map_set_index_in_place,
+        aurora_direct_map_values, aurora_direct_net_connect, aurora_direct_net_http_listen,
+        aurora_direct_net_http_request_bytes_timeout, aurora_direct_net_listen,
+        aurora_direct_net_udp_bind, aurora_direct_net_unix_connect, aurora_direct_net_unix_listen,
+        aurora_direct_net_websocket_connect, aurora_direct_net_websocket_listen,
+        aurora_direct_process_child_close, aurora_direct_process_child_stderr,
+        aurora_direct_process_child_stdin, aurora_direct_process_child_stdout,
+        aurora_direct_process_child_wait, aurora_direct_process_child_wait_ok,
+        aurora_direct_process_child_wait_or_none, aurora_direct_process_completed_check,
+        aurora_direct_process_completed_status, aurora_direct_process_completed_stderr,
+        aurora_direct_process_completed_stderr_bytes, aurora_direct_process_completed_stdout,
+        aurora_direct_process_completed_stdout_bytes, aurora_direct_process_completed_success,
+        aurora_direct_process_null, aurora_direct_process_pipe, aurora_direct_process_pipe_close,
+        aurora_direct_process_pipe_flush, aurora_direct_process_pipe_read_all,
+        aurora_direct_process_pipe_read_bytes, aurora_direct_process_pipe_write_all,
+        aurora_direct_process_pipe_write_bytes, aurora_direct_process_run,
+        aurora_direct_process_start, aurora_direct_release_value, aurora_direct_set_contains,
+        aurora_direct_set_empty, aurora_direct_set_index_option, aurora_direct_set_insert_in_place,
+        aurora_direct_set_is_empty, aurora_direct_set_len, aurora_direct_set_remove_in_place,
+        aurora_direct_sleep_ms, aurora_direct_string_literal, aurora_direct_tcp_listener_accept,
+        aurora_direct_tcp_listener_close, aurora_direct_tcp_listener_local_addr,
+        aurora_direct_tcp_stream_close, aurora_direct_tcp_stream_flush,
+        aurora_direct_tcp_stream_local_addr, aurora_direct_tcp_stream_peer_addr,
+        aurora_direct_tcp_stream_read_all, aurora_direct_tcp_stream_read_exact,
+        aurora_direct_tcp_stream_shutdown_read, aurora_direct_tcp_stream_shutdown_write,
+        aurora_direct_tcp_stream_write_all, aurora_direct_tcp_stream_write_bytes,
+        aurora_direct_udp_datagram_address, aurora_direct_udp_datagram_bytes,
+        aurora_direct_udp_datagram_text, aurora_direct_udp_socket_close,
+        aurora_direct_udp_socket_local_addr, aurora_direct_udp_socket_recv,
+        aurora_direct_udp_socket_recv_from, aurora_direct_udp_socket_send_bytes,
+        aurora_direct_unary_value, aurora_direct_unary_value_at, aurora_direct_unbox_bool,
+        aurora_direct_unbox_i64, aurora_direct_unix_listener_accept,
+        aurora_direct_unix_listener_close, aurora_direct_unix_stream_close,
+        aurora_direct_unix_stream_read_exact, aurora_direct_unix_stream_write_all,
+        aurora_direct_value_as_condition, aurora_direct_variant_payload,
+        aurora_direct_vec_clear_in_place, aurora_direct_vec_contains, aurora_direct_vec_empty,
+        aurora_direct_vec_extend_in_place, aurora_direct_vec_get, aurora_direct_vec_index,
+        aurora_direct_vec_index_option, aurora_direct_vec_insert_in_place,
+        aurora_direct_vec_is_empty, aurora_direct_vec_len, aurora_direct_vec_pop_in_place,
+        aurora_direct_vec_push_in_place, aurora_direct_vec_remove_in_place,
+        aurora_direct_vec_reverse_in_place, aurora_direct_vec_set_in_place,
+        aurora_direct_vec_set_index_in_place, aurora_direct_vec_swap_in_place,
+        aurora_direct_wait_all, aurora_direct_wait_all_timeout_value, aurora_direct_wait_any,
+        aurora_direct_wait_any_timeout_value, aurora_direct_websocket_close,
+        aurora_direct_websocket_listener_accept, aurora_direct_websocket_listener_local_addr,
+        aurora_direct_websocket_recv_bytes, aurora_direct_websocket_recv_text,
+        aurora_direct_websocket_send_bytes, aurora_direct_websocket_send_text, OpaqueValue,
+    };
+}
+
 pub fn parse_source(source: &str) -> Result<ast::Module> {
     parser::parse(source)
 }
@@ -129,6 +202,7 @@ fn check_module_with_builtin_imports(module: ast::Module) -> Result<Program> {
             module_name: "<main>".to_string(),
             imported_bindings,
             module_registry,
+            is_entry_module: true,
         },
     )
 }
@@ -248,6 +322,7 @@ impl ModuleLoader {
         }
 
         self.stack.push(path.clone());
+        let is_entry_module = self.stack.len() == 1;
 
         let source = if let Some(source) = source_override {
             source.to_string()
@@ -268,6 +343,7 @@ impl ModuleLoader {
                 module_name,
                 imported_bindings,
                 module_registry,
+                is_entry_module,
             },
         )
         .map_err(|error| error.with_render_context(display_path, source.clone()))?;
@@ -465,7 +541,7 @@ fn absolutize(path: &Path) -> PathBuf {
 }
 
 fn infer_package_root(entry_path: &Path, source_override: Option<&str>) -> Result<PathBuf> {
-    let entry_dir = entry_path.parent().unwrap_or_else(|| Path::new("."));
+    let entry_dir = entry_path.parent().unwrap_or(Path::new("."));
 
     let parsed_entry = source_override
         .map(str::to_string)
@@ -545,13 +621,16 @@ fn canonicalize_if_exists(path: &Path) -> Result<PathBuf> {
         existing_ancestor = parent;
     }
 
-    let canonical_ancestor = fs::canonicalize(existing_ancestor).map_err(|error| {
-        Diagnostic::new(format!(
-            "failed to resolve path `{}`: {}",
-            existing_ancestor.display(),
-            error
-        ))
-    })?;
+    let canonical_ancestor = match fs::canonicalize(existing_ancestor) {
+        Ok(canonical) => canonical,
+        Err(error) => {
+            return Err(Diagnostic::new(format!(
+                "failed to resolve path `{}`: {}",
+                existing_ancestor.display(),
+                error
+            )));
+        }
+    };
     let Ok(suffix) = path.strip_prefix(existing_ancestor) else {
         return Ok(path.to_path_buf());
     };
@@ -1095,12 +1174,7 @@ fn insert_namespace_import(
                 imported_modules: BTreeMap::new(),
             });
     }
-    let Some(last) = path.last().cloned() else {
-        return Err(Diagnostic::at(
-            span,
-            format!("invalid module import path for `{}`", root_name),
-        ));
-    };
+    let last = path[path.len() - 1].clone();
     current.modules.insert(last, leaf);
     Ok(())
 }

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
+  <title id="title">Aurora language mark</title>
+  <desc id="desc">A layered teal and indigo aurora arc above a dark core.</desc>
+  <defs>
+    <linearGradient id="arc" x1="18" y1="32" x2="142" y2="126" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="0.54" stop-color="#22c55e"/>
+      <stop offset="1" stop-color="#4f46e5"/>
+    </linearGradient>
+    <linearGradient id="core" x1="48" y1="44" x2="116" y2="124" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="1" stop-color="#115e59"/>
+    </linearGradient>
+  </defs>
+  <rect width="160" height="160" rx="34" fill="#f8fafc"/>
+  <path d="M24 106c18-46 46-70 84-72 18-1 30 3 36 7-37 2-63 20-78 54-7 16-18 27-42 11Z" fill="url(#arc)" opacity=".9"/>
+  <path d="M39 113c15-28 35-43 62-45 13-1 24 1 32 5-26 4-45 17-57 40-7 14-20 17-37 0Z" fill="#14b8a6" opacity=".34"/>
+  <path d="M52 118 82 42l30 76H93l-5-15H72l-5 15H52Zm25-31h7l-4-13-3 13Z" fill="url(#core)"/>
+</svg>

@@ -399,6 +399,10 @@ fn checker_small_helper_utilities_cover_default_arg_and_recursive_type_paths() {
         render_literal_pattern_key(&LiteralPatternKey::Bool(false)),
         "false"
     );
+    assert_eq!(
+        render_literal_pattern_key(&LiteralPatternKey::Float(1.5f64.to_bits())),
+        "1.5"
+    );
 
     let string_ty = Type::named("String");
     let int_ty = Type::named("int32");
@@ -458,6 +462,36 @@ fn checker_small_helper_utilities_cover_default_arg_and_recursive_type_paths() {
         &classes,
         &mut BTreeSet::new(),
     ));
+
+    let recursive_classes = BTreeMap::from([
+        (
+            "A".to_string(),
+            class_info("A", false, vec![("b", Type::named("B"), false)]),
+        ),
+        (
+            "B".to_string(),
+            class_info("B", false, vec![("a", Type::named("A"), false)]),
+        ),
+    ]);
+    assert!(!type_reaches_class_through_non_indirect_fields(
+        &Type::named("A"),
+        "Missing",
+        &recursive_classes,
+        &mut BTreeSet::new(),
+    ));
+
+    let mut broken = class_info(
+        "Broken",
+        false,
+        vec![("lost", Type::named("Missing"), false)],
+    );
+    broken.fields.clear();
+    assert!(!type_reaches_class_through_non_indirect_fields(
+        &Type::named("Broken"),
+        "Missing",
+        &BTreeMap::from([("Broken".to_string(), broken)]),
+        &mut BTreeSet::new(),
+    ));
 }
 
 #[test]
@@ -480,6 +514,27 @@ fn checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges()
         &program.module_registry,
     );
     let span = Span::new(3, 4);
+    let empty_type_params = BTreeMap::new();
+    assert_eq!(
+        lower_type(
+            &type_ref("TaskGroup"),
+            &type_names,
+            &type_arities,
+            &empty_type_params
+        )
+        .expect("TaskGroup should lower without type arguments"),
+        Type::named("TaskGroup")
+    );
+    assert_eq!(
+        lower_type(
+            &type_ref("Duration"),
+            &type_names,
+            &type_arities,
+            &empty_type_params
+        )
+        .expect("Duration should lower without type arguments"),
+        Type::named("Duration")
+    );
 
     let explicit = checker
         .explicit_type_substitutions(&["T".to_string()], &[type_ref("String")], span, "Box")
@@ -526,10 +581,42 @@ fn checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges()
         &type_params,
         &mut HashMap::new(),
     ));
+    assert!(type_pattern_matches(
+        &Type::TypeParam("U".to_string()),
+        &Type::TypeParam("U".to_string()),
+        &type_params,
+        &mut HashMap::new(),
+    ));
+    assert_eq!(type_pattern_specificity(&Type::Unit), 1);
+    assert_eq!(
+        type_pattern_specificity(&Type::Module("helpers.math".to_string())),
+        1
+    );
     assert!(has_unresolved_type_params(&Type::Named(
         "Option".to_string(),
         vec![Type::TypeParam("T".to_string())],
     )));
+    assert!(!has_unresolved_type_params(&Type::Unit));
+    assert!(!has_unresolved_type_params(&Type::Module(
+        "helpers.math".to_string()
+    )));
+    assert_eq!(
+        substitute_type(&Type::Module("helpers.math".to_string()), &HashMap::new()),
+        Type::Module("helpers.math".to_string())
+    );
+    let mut collected = BTreeSet::new();
+    collect_type_params_from_type(&Type::Unit, &mut collected);
+    collect_type_params_from_type(&Type::Module("helpers.math".to_string()), &mut collected);
+    assert!(collected.is_empty());
+
+    unify_type_pattern(&Type::Unit, &Type::Unit, &mut HashMap::new())
+        .expect("unit patterns should unify with unit");
+    unify_type_pattern(
+        &Type::Module("helpers.math".to_string()),
+        &Type::Module("helpers.math".to_string()),
+        &mut HashMap::new(),
+    )
+    .expect("module patterns should unify with matching modules");
 
     let unit_mismatch = unify_type_pattern(&Type::Unit, &Type::named("int32"), &mut HashMap::new())
         .expect_err("unit mismatches should report `None` diagnostics");
@@ -546,12 +633,18 @@ fn checker_helper_paths_cover_explicit_type_args_and_pattern_unification_edges()
     assert!(module_mismatch
         .message
         .contains("expected `module helpers.math`, found `module helpers.other`"));
+    let named_against_unit =
+        unify_type_pattern(&Type::named("String"), &Type::Unit, &mut HashMap::new())
+            .expect_err("named patterns should reject non-named actual types");
+    assert!(named_against_unit
+        .message
+        .contains("expected `String`, found `None`"));
 }
 
 #[test]
 fn checker_expression_helper_paths_cover_collection_specialization_and_control_edges() {
     let program = crate::check_source(
-            "class Counter:\n    value: int32\n\nclass Holder[T]:\n    value: T\n\nclass Flag:\n    value: bool\n\nenum Maybe[T]:\n    Value(T)\n    Empty\n\ndef work(value: int32) -> int32:\n    return value\n\ndef main():\n    pass\n",
+            "class Counter:\n    value: int32\n\nclass Holder[T]:\n    value: T\n\nclass PairBox[A, B]:\n    left: A\n    right: B\n\nclass Flag:\n    value: bool\n\nenum Maybe[T]:\n    Value(T)\n    Empty\n\nenum Pair[A, B]:\n    Empty\n\ndef work(value: int32) -> int32:\n    return value\n\ndef main():\n    pass\n",
         )
         .expect("helper program should type check");
     let (type_names, type_arities) = type_maps_from_program(&program);
@@ -757,6 +850,10 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             ),
         ),
         (
+            "unit_value".to_string(),
+            local_binding(Type::Unit, false, false, ReceiverKind::Value, false, &[]),
+        ),
+        (
             "text".to_string(),
             local_binding(
                 Type::named("String"),
@@ -793,6 +890,17 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             "tasks".to_string(),
             local_binding(
                 task_list_int.clone(),
+                false,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "unit_tasks".to_string(),
+            local_binding(
+                Type::Named("Vec".to_string(), vec![Type::Unit]),
                 false,
                 false,
                 ReceiverKind::Value,
@@ -950,6 +1058,18 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         .expect_err("Set arity mismatches should fail")
         .message
         .contains("type `Set` expects exactly one type argument"));
+    assert_eq!(
+        checker
+            .type_of_expr(
+                &expr(ExprKind::Specialize {
+                    expr: Box::new(expr(ExprKind::Name("Set".to_string()))),
+                    type_args: vec![type_ref("int32")],
+                }),
+                &mut locals,
+            )
+            .expect("Set specialization should preserve its explicit element type"),
+        Type::Named("Set".to_string(), vec![Type::named("int32")])
+    );
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Specialize {
@@ -961,6 +1081,21 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         .expect_err("Map arity mismatches should fail")
         .message
         .contains("type `Map` expects exactly two type arguments"));
+    assert_eq!(
+        checker
+            .type_of_expr(
+                &expr(ExprKind::Specialize {
+                    expr: Box::new(expr(ExprKind::Name("Map".to_string()))),
+                    type_args: vec![type_ref("String"), type_ref("int32")],
+                }),
+                &mut locals,
+            )
+            .expect("Map specialization should preserve explicit key/value types"),
+        Type::Named(
+            "Map".to_string(),
+            vec![Type::named("String"), Type::named("int32")]
+        )
+    );
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Specialize {
@@ -975,6 +1110,29 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Specialize {
+                expr: Box::new(expr(ExprKind::Name("PairBox".to_string()))),
+                type_args: vec![type_ref("int32")],
+            }),
+            &mut locals,
+        )
+        .expect_err("plural class arity diagnostics should be covered")
+        .message
+        .contains("class `PairBox` expects 2 type arguments"));
+    assert_eq!(
+        checker
+            .type_of_expr(
+                &expr(ExprKind::Specialize {
+                    expr: Box::new(expr(ExprKind::Name("Holder".to_string()))),
+                    type_args: vec![type_ref("int32")],
+                }),
+                &mut locals,
+            )
+            .expect("generic class specialization should lower explicit type args"),
+        Type::Named("Holder".to_string(), vec![Type::named("int32")])
+    );
+    assert!(checker
+        .type_of_expr(
+            &expr(ExprKind::Specialize {
                 expr: Box::new(expr(ExprKind::Name("Maybe".to_string()))),
                 type_args: vec![type_ref("int32"), type_ref("String")],
             }),
@@ -983,6 +1141,29 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         .expect_err("enum arity mismatches should fail")
         .message
         .contains("enum `Maybe` expects 1 type argument"));
+    assert!(checker
+        .type_of_expr(
+            &expr(ExprKind::Specialize {
+                expr: Box::new(expr(ExprKind::Name("Pair".to_string()))),
+                type_args: vec![type_ref("int32")],
+            }),
+            &mut locals,
+        )
+        .expect_err("plural enum arity diagnostics should be covered")
+        .message
+        .contains("enum `Pair` expects 2 type arguments"));
+    assert_eq!(
+        checker
+            .type_of_expr(
+                &expr(ExprKind::Specialize {
+                    expr: Box::new(expr(ExprKind::Name("Maybe".to_string()))),
+                    type_args: vec![type_ref("String")],
+                }),
+                &mut locals,
+            )
+            .expect("generic enum specialization should lower explicit type args"),
+        Type::Named("Maybe".to_string(), vec![Type::named("String")])
+    );
     assert_eq!(
         checker
             .type_of_expr(
@@ -1154,6 +1335,39 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             .expect("wait_all should type check"),
         Type::Named("WaitAll".to_string(), vec![Type::named("int32")])
     );
+    assert!(checker
+        .type_of_expr(
+            &expr(ExprKind::Call {
+                callee: Box::new(expr(ExprKind::Name("wait_any".to_string()))),
+                args: vec![arg(expr(ExprKind::Name("unit_value".to_string())))],
+            }),
+            &mut locals,
+        )
+        .expect_err("wait_any should reject non-container task arguments")
+        .message
+        .contains("`wait_any` expects `Vec[Task[T]]`, found `None`"));
+    assert!(checker
+        .type_of_expr(
+            &expr(ExprKind::Call {
+                callee: Box::new(expr(ExprKind::Name("wait_all".to_string()))),
+                args: vec![arg(expr(ExprKind::Name("unit_tasks".to_string())))],
+            }),
+            &mut locals,
+        )
+        .expect_err("wait_all should reject Vec[None] task containers")
+        .message
+        .contains("`wait_all` expects `Vec[Task[T]]`, found `Vec[None]`"));
+    assert!(checker
+        .type_of_expr(
+            &expr(ExprKind::Call {
+                callee: Box::new(expr(ExprKind::Name("wait_any".to_string()))),
+                args: vec![arg(expr(ExprKind::Name("words".to_string())))],
+            }),
+            &mut locals,
+        )
+        .expect_err("wait_any should reject non-task vector elements")
+        .message
+        .contains("`wait_any` expects `Vec[Task[T]]`, found `Vec[String]`"));
 
     checker.current_return_type = Some(result_int_string.clone());
     assert_eq!(
@@ -1189,6 +1403,17 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         .expect_err("non-Result returns should fail")
         .message
         .contains("enclosing function to return `Result`"));
+    checker.current_return_type = Some(Type::Unit);
+    assert!(checker
+        .type_of_expr(
+            &expr(ExprKind::Try(Box::new(expr(ExprKind::Name(
+                "result_value".to_string(),
+            ))))),
+            &mut locals,
+        )
+        .expect_err("non-named returns should fail")
+        .message
+        .contains("enclosing function to return `Result`"));
     checker.current_return_type = Some(Type::Named(
         "Result".to_string(),
         vec![Type::named("int32"), Type::named("bool")],
@@ -1210,6 +1435,16 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             &mut locals,
         )
         .expect_err("try requires Result expressions")
+        .message
+        .contains("`try` requires a `Result[T, E]`"));
+    assert!(checker
+        .type_of_expr(
+            &expr(ExprKind::Try(Box::new(expr(ExprKind::Name(
+                "unit_value".to_string(),
+            ))))),
+            &mut locals,
+        )
+        .expect_err("try requires named Result expressions")
         .message
         .contains("`try` requires a `Result[T, E]`"));
 
@@ -1290,6 +1525,20 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         .expect_err("generic enum arity should be enforced on members too")
         .message
         .contains("enum `Maybe` expects 1 type argument"));
+    assert!(checker
+        .type_of_expr(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Specialize {
+                    expr: Box::new(expr(ExprKind::Name("Pair".to_string()))),
+                    type_args: vec![type_ref("int32")],
+                })),
+                field: "Empty".to_string(),
+            }),
+            &mut locals,
+        )
+        .expect_err("plural enum arity diagnostics should be covered on members")
+        .message
+        .contains("enum `Pair` expects 2 type arguments"));
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Member {
@@ -1800,17 +2049,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
     assert!(!typed.moved);
     assert!(typed.moved_fields.is_empty());
 
-    let mut locals = HashMap::from([(
-        "pkg".to_string(),
-        local_binding(
-            Type::Module("pkg".to_string()),
-            false,
-            false,
-            ReceiverKind::Value,
-            false,
-            &[],
-        ),
-    )]);
+    let mut locals = HashMap::new();
     assert!(checker
         .check_assign(
             &assign_stmt(
@@ -1970,6 +2209,42 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
                 &[],
             ),
         ),
+        (
+            "numbers".to_string(),
+            local_binding(
+                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "generic_tasks".to_string(),
+            local_binding(
+                Type::Named("Vec".to_string(), vec![Type::TypeParam("T".to_string())]),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "queued_tasks".to_string(),
+            local_binding(
+                Type::Named(
+                    "Queue".to_string(),
+                    vec![Type::Named("Task".to_string(), vec![Type::named("int32")])],
+                ),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
     ]);
 
     assert!(checker
@@ -2102,6 +2377,34 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         .expect_err("Map constructors stay argument-free")
         .message
         .contains("does not take constructor arguments"));
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Specialize {
+                expr: Box::new(expr(ExprKind::Name("TaskGroup".to_string()))),
+                type_args: vec![type_ref("int32")],
+            }),
+            &[],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("TaskGroup should reject explicit type args")
+        .message
+        .contains("does not take type arguments"));
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Specialize {
+                expr: Box::new(expr(ExprKind::Name("TaskGroup".to_string()))),
+                type_args: Vec::new(),
+            }),
+            &[arg(expr(ExprKind::Int(1)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("TaskGroup should reject constructor args")
+        .message
+        .contains("does not take constructor arguments"));
 
     assert!(checker
         .type_of_call(
@@ -2123,6 +2426,39 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
             None,
         )
         .expect_err("wait_any() requires a Vec[Task[T]]")
+        .message
+        .contains("expects `Vec[Task[T]]`"));
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Name("wait_any".to_string())),
+            &[arg(expr(ExprKind::Name("queued_tasks".to_string())))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("wait_any() requires Vec rather than Queue")
+        .message
+        .contains("expects `Vec[Task[T]]`"));
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Name("wait_any".to_string())),
+            &[arg(expr(ExprKind::Name("generic_tasks".to_string())))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("wait_any() requires Vec[Task[T]], not Vec[T]")
+        .message
+        .contains("expects `Vec[Task[T]]`"));
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Name("wait_any".to_string())),
+            &[arg(expr(ExprKind::Name("numbers".to_string())))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("wait_any() requires task elements")
         .message
         .contains("expects `Vec[Task[T]]`"));
     assert!(checker
@@ -2314,6 +2650,24 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
 }
 
 #[test]
+fn checker_user_call_argument_mismatch_reports_direct_callable_mismatch() {
+    let error = crate::check_source(
+        r#"
+def takes_count(value: int32) -> None:
+    pass
+
+def main() -> None:
+    takes_count("bad")
+"#,
+    )
+    .expect_err("ordinary callable arguments should enforce declared parameter types");
+
+    assert!(error.message.contains(
+        "argument type mismatch for function `takes_count`: expected `int32`, found `String`"
+    ));
+}
+
+#[test]
 fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_fields() {
     let span = Span::new(1, 1);
 
@@ -2378,11 +2732,49 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
         span,
     });
 
+    let mut shape = enum_info("Shape", None);
+    shape.decl.variants = vec![crate::ast::EnumVariantDecl {
+        name: "Point".to_string(),
+        payloads: vec![
+            crate::ast::EnumPayloadFieldDecl {
+                name: Some("x".to_string()),
+                ty: type_ref("int32"),
+                span,
+            },
+            crate::ast::EnumPayloadFieldDecl {
+                name: Some("y".to_string()),
+                ty: type_ref("int32"),
+                span,
+            },
+        ],
+        named_payloads: true,
+        span,
+    }];
+    shape.variants = BTreeMap::from([(
+        "Point".to_string(),
+        EnumVariantInfo {
+            payloads: vec![
+                EnumPayloadFieldInfo {
+                    name: Some("x".to_string()),
+                    ty: Type::named("int32"),
+                    span,
+                },
+                EnumPayloadFieldInfo {
+                    name: Some("y".to_string()),
+                    ty: Type::named("int32"),
+                    span,
+                },
+            ],
+            named_payloads: true,
+            span,
+        },
+    )]);
+
     let classes = BTreeMap::from([
         ("Widget".to_string(), widget),
         ("SecretBox".to_string(), secret_box),
     ]);
-    let enums = BTreeMap::from([("Status".to_string(), status)]);
+    let enums = BTreeMap::from([("Shape".to_string(), shape), ("Status".to_string(), status)]);
     let functions = BTreeMap::new();
     let traits = BTreeMap::new();
     let imported_modules = BTreeMap::new();
@@ -2390,11 +2782,13 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
     let type_names = BTreeMap::from([
         ("Widget".to_string(), span),
         ("SecretBox".to_string(), span),
+        ("Shape".to_string(), span),
         ("Status".to_string(), span),
     ]);
     let type_arities = BTreeMap::from([
         ("Widget".to_string(), 0usize),
         ("SecretBox".to_string(), 0usize),
+        ("Shape".to_string(), 0usize),
         ("Status".to_string(), 1usize),
     ]);
     let checker = checker(
@@ -2409,17 +2803,30 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
         &imported_modules,
         &module_registry,
     );
-    let mut locals = HashMap::from([(
-        "flag".to_string(),
-        local_binding(
-            Type::named("bool"),
-            false,
-            false,
-            ReceiverKind::Value,
-            false,
-            &[],
+    let mut locals = HashMap::from([
+        (
+            "flag".to_string(),
+            local_binding(
+                Type::named("bool"),
+                false,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
         ),
-    )]);
+        (
+            "widget".to_string(),
+            local_binding(
+                Type::named("Widget"),
+                false,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+    ]);
 
     assert_eq!(
         checker
@@ -2439,6 +2846,22 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("widget".to_string()))),
+                field: "build".to_string(),
+            }),
+            &[],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("associated methods should require class-name calls")
+        .message
+        .contains(
+            "associated method `build` on class `Widget` must be called through the class name"
+        ));
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("Widget".to_string()))),
                 field: "touch".to_string(),
             }),
@@ -2450,6 +2873,17 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
         .expect_err("receiver methods should require instances when called from class names")
         .message
         .contains("requires an instance receiver"));
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Name("Widget".to_string())),
+            &[arg(expr(ExprKind::Int(1))), arg(expr(ExprKind::Int(2)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("class constructors should reject extra positional arguments")
+        .message
+        .contains("received too many positional arguments"));
 
     let status_ready = expr(ExprKind::Member {
         object: Box::new(expr(ExprKind::Name("Status".to_string()))),
@@ -2467,6 +2901,11 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
         field: "Value".to_string(),
     });
 
+    assert!(checker
+        .type_of_expr(&status_value, &mut locals)
+        .expect_err("payload variants used as values should require construction")
+        .message
+        .contains("requires a payload"));
     assert_eq!(
         checker
             .type_of_call(
@@ -2510,6 +2949,28 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
     assert!(checker
         .type_of_call(
             &specialized_status_value,
+            &[arg(expr(ExprKind::Int(1))), arg(expr(ExprKind::Int(2)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("single-payload variants should reject extra payloads")
+        .message
+        .contains("expects 1 payload argument"));
+    assert!(checker
+        .type_of_call(
+            &specialized_status_value,
+            &[named_arg("item", expr(ExprKind::Int(1)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("single-payload variants should only accept value=")
+        .message
+        .contains("only accepts the keyword `value=`"));
+    assert!(checker
+        .type_of_call(
+            &specialized_status_value,
             &[arg(expr(ExprKind::Bool(true)))],
             span,
             &mut locals,
@@ -2530,6 +2991,106 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
             .expect("specialized generic enum constructors should type check"),
         Type::Named("Status".to_string(), vec![Type::named("int32")])
     );
+
+    let shape_point = expr(ExprKind::Member {
+        object: Box::new(expr(ExprKind::Name("Shape".to_string()))),
+        field: "Point".to_string(),
+    });
+    assert_eq!(
+        checker
+            .type_of_call(
+                &shape_point,
+                &[
+                    named_arg("x", expr(ExprKind::Int(1))),
+                    named_arg("y", expr(ExprKind::Int(2))),
+                ],
+                span,
+                &mut locals,
+                None,
+            )
+            .expect("named enum payload constructors should type check"),
+        Type::named("Shape")
+    );
+    assert_eq!(
+        checker
+            .type_of_call(
+                &shape_point,
+                &[arg(expr(ExprKind::Int(1))), arg(expr(ExprKind::Int(2)))],
+                span,
+                &mut locals,
+                None,
+            )
+            .expect("named enum payloads should still accept positional construction"),
+        Type::named("Shape")
+    );
+    assert!(checker
+        .type_of_call(
+            &shape_point,
+            &[named_arg("x", expr(ExprKind::Int(1)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("named enum payloads should require all fields")
+        .message
+        .contains("expects 2 payload arguments, found 1"));
+    assert!(checker
+        .type_of_call(
+            &shape_point,
+            &[
+                named_arg("x", expr(ExprKind::Int(1))),
+                named_arg("z", expr(ExprKind::Int(2))),
+            ],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("named enum payloads should require declared names")
+        .message
+        .contains("is missing payload argument `y`"));
+    assert!(checker
+        .type_of_call(
+            &shape_point,
+            &[
+                named_arg("x", expr(ExprKind::Int(1))),
+                named_arg("y", expr(ExprKind::Int(2))),
+                named_arg("z", expr(ExprKind::Int(3))),
+            ],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("named enum payloads should reject extra names after required fields")
+        .message
+        .contains("has no payload named `z`"));
+    assert!(checker
+        .type_of_call(
+            &shape_point,
+            &[
+                named_arg("x", expr(ExprKind::Int(1))),
+                named_arg("y", expr(ExprKind::Bool(true))),
+            ],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("named enum payloads should enforce field types")
+        .message
+        .contains("expects `int32`, found `bool`"));
+    assert!(checker
+        .type_of_call(
+            &status_ready,
+            &[arg(expr(ExprKind::Int(1)))],
+            span,
+            &mut locals,
+            Some(&Type::Named(
+                "Status".to_string(),
+                vec![Type::named("int32")]
+            )),
+        )
+        .expect_err("payload-free variants should reject arguments")
+        .message
+        .contains("does not take a payload"));
 
     let option_some = expr(ExprKind::Member {
         object: Box::new(expr(ExprKind::Specialize {
@@ -2562,6 +3123,36 @@ fn checker_type_of_call_covers_associated_methods_generic_variants_and_private_f
         .expect_err("Option.Some still requires a payload")
         .message
         .contains("payload"));
+    let inferred_option_some = expr(ExprKind::Member {
+        object: Box::new(expr(ExprKind::Name("Option".to_string()))),
+        field: "Some".to_string(),
+    });
+    let inferred_option_none = expr(ExprKind::Member {
+        object: Box::new(expr(ExprKind::Name("Option".to_string()))),
+        field: "None".to_string(),
+    });
+    assert!(checker
+        .type_of_call(&inferred_option_some, &[], span, &mut locals, None)
+        .expect_err("unqualified Option.Some should still require a payload")
+        .message
+        .contains("expects 1 payload argument, found 0"));
+    assert!(checker
+        .type_of_expr(&inferred_option_none, &mut locals)
+        .expect_err("bare Option.None needs an expected type")
+        .message
+        .contains("cannot infer type parameter `T`"));
+    assert!(checker
+        .type_of_expr_hint(
+            &inferred_option_some,
+            &mut locals,
+            Some(&Type::Named(
+                "Option".to_string(),
+                vec![Type::named("int32")]
+            )),
+        )
+        .expect_err("payload-bearing builtin variants should not be used as values")
+        .message
+        .contains("requires a payload"));
     assert_eq!(
         checker
             .type_of_call(&option_none, &[], span, &mut locals, None)
@@ -2990,10 +3581,37 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
     let float_ty = Type::named("float64");
     let bool_ty = Type::named("bool");
     let vec_int = Type::Named("Vec".to_string(), vec![int_ty.clone()]);
+    let vec_bool = Type::Named("Vec".to_string(), vec![bool_ty.clone()]);
+    let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
+    let headers_ty = Type::Named(
+        "Map".to_string(),
+        vec![string_ty.clone(), string_ty.clone()],
+    );
     let map_ty = Type::Named("Map".to_string(), vec![string_ty.clone(), int_ty.clone()]);
     let set_ty = Type::Named("Set".to_string(), vec![string_ty.clone()]);
     let channel_ty = Type::Named("Queue".to_string(), vec![string_ty.clone()]);
     let task_ty = Type::Named("Task".to_string(), vec![int_ty.clone()]);
+    let result_ty = |ok: Type| {
+        Type::Named(
+            "Result".to_string(),
+            vec![ok, crate::builtin_modules::io_error_type()],
+        )
+    };
+    let process_result_ty = |ok: Type| {
+        Type::Named(
+            "Result".to_string(),
+            vec![ok, crate::builtin_modules::process_error_type()],
+        )
+    };
+    let option_ty = |inner: Type| Type::Named("Option".to_string(), vec![inner]);
+    let bytes_expr = || expr(ExprKind::List(vec![expr(ExprKind::Int(1))]));
+    let headers_expr = || {
+        expr(ExprKind::Map(vec![MapEntryExpr {
+            key: expr(ExprKind::String("content-type".to_string())),
+            value: expr(ExprKind::String("text/plain".to_string())),
+        }]))
+    };
+    let timeout_arg = || arg(expr(ExprKind::DurationMillis(1)));
     let mut locals = HashMap::from([
         (
             "number".to_string(),
@@ -3055,6 +3673,10 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             ),
         ),
         (
+            "bad_bytes".to_string(),
+            local_binding(vec_bool, false, false, ReceiverKind::Value, false, &[]),
+        ),
+        (
             "mapping".to_string(),
             local_binding(map_ty.clone(), true, true, ReceiverKind::Value, false, &[]),
         ),
@@ -3096,6 +3718,41 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             ),
         ),
     ]);
+    for (name, ty) in [
+        ("tcp_listener", Type::named("net.TcpListener")),
+        ("tcp_stream", Type::named("net.TcpStream")),
+        ("udp_socket", Type::named("net.UdpSocket")),
+        ("udp_datagram", Type::named("net.UdpDatagram")),
+        ("http_listener", Type::named("net.HttpListener")),
+        ("http_exchange", Type::named("net.HttpExchange")),
+        ("http_response", Type::named("net.HttpResponse")),
+        ("websocket_listener", Type::named("net.WebSocketListener")),
+        ("websocket", Type::named("net.WebSocket")),
+        ("unix_listener", Type::named("net.UnixListener")),
+        ("unix_stream", Type::named("net.UnixStream")),
+        ("tls_listener", Type::named("net.TlsListener")),
+        ("tls_stream", Type::named("net.TlsStream")),
+        ("child", Type::named("process.Child")),
+        ("pipe", Type::named("process.Pipe")),
+        ("completed", Type::named("process.Completed")),
+        ("supervisor", Type::named("process.Supervisor")),
+    ] {
+        locals.insert(
+            name.to_string(),
+            local_binding(ty, false, false, ReceiverKind::Value, false, &[]),
+        );
+    }
+    locals.insert(
+        "file".to_string(),
+        local_binding(
+            Type::named("fs.File"),
+            true,
+            true,
+            ReceiverKind::Value,
+            false,
+            &[],
+        ),
+    );
 
     for (callee, args, expected) in [
         (
@@ -3160,10 +3817,61 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("text".to_string()))),
+                field: "contains".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("ur".to_string())))],
+            bool_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("text".to_string()))),
+                field: "starts_with".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("au".to_string())))],
+            bool_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("text".to_string()))),
+                field: "ends_with".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("ra".to_string())))],
+            bool_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("text".to_string()))),
+                field: "join".to_string(),
+            }),
+            vec![arg(expr(ExprKind::List(vec![
+                expr(ExprKind::String("left".to_string())),
+                expr(ExprKind::String("right".to_string())),
+            ])))],
+            string_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("text".to_string()))),
+                field: "strip_prefix".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("au".to_string())))],
+            Type::Named("Option".to_string(), vec![string_ty.clone()]),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("text".to_string()))),
                 field: "strip_suffix".to_string(),
             }),
             vec![arg(expr(ExprKind::String("x".to_string())))],
             Type::Named("Option".to_string(), vec![string_ty.clone()]),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("text".to_string()))),
+                field: "clone".to_string(),
+            }),
+            Vec::new(),
+            string_ty.clone(),
         ),
         (
             expr(ExprKind::Member {
@@ -3188,6 +3896,30 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             }),
             Vec::new(),
             bool_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "clone".to_string(),
+            }),
+            Vec::new(),
+            vec_int.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "push".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "pop".to_string(),
+            }),
+            Vec::new(),
+            Type::Named("Option".to_string(), vec![int_ty.clone()]),
         ),
         (
             expr(ExprKind::Member {
@@ -3219,6 +3951,30 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         (
             expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "remove".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(0)))],
+            Type::Named("Option".to_string(), vec![int_ty.clone()]),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "swap".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(0))), arg(expr(ExprKind::Int(1)))],
+            bool_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "extend".to_string(),
+            }),
+            vec![arg(expr(ExprKind::List(vec![expr(ExprKind::Int(2))])))],
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
                 field: "insert".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(0))), arg(expr(ExprKind::Int(9)))],
@@ -3231,6 +3987,65 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             }),
             Vec::new(),
             Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "reverse".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                field: "len".to_string(),
+            }),
+            Vec::new(),
+            int_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                field: "is_empty".to_string(),
+            }),
+            Vec::new(),
+            bool_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                field: "clone".to_string(),
+            }),
+            Vec::new(),
+            map_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                field: "get".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("count".to_string())))],
+            Type::Named("Option".to_string(), vec![int_ty.clone()]),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                field: "set".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("count".to_string()))),
+                arg(expr(ExprKind::Int(1))),
+            ],
+            Type::Named("Option".to_string(), vec![int_ty.clone()]),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                field: "remove".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("count".to_string())))],
+            Type::Named("Option".to_string(), vec![int_ty.clone()]),
         ),
         (
             expr(ExprKind::Member {
@@ -3294,6 +4109,17 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         ),
         (
             expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                field: "extend".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Map(vec![MapEntryExpr {
+                key: expr(ExprKind::String("next".to_string())),
+                value: expr(ExprKind::Int(2)),
+            }])))],
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("items".to_string()))),
                 field: "len".to_string(),
             }),
@@ -3318,11 +4144,65 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         ),
         (
             expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("items".to_string()))),
+                field: "clone".to_string(),
+            }),
+            Vec::new(),
+            set_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("items".to_string()))),
+                field: "insert".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("name".to_string())))],
+            bool_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("items".to_string()))),
+                field: "remove".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("name".to_string())))],
+            bool_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("queue".to_string()))),
+                field: "try_put".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("ok".to_string())))],
+            Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Unit,
+                    Type::Named("SendError".to_string(), vec![string_ty.clone()]),
+                ],
+            ),
+        ),
+        (
+            expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("queue".to_string()))),
                 field: "get".to_string(),
             }),
             Vec::new(),
             Type::Named("QueueReceive".to_string(), vec![string_ty.clone()]),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("queue".to_string()))),
+                field: "get_or_none".to_string(),
+            }),
+            Vec::new(),
+            Type::Named("Option".to_string(), vec![string_ty.clone()]),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("queue".to_string()))),
+                field: "get_or".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("fallback".to_string())))],
+            string_ty.clone(),
         ),
         (
             expr(ExprKind::Member {
@@ -3356,8 +4236,813 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         ),
         (
             expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("task".to_string()))),
+                field: "result_or_none".to_string(),
+            }),
+            Vec::new(),
+            Type::Named("Option".to_string(), vec![int_ty.clone()]),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("task".to_string()))),
+                field: "result_or".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(0)))],
+            int_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("group".to_string()))),
                 field: "cancel".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("file".to_string()))),
+                field: "read_all".to_string(),
+            }),
+            Vec::new(),
+            result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("file".to_string()))),
+                field: "read_bytes".to_string(),
+            }),
+            Vec::new(),
+            result_ty(bytes_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("file".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("ok".to_string())))],
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("file".to_string()))),
+                field: "write_bytes".to_string(),
+            }),
+            vec![arg(bytes_expr())],
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("file".to_string()))),
+                field: "flush".to_string(),
+            }),
+            Vec::new(),
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("file".to_string()))),
+                field: "close".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("child".to_string()))),
+                field: "stdin".to_string(),
+            }),
+            Vec::new(),
+            option_ty(Type::named("process.Pipe")),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("child".to_string()))),
+                field: "stdout".to_string(),
+            }),
+            Vec::new(),
+            option_ty(Type::named("process.Pipe")),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("child".to_string()))),
+                field: "stderr".to_string(),
+            }),
+            Vec::new(),
+            option_ty(Type::named("process.Pipe")),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("child".to_string()))),
+                field: "wait".to_string(),
+            }),
+            vec![timeout_arg()],
+            Type::named("process.Wait"),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("child".to_string()))),
+                field: "wait_or_none".to_string(),
+            }),
+            vec![timeout_arg()],
+            process_result_ty(option_ty(Type::named("process.ExitStatus"))),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("child".to_string()))),
+                field: "wait_ok".to_string(),
+            }),
+            vec![timeout_arg()],
+            process_result_ty(Type::named("process.ExitStatus")),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("child".to_string()))),
+                field: "kill".to_string(),
+            }),
+            Vec::new(),
+            process_result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("child".to_string()))),
+                field: "terminate".to_string(),
+            }),
+            Vec::new(),
+            process_result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("child".to_string()))),
+                field: "close".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "read_all".to_string(),
+            }),
+            Vec::new(),
+            process_result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "read_line".to_string(),
+            }),
+            vec![timeout_arg()],
+            process_result_ty(option_ty(string_ty.clone())),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "read_bytes".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), timeout_arg()],
+            process_result_ty(option_ty(bytes_ty.clone())),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("ok".to_string()))), timeout_arg()],
+            process_result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "write_bytes".to_string(),
+            }),
+            vec![arg(bytes_expr()), timeout_arg()],
+            process_result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "flush".to_string(),
+            }),
+            Vec::new(),
+            process_result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "close".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("completed".to_string()))),
+                field: "status".to_string(),
+            }),
+            Vec::new(),
+            Type::named("process.ExitStatus"),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("completed".to_string()))),
+                field: "success".to_string(),
+            }),
+            Vec::new(),
+            bool_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("completed".to_string()))),
+                field: "stdout".to_string(),
+            }),
+            Vec::new(),
+            string_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("completed".to_string()))),
+                field: "stderr".to_string(),
+            }),
+            Vec::new(),
+            string_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("completed".to_string()))),
+                field: "stdout_bytes".to_string(),
+            }),
+            Vec::new(),
+            bytes_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("completed".to_string()))),
+                field: "stderr_bytes".to_string(),
+            }),
+            Vec::new(),
+            bytes_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("completed".to_string()))),
+                field: "check".to_string(),
+            }),
+            Vec::new(),
+            process_result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "start".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("svc".to_string()))),
+                arg(expr(ExprKind::List(vec![expr(ExprKind::String(
+                    "/bin/echo".to_string(),
+                ))]))),
+            ],
+            process_result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "wait".to_string(),
+            }),
+            vec![timeout_arg()],
+            Type::named("process.SupervisorWait"),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "wait_or_none".to_string(),
+            }),
+            vec![timeout_arg()],
+            process_result_ty(option_ty(Type::named("process.SupervisorEvent"))),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "stop".to_string(),
+            }),
+            Vec::new(),
+            process_result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "is_empty".to_string(),
+            }),
+            Vec::new(),
+            bool_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "close".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_listener".to_string()))),
+                field: "accept".to_string(),
+            }),
+            vec![timeout_arg()],
+            result_ty(Type::named("net.TcpStream")),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_listener".to_string()))),
+                field: "local_addr".to_string(),
+            }),
+            Vec::new(),
+            result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_listener".to_string()))),
+                field: "close".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "read_all".to_string(),
+            }),
+            vec![timeout_arg()],
+            result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "read_line".to_string(),
+            }),
+            vec![timeout_arg()],
+            result_ty(option_ty(string_ty.clone())),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "read_bytes".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), timeout_arg()],
+            result_ty(option_ty(bytes_ty.clone())),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "read_exact".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), timeout_arg()],
+            result_ty(bytes_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("ok".to_string()))), timeout_arg()],
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "write_bytes".to_string(),
+            }),
+            vec![arg(bytes_expr()), timeout_arg()],
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "shutdown_read".to_string(),
+            }),
+            Vec::new(),
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "shutdown_write".to_string(),
+            }),
+            Vec::new(),
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "shutdown_both".to_string(),
+            }),
+            Vec::new(),
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "flush".to_string(),
+            }),
+            Vec::new(),
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "local_addr".to_string(),
+            }),
+            Vec::new(),
+            result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "peer_addr".to_string(),
+            }),
+            Vec::new(),
+            result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "close".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "send_text".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("127.0.0.1:9".to_string()))),
+                arg(expr(ExprKind::String("ok".to_string()))),
+                timeout_arg(),
+            ],
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "send_bytes".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("127.0.0.1:9".to_string()))),
+                arg(bytes_expr()),
+                timeout_arg(),
+            ],
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "recv".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), timeout_arg()],
+            result_ty(option_ty(bytes_ty.clone())),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "recv_from".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), timeout_arg()],
+            result_ty(option_ty(Type::named("net.UdpDatagram"))),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "local_addr".to_string(),
+            }),
+            Vec::new(),
+            result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "peer_addr".to_string(),
+            }),
+            Vec::new(),
+            result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "close".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_datagram".to_string()))),
+                field: "address".to_string(),
+            }),
+            Vec::new(),
+            string_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_datagram".to_string()))),
+                field: "bytes".to_string(),
+            }),
+            Vec::new(),
+            bytes_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_datagram".to_string()))),
+                field: "text".to_string(),
+            }),
+            Vec::new(),
+            result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_listener".to_string()))),
+                field: "accept".to_string(),
+            }),
+            vec![timeout_arg()],
+            result_ty(Type::named("net.HttpExchange")),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_listener".to_string()))),
+                field: "local_addr".to_string(),
+            }),
+            Vec::new(),
+            result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_listener".to_string()))),
+                field: "close".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_exchange".to_string()))),
+                field: "method".to_string(),
+            }),
+            Vec::new(),
+            string_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_exchange".to_string()))),
+                field: "path".to_string(),
+            }),
+            Vec::new(),
+            string_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_exchange".to_string()))),
+                field: "headers".to_string(),
+            }),
+            Vec::new(),
+            headers_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_exchange".to_string()))),
+                field: "body_text".to_string(),
+            }),
+            Vec::new(),
+            result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_exchange".to_string()))),
+                field: "body_bytes".to_string(),
+            }),
+            Vec::new(),
+            bytes_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_exchange".to_string()))),
+                field: "respond_text".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::Int(200))),
+                arg(expr(ExprKind::String("ok".to_string()))),
+                arg(headers_expr()),
+            ],
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_exchange".to_string()))),
+                field: "respond_bytes".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::Int(200))),
+                arg(bytes_expr()),
+                arg(headers_expr()),
+            ],
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
+                field: "status".to_string(),
+            }),
+            Vec::new(),
+            int_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
+                field: "reason".to_string(),
+            }),
+            Vec::new(),
+            string_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
+                field: "headers".to_string(),
+            }),
+            Vec::new(),
+            headers_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
+                field: "text".to_string(),
+            }),
+            Vec::new(),
+            result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
+                field: "bytes".to_string(),
+            }),
+            Vec::new(),
+            bytes_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket_listener".to_string()))),
+                field: "accept".to_string(),
+            }),
+            vec![timeout_arg()],
+            result_ty(Type::named("net.WebSocket")),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket_listener".to_string()))),
+                field: "local_addr".to_string(),
+            }),
+            Vec::new(),
+            result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket".to_string()))),
+                field: "send_text".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("ok".to_string()))), timeout_arg()],
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket".to_string()))),
+                field: "send_bytes".to_string(),
+            }),
+            vec![arg(bytes_expr()), timeout_arg()],
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket".to_string()))),
+                field: "recv_text".to_string(),
+            }),
+            vec![timeout_arg()],
+            result_ty(option_ty(string_ty.clone())),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket".to_string()))),
+                field: "recv_bytes".to_string(),
+            }),
+            vec![timeout_arg()],
+            result_ty(option_ty(bytes_ty.clone())),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket".to_string()))),
+                field: "close".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("unix_listener".to_string()))),
+                field: "accept".to_string(),
+            }),
+            vec![timeout_arg()],
+            result_ty(Type::named("net.UnixStream")),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("unix_listener".to_string()))),
+                field: "close".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("unix_stream".to_string()))),
+                field: "read_line".to_string(),
+            }),
+            vec![timeout_arg()],
+            result_ty(option_ty(string_ty.clone())),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("unix_stream".to_string()))),
+                field: "read_exact".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), timeout_arg()],
+            result_ty(bytes_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("unix_stream".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("ok".to_string()))), timeout_arg()],
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("unix_stream".to_string()))),
+                field: "close".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tls_listener".to_string()))),
+                field: "accept".to_string(),
+            }),
+            vec![timeout_arg()],
+            result_ty(Type::named("net.TlsStream")),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tls_listener".to_string()))),
+                field: "local_addr".to_string(),
+            }),
+            Vec::new(),
+            result_ty(string_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tls_listener".to_string()))),
+                field: "close".to_string(),
+            }),
+            Vec::new(),
+            Type::Unit,
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tls_stream".to_string()))),
+                field: "read_line".to_string(),
+            }),
+            vec![timeout_arg()],
+            result_ty(option_ty(string_ty.clone())),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tls_stream".to_string()))),
+                field: "read_exact".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), timeout_arg()],
+            result_ty(bytes_ty.clone()),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tls_stream".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("ok".to_string()))), timeout_arg()],
+            result_ty(Type::Unit),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tls_stream".to_string()))),
+                field: "close".to_string(),
             }),
             Vec::new(),
             Type::Unit,
@@ -3368,6 +5053,911 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 .type_of_call(&callee, &args, span, &mut locals, None)
                 .expect("member call should type check"),
             expected
+        );
+    }
+
+    for (callee, args, expected) in [
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("queue".to_string()))),
+                field: "put".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("ok".to_string()))),
+                arg(expr(ExprKind::Int(1))),
+            ],
+            "`put(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("queue".to_string()))),
+                field: "try_put".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Bool(true)))],
+            "`try_put` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("queue".to_string()))),
+                field: "get".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`get(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("queue".to_string()))),
+                field: "get_or_none".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`get(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("queue".to_string()))),
+                field: "get_or".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("fallback".to_string()))),
+                arg(expr(ExprKind::Int(1))),
+            ],
+            "`get_or(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("queue".to_string()))),
+                field: "get_or".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Bool(true)))],
+            "`get_or` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("task".to_string()))),
+                field: "result".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`result(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("task".to_string()))),
+                field: "result_or_none".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`result(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("task".to_string()))),
+                field: "result_or".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(0))), arg(expr(ExprKind::Int(1)))],
+            "`result_or(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("task".to_string()))),
+                field: "result_or".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Bool(true)))],
+            "`result_or` expects `int32`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("group".to_string()))),
+                field: "start".to_string(),
+            }),
+            Vec::new(),
+            "`start` expects a target function followed by its arguments",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("group".to_string()))),
+                field: "start_soon".to_string(),
+            }),
+            vec![named_arg(
+                "target",
+                expr(ExprKind::Name("worker".to_string())),
+            )],
+            "`start_soon` does not take keyword arguments",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("child".to_string()))),
+                field: "wait".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`wait(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("child".to_string()))),
+                field: "wait_or_none".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`wait_or_none(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("child".to_string()))),
+                field: "wait_ok".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`wait_ok(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "read_line".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`read_line(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "read_bytes".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("bad".to_string())))],
+            "`read_bytes` expects `int32`, found `String`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "read_bytes".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
+            "`read_bytes(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Bool(true)))],
+            "`write_all` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("ok".to_string()))),
+                arg(expr(ExprKind::Int(1))),
+            ],
+            "`write_all(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "write_bytes".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Name("bad_bytes".to_string())))],
+            "`write_bytes` expects `Vec[uint8]`, found `Vec[bool]`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pipe".to_string()))),
+                field: "write_bytes".to_string(),
+            }),
+            vec![arg(bytes_expr()), arg(expr(ExprKind::Int(1)))],
+            "`write_bytes(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "start".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::Bool(true))),
+                arg(expr(ExprKind::List(vec![expr(ExprKind::String(
+                    "/bin/echo".to_string(),
+                ))]))),
+            ],
+            "`start` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "start".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("svc".to_string()))),
+                arg(expr(ExprKind::Bool(true))),
+            ],
+            "`start` expects `Vec[String]`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "start".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("svc".to_string()))),
+                arg(expr(ExprKind::List(vec![expr(ExprKind::String(
+                    "/bin/echo".to_string(),
+                ))]))),
+                named_arg("cwd", expr(ExprKind::Bool(true))),
+            ],
+            "`start` expects `Option[String]`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "start".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("svc".to_string()))),
+                arg(expr(ExprKind::List(vec![expr(ExprKind::String(
+                    "/bin/echo".to_string(),
+                ))]))),
+                named_arg("env", expr(ExprKind::Bool(true))),
+            ],
+            "`start` expects `Map[String, String]`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "start".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("svc".to_string()))),
+                arg(expr(ExprKind::List(vec![expr(ExprKind::String(
+                    "/bin/echo".to_string(),
+                ))]))),
+                named_arg("stdin", expr(ExprKind::Bool(true))),
+            ],
+            "`start` expects `process.Stdio`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "start".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("svc".to_string()))),
+                arg(expr(ExprKind::List(vec![expr(ExprKind::String(
+                    "/bin/echo".to_string(),
+                ))]))),
+                named_arg("stdout", expr(ExprKind::Bool(true))),
+            ],
+            "`start` expects `process.Stdio`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "start".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("svc".to_string()))),
+                arg(expr(ExprKind::List(vec![expr(ExprKind::String(
+                    "/bin/echo".to_string(),
+                ))]))),
+                named_arg("stderr", expr(ExprKind::Bool(true))),
+            ],
+            "`start` expects `process.Stdio`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "start".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("svc".to_string()))),
+                arg(expr(ExprKind::List(vec![expr(ExprKind::String(
+                    "/bin/echo".to_string(),
+                ))]))),
+                named_arg("backoff", expr(ExprKind::Bool(true))),
+            ],
+            "`start` expects `Duration`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "start".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("svc".to_string()))),
+                arg(expr(ExprKind::List(vec![expr(ExprKind::String(
+                    "/bin/echo".to_string(),
+                ))]))),
+                named_arg("max_restarts", expr(ExprKind::Bool(true))),
+            ],
+            "`start` expects `int32`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "start".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("svc".to_string()))),
+                arg(expr(ExprKind::List(vec![expr(ExprKind::String(
+                    "/bin/echo".to_string(),
+                ))]))),
+                named_arg("group", expr(ExprKind::Int(1))),
+            ],
+            "`start` expects `bool`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "wait".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`wait(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "wait_or_none".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`wait_or_none(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_listener".to_string()))),
+                field: "accept".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`accept(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Bool(true)))],
+            "`write_all` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("file".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Bool(true)))],
+            "`write_all` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("file".to_string()))),
+                field: "write_bytes".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Name("bad_bytes".to_string())))],
+            "`write_bytes` expects `Vec[uint8]`, found `Vec[bool]`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("text".to_string()))),
+                field: "split".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`split` expects `String`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("text".to_string()))),
+                field: "strip_prefix".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`strip_prefix` expects `String`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                field: "get".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`get` expects `String`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                field: "set".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1))), arg(expr(ExprKind::Int(2)))],
+            "`set` expects key type `String`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                field: "set".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("count".to_string()))),
+                arg(expr(ExprKind::Bool(true))),
+            ],
+            "`set` expects value type `int32`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                field: "remove".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`remove` expects `String`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                field: "contains_key".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`contains_key` expects `String`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("mapping".to_string()))),
+                field: "extend".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Bool(true)))],
+            "`extend` expects `Map[String, int32]`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("items".to_string()))),
+                field: "contains".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Bool(true)))],
+            "`contains` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("items".to_string()))),
+                field: "insert".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Bool(true)))],
+            "`insert` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("items".to_string()))),
+                field: "remove".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Bool(true)))],
+            "`remove` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "read_bytes".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("bad".to_string())))],
+            "`read_bytes` expects `int32`, found `String`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "read_all".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`read_all(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "read_line".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`read_line(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "read_bytes".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
+            "`read_bytes(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "read_exact".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("bad".to_string())))],
+            "`read_exact` expects `int32`, found `String`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "read_exact".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
+            "`read_exact(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("ok".to_string()))),
+                arg(expr(ExprKind::Int(1))),
+            ],
+            "`write_all(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "write_bytes".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Name("bad_bytes".to_string())))],
+            "`write_bytes` expects `Vec[uint8]`, found `Vec[bool]`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tcp_stream".to_string()))),
+                field: "write_bytes".to_string(),
+            }),
+            vec![arg(bytes_expr()), arg(expr(ExprKind::Int(1)))],
+            "`write_bytes(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "send_text".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::Int(1))),
+                arg(expr(ExprKind::String("ok".to_string()))),
+            ],
+            "`send_text` expects `String`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "send_text".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("127.0.0.1:9".to_string()))),
+                arg(expr(ExprKind::Bool(true))),
+            ],
+            "`send_text` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "send_text".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("127.0.0.1:9".to_string()))),
+                arg(expr(ExprKind::String("ok".to_string()))),
+                arg(expr(ExprKind::Int(1))),
+            ],
+            "`send_text(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "send_bytes".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1))), arg(bytes_expr())],
+            "`send_bytes` expects `String`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "send_bytes".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("127.0.0.1:9".to_string()))),
+                arg(expr(ExprKind::Name("bad_bytes".to_string()))),
+            ],
+            "`send_bytes` expects `Vec[uint8]`, found `Vec[bool]`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "send_bytes".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("127.0.0.1:9".to_string()))),
+                arg(bytes_expr()),
+                arg(expr(ExprKind::Int(1))),
+            ],
+            "`send_bytes(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "recv".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("bad".to_string())))],
+            "`recv` expects `int32`, found `String`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "recv".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
+            "`recv(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "recv_from".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("bad".to_string())))],
+            "`recv_from` expects `int32`, found `String`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("udp_socket".to_string()))),
+                field: "recv_from".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
+            "`recv_from(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_listener".to_string()))),
+                field: "accept".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`accept(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_exchange".to_string()))),
+                field: "respond_text".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::Bool(true))),
+                arg(expr(ExprKind::String("ok".to_string()))),
+                arg(headers_expr()),
+            ],
+            "`respond_text` expects `int32`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_exchange".to_string()))),
+                field: "respond_text".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::Int(200))),
+                arg(expr(ExprKind::Bool(true))),
+                arg(headers_expr()),
+            ],
+            "`respond_text` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_exchange".to_string()))),
+                field: "respond_text".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::Int(200))),
+                arg(expr(ExprKind::String("ok".to_string()))),
+                arg(expr(ExprKind::Bool(true))),
+            ],
+            "`respond_text` expects `Map[String, String]`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_exchange".to_string()))),
+                field: "respond_bytes".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::Bool(true))),
+                arg(bytes_expr()),
+                arg(headers_expr()),
+            ],
+            "`respond_bytes` expects `int32`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_exchange".to_string()))),
+                field: "respond_bytes".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::Int(200))),
+                arg(expr(ExprKind::Name("bad_bytes".to_string()))),
+                arg(headers_expr()),
+            ],
+            "`respond_bytes` expects `Vec[uint8]`, found `Vec[bool]`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("http_exchange".to_string()))),
+                field: "respond_bytes".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::Int(200))),
+                arg(bytes_expr()),
+                arg(expr(ExprKind::Bool(true))),
+            ],
+            "`respond_bytes` expects `Map[String, String]`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket_listener".to_string()))),
+                field: "accept".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`accept(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket".to_string()))),
+                field: "send_text".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Bool(true)))],
+            "`send_text` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket".to_string()))),
+                field: "send_text".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("ok".to_string()))),
+                arg(expr(ExprKind::Int(1))),
+            ],
+            "`send_text(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket".to_string()))),
+                field: "send_bytes".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Name("bad_bytes".to_string())))],
+            "`send_bytes` expects `Vec[uint8]`, found `Vec[bool]`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket".to_string()))),
+                field: "send_bytes".to_string(),
+            }),
+            vec![arg(bytes_expr()), arg(expr(ExprKind::Int(1)))],
+            "`send_bytes(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket".to_string()))),
+                field: "recv_text".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`recv_text(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("websocket".to_string()))),
+                field: "recv_bytes".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`recv_bytes(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("unix_listener".to_string()))),
+                field: "accept".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`accept(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("unix_stream".to_string()))),
+                field: "read_line".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`read_line(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("unix_stream".to_string()))),
+                field: "read_exact".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("bad".to_string())))],
+            "`read_exact` expects `int32`, found `String`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("unix_stream".to_string()))),
+                field: "read_exact".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
+            "`read_exact(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("unix_stream".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Bool(true)))],
+            "`write_all` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("unix_stream".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("ok".to_string()))),
+                arg(expr(ExprKind::Int(1))),
+            ],
+            "`write_all(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tls_listener".to_string()))),
+                field: "accept".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`accept(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tls_stream".to_string()))),
+                field: "read_line".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`read_line(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tls_stream".to_string()))),
+                field: "read_exact".to_string(),
+            }),
+            vec![arg(expr(ExprKind::String("bad".to_string())))],
+            "`read_exact` expects `int32`, found `String`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tls_stream".to_string()))),
+                field: "read_exact".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
+            "`read_exact(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tls_stream".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![arg(expr(ExprKind::Bool(true)))],
+            "`write_all` expects `String`, found `bool`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("tls_stream".to_string()))),
+                field: "write_all".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("ok".to_string()))),
+                arg(expr(ExprKind::Int(1))),
+            ],
+            "`write_all(timeout=...)` expects `Duration`, found `int32`",
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("supervisor".to_string()))),
+                field: "start".to_string(),
+            }),
+            vec![
+                arg(expr(ExprKind::String("svc".to_string()))),
+                arg(expr(ExprKind::List(vec![expr(ExprKind::String(
+                    "/bin/echo".to_string(),
+                ))]))),
+                named_arg("restart", expr(ExprKind::Bool(true))),
+            ],
+            "`start` expects `process.RestartPolicy`, found `bool`",
+        ),
+    ] {
+        let error = match checker.type_of_call(&callee, &args, span, &mut locals, None) {
+            Ok(actual) => {
+                panic!("member call should report `{expected}`, but type checked as `{actual}`")
+            }
+            Err(error) => error,
+        };
+        assert!(
+            error.message.contains(expected),
+            "expected diagnostic containing `{expected}`, got `{}`",
+            error.message
         );
     }
 
@@ -3407,6 +5997,39 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         .type_of_call(
             &expr(ExprKind::Member {
                 object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "get".to_string(),
+            }),
+            &[arg(expr(ExprKind::Bool(true)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("vec.get() should enforce integer indices")
+        .message
+        .contains("vector indices must be integers"));
+
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "set".to_string(),
+            }),
+            &[
+                named_arg("index", expr(ExprKind::Bool(true))),
+                named_arg("value", expr(ExprKind::Int(1))),
+            ],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("vec.set() should enforce integer indices")
+        .message
+        .contains("vector indices must be integers"));
+
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
                 field: "set".to_string(),
             }),
             &[
@@ -3433,6 +6056,21 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             None,
         )
         .expect_err("vec.remove() should enforce integer indices")
+        .message
+        .contains("vector indices must be integers"));
+
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "swap".to_string(),
+            }),
+            &[arg(expr(ExprKind::Bool(true))), arg(expr(ExprKind::Int(1)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("vec.swap() should enforce the first integer index")
         .message
         .contains("vector indices must be integers"));
 
@@ -3480,6 +6118,21 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         .expect_err("vec.extend() should enforce vector types")
         .message
         .contains("`extend` expects `Vec[int32]`"));
+
+    assert!(checker
+        .type_of_call(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("values".to_string()))),
+                field: "insert".to_string(),
+            }),
+            &[arg(expr(ExprKind::Bool(true))), arg(expr(ExprKind::Int(1)))],
+            span,
+            &mut locals,
+            None,
+        )
+        .expect_err("vec.insert() should enforce integer indices")
+        .message
+        .contains("vector indices must be integers"));
 
     assert!(checker
         .type_of_call(
@@ -3775,6 +6428,58 @@ fn sema_helper_edges_cover_copy_defaults_literal_patterns_and_module_members() {
         .expect_err("unit has no members")
         .message
         .contains("cannot access field"));
+
+    let pkg_widget = expr(ExprKind::Member {
+        object: Box::new(expr(ExprKind::Name("pkg".to_string()))),
+        field: "Widget".to_string(),
+    });
+    let mut call_locals = HashMap::new();
+    checker.seed_imported_modules(&mut call_locals);
+    assert_eq!(
+        checker
+            .type_of_call(
+                &pkg_widget,
+                &[named_arg("value", expr(ExprKind::Int(1)))],
+                Span::new(1, 1),
+                &mut call_locals,
+                None,
+            )
+            .expect("module class constructors should type check"),
+        Type::named("Widget")
+    );
+    for (args, expected) in [
+        (
+            vec![
+                named_arg("value", expr(ExprKind::Int(1))),
+                arg(expr(ExprKind::Int(2))),
+            ],
+            "positional class constructor arguments must come before named arguments",
+        ),
+        (
+            vec![arg(expr(ExprKind::Int(1))), arg(expr(ExprKind::Int(2)))],
+            "class constructor `Widget` received too many positional arguments",
+        ),
+        (
+            vec![named_arg("missing", expr(ExprKind::Int(1)))],
+            "class `Widget` has no field named `missing`",
+        ),
+        (
+            vec![
+                named_arg("value", expr(ExprKind::Int(1))),
+                named_arg("value", expr(ExprKind::Int(2))),
+            ],
+            "field `value` was provided more than once",
+        ),
+    ] {
+        assert!(
+            checker
+                .type_of_call(&pkg_widget, &args, Span::new(1, 1), &mut call_locals, None,)
+                .expect_err("module class constructor diagnostics should be reported")
+                .message
+                .contains(expected),
+            "expected module constructor diagnostic containing `{expected}`"
+        );
+    }
 }
 
 #[test]
@@ -4025,6 +6730,263 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
 }
 
 #[test]
+fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_paths() {
+    let span = Span::new(1, 1);
+    let classes = BTreeMap::from([(
+        "Holder".to_string(),
+        class_info(
+            "Holder",
+            false,
+            vec![("text", Type::named("String"), false)],
+        ),
+    )]);
+    let type_names = BTreeMap::from([("Holder".to_string(), span)]);
+    let type_arities = BTreeMap::from([("Holder".to_string(), 0usize)]);
+    let enums = BTreeMap::new();
+    let functions = BTreeMap::new();
+    let traits = BTreeMap::new();
+    let imported_modules = BTreeMap::new();
+    let module_registry = BTreeMap::new();
+    let checker = checker(
+        "<main>",
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &functions,
+        &traits,
+        &[],
+        &imported_modules,
+        &module_registry,
+    );
+
+    let mut managed_locals = HashMap::from([(
+        "resource".to_string(),
+        LocalBinding {
+            managed_resource: true,
+            ..local_binding(
+                Type::named("String"),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            )
+        },
+    )]);
+    let managed_error = checker
+        .consume_binding("resource", span, &mut managed_locals)
+        .expect_err("managed resources should not move out by value");
+    assert!(managed_error
+        .message
+        .contains("cannot move managed `with` resource `resource`"));
+
+    let mut specialized_locals = HashMap::from([(
+        "owned".to_string(),
+        local_binding(
+            Type::named("String"),
+            true,
+            true,
+            ReceiverKind::Value,
+            false,
+            &[],
+        ),
+    )]);
+    checker
+        .consume_value_expr(
+            &expr(ExprKind::Specialize {
+                expr: Box::new(expr(ExprKind::Name("owned".to_string()))),
+                type_args: vec![type_ref("String")],
+            }),
+            &mut specialized_locals,
+        )
+        .expect("specialized value expressions should consume their base value");
+    assert!(specialized_locals["owned"].moved);
+
+    let mut member_locals = HashMap::from([(
+        "holder".to_string(),
+        local_binding(
+            Type::named("Holder"),
+            true,
+            true,
+            ReceiverKind::Value,
+            false,
+            &[],
+        ),
+    )]);
+    checker
+        .consume_value_expr(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("holder".to_string()))),
+                field: "text".to_string(),
+            }),
+            &mut member_locals,
+        )
+        .expect("moving a non-copy field from an owned binding should be tracked");
+    assert!(member_locals["holder"].moved_fields.contains("text"));
+
+    let mut match_locals = HashMap::from([
+        (
+            "flag".to_string(),
+            local_binding(
+                Type::named("bool"),
+                false,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "owned".to_string(),
+            local_binding(
+                Type::named("String"),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+    ]);
+    checker
+        .consume_value_expr(
+            &expr(ExprKind::Match {
+                scrutinee: Box::new(expr(ExprKind::Name("flag".to_string()))),
+                borrow_mode: None,
+                arms: vec![MatchExprArm {
+                    pattern: Pattern::Wildcard(span),
+                    value: expr(ExprKind::Name("owned".to_string())),
+                    span,
+                }],
+            }),
+            &mut match_locals,
+        )
+        .expect("match expression arms should merge consumed value state");
+    assert!(match_locals["owned"].moved);
+
+    let mut group_locals = HashMap::from([(
+        "flag".to_string(),
+        local_binding(
+            Type::named("bool"),
+            false,
+            false,
+            ReceiverKind::Value,
+            false,
+            &[],
+        ),
+    )]);
+    checker
+        .consume_match_scrutinee_expr(
+            &expr(ExprKind::Group(Box::new(expr(ExprKind::Name(
+                "flag".to_string(),
+            ))))),
+            &mut group_locals,
+        )
+        .expect("grouped match scrutinees should be consumed through their inner expression");
+
+    let mut borrowed_holder_locals = HashMap::from([(
+        "holder".to_string(),
+        LocalBinding {
+            passing: ReceiverKind::Borrow,
+            borrow_origin: Some("holder".to_string()),
+            ..local_binding(
+                Type::named("Holder"),
+                false,
+                false,
+                ReceiverKind::Borrow,
+                false,
+                &[],
+            )
+        },
+    )]);
+    let borrowed_field_error = checker
+        .consume_match_scrutinee_expr(
+            &expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("holder".to_string()))),
+                field: "text".to_string(),
+            }),
+            &mut borrowed_holder_locals,
+        )
+        .expect_err("match scrutinees should reject moving non-copy fields out of borrows");
+    assert!(borrowed_field_error
+        .message
+        .contains("cannot move non-copy field `text` out of borrowed value `holder`"));
+
+    let grouped_borrowed_field_error = checker
+        .consume_match_scrutinee_expr(
+            &expr(ExprKind::Group(Box::new(expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("holder".to_string()))),
+                field: "text".to_string(),
+            })))),
+            &mut borrowed_holder_locals,
+        )
+        .expect_err("grouped match scrutinees should still reject borrowed field moves");
+    assert!(grouped_borrowed_field_error
+        .message
+        .contains("cannot move non-copy field `text` out of borrowed value `holder`"));
+
+    let mut merged_locals = HashMap::from([(
+        "holder".to_string(),
+        local_binding(
+            Type::named("Holder"),
+            true,
+            true,
+            ReceiverKind::Value,
+            false,
+            &[],
+        ),
+    )]);
+    let mut branch_with_stale_match_borrow = merged_locals.clone();
+    let branch_binding = branch_with_stale_match_borrow
+        .get_mut("holder")
+        .expect("branch binding should exist");
+    branch_binding.moved = true;
+    branch_binding.moved_fields.insert("text".to_string());
+    branch_binding.stale_match_borrow_mut_place = Some("holder.text".to_string());
+    let branch_without_binding = HashMap::new();
+    checker.merge_control_flow_moves(
+        &mut merged_locals,
+        &[&branch_with_stale_match_borrow, &branch_without_binding],
+    );
+    assert!(merged_locals["holder"].moved);
+    assert!(merged_locals["holder"].moved_fields.contains("text"));
+    assert_eq!(
+        merged_locals["holder"]
+            .stale_match_borrow_mut_place
+            .as_deref(),
+        Some("holder.text")
+    );
+
+    assert_eq!(
+        checker.const_bool_value(&expr(ExprKind::Unary {
+            op: UnaryOp::Not,
+            expr: Box::new(expr(ExprKind::Group(Box::new(expr(ExprKind::Bool(false)))))),
+        })),
+        Some(true)
+    );
+
+    checker
+        .reject_loop_carried_moves(
+            &HashMap::from([(
+                "outer".to_string(),
+                local_binding(
+                    Type::named("String"),
+                    true,
+                    true,
+                    ReceiverKind::Value,
+                    false,
+                    &[],
+                ),
+            )]),
+            &HashMap::new(),
+            "while",
+            span,
+        )
+        .expect("bindings absent from the loop body state should be ignored");
+}
+
+#[test]
 fn vec_literal_consumes_non_copy_elements_only_once() {
     crate::check_source(
         "class Box:\n    value: int32\n\ndef main() -> int32:\n    b = Box(value=1)\n    values: Vec[Box] = [b]\n    return 0\n",
@@ -4065,6 +7027,14 @@ fn namespace_and_type_parameter_helpers_cover_registration_lookup_and_collection
             .map(|found| found.path.clone()),
         Some("pkg.inner".to_string())
     );
+    let mut root = namespace("pkg");
+    root.imported_modules
+        .insert("external".to_string(), imported.clone());
+    assert_eq!(
+        find_namespace_in_modules(&BTreeMap::from([("pkg".to_string(), root)]), "pkg.external")
+            .map(|found| found.path.clone()),
+        Some("pkg.external".to_string())
+    );
 
     validate_type_params(
         &["T".to_string(), "U".to_string()],
@@ -4079,6 +7049,9 @@ fn namespace_and_type_parameter_helpers_cover_registration_lookup_and_collection
     )
     .expect_err("duplicate type params should fail");
     assert!(duplicate.message.contains("duplicate type parameter `T`"));
+    let reserved_self = validate_type_params(&["Self".to_string()], Span::new(1, 1), "class Box")
+        .expect_err("Self cannot be used as a type parameter");
+    assert!(reserved_self.message.contains("`Self` is reserved"));
 
     let parent = type_param_scope(&["T".to_string()]);
     let merged = merged_type_param_scope(&parent, &["U".to_string()]);
@@ -4359,6 +7332,354 @@ fn operator_trait_helpers_map_supported_operators() {
 }
 
 #[test]
+fn return_borrow_source_resolution_covers_explicit_and_inferred_edges() {
+    fn borrowed_param(name: &str, passing: ReceiverKind, label: Option<&str>) -> Param {
+        Param {
+            name: name.to_string(),
+            passing,
+            borrow_label: label.map(str::to_string),
+            ty: type_ref("String"),
+            default: None,
+            span: Span::new(1, 1),
+        }
+    }
+
+    let span = Span::new(1, 1);
+    assert_eq!(
+        resolve_return_borrow_source(None, &[], ReceiverKind::Value, None, span)
+            .expect("owned returns do not need a borrow source"),
+        None
+    );
+    assert_eq!(
+        resolve_return_borrow_source(
+            Some(ReceiverKind::BorrowMut),
+            &[],
+            ReceiverKind::BorrowMut,
+            None,
+            span,
+        )
+        .expect("a borrowed receiver can infer self as source"),
+        Some("self".to_string())
+    );
+    assert_eq!(
+        resolve_return_borrow_source(
+            None,
+            &[borrowed_param("text", ReceiverKind::Borrow, None)],
+            ReceiverKind::Borrow,
+            None,
+            span,
+        )
+        .expect("a single borrowed parameter can be inferred"),
+        Some("text".to_string())
+    );
+
+    let missing = resolve_return_borrow_source(
+        None,
+        &[borrowed_param("text", ReceiverKind::Borrow, None)],
+        ReceiverKind::Borrow,
+        Some("other"),
+        span,
+    )
+    .expect_err("explicit sources must name a borrowed parameter");
+    assert!(missing.message.contains("must name a borrowed parameter"));
+
+    let immutable_for_mut = resolve_return_borrow_source(
+        None,
+        &[borrowed_param("text", ReceiverKind::Borrow, Some("src"))],
+        ReceiverKind::BorrowMut,
+        Some("src"),
+        span,
+    )
+    .expect_err("borrow mut returns only consider mutable sources");
+    assert!(immutable_for_mut
+        .message
+        .contains("must name a borrowed parameter"));
+
+    let none_available = resolve_return_borrow_source(
+        None,
+        &[borrowed_param("text", ReceiverKind::Value, None)],
+        ReceiverKind::Borrow,
+        None,
+        span,
+    )
+    .expect_err("borrowed returns require at least one borrowed source");
+    assert!(none_available
+        .message
+        .contains("require a borrowed parameter or receiver"));
+
+    let ambiguous_mut = resolve_return_borrow_source(
+        None,
+        &[
+            borrowed_param("left", ReceiverKind::BorrowMut, None),
+            borrowed_param("right", ReceiverKind::BorrowMut, None),
+        ],
+        ReceiverKind::BorrowMut,
+        None,
+        span,
+    )
+    .expect_err("multiple mutable candidates need an explicit source");
+    assert!(ambiguous_mut.message.contains("-> borrow mut[left]"));
+}
+
+#[test]
+fn call_expr_borrow_info_covers_method_return_sources() {
+    let span = Span::new(1, 1);
+    let mut holder = class_info(
+        "Holder",
+        false,
+        vec![("value", Type::named("String"), false)],
+    );
+    holder.methods.insert(
+        "value_ref".to_string(),
+        MethodInfo {
+            decl: {
+                let mut decl = function_decl("value_ref");
+                decl.receiver = Some(ReceiverKind::Borrow);
+                decl.return_passing = ReceiverKind::Borrow;
+                decl.return_borrow_source = Some("self".to_string());
+                decl.return_type = type_ref("String");
+                decl
+            },
+            signature: FunctionSignature {
+                params: Vec::new(),
+                return_type: Type::named("String"),
+                return_passing: ReceiverKind::Borrow,
+                return_borrow_source: Some("self".to_string()),
+            },
+            type_param_bounds: BTreeMap::new(),
+        },
+    );
+    holder.methods.insert(
+        "pick".to_string(),
+        MethodInfo {
+            decl: {
+                let mut decl = function_decl("pick");
+                decl.receiver = Some(ReceiverKind::Borrow);
+                decl.params = vec![Param {
+                    name: "source".to_string(),
+                    ty: type_ref("String"),
+                    passing: ReceiverKind::Borrow,
+                    borrow_label: None,
+                    default: None,
+                    span,
+                }];
+                decl.return_passing = ReceiverKind::Borrow;
+                decl.return_borrow_source = Some("source".to_string());
+                decl.return_type = type_ref("String");
+                decl
+            },
+            signature: FunctionSignature {
+                params: vec![Type::named("String")],
+                return_type: Type::named("String"),
+                return_passing: ReceiverKind::Borrow,
+                return_borrow_source: Some("source".to_string()),
+            },
+            type_param_bounds: BTreeMap::new(),
+        },
+    );
+
+    let type_names = BTreeMap::from([("Holder".to_string(), span)]);
+    let type_arities = BTreeMap::from([("Holder".to_string(), 0usize)]);
+    let classes = BTreeMap::from([("Holder".to_string(), holder)]);
+    let enums = BTreeMap::new();
+    let functions = BTreeMap::new();
+    let traits = BTreeMap::new();
+    let imported_modules = BTreeMap::new();
+    let module_registry = BTreeMap::new();
+    let checker = checker(
+        "<main>",
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &functions,
+        &traits,
+        &[],
+        &imported_modules,
+        &module_registry,
+    );
+    let mut locals = HashMap::from([
+        (
+            "holder".to_string(),
+            local_binding(
+                Type::named("Holder"),
+                true,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "text".to_string(),
+            local_binding(
+                Type::named("String"),
+                true,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+    ]);
+
+    let self_return = expr(ExprKind::Call {
+        callee: Box::new(expr(ExprKind::Member {
+            object: Box::new(expr(ExprKind::Name("holder".to_string()))),
+            field: "value_ref".to_string(),
+        })),
+        args: Vec::new(),
+    });
+    let self_info = checker
+        .expr_borrow_info(&self_return, &mut locals)
+        .expect("method self borrowed return should resolve")
+        .expect("borrow source should be present");
+    assert_eq!(self_info.origin, "holder");
+    assert_eq!(self_info.passing, ReceiverKind::Borrow);
+
+    let arg_return = expr(ExprKind::Call {
+        callee: Box::new(expr(ExprKind::Member {
+            object: Box::new(expr(ExprKind::Name("holder".to_string()))),
+            field: "pick".to_string(),
+        })),
+        args: vec![named_arg(
+            "source",
+            expr(ExprKind::Name("text".to_string())),
+        )],
+    });
+    let arg_info = checker
+        .expr_borrow_info(&arg_return, &mut locals)
+        .expect("method argument borrowed return should resolve")
+        .expect("borrow source should be present");
+    assert_eq!(arg_info.origin, "text");
+    assert_eq!(arg_info.passing, ReceiverKind::Borrow);
+}
+
+#[test]
+fn borrowed_copy_return_assignments_bind_as_plain_values() {
+    crate::check_source(
+        "def id_ref(value: borrow[src] int32) -> borrow[src] int32:\n    return value\n\n\
+def main() -> int32:\n    value = 7\n    mirrored = id_ref(value)\n    return mirrored\n",
+    )
+    .expect("copy-typed borrowed returns should be bindable as plain values");
+}
+
+#[test]
+fn default_argument_reference_detection_walks_nested_expression_shapes() {
+    let params = vec!["left".to_string(), "right".to_string()];
+    let name_left = expr(ExprKind::Name("left".to_string()));
+    let name_right = expr(ExprKind::Name("right".to_string()));
+    let unrelated = expr(ExprKind::Name("other".to_string()));
+
+    assert_eq!(
+        default_argument_references_param(
+            &expr(ExprKind::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(name_left.clone()),
+            }),
+            &params,
+        ),
+        Some("left".to_string())
+    );
+    assert_eq!(
+        default_argument_references_param(
+            &expr(ExprKind::Cast {
+                expr: Box::new(name_right.clone()),
+                ty: type_ref("int32"),
+            }),
+            &params,
+        ),
+        Some("right".to_string())
+    );
+    assert_eq!(
+        default_argument_references_param(
+            &expr(ExprKind::Specialize {
+                expr: Box::new(name_left.clone()),
+                type_args: vec![type_ref("String")],
+            }),
+            &params,
+        ),
+        Some("left".to_string())
+    );
+    assert_eq!(
+        default_argument_references_param(
+            &expr(ExprKind::Member {
+                object: Box::new(name_left.clone()),
+                field: "len".to_string(),
+            }),
+            &params,
+        ),
+        Some("left".to_string())
+    );
+    assert_eq!(
+        default_argument_references_param(
+            &expr(ExprKind::Index {
+                object: Box::new(unrelated.clone()),
+                index: Box::new(name_right.clone()),
+            }),
+            &params,
+        ),
+        Some("right".to_string())
+    );
+    assert_eq!(
+        default_argument_references_param(
+            &expr(ExprKind::Call {
+                callee: Box::new(unrelated.clone()),
+                args: vec![named_arg("value", name_left.clone())],
+            }),
+            &params,
+        ),
+        Some("left".to_string())
+    );
+    assert_eq!(
+        default_argument_references_param(
+            &expr(ExprKind::Map(vec![MapEntryExpr {
+                key: unrelated.clone(),
+                value: name_right.clone(),
+            }])),
+            &params,
+        ),
+        Some("right".to_string())
+    );
+    assert_eq!(
+        default_argument_references_param(
+            &expr(ExprKind::FString(vec![
+                FormatPart::Literal("prefix".to_string()),
+                FormatPart::Expr(name_left.clone()),
+            ])),
+            &params,
+        ),
+        Some("left".to_string())
+    );
+    assert_eq!(
+        default_argument_references_param(
+            &expr(ExprKind::Match {
+                scrutinee: Box::new(unrelated.clone()),
+                borrow_mode: None,
+                arms: vec![MatchExprArm {
+                    pattern: Pattern::Wildcard(Span::new(1, 1)),
+                    value: name_right.clone(),
+                    span: Span::new(1, 1),
+                }],
+            }),
+            &params,
+        ),
+        Some("right".to_string())
+    );
+    assert_eq!(
+        default_argument_references_param(
+            &expr(ExprKind::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(unrelated),
+                right: Box::new(name_left),
+            }),
+            &params,
+        ),
+        Some("left".to_string())
+    );
+}
+
+#[test]
 fn reserved_type_names_are_rejected() {
     let error = reject_reserved_type_name("Task", Span::new(1, 1))
         .expect_err("reserved built-in type names should fail");
@@ -4491,6 +7812,17 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
             .expect("None should lower to unit"),
         Type::Unit
     );
+    assert_eq!(
+        lower_type_with_self(
+            &type_ref("Self"),
+            &type_names,
+            &type_arities,
+            &type_params,
+            Some(&Type::named("Counter"))
+        )
+        .expect("Self should lower with an explicit self type"),
+        Type::named("Counter")
+    );
 
     let unknown = lower_type(
         &type_ref("Unknown"),
@@ -4520,6 +7852,28 @@ fn lower_type_covers_builtin_generic_and_error_paths() {
     assert!(task_group_args
         .message
         .contains("does not take type arguments"));
+    let self_type_args = lower_type_with_self(
+        &nested_type_ref("Self", vec![type_ref("int32")]),
+        &type_names,
+        &type_arities,
+        &type_params,
+        Some(&Type::named("Counter")),
+    )
+    .expect_err("Self should reject explicit type arguments");
+    assert!(self_type_args
+        .message
+        .contains("`Self` does not take generic arguments"));
+    let self_without_context = lower_type_with_self(
+        &type_ref("Self"),
+        &type_names,
+        &type_arities,
+        &type_params,
+        None,
+    )
+    .expect_err("Self requires an enclosing self type");
+    assert!(self_without_context
+        .message
+        .contains("`Self` is only available"));
     let type_param_args = lower_type(
         &nested_type_ref("T", vec![type_ref("int32")]),
         &type_names,
@@ -4561,6 +7915,81 @@ fn lower_trait_bounds_reports_unknown_traits_and_arity_mismatches() {
     )
     .expect_err("trait arity mismatch should fail");
     assert!(arity.message.contains("expects 1 type arguments, found 0"));
+}
+
+#[test]
+fn lower_supertraits_reports_unknown_arity_and_lowers_self_args() {
+    let traits = BTreeMap::from([
+        ("Base".to_string(), trait_info("Base", vec![])),
+        ("Mapper".to_string(), trait_info("Mapper", vec!["T"])),
+    ]);
+    let type_names = BTreeMap::from([
+        ("String".to_string(), Span::new(1, 1)),
+        ("Widget".to_string(), Span::new(1, 1)),
+    ]);
+    let type_arities = BTreeMap::from([("String".to_string(), 0usize), ("Widget".to_string(), 0)]);
+    let scope = type_param_scope(&["T".to_string()]);
+
+    let unknown = lower_supertraits(
+        &[type_ref("Missing")],
+        &traits,
+        &type_names,
+        &type_arities,
+        &scope,
+        Some(&Type::named("Widget")),
+    )
+    .expect_err("unknown supertraits should fail");
+    assert!(unknown.message.contains("unknown trait `Missing`"));
+
+    let arity = lower_supertraits(
+        &[nested_type_ref("Mapper", vec![])],
+        &traits,
+        &type_names,
+        &type_arities,
+        &scope,
+        Some(&Type::named("Widget")),
+    )
+    .expect_err("supertrait arity mismatches should fail");
+    assert!(arity
+        .message
+        .contains("trait `Mapper` expects 1 type arguments, found 0"));
+
+    let lowered = lower_supertraits(
+        &[
+            type_ref("Base"),
+            nested_type_ref("Mapper", vec![type_ref("Self")]),
+        ],
+        &traits,
+        &type_names,
+        &type_arities,
+        &scope,
+        Some(&Type::named("Widget")),
+    )
+    .expect("valid supertraits should lower");
+    assert_eq!(
+        lowered,
+        vec![
+            TraitBound {
+                trait_name: "Base".to_string(),
+                trait_args: Vec::new(),
+            },
+            TraitBound {
+                trait_name: "Mapper".to_string(),
+                trait_args: vec![Type::named("Widget")],
+            },
+        ]
+    );
+
+    let bad_arg = lower_supertraits(
+        &[nested_type_ref("Mapper", vec![type_ref("MissingType")])],
+        &traits,
+        &type_names,
+        &type_arities,
+        &scope,
+        Some(&Type::named("Widget")),
+    )
+    .expect_err("supertrait arguments should be type-checked");
+    assert!(bad_arg.message.contains("unknown type `MissingType`"));
 }
 
 #[test]
@@ -4618,6 +8047,14 @@ fn structured_wait_helpers_cover_valid_and_error_paths() {
 
 #[test]
 fn checker_function_default_loop_and_resource_validation_cover_additional_branches() {
+    for source in [
+        "class Job:\n    label: String\n\ndef main() -> None:\n    jobs = Queue[Job]()\n    for job in borrow jobs:\n        pass\n",
+        "def main() -> None:\n    jobs = Queue[int32]()\n    for job in borrow jobs:\n        pass\n",
+        "class Job:\n    label: String\n\ndef main() -> None:\n    jobs: Set[Job] = Set[Job]()\n    for job in borrow jobs:\n        pass\n",
+    ] {
+        crate::check_source(source).expect("borrowed loop source should type check");
+    }
+
     for (source, expected) in [
             (
                 "def helper(value: borrow int32 = 1) -> None:\n    pass\n\ndef main() -> None:\n    pass\n",
@@ -4745,6 +8182,22 @@ fn checker_loop_move_helper_reports_full_and_partial_repeated_moves() {
 }
 
 #[test]
+fn checker_loop_const_bool_conditions_cover_grouped_and_negated_forms() {
+    crate::check_source(
+        "class Name:\n    value: String\n\ndef main():\n    name = Name(value=\"aurora\")\n    while (false):\n        moved = name.value\n    later = name.value\n",
+    )
+    .expect("grouped false loops should not merge move state from unreachable bodies");
+
+    let repeated_move = crate::check_source(
+        "class Name:\n    value: String\n\ndef main():\n    name = Name(value=\"aurora\")\n    while not false:\n        moved = name.value\n",
+    )
+    .expect_err("negated false loops may execute and should reject repeated moves");
+    assert!(repeated_move
+        .message
+        .contains("`while` loop body partially moves `name` and may execute more than once"));
+}
+
+#[test]
 fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
     let classes = BTreeMap::from([(
         "Counter".to_string(),
@@ -4802,6 +8255,71 @@ fn checker_direct_entrypoints_cover_top_level_function_method_and_impl_paths() {
     assert!(top_level_continue
         .message
         .contains("`continue` is only allowed inside a loop"));
+
+    let borrowed_return_checker = checker.with_return_type(
+        Type::named("String"),
+        ReceiverKind::Borrow,
+        Some("source".to_string()),
+    );
+    let mut owned_return_locals = HashMap::from([(
+        "owned".to_string(),
+        local_binding(
+            Type::named("String"),
+            true,
+            false,
+            ReceiverKind::Value,
+            false,
+            &[],
+        ),
+    )]);
+    let unborrowed_return = borrowed_return_checker
+        .check_block(
+            &[Stmt::Return(ReturnStmt {
+                value: Some(expr(ExprKind::Name("owned".to_string()))),
+                span,
+            })],
+            &mut owned_return_locals,
+            &Type::named("String"),
+            0,
+            true,
+        )
+        .expect_err("borrowed returns should require a borrowed source expression");
+    assert!(unborrowed_return
+        .message
+        .contains("borrowed return expression must come from a borrowed parameter or receiver"));
+
+    let missing_source_checker =
+        checker.with_return_type(Type::named("String"), ReceiverKind::Borrow, None);
+    let mut borrowed_return_locals = HashMap::from([(
+        "source".to_string(),
+        LocalBinding {
+            passing: ReceiverKind::Borrow,
+            borrow_origin: Some("source".to_string()),
+            ..local_binding(
+                Type::named("String"),
+                true,
+                false,
+                ReceiverKind::Borrow,
+                false,
+                &[],
+            )
+        },
+    )]);
+    let missing_source = missing_source_checker
+        .check_block(
+            &[Stmt::Return(ReturnStmt {
+                value: Some(expr(ExprKind::Name("source".to_string()))),
+                span,
+            })],
+            &mut borrowed_return_locals,
+            &Type::named("String"),
+            0,
+            true,
+        )
+        .expect_err("borrowed return source should be resolved before block checking");
+    assert!(missing_source
+        .message
+        .contains("internal error: borrowed return source was not resolved"));
 
     let mut function_ok = function_decl("helper");
     function_ok.return_type = type_ref("int32");
@@ -5222,6 +8740,16 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
         (
+            "TaskGroup[]",
+            expr(ExprKind::Specialize {
+                expr: Box::new(expr(ExprKind::Name("TaskGroup".to_string()))),
+                type_args: Vec::new(),
+            }),
+            Vec::new(),
+            Type::named("TaskGroup"),
+            None,
+        ),
+        (
             "cancelled",
             expr(ExprKind::Name("cancelled".to_string())),
             Vec::new(),
@@ -5351,6 +8879,370 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
 }
 
 #[test]
+fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
+    let type_names = BTreeMap::new();
+    let type_arities = BTreeMap::new();
+    let classes = BTreeMap::new();
+    let enums = BTreeMap::new();
+    let functions = BTreeMap::new();
+    let traits = BTreeMap::new();
+    let imported_modules = BTreeMap::new();
+    let module_registry = BTreeMap::new();
+    let checker = checker(
+        "<main>",
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &functions,
+        &traits,
+        &[],
+        &imported_modules,
+        &module_registry,
+    );
+    let span = Span::new(1, 1);
+    let int_ty = Type::named("int32");
+    let string_ty = Type::named("String");
+    let bool_ty = Type::named("bool");
+    let vec_int_ty = Type::Named("Vec".to_string(), vec![int_ty.clone()]);
+    let vec_type_param_ty = Type::Named("Vec".to_string(), vec![Type::TypeParam("T".to_string())]);
+    let vec_task_int_ty = Type::Named(
+        "Vec".to_string(),
+        vec![Type::Named("Task".to_string(), vec![int_ty.clone()])],
+    );
+    let queue_int_ty = Type::Named("Queue".to_string(), vec![int_ty.clone()]);
+    let mut locals = HashMap::from([
+        (
+            "numbers".to_string(),
+            local_binding(vec_int_ty, false, false, ReceiverKind::Value, false, &[]),
+        ),
+        (
+            "generic_values".to_string(),
+            local_binding(
+                vec_type_param_ty,
+                false,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "tasks".to_string(),
+            local_binding(
+                vec_task_int_ty,
+                false,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "queue".to_string(),
+            local_binding(queue_int_ty, false, false, ReceiverKind::Value, false, &[]),
+        ),
+        (
+            "text".to_string(),
+            local_binding(
+                string_ty.clone(),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "flag".to_string(),
+            local_binding(bool_ty, false, false, ReceiverKind::Value, false, &[]),
+        ),
+    ]);
+
+    let name = |name: &str| expr(ExprKind::Name(name.to_string()));
+    let specialize = |name: &str, type_args: Vec<TypeRef>| {
+        expr(ExprKind::Specialize {
+            expr: Box::new(expr(ExprKind::Name(name.to_string()))),
+            type_args,
+        })
+    };
+    let member = |object: Expr, field: &str| {
+        expr(ExprKind::Member {
+            object: Box::new(object),
+            field: field.to_string(),
+        })
+    };
+    let mut expect_error =
+        |callee: Expr, args: Vec<Argument>, expected: Option<Type>, text: &str| {
+            let error = checker
+                .type_of_call(&callee, &args, span, &mut locals, expected.as_ref())
+                .expect_err("checker direct path should report a diagnostic");
+            assert!(
+                error.message.contains(text),
+                "expected diagnostic containing `{text}`, got `{}`",
+                error.message
+            );
+        };
+
+    for (callee, args, expected) in [
+        (
+            name("TaskGroup"),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`TaskGroup` does not take constructor arguments",
+        ),
+        (
+            specialize("TaskGroup", vec![type_ref("int32")]),
+            Vec::new(),
+            "`TaskGroup` does not take type arguments",
+        ),
+        (
+            specialize("TaskGroup", Vec::new()),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "`TaskGroup` does not take constructor arguments",
+        ),
+        (
+            specialize("Queue", vec![type_ref("int32"), type_ref("String")]),
+            Vec::new(),
+            "class `Queue` expects exactly one type argument, found 2",
+        ),
+        (
+            specialize("Queue", vec![type_ref("int32")]),
+            vec![named_arg("capacity", expr(ExprKind::Bool(true)))],
+            "field `capacity` expects `int32`, found `bool`",
+        ),
+        (
+            specialize("Vec", vec![type_ref("int32"), type_ref("String")]),
+            Vec::new(),
+            "class `Vec` expects exactly one type argument, found 2",
+        ),
+        (
+            specialize("Vec", vec![type_ref("int32")]),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "class `Vec` does not take constructor arguments",
+        ),
+        (
+            specialize("Set", vec![type_ref("String"), type_ref("int32")]),
+            Vec::new(),
+            "class `Set` expects exactly one type argument, found 2",
+        ),
+        (
+            specialize("Set", vec![type_ref("String")]),
+            vec![arg(expr(ExprKind::String("ada".to_string())))],
+            "class `Set` does not take constructor arguments",
+        ),
+        (
+            specialize("Map", vec![type_ref("String")]),
+            Vec::new(),
+            "class `Map` expects exactly two type arguments, found 1",
+        ),
+        (
+            specialize("Map", vec![type_ref("String"), type_ref("int32")]),
+            vec![arg(expr(ExprKind::Int(1)))],
+            "class `Map` does not take constructor arguments",
+        ),
+    ] {
+        expect_error(callee, args, None, expected);
+    }
+
+    for (callee, args, expected) in [
+        (
+            name("wait_any"),
+            vec![arg(name("queue"))],
+            "`wait_any` expects `Vec[Task[T]]`, found `Queue[int32]`",
+        ),
+        (
+            name("wait_all"),
+            vec![arg(name("numbers"))],
+            "`wait_all` expects `Vec[Task[T]]`, found `Vec[int32]`",
+        ),
+        (
+            name("wait_any"),
+            vec![arg(name("generic_values"))],
+            "`wait_any` expects `Vec[Task[T]]`, found `Vec[T]`",
+        ),
+        (
+            name("wait_all"),
+            vec![
+                arg(name("tasks")),
+                named_arg("timeout", expr(ExprKind::Int(1))),
+            ],
+            "`wait_all(timeout=...)` expects `Duration`, found `int32`",
+        ),
+    ] {
+        expect_error(callee, args, None, expected);
+    }
+
+    expect_error(
+        name("Some"),
+        vec![arg(expr(ExprKind::Int(1)))],
+        None,
+        "bare enum variants require an expected enum type",
+    );
+    expect_error(
+        name("Some"),
+        vec![arg(expr(ExprKind::Int(1)))],
+        Some(Type::Unit),
+        "bare enum variants require an expected enum type",
+    );
+    expect_error(
+        name("Closed"),
+        Vec::new(),
+        Some(Type::Named("Option".to_string(), vec![int_ty.clone()])),
+        "bare enum variants require an expected enum type",
+    );
+    expect_error(
+        member(name("Option"), "None"),
+        Vec::new(),
+        None,
+        "cannot infer type parameter `T` for enum variant `Option.None`",
+    );
+    drop(expect_error);
+
+    assert_eq!(
+        checker
+            .type_of_call(
+                &member(name("Option"), "Some"),
+                &[arg(name("text"))],
+                span,
+                &mut locals,
+                None,
+            )
+            .expect("bare Option.Some should infer from payload"),
+        Type::Named("Option".to_string(), vec![string_ty])
+    );
+}
+
+#[test]
+fn checker_class_constructor_direct_errors_cover_field_binding_edges() {
+    let span = Span::new(1, 1);
+    let type_names = BTreeMap::from([("Pair".to_string(), span), ("Widget".to_string(), span)]);
+    let type_arities = BTreeMap::from([("Pair".to_string(), 0usize), ("Widget".to_string(), 0)]);
+    let mut widget = class_info(
+        "Widget",
+        false,
+        vec![
+            ("public_value", Type::named("int32"), false),
+            ("secret", Type::named("int32"), false),
+        ],
+    );
+    widget.module_name = "pkg".to_string();
+    widget.fields.get_mut("secret").unwrap().public = false;
+    widget.decl.fields[1].public = false;
+    let classes = BTreeMap::from([
+        (
+            "Pair".to_string(),
+            class_info(
+                "Pair",
+                true,
+                vec![
+                    ("left", Type::named("int32"), false),
+                    ("right", Type::named("int32"), false),
+                ],
+            ),
+        ),
+        ("Widget".to_string(), widget),
+    ]);
+    let enums = BTreeMap::new();
+    let functions = BTreeMap::new();
+    let traits = BTreeMap::new();
+    let imported_modules = BTreeMap::new();
+    let module_registry = BTreeMap::new();
+    let checker = checker(
+        "main",
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &functions,
+        &traits,
+        &[],
+        &imported_modules,
+        &module_registry,
+    );
+    let mut locals = HashMap::from([(
+        "pkg".to_string(),
+        local_binding(
+            Type::Module("pkg".to_string()),
+            false,
+            false,
+            ReceiverKind::Value,
+            false,
+            &[],
+        ),
+    )]);
+    let pair = expr(ExprKind::Name("Pair".to_string()));
+    let widget = expr(ExprKind::Name("Widget".to_string()));
+
+    for (callee, args, expected) in [
+        (
+            pair.clone(),
+            vec![
+                named_arg("left", expr(ExprKind::Int(1))),
+                arg(expr(ExprKind::Int(2))),
+            ],
+            "positional class constructor arguments must come before named arguments",
+        ),
+        (
+            pair.clone(),
+            vec![
+                arg(expr(ExprKind::Int(1))),
+                arg(expr(ExprKind::Int(2))),
+                arg(expr(ExprKind::Int(3))),
+            ],
+            "class constructor `Pair` received too many positional arguments",
+        ),
+        (
+            pair.clone(),
+            vec![named_arg("missing", expr(ExprKind::Int(1)))],
+            "class `Pair` has no field named `missing`",
+        ),
+        (
+            pair.clone(),
+            vec![
+                named_arg("left", expr(ExprKind::Int(1))),
+                named_arg("left", expr(ExprKind::Int(2))),
+            ],
+            "field `left` was provided more than once",
+        ),
+        (
+            pair.clone(),
+            vec![
+                named_arg("left", expr(ExprKind::Bool(true))),
+                named_arg("right", expr(ExprKind::Int(2))),
+            ],
+            "field `left` expects `int32`, found `bool`",
+        ),
+        (
+            pair,
+            vec![named_arg("left", expr(ExprKind::Int(1)))],
+            "class constructor `Pair` is missing required field `right`",
+        ),
+        (
+            widget.clone(),
+            vec![named_arg("public_value", expr(ExprKind::Int(1)))],
+            "class constructor `Widget` cannot initialize private field `secret` from another module",
+        ),
+        (
+            widget,
+            vec![
+                named_arg("public_value", expr(ExprKind::Int(1))),
+                named_arg("secret", expr(ExprKind::Int(2))),
+            ],
+            "field `secret` is private on `Widget`",
+        ),
+    ] {
+        let error = checker
+            .type_of_call(&callee, &args, span, &mut locals, None)
+            .expect_err("class constructor should report a diagnostic");
+        assert!(
+            error.message.contains(expected),
+            "expected diagnostic containing `{expected}`, got `{}`",
+            error.message
+        );
+    }
+}
+
+#[test]
 fn method_receiver_borrow_aliasing_checks_overlap_and_distinct_places() {
     let overlap = crate::check_source(
             "class Acc:\n    value: int32\n\n    def add_from(borrow mut self, source: borrow mut Acc):\n        self.value += source.value\n\ndef main() -> int32:\n    mut acc = Acc(value=1)\n    acc.add_from(source=acc)\n    return 0\n",
@@ -5375,6 +9267,14 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "duplicate match arm for literal `1`",
             ),
             (
+                "def main() -> int32:\n    match true:\n        case 1:\n            return 1\n        case _:\n            return 0\n",
+                "literal pattern `1` does not match scrutinee type `bool`",
+            ),
+            (
+                "def main() -> int32:\n    match 1:\n        case 1.0:\n            return 1\n        case _:\n            return 0\n",
+                "does not match scrutinee type `int32`",
+            ),
+            (
                 "def main() -> int32:\n    match 1:\n        case _:\n            return 1\n        case 2:\n            return 2\n",
                 "wildcard match arm must be the final `case`",
             ),
@@ -5391,6 +9291,10 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "non-exhaustive match over `bool`: missing `false`",
             ),
             (
+                "def main() -> int32:\n    match true:\n        case true:\n            return 1\n        case false:\n            return 0\n        case _:\n            return 2\n",
+                "unreachable match arm",
+            ),
+            (
                 "def main() -> int32:\n    match 1:\n        case 1:\n            return 1\n",
                 "`match` over `int32` with literal patterns requires a final `case _:` arm",
             ),
@@ -5403,8 +9307,24 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "match over `Status` expects enum variant patterns, not literal `1`",
             ),
             (
+                "enum Status:\n    Ready\n    Done\n\ndef main() -> int32:\n    status = Status.Ready\n    match status:\n        case _:\n            return 0\n        case Status.Done:\n            return 1\n",
+                "wildcard match arm must be the final `case`",
+            ),
+            (
+                "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    match status:\n        case value:\n            return 1\n",
+                "top-level binding patterns are not yet supported",
+            ),
+            (
                 "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    match status:\n        case Other.Ready:\n            return 1\n        case _:\n            return 0\n",
                 "unknown enum `Other` in match pattern",
+            ),
+            (
+                "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    match status:\n        case Status.Missing:\n            return 1\n        case _:\n            return 0\n",
+                "enum `Status` has no variant `Missing`",
+            ),
+            (
+                "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    match status:\n        case Status.Ready:\n            return 1\n        case Status.Ready:\n            return 2\n",
+                "duplicate match arm for `Status.Ready`",
             ),
             (
                 "enum Status:\n    Done(int32)\n\ndef main() -> int32:\n    status = Status.Done(1)\n    match status:\n        case Status.Done:\n            return 1\n        case _:\n            return 0\n",
@@ -5425,6 +9345,18 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             (
                 "enum Status:\n    Ready\n    Done\n\ndef main() -> int32:\n    status = Status.Ready\n    match status:\n        case Status.Ready:\n            return 1\n",
                 "non-exhaustive match over `Status`: missing `Done`",
+            ),
+            (
+                "class Packet:\n    value: int32\n\ndef main() -> int32:\n    packet = Packet(value=1)\n    match packet:\n        case _:\n            return 0\n",
+                "`match` currently requires an enum, bool, integer, float, or String scrutinee",
+            ),
+            (
+                "enum Status:\n    Ready\n\ndef main() -> int32:\n    match 1:\n        case Status.Ready:\n            return 1\n        case _:\n            return 0\n",
+                "match over `int32` only supports literal patterns and `_`",
+            ),
+            (
+                "def main() -> int32:\n    match 1:\n        case value:\n            return 1\n",
+                "top-level binding patterns are not yet supported",
             ),
             (
                 "def main() -> int32:\n    return range(start=true, stop=3)\n",
@@ -5470,6 +9402,118 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "def main() -> int32:\n    return parse_float64(text=1)\n",
                 "`parse_float64(...)` expects `String`, found `int32`",
             ),
+            (
+                "def main() -> int32:\n    text = \"aurora\"\n    ok: bool = text.contains(1)\n    return 0\n",
+                "`contains` expects `String`, found `int32`",
+            ),
+            (
+                "def main() -> int32:\n    text = \"aurora\"\n    replaced: String = text.replace(1, \"x\")\n    return 0\n",
+                "`replace` expects `String` for `from`, found `int32`",
+            ),
+            (
+                "def main() -> int32:\n    text = \"aurora\"\n    replaced: String = text.replace(\"a\", 1)\n    return 0\n",
+                "`replace` expects `String` for `to`, found `int32`",
+            ),
+            (
+                "def main() -> None:\n    mut values = [1]\n    values.push(\"x\")\n",
+                "`push` expects `int32`, found `String`",
+            ),
+            (
+                "import fs\n\ndef main() -> int32:\n    file = fs.File()\n    return 0\n",
+                "builtin resource `fs.File` must be created through its module functions",
+            ),
+            (
+                "import net\n\ndef main() -> int32:\n    stream = net.TcpStream()\n    return 0\n",
+                "builtin resource `net.TcpStream` must be created through its module functions",
+            ),
+            (
+                "import net\n\ndef main() -> int32:\n    listener = net.TcpListener()\n    return 0\n",
+                "builtin resource `net.TcpListener` must be created through its module functions",
+            ),
+            (
+                "import net\n\ndef main() -> int32:\n    socket = net.UdpSocket()\n    return 0\n",
+                "builtin resource `net.UdpSocket` must be created through its module functions",
+            ),
+            (
+                "import net\n\ndef main() -> int32:\n    datagram = net.UdpDatagram()\n    return 0\n",
+                "builtin resource `net.UdpDatagram` must be created through its module functions",
+            ),
+            (
+                "import net\n\ndef main() -> int32:\n    listener = net.HttpListener()\n    return 0\n",
+                "builtin resource `net.HttpListener` must be created through its module functions",
+            ),
+            (
+                "import net\n\ndef main() -> int32:\n    exchange = net.HttpExchange()\n    return 0\n",
+                "builtin resource `net.HttpExchange` must be created through its module functions",
+            ),
+            (
+                "import net\n\ndef main() -> int32:\n    response = net.HttpResponse()\n    return 0\n",
+                "builtin resource `net.HttpResponse` must be created through its module functions",
+            ),
+            (
+                "import net\n\ndef main() -> int32:\n    listener = net.WebSocketListener()\n    return 0\n",
+                "builtin resource `net.WebSocketListener` must be created through its module functions",
+            ),
+            (
+                "import net\n\ndef main() -> int32:\n    socket = net.WebSocket()\n    return 0\n",
+                "builtin resource `net.WebSocket` must be created through its module functions",
+            ),
+            (
+                "import net\n\ndef main() -> int32:\n    listener = net.UnixListener()\n    return 0\n",
+                "builtin resource `net.UnixListener` must be created through its module functions",
+            ),
+            (
+                "import net\n\ndef main() -> int32:\n    stream = net.UnixStream()\n    return 0\n",
+                "builtin resource `net.UnixStream` must be created through its module functions",
+            ),
+            (
+                "import net\n\ndef main() -> int32:\n    listener = net.TlsListener()\n    return 0\n",
+                "builtin resource `net.TlsListener` must be created through its module functions",
+            ),
+            (
+                "import net\n\ndef main() -> int32:\n    stream = net.TlsStream()\n    return 0\n",
+                "builtin resource `net.TlsStream` must be created through its module functions",
+            ),
+            (
+                "class Resource[T]:\n    value: T\n\n    def close(borrow mut self):\n        pass\n\ndef main() -> None:\n    resource = Resource[int32](value=1)\n    with resource as handle:\n        pass\n",
+                "`with` does not yet support generic resource types",
+            ),
+            (
+                "class Resource:\n    value: int32\n\ndef main() -> None:\n    resource = Resource(value=1)\n    with resource as handle:\n        pass\n",
+                "does not define `close(borrow mut self)`",
+            ),
+            (
+                "class Resource:\n    value: int32\n\n    def close(self) -> int32:\n        return 0\n\ndef main() -> None:\n    resource = Resource(value=1)\n    with resource as handle:\n        pass\n",
+                "`with` resources must define `close(borrow mut self)` returning `None`",
+            ),
+            (
+                "def make() -> Option[int32]:\n    return Option[int32].Missing()\n\ndef main():\n    pass\n",
+                "enum `Option` has no variant `Missing`",
+            ),
+            (
+                "def make() -> Option[int32]:\n    return Option[int32].None(1)\n\ndef main():\n    pass\n",
+                "variant `None` of enum `Option` does not take a payload",
+            ),
+            (
+                "def make() -> Option[int32]:\n    return Option[int32].Some()\n\ndef main():\n    pass\n",
+                "variant `Some` of enum `Option` expects 1 payload argument, found 0",
+            ),
+            (
+                "def make() -> Option[int32]:\n    return Option[int32].Some(\"x\")\n\ndef main():\n    pass\n",
+                "variant `Some` of enum `Option` expects `int32`, found `String`",
+            ),
+            (
+                "def make() -> Option[int32]:\n    return Option.None(1)\n\ndef main():\n    pass\n",
+                "variant `None` of enum `Option` does not take a payload",
+            ),
+            (
+                "def make() -> Option[int32]:\n    return Option[int32].Some(value=1, extra=2)\n\ndef main():\n    pass\n",
+                "variant `Some` of enum `Option` expects 1 payload argument, found 2",
+            ),
+            (
+                "enum Pair:\n    Both(int32, int32)\n\ndef make() -> Pair:\n    return Pair.Both(left=1, right=2)\n\ndef main():\n    pass\n",
+                "variant `Both` of enum `Pair` uses positional payloads and cannot be constructed with named arguments",
+            ),
         ] {
             let error = crate::check_source(source)
                 .expect_err("checker surface case should report a diagnostic");
@@ -5480,10 +9524,348 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 source
             );
         }
+
+    for (source, expected) in [
+        (
+            "class Packet:\n    value: int32\n\ndef main() -> int32:\n    packet = Packet(value=1)\n    return match packet:\n        case _: 0\n",
+            "`match` currently requires an enum, bool, integer, float, or String scrutinee",
+        ),
+        (
+            "enum Status:\n    Ready\n\ndef main() -> int32:\n    return match 1:\n        case Status.Ready: 1\n        case _: 0\n",
+            "match over `int32` only supports literal patterns and `_`",
+        ),
+        (
+            "def main() -> int32:\n    return match 1:\n        case value: 1\n",
+            "top-level binding patterns are not yet supported",
+        ),
+        (
+            "def main() -> int32:\n    return match 1:\n        case _: 0\n        case 1: 1\n",
+            "wildcard match arm must be the final `case`",
+        ),
+        (
+            "def main() -> int32:\n    return match 1:\n        case 1: 1\n        case 1: 2\n        case _: 3\n",
+            "unreachable match arm",
+        ),
+        (
+            "def main() -> int32:\n    return match true:\n        case true: 1\n",
+            "non-exhaustive bool match: missing `false`",
+        ),
+        (
+            "def main() -> int32:\n    return match 1:\n        case 1: 1\n",
+            "match over `int32` requires a final wildcard arm because the domain is open-ended",
+        ),
+        (
+            "def main() -> int32:\n    return match true:\n        case true: 1\n        case false: \"no\"\n",
+            "match arm expression expects `int32`, found `String`",
+        ),
+        (
+            "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case 1: 1\n        case _: 0\n",
+            "match over `Status` expects enum variant patterns, not literal `1`",
+        ),
+        (
+            "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case value: 1\n",
+            "top-level binding patterns are not yet supported",
+        ),
+        (
+            "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case Other.Ready: 1\n        case _: 0\n",
+            "unknown enum `Other` in match pattern",
+        ),
+        (
+            "enum Status:\n    Ready\n\nenum Other:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case Other.Ready: 1\n        case _: 0\n",
+            "match arm expects enum `Status`, found pattern for `Other`",
+        ),
+        (
+            "enum Status:\n    Ready\n    Done\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case _: 0\n        case Status.Done: 1\n",
+            "wildcard match arm must be the final `case`",
+        ),
+        (
+            "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case Status.Missing: 1\n        case _: 0\n",
+            "enum `Status` has no variant `Missing`",
+        ),
+        (
+            "enum Status:\n    Done(int32)\n\ndef main() -> int32:\n    status = Status.Done(1)\n    return match status:\n        case Status.Done: 1\n        case _: 0\n",
+            "variant `Status.Done` carries a payload and must bind it",
+        ),
+        (
+            "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case Status.Ready(value): 1\n        case _: 0\n",
+            "variant `Status.Ready` does not carry a payload",
+        ),
+        (
+            "enum Status:\n    Ready\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case Status.Ready: 1\n        case Status.Ready: 2\n",
+            "unreachable match arm",
+        ),
+        (
+            "enum Status:\n    Ready\n    Done\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case Status.Ready: 1\n        case Status.Done: \"no\"\n",
+            "match arm expression expects `int32`, found `String`",
+        ),
+        (
+            "enum Status:\n    Ready\n    Done\n\ndef main() -> int32:\n    status = Status.Ready\n    return match status:\n        case Status.Ready: 1\n",
+            "non-exhaustive match over `Status`: missing `Done`",
+        ),
+    ] {
+        let error = crate::check_source(source)
+            .expect_err("checker match expression surface should report a diagnostic");
+        assert!(
+            error.message.contains(expected),
+            "expected diagnostic containing `{expected}`, got `{}` for source:\n{}",
+            error.message,
+            source
+        );
+    }
+
+    let span = Span::new(1, 1);
+    let enums = BTreeMap::from([
+        ("Other".to_string(), enum_info("Other", None)),
+        (
+            "PayloadStatus".to_string(),
+            enum_info("PayloadStatus", Some(Type::named("int32"))),
+        ),
+        ("Status".to_string(), enum_info("Status", None)),
+    ]);
+    let type_names = BTreeMap::from([
+        ("Other".to_string(), span),
+        ("PayloadStatus".to_string(), span),
+        ("Status".to_string(), span),
+    ]);
+    let type_arities = BTreeMap::from([
+        ("Other".to_string(), 0usize),
+        ("PayloadStatus".to_string(), 0usize),
+        ("Status".to_string(), 0usize),
+    ]);
+    let classes = BTreeMap::new();
+    let functions = BTreeMap::new();
+    let traits = BTreeMap::new();
+    let imported_modules = BTreeMap::new();
+    let module_registry = BTreeMap::new();
+    let checker = checker(
+        "<main>",
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &functions,
+        &traits,
+        &[],
+        &imported_modules,
+        &module_registry,
+    );
+    let mut locals = HashMap::from([(
+        "status".to_string(),
+        local_binding(
+            Type::named("Status"),
+            false,
+            false,
+            ReceiverKind::Value,
+            false,
+            &[],
+        ),
+    )]);
+    let empty_match_expr = expr(ExprKind::Match {
+        scrutinee: Box::new(expr(ExprKind::Name("status".to_string()))),
+        borrow_mode: None,
+        arms: Vec::new(),
+    });
+    assert!(checker
+        .type_of_expr(&empty_match_expr, &mut locals)
+        .expect_err("empty enum match expression should be rejected")
+        .message
+        .contains("`match` requires at least one `case` arm"));
+
+    let variant_pattern =
+        |enum_name: Option<&str>, variant_name: &str, subpatterns: Vec<Pattern>| {
+            Pattern::Variant(crate::ast::VariantPattern {
+                enum_name: enum_name.map(str::to_string),
+                variant_name: variant_name.to_string(),
+                subpatterns,
+                span,
+            })
+        };
+    for (pattern, expected_ty, expected) in [
+        (
+            variant_pattern(None, "Value", Vec::new()),
+            Type::named("int32"),
+            "pattern `Value` expects an enum scrutinee, found `int32`",
+        ),
+        (
+            variant_pattern(Some("Other"), "Value", Vec::new()),
+            Type::named("Status"),
+            "match arm expects enum `Status`, found pattern for `Other`",
+        ),
+        (
+            variant_pattern(None, "Missing", Vec::new()),
+            Type::named("Status"),
+            "enum `Status` has no variant `Missing`",
+        ),
+        (
+            variant_pattern(None, "Value", Vec::new()),
+            Type::named("PayloadStatus"),
+            "variant `PayloadStatus.Value` carries a payload and must bind it",
+        ),
+        (
+            variant_pattern(None, "Value", vec![Pattern::Wildcard(span)]),
+            Type::named("Status"),
+            "variant `Status.Value` does not carry a payload",
+        ),
+    ] {
+        assert!(
+            checker
+                .bind_pattern_locals(&pattern, &expected_ty, &mut locals, None, None)
+                .expect_err("direct pattern binding diagnostic should be reported")
+                .message
+                .contains(expected),
+            "expected direct pattern diagnostic containing `{expected}`"
+        );
+    }
+
+    let empty_match = crate::ast::Stmt::Match(crate::ast::MatchStmt {
+        scrutinee: expr(ExprKind::Name("status".to_string())),
+        borrow_mode: None,
+        arms: Vec::new(),
+        span,
+    });
+    assert!(checker
+        .check_block(&[empty_match], &mut locals, &Type::named("int32"), 0, true)
+        .expect_err("empty enum match should be rejected")
+        .message
+        .contains("`match` requires at least one `case` arm"));
+}
+
+#[test]
+fn checker_module_member_type_edges_cover_private_and_uncalled_members() {
+    let span = Span::new(1, 1);
+    let type_names = BTreeMap::new();
+    let type_arities = BTreeMap::new();
+    let enums = BTreeMap::new();
+    let functions = BTreeMap::new();
+    let traits = BTreeMap::new();
+    let mut imported_modules = BTreeMap::new();
+    let mut module_registry = BTreeMap::new();
+    let mut root = namespace("pkg");
+    root.functions.insert(
+        "make".to_string(),
+        FunctionInfo {
+            module_name: "pkg".to_string(),
+            decl: function_decl("make"),
+            signature: function_signature(Vec::new(), Type::Unit),
+            type_param_bounds: BTreeMap::new(),
+        },
+    );
+    let mut widget = class_info(
+        "Widget",
+        false,
+        vec![
+            ("value", Type::named("int32"), false),
+            ("secret", Type::named("String"), false),
+        ],
+    );
+    widget.module_name = "pkg".to_string();
+    widget.fields.get_mut("secret").unwrap().public = false;
+    widget.decl.fields[1].public = false;
+    let mut hidden = function_decl("hidden");
+    hidden.public = false;
+    hidden.receiver = Some(ReceiverKind::Borrow);
+    widget.methods.insert(
+        "hidden".to_string(),
+        MethodInfo {
+            decl: hidden,
+            signature: function_signature(Vec::new(), Type::named("String")),
+            type_param_bounds: BTreeMap::new(),
+        },
+    );
+    root.classes.insert("Widget".to_string(), widget.clone());
+    root.enums
+        .insert("Status".to_string(), enum_info("Status", None));
+    imported_modules.insert("pkg".to_string(), root.clone());
+    module_registry.insert("pkg".to_string(), root);
+    let classes = BTreeMap::from([("Widget".to_string(), widget)]);
+    let checker = checker(
+        "main",
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &functions,
+        &traits,
+        &[],
+        &imported_modules,
+        &module_registry,
+    );
+
+    for (object_ty, field, expected) in [
+        (
+            Type::Module("pkg".to_string()),
+            "make",
+            "function `make` from module `pkg` must be called with `(...)`",
+        ),
+        (
+            Type::Module("pkg".to_string()),
+            "Widget",
+            "class `Widget` from module `pkg` must be constructed with `(...)`",
+        ),
+        (
+            Type::Module("pkg".to_string()),
+            "missing",
+            "module `pkg` has no member `missing`",
+        ),
+        (
+            Type::Named("Option".to_string(), vec![Type::named("int32")]),
+            "Some",
+            "variant `Some` of enum `Option` requires a payload",
+        ),
+        (
+            Type::named("MapEntry"),
+            "other",
+            "type `MapEntry` has no field `other`",
+        ),
+        (
+            Type::named("Widget"),
+            "secret",
+            "field `secret` is private on `Widget`",
+        ),
+        (
+            Type::named("Widget"),
+            "hidden",
+            "method `hidden` is private on `Widget`",
+        ),
+    ] {
+        let error = checker
+            .resolve_member_type(&object_ty, field, span)
+            .expect_err("member type lookup should report the expected diagnostic");
+        assert!(
+            error.message.contains(expected),
+            "expected diagnostic containing `{expected}`, got `{}`",
+            error.message
+        );
+    }
 }
 
 #[test]
 fn operator_trait_and_bound_helpers_cover_checker_resolution_paths() {
+    let bad_ord = crate::check_source(
+        "\
+trait Ord[Rhs]:
+    def lt(borrow self, rhs: Rhs) -> Score
+
+class Score:
+    value: int32
+
+impl Ord[Score] for Score:
+    def lt(borrow self, rhs: Score) -> Score:
+        return self
+
+def main() -> int32:
+    left = Score(value=1)
+    right = Score(value=2)
+    if left < right:
+        return 1
+    return 0
+",
+    )
+    .expect_err("ordering operator traits must return bool");
+    assert!(bad_ord
+        .message
+        .contains("operator trait `Ord` for `lt` must return `bool`"));
+
     let program = crate::check_source(
         "\
 trait Named:
@@ -5501,6 +9883,9 @@ class User:
 class Point:
     x: int32
 
+class Box[T]:
+    value: T
+
 impl Named for User:
     def name(borrow self) -> String:
         return self.label.clone()
@@ -5512,6 +9897,10 @@ impl Add[Point, Point] for Point:
 impl Neg[Point] for Point:
     def neg(borrow self) -> Point:
         return Point(x=0 - self.x)
+
+impl[T: Named] Add[Box[T], Box[T]] for Box[T]:
+    def add(borrow self, rhs: Box[T]) -> Box[T]:
+        return rhs
 
 def main():
     pass
@@ -5549,6 +9938,31 @@ def main():
             )
             .expect("add trait lookup should succeed"),
         Some(Type::named("Point"))
+    );
+    let box_user = Type::Named("Box".to_string(), vec![Type::named("User")]);
+    assert_eq!(
+        base_checker
+            .type_of_binary_operator_via_trait(span, BinaryOp::Add, &box_user, &box_user)
+            .expect("generic add impl should satisfy its Named bound for User"),
+        Some(box_user.clone())
+    );
+    let box_point = Type::Named("Box".to_string(), vec![Type::named("Point")]);
+    assert_eq!(
+        base_checker
+            .type_of_binary_operator_via_trait(span, BinaryOp::Add, &box_point, &box_point)
+            .expect("generic add impl with unsatisfied bounds should be ignored"),
+        None
+    );
+    assert_eq!(
+        base_checker
+            .type_of_binary_operator_via_trait(
+                span,
+                BinaryOp::And,
+                &Type::named("bool"),
+                &Type::named("bool"),
+            )
+            .expect("boolean operators do not resolve through traits"),
+        None
     );
     assert_eq!(
         base_checker
@@ -5633,6 +10047,214 @@ def main():
     assert!(type_param_bound_error
         .message
         .contains("type parameter `T` does not satisfy trait bound `Named`"));
+
+    let no_traits = BTreeMap::new();
+    let no_trait_impls = Vec::new();
+    let no_trait_checker = checker(
+        &program.module_name,
+        &type_names,
+        &type_arities,
+        &program.classes,
+        &program.enums,
+        &program.functions,
+        &no_traits,
+        &no_trait_impls,
+        &program.imported_modules,
+        &program.module_registry,
+    )
+    .with_type_params(BTreeMap::from([("T".to_string(), ())]), BTreeMap::new());
+    assert!(no_trait_checker
+        .operator_method_from_type_param("T", "Add", "add", Some(&Type::named("Point")))
+        .expect("missing operator traits should be ignored for type params")
+        .is_none());
+
+    let mut broken_add_trait = program.traits["Add"].clone();
+    broken_add_trait.methods.clear();
+    let broken_traits = BTreeMap::from([("Add".to_string(), broken_add_trait)]);
+    let broken_trait_checker = checker(
+        &program.module_name,
+        &type_names,
+        &type_arities,
+        &program.classes,
+        &program.enums,
+        &program.functions,
+        &broken_traits,
+        &program.trait_impls,
+        &program.imported_modules,
+        &program.module_registry,
+    )
+    .with_type_params(BTreeMap::from([("T".to_string(), ())]), BTreeMap::new());
+    let missing_method = match broken_trait_checker.operator_method_from_type_param(
+        "T",
+        "Add",
+        "add",
+        Some(&Type::named("Point")),
+    ) {
+        Ok(_) => panic!("operator traits must expose the expected method"),
+        Err(error) => error,
+    };
+    assert!(missing_method
+        .message
+        .contains("operator trait `Add` must define method `add`"));
+
+    let named_only_checker = base_checker.with_type_params(
+        BTreeMap::from([("T".to_string(), ())]),
+        BTreeMap::from([(
+            "T".to_string(),
+            vec![TraitBound {
+                trait_name: "Named".to_string(),
+                trait_args: Vec::new(),
+            }],
+        )]),
+    );
+    assert!(named_only_checker
+        .operator_method_from_type_param("T", "Add", "add", Some(&Type::named("Point")))
+        .expect("unrelated type-param bounds should not match Add")
+        .is_none());
+
+    let wrong_rhs_checker = base_checker.with_type_params(
+        BTreeMap::from([("T".to_string(), ())]),
+        BTreeMap::from([(
+            "T".to_string(),
+            vec![TraitBound {
+                trait_name: "Add".to_string(),
+                trait_args: vec![Type::named("String"), Type::named("Point")],
+            }],
+        )]),
+    );
+    assert!(wrong_rhs_checker
+        .operator_method_from_type_param("T", "Add", "add", Some(&Type::named("Point")))
+        .expect("type-param Add bounds with the wrong rhs should not match")
+        .is_none());
+
+    let add_point_impl = program
+        .trait_impls
+        .iter()
+        .find(|trait_impl| {
+            trait_impl.trait_name == "Add" && trait_impl.for_type == Type::named("Point")
+        })
+        .expect("Point Add impl should be present")
+        .clone();
+
+    let mut missing_impl_method = add_point_impl.clone();
+    missing_impl_method.methods.clear();
+    let missing_impl_methods = vec![missing_impl_method];
+    let missing_impl_checker = checker(
+        &program.module_name,
+        &type_names,
+        &type_arities,
+        &program.classes,
+        &program.enums,
+        &program.functions,
+        &program.traits,
+        &missing_impl_methods,
+        &program.imported_modules,
+        &program.module_registry,
+    );
+    assert!(missing_impl_checker
+        .operator_method_for_concrete_type(
+            span,
+            &Type::named("Point"),
+            "Add",
+            "add",
+            Some(&Type::named("Point")),
+        )
+        .expect("impls missing the operator method should be skipped")
+        .is_none());
+
+    let mut wrong_rhs_impl = add_point_impl.clone();
+    wrong_rhs_impl.trait_args = vec![Type::named("String"), Type::named("Point")];
+    let wrong_rhs_impls = vec![wrong_rhs_impl];
+    let wrong_rhs_impl_checker = checker(
+        &program.module_name,
+        &type_names,
+        &type_arities,
+        &program.classes,
+        &program.enums,
+        &program.functions,
+        &program.traits,
+        &wrong_rhs_impls,
+        &program.imported_modules,
+        &program.module_registry,
+    );
+    assert!(wrong_rhs_impl_checker
+        .operator_method_for_concrete_type(
+            span,
+            &Type::named("Point"),
+            "Add",
+            "add",
+            Some(&Type::named("Point")),
+        )
+        .expect("impls with mismatched rhs patterns should be skipped")
+        .is_none());
+    assert!(base_checker
+        .operator_method_for_concrete_type(span, &Type::named("Point"), "Add", "add", None)
+        .expect("binary traits should not match unary lookup shapes")
+        .is_none());
+
+    let mut unbound_generic_impl = add_point_impl;
+    unbound_generic_impl.type_param_bounds = BTreeMap::from([(
+        "T".to_string(),
+        vec![TraitBound {
+            trait_name: "Named".to_string(),
+            trait_args: Vec::new(),
+        }],
+    )]);
+    let unbound_generic_impls = vec![unbound_generic_impl];
+    let unbound_generic_checker = checker(
+        &program.module_name,
+        &type_names,
+        &type_arities,
+        &program.classes,
+        &program.enums,
+        &program.functions,
+        &program.traits,
+        &unbound_generic_impls,
+        &program.imported_modules,
+        &program.module_registry,
+    );
+    assert!(unbound_generic_checker
+        .operator_method_for_concrete_type(
+            span,
+            &Type::named("Point"),
+            "Add",
+            "add",
+            Some(&Type::named("Point")),
+        )
+        .expect("impl bounds for unbound type params should invalidate the impl")
+        .is_none());
+}
+
+#[test]
+fn concrete_operator_trait_resolution_reports_ambiguity_for_equal_specificity_impls() {
+    let error = crate::check_source(
+        "\
+trait Add[Rhs, Out]:
+    def add(borrow self, rhs: Rhs) -> Out
+
+class Pair[A, B]:
+    left: A
+    right: B
+
+impl[T] Add[Pair[int32, T], Pair[int32, T]] for Pair[int32, T]:
+    def add(borrow self, rhs: Pair[int32, T]) -> Pair[int32, T]:
+        return Pair(left=self.left + rhs.left, right=rhs.right)
+
+impl[T] Add[Pair[T, int32], Pair[T, int32]] for Pair[T, int32]:
+    def add(borrow self, rhs: Pair[T, int32]) -> Pair[T, int32]:
+        return Pair(left=rhs.left, right=self.right + rhs.right)
+
+def main() -> int32:
+    left: Pair[int32, int32] = Pair(left=1, right=2)
+    right: Pair[int32, int32] = Pair(left=3, right=4)
+    total = left + right
+    return total.left
+",
+    )
+    .expect_err("equally specific concrete operator impls should be ambiguous");
+    assert!(error
+        .message
+        .contains("operator trait `Add` is ambiguous for type `Pair[int32, int32]`"));
 }
 
 #[test]
@@ -5952,6 +10574,122 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         ),
         Some(Vec::new())
     );
+    let string_ty = Type::named("String");
+    let int_ty = Type::named("int32");
+    let builtin_payload_cases = [
+        (
+            Type::Named(
+                "Result".to_string(),
+                vec![int_ty.clone(), string_ty.clone()],
+            ),
+            "Result",
+            "Ok",
+            vec![int_ty.clone()],
+        ),
+        (
+            Type::Named(
+                "Result".to_string(),
+                vec![int_ty.clone(), string_ty.clone()],
+            ),
+            "Result",
+            "Err",
+            vec![string_ty.clone()],
+        ),
+        (
+            Type::Named("SendError".to_string(), vec![int_ty.clone()]),
+            "SendError",
+            "Closed",
+            vec![int_ty.clone()],
+        ),
+        (
+            Type::Named("QueueReceive".to_string(), vec![int_ty.clone()]),
+            "QueueReceive",
+            "Item",
+            vec![int_ty.clone()],
+        ),
+        (
+            Type::Named("QueueReceive".to_string(), vec![int_ty.clone()]),
+            "QueueReceive",
+            "TimedOut",
+            Vec::new(),
+        ),
+        (
+            Type::Named("TaskResult".to_string(), vec![int_ty.clone()]),
+            "TaskResult",
+            "Ready",
+            vec![int_ty.clone()],
+        ),
+        (
+            Type::Named("TaskResult".to_string(), vec![int_ty.clone()]),
+            "TaskResult",
+            "Error",
+            vec![string_ty.clone()],
+        ),
+        (
+            Type::Named("TaskResult".to_string(), vec![int_ty.clone()]),
+            "TaskResult",
+            "Cancelled",
+            Vec::new(),
+        ),
+        (
+            Type::Named("WaitAny".to_string(), vec![int_ty.clone()]),
+            "WaitAny",
+            "Ready",
+            vec![int_ty.clone(), int_ty.clone()],
+        ),
+        (
+            Type::Named("WaitAny".to_string(), vec![int_ty.clone()]),
+            "WaitAny",
+            "Error",
+            vec![int_ty.clone(), string_ty.clone()],
+        ),
+        (
+            Type::Named("WaitAny".to_string(), vec![int_ty.clone()]),
+            "WaitAny",
+            "TimedOut",
+            Vec::new(),
+        ),
+        (
+            Type::Named(
+                "WaitAll".to_string(),
+                vec![Type::Named("Vec".to_string(), vec![int_ty.clone()])],
+            ),
+            "WaitAll",
+            "Ready",
+            vec![Type::Named("Vec".to_string(), vec![int_ty.clone()])],
+        ),
+        (
+            Type::Named("WaitAll".to_string(), vec![int_ty.clone()]),
+            "WaitAll",
+            "Error",
+            vec![int_ty.clone(), string_ty.clone()],
+        ),
+        (
+            Type::Named("WaitAll".to_string(), vec![int_ty.clone()]),
+            "WaitAll",
+            "Cancelled",
+            Vec::new(),
+        ),
+    ];
+    for (expected, enum_name, variant_name, payload) in builtin_payload_cases {
+        assert_eq!(
+            checker.builtin_enum_variant_payload(&expected, enum_name, variant_name),
+            Some(payload),
+            "{enum_name}.{variant_name}"
+        );
+    }
+    assert_eq!(
+        checker.builtin_enum_variant_payload(&Type::Unit, "Option", "Some"),
+        None
+    );
+    assert_eq!(
+        checker.builtin_enum_variant_payload(
+            &Type::Named("Option".to_string(), vec![int_ty.clone()]),
+            "Result",
+            "Ok",
+        ),
+        None
+    );
     assert_eq!(
         checker
             .explicit_builtin_type(
@@ -5965,6 +10703,21 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
             vec![Type::named("int32"), Type::named("String")]
         )
     );
+    for (name, args) in [
+        ("SendError", vec![int_ty.clone()]),
+        ("QueueReceive", vec![int_ty.clone()]),
+        ("TaskResult", vec![int_ty.clone()]),
+        ("WaitAny", vec![int_ty.clone()]),
+        ("WaitAll", vec![int_ty.clone()]),
+    ] {
+        assert_eq!(
+            checker
+                .explicit_builtin_type(name, &args, span)
+                .expect("builtin enum specialization should accept the maintained arity"),
+            Type::Named(name.to_string(), args),
+            "{name}"
+        );
+    }
     let builtin_arity = checker
         .explicit_builtin_type("Option", &[], span)
         .expect_err("wrong explicit type arg arity should fail");
@@ -6010,7 +10763,17 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         .expect_err("Option.None should reject payloads");
     assert!(none_payload.message.contains("does not take a payload"));
 
-    let mut locals = HashMap::new();
+    let mut locals = HashMap::from([(
+        "pkg".to_string(),
+        local_binding(
+            Type::Module("pkg".to_string()),
+            false,
+            false,
+            ReceiverKind::Value,
+            false,
+            &[],
+        ),
+    )]);
     let qualified_widget_build = expr(ExprKind::Member {
         object: Box::new(expr(ExprKind::Member {
             object: Box::new(expr(ExprKind::Member {
@@ -6048,6 +10811,30 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         })),
         field: "Missing".to_string(),
     });
+    let qualified_missing_enum_value = expr(ExprKind::Member {
+        object: Box::new(expr(ExprKind::Member {
+            object: Box::new(expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("pkg".to_string()))),
+                field: "tools".to_string(),
+            })),
+            field: "NotAnEnum".to_string(),
+        })),
+        field: "Value".to_string(),
+    });
+
+    let missing_variant_expr = checker
+        .type_of_expr(&qualified_status_missing, &mut locals)
+        .expect_err("missing qualified variants should fail as expressions");
+    assert!(missing_variant_expr
+        .message
+        .contains("enum `Status` has no variant `Missing`"));
+
+    let missing_enum_expr = checker
+        .type_of_expr(&qualified_missing_enum_value, &mut locals)
+        .expect_err("qualified non-enum members should fall through to module member errors");
+    assert!(missing_enum_expr
+        .message
+        .contains("module `pkg.tools` has no member `NotAnEnum`"));
 
     let missing_variant = checker
         .type_of_call(&qualified_status_missing, &[], span, &mut locals, None)
@@ -6123,7 +10910,50 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
         vec![("value", Type::named("int32"), false)],
     );
     math_widget.module_name = "helpers.math".to_string();
+    let mut merge_decl = function_decl("merge");
+    merge_decl.params = vec![
+        Param {
+            name: "left".to_string(),
+            ty: type_ref("Widget"),
+            passing: ReceiverKind::BorrowMut,
+            borrow_label: None,
+            default: None,
+            span,
+        },
+        Param {
+            name: "right".to_string(),
+            ty: type_ref("Widget"),
+            passing: ReceiverKind::BorrowMut,
+            borrow_label: None,
+            default: None,
+            span,
+        },
+    ];
+    math_widget.methods.insert(
+        "merge".to_string(),
+        MethodInfo {
+            decl: merge_decl.clone(),
+            signature: function_signature(
+                vec![Type::named("Widget"), Type::named("Widget")],
+                Type::Unit,
+            ),
+            type_param_bounds: BTreeMap::new(),
+        },
+    );
     math.classes.insert("Widget".to_string(), math_widget);
+    let mut math_secret = class_info(
+        "SecretBox",
+        false,
+        vec![("secret", Type::named("int32"), false)],
+    );
+    math_secret.module_name = "helpers.math".to_string();
+    math_secret.decl.fields[0].public = false;
+    math_secret
+        .fields
+        .get_mut("secret")
+        .expect("secret field should exist")
+        .public = false;
+    math.classes.insert("SecretBox".to_string(), math_secret);
     math.all_classes = math.classes.clone();
     let mut math_status = enum_info("Status", Some(Type::named("int32")));
     math_status.module_name = "helpers.math".to_string();
@@ -6183,6 +11013,17 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
         object: Box::new(math_expr.clone()),
         field: "Widget".to_string(),
     });
+    let secret_expr = expr(ExprKind::Member {
+        object: Box::new(math_expr.clone()),
+        field: "SecretBox".to_string(),
+    });
+    let qualified_status_value_expr = expr(ExprKind::Member {
+        object: Box::new(expr(ExprKind::Member {
+            object: Box::new(math_expr.clone()),
+            field: "Status".to_string(),
+        })),
+        field: "Value".to_string(),
+    });
     let indexed_widget_expr = expr(ExprKind::Index {
         object: Box::new(widget_expr.clone()),
         index: Box::new(expr(ExprKind::Int(0))),
@@ -6206,6 +11047,17 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
         Some("helpers.math".to_string())
     );
     assert_eq!(
+        root_checker.infer_module_path(&expr(ExprKind::Index {
+            object: Box::new(math_expr.clone()),
+            index: Box::new(expr(ExprKind::Int(0))),
+        })),
+        Some("helpers.math".to_string())
+    );
+    assert_eq!(
+        root_checker.infer_module_path(&expr(ExprKind::Bool(true))),
+        None
+    );
+    assert_eq!(
         root_checker.qualified_module_item(&indexed_widget_expr),
         Some(("helpers.math".to_string(), "Widget".to_string()))
     );
@@ -6225,6 +11077,115 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
             .map(|info| info.module_name.as_str()),
         Some("helpers.math")
     );
+    assert!(root_checker
+        .resolve_class_info("helpers.math.Missing")
+        .is_none());
+    assert!(root_checker
+        .resolve_enum_info("helpers.math.Missing")
+        .is_none());
+    assert_eq!(
+        root_checker.canonical_enum_name("helpers.math.Missing"),
+        "Missing"
+    );
+    let mut root_locals = HashMap::from([
+        (
+            "helpers".to_string(),
+            local_binding(
+                Type::Module("helpers".to_string()),
+                false,
+                false,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "left".to_string(),
+            local_binding(
+                Type::named("Widget"),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "right".to_string(),
+            local_binding(
+                Type::named("Widget"),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+    ]);
+    assert_eq!(
+        root_checker
+            .type_of_call(
+                &widget_expr,
+                &[arg(expr(ExprKind::Int(1)))],
+                span,
+                &mut root_locals,
+                None,
+            )
+            .expect("module-qualified class constructors should type check"),
+        Type::named("Widget")
+    );
+    assert!(root_checker
+        .type_of_call(
+            &widget_expr,
+            &[arg(expr(ExprKind::Int(1))), arg(expr(ExprKind::Int(2)))],
+            span,
+            &mut root_locals,
+            None,
+        )
+        .expect_err("module-qualified constructors should reject extra positional arguments")
+        .message
+        .contains("received too many positional arguments"));
+    assert!(root_checker
+        .type_of_call(
+            &secret_expr,
+            &[named_arg("secret", expr(ExprKind::Int(1)))],
+            span,
+            &mut root_locals,
+            None,
+        )
+        .expect_err("external module constructors should reject private fields")
+        .message
+        .contains("field `secret` is private on `SecretBox`"));
+    assert!(root_checker
+        .type_of_call(&secret_expr, &[], span, &mut root_locals, None)
+        .expect_err("external module constructors should not infer private fields")
+        .message
+        .contains("cannot initialize private field `secret` from another module"));
+    assert!(root_checker
+        .type_of_expr(&qualified_status_value_expr, &mut root_locals)
+        .expect_err("module-qualified payload variants should require construction")
+        .message
+        .contains("requires a payload"));
+
+    let merge_expr = expr(ExprKind::Member {
+        object: Box::new(widget_expr.clone()),
+        field: "merge".to_string(),
+    });
+    let mut borrowed_places = Vec::new();
+    root_checker
+        .collect_call_borrowed_places(
+            &merge_expr,
+            &[
+                named_arg("left", expr(ExprKind::Name("left".to_string()))),
+                named_arg("right", expr(ExprKind::Name("right".to_string()))),
+            ],
+            &root_locals,
+            &mut borrowed_places,
+        )
+        .expect("module-qualified class methods should collect borrowed arguments");
+    assert_eq!(borrowed_places.len(), 2);
+    assert_eq!(borrowed_places[0].path, "left");
+    assert_eq!(borrowed_places[1].path, "right");
 
     let module_checker = checker(
         "helpers.math",
@@ -6271,6 +11232,174 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
         .resolve_member_type(&Type::Module("helpers".to_string()), "missing", span)
         .expect_err("missing module members should still fail");
     assert!(member_error.message.contains("has no member `missing`"));
+}
+
+#[test]
+fn spawn_callable_resolution_covers_module_and_associated_targets() {
+    let type_names = BTreeMap::new();
+    let type_arities = BTreeMap::new();
+    let mut worker = class_info("Worker", false, vec![]);
+    worker.methods.insert(
+        "make".to_string(),
+        MethodInfo {
+            decl: function_decl("make"),
+            signature: function_signature(Vec::new(), Type::named("int32")),
+            type_param_bounds: BTreeMap::new(),
+        },
+    );
+    let mut touch_decl = function_decl("touch");
+    touch_decl.receiver = Some(ReceiverKind::Borrow);
+    worker.methods.insert(
+        "touch".to_string(),
+        MethodInfo {
+            decl: touch_decl,
+            signature: function_signature(Vec::new(), Type::Unit),
+            type_param_bounds: BTreeMap::new(),
+        },
+    );
+    let classes = BTreeMap::from([("Worker".to_string(), worker)]);
+    let enums = BTreeMap::new();
+    let functions = BTreeMap::from([(
+        "job".to_string(),
+        FunctionInfo {
+            module_name: "<main>".to_string(),
+            decl: function_decl("job"),
+            signature: function_signature(Vec::new(), Type::named("int32")),
+            type_param_bounds: BTreeMap::new(),
+        },
+    )]);
+    let traits = BTreeMap::new();
+
+    let remote_job = FunctionInfo {
+        module_name: "pkg.tools".to_string(),
+        decl: function_decl("remote_job"),
+        signature: function_signature(Vec::new(), Type::Unit),
+        type_param_bounds: BTreeMap::new(),
+    };
+    let mut remote_worker = class_info("RemoteWorker", false, vec![]);
+    remote_worker.module_name = "pkg.tools".to_string();
+    remote_worker.methods.insert(
+        "make".to_string(),
+        MethodInfo {
+            decl: function_decl("make"),
+            signature: function_signature(Vec::new(), Type::named("bool")),
+            type_param_bounds: BTreeMap::new(),
+        },
+    );
+    let mut tools = namespace("pkg.tools");
+    tools
+        .all_functions
+        .insert("remote_job".to_string(), remote_job);
+    tools
+        .classes
+        .insert("RemoteWorker".to_string(), remote_worker);
+    let mut pkg = namespace("pkg");
+    pkg.modules.insert("tools".to_string(), tools.clone());
+    let imported_modules = BTreeMap::from([("pkg".to_string(), pkg.clone())]);
+    let module_registry =
+        BTreeMap::from([("pkg".to_string(), pkg), ("pkg.tools".to_string(), tools)]);
+
+    let checker = checker(
+        "<main>",
+        &type_names,
+        &type_arities,
+        &classes,
+        &enums,
+        &functions,
+        &traits,
+        &[],
+        &imported_modules,
+        &module_registry,
+    );
+
+    let local_job = checker
+        .resolve_spawn_callable(&expr(ExprKind::Name("job".to_string())))
+        .expect("named local functions should be task-start targets");
+    assert_eq!(local_job.display_name, "job");
+    assert_eq!(local_job.signature.return_type, Type::named("int32"));
+
+    let local_static = checker
+        .resolve_spawn_callable(&expr(ExprKind::Member {
+            object: Box::new(expr(ExprKind::Name("Worker".to_string()))),
+            field: "make".to_string(),
+        }))
+        .expect("static associated methods should be task-start targets");
+    assert_eq!(local_static.display_name, "Worker.make");
+    assert!(checker
+        .resolve_spawn_callable(&expr(ExprKind::Member {
+            object: Box::new(expr(ExprKind::Specialize {
+                expr: Box::new(expr(ExprKind::Name("Worker".to_string()))),
+                type_args: Vec::new(),
+            })),
+            field: "make".to_string(),
+        }))
+        .is_ok());
+
+    let pkg_tools = expr(ExprKind::Member {
+        object: Box::new(expr(ExprKind::Name("pkg".to_string()))),
+        field: "tools".to_string(),
+    });
+    let remote_function = checker
+        .resolve_spawn_callable(&expr(ExprKind::Member {
+            object: Box::new(pkg_tools.clone()),
+            field: "remote_job".to_string(),
+        }))
+        .expect("module-qualified functions should be task-start targets");
+    assert_eq!(remote_function.display_name, "pkg.tools.remote_job");
+    let missing_remote_function = match checker.resolve_spawn_callable(&expr(ExprKind::Member {
+        object: Box::new(pkg_tools.clone()),
+        field: "missing".to_string(),
+    })) {
+        Ok(_) => panic!("missing module-qualified functions should not be task-start targets"),
+        Err(error) => error,
+    };
+    assert!(missing_remote_function
+        .message
+        .contains("task starting currently supports named functions"));
+
+    let remote_static = checker
+        .resolve_spawn_callable(&expr(ExprKind::Member {
+            object: Box::new(expr(ExprKind::Member {
+                object: Box::new(pkg_tools),
+                field: "RemoteWorker".to_string(),
+            })),
+            field: "make".to_string(),
+        }))
+        .expect("module-qualified static methods should be task-start targets");
+    assert_eq!(remote_static.display_name, "RemoteWorker.make");
+    assert_eq!(remote_static.signature.return_type, Type::named("bool"));
+
+    let receiver_method = match checker.resolve_spawn_callable(&expr(ExprKind::Member {
+        object: Box::new(expr(ExprKind::Name("Worker".to_string()))),
+        field: "touch".to_string(),
+    })) {
+        Ok(_) => panic!("receiver methods should not be task-start targets"),
+        Err(error) => error,
+    };
+    assert!(receiver_method
+        .message
+        .contains("task starting currently supports named functions"));
+    let missing_name =
+        match checker.resolve_spawn_callable(&expr(ExprKind::Name("missing".to_string()))) {
+            Ok(_) => panic!("unknown names should not be task-start targets"),
+            Err(error) => error,
+        };
+    assert!(missing_name
+        .message
+        .contains("task start target must be a callable function"));
+    let non_callable = match checker.resolve_spawn_callable(&expr(ExprKind::Int(1))) {
+        Ok(_) => panic!("non-call expressions should not be task-start targets"),
+        Err(error) => error,
+    };
+    assert!(non_callable
+        .message
+        .contains("task starting currently supports named functions"));
+    assert!(checker
+        .resolve_spawn_callable(&expr(ExprKind::Specialize {
+            expr: Box::new(expr(ExprKind::Name("job".to_string()))),
+            type_args: Vec::new(),
+        }))
+        .is_ok());
 }
 
 #[test]
@@ -6349,9 +11478,31 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 match_borrow_mut_place: None,
                 stale_match_borrow_mut_place: None,
                 moved: false,
-                moved_fields: BTreeSet::from(["value.inner".to_string()]),
+                moved_fields: BTreeSet::from(["other".to_string(), "value.inner".to_string()]),
                 frozen_places: BTreeSet::new(),
             },
+        ),
+        (
+            "items".to_string(),
+            local_binding(
+                Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+                true,
+                true,
+                ReceiverKind::Value,
+                false,
+                &[],
+            ),
+        ),
+        (
+            "moved".to_string(),
+            local_binding(
+                Type::named("Counter"),
+                true,
+                true,
+                ReceiverKind::Value,
+                true,
+                &[],
+            ),
         ),
         (
             "borrowed".to_string(),
@@ -6438,6 +11589,67 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
     let binding = locals.get_mut("counter").unwrap();
     FunctionChecker::clear_moved_field_path(binding, "value");
     assert!(!FunctionChecker::field_path_is_moved(binding, "value"));
+    assert!(binding.moved_fields.contains("other"));
+
+    assert_eq!(
+        checker
+            .type_of_member_object_expr(
+                &expr(ExprKind::Group(Box::new(member_expr.clone()))),
+                &mut locals
+            )
+            .expect("grouped member objects should resolve through the inner object"),
+        Type::named("int32")
+    );
+    assert_eq!(
+        checker
+            .type_of_member_object_expr(
+                &expr(ExprKind::Cast {
+                    expr: Box::new(expr(ExprKind::Name("counter".to_string()))),
+                    ty: type_ref("Counter"),
+                }),
+                &mut locals,
+            )
+            .expect("cast member objects should resolve through the inner object"),
+        Type::named("Counter")
+    );
+    assert_eq!(
+        checker
+            .type_of_member_object_expr(
+                &expr(ExprKind::Specialize {
+                    expr: Box::new(expr(ExprKind::Name("counter".to_string()))),
+                    type_args: Vec::new(),
+                }),
+                &mut locals,
+            )
+            .expect("specialized member objects should resolve through the inner object"),
+        Type::named("Counter")
+    );
+    assert_eq!(
+        checker
+            .type_of_member_object_expr(
+                &expr(ExprKind::Index {
+                    object: Box::new(expr(ExprKind::Name("items".to_string()))),
+                    index: Box::new(expr(ExprKind::Int(0))),
+                }),
+                &mut locals,
+            )
+            .expect("indexed member objects should resolve through expression typing"),
+        Type::named("int32")
+    );
+    assert_eq!(
+        checker
+            .type_of_member_object_expr(&expr(ExprKind::Bool(true)), &mut locals)
+            .expect("fallback member objects should resolve through expression typing"),
+        Type::named("bool")
+    );
+    let missing_object = checker
+        .type_of_member_object_expr(&expr(ExprKind::Name("missing".to_string())), &mut locals)
+        .expect_err("missing member objects should report unknown names");
+    assert!(missing_object.message.contains("unknown name `missing`"));
+    let moved_object = checker
+        .type_of_member_object_expr(&expr(ExprKind::Name("moved".to_string())), &mut locals)
+        .expect_err("moved member objects should report moved values");
+    assert!(moved_object.message.contains("use of moved value `moved`"));
 
     let borrowed_receiver = checker
         .prepare_method_receiver_borrows(
@@ -6525,6 +11737,14 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
         .require_with_resource(&Type::named("BadResource"), span)
         .expect_err("bad close signature should fail");
     assert!(bad_with.message.contains("close(borrow mut self)"));
+    let primitive_with = checker
+        .require_with_resource(&Type::named("int32"), span)
+        .expect_err("primitive values cannot be with resources");
+    assert!(primitive_with.message.contains("requires a class resource"));
+    let unit_with = checker
+        .require_with_resource(&Type::Unit, span)
+        .expect_err("unit values cannot be with resources");
+    assert!(unit_with.message.contains("requires a class resource"));
 
     checker
         .require_task_startable_function("work", &[], span)
@@ -6546,6 +11766,78 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
     assert!(task_start_error
         .message
         .contains("does not yet support borrowed parameter `value`"));
+
+    let consumed_then_borrowed = checker
+        .reject_overlapping_borrow(
+            &[BorrowedCallPlace {
+                path: "counter".to_string(),
+                passing: ReceiverKind::Value,
+                param_name: "owned".to_string(),
+            }],
+            "counter",
+            ReceiverKind::Borrow,
+            "borrowed",
+            "function `use_counter`",
+            span,
+        )
+        .expect_err("borrows should not overlap an already consumed argument");
+    assert!(consumed_then_borrowed
+        .message
+        .contains("overlaps consumed argument"));
+
+    let infer_missing = checker
+        .type_check_callable_args(
+            "function `make`",
+            &["T".to_string()],
+            &[],
+            &[],
+            &Type::TypeParam("T".to_string()),
+            &BTreeMap::new(),
+            &[],
+            span,
+            &mut HashMap::new(),
+            None,
+            HashMap::new(),
+        )
+        .expect_err("generic functions without evidence should report missing inference");
+    assert!(infer_missing
+        .message
+        .contains("cannot infer type parameter `T`"));
+
+    let infer_unresolved = checker
+        .type_check_callable_args_seeded(
+            "function `make`",
+            &["T".to_string()],
+            &[],
+            &[],
+            &Type::TypeParam("T".to_string()),
+            &BTreeMap::new(),
+            &[],
+            span,
+            &mut HashMap::new(),
+            None,
+            HashMap::from([("T".to_string(), Type::TypeParam("T".to_string()))]),
+            Vec::new(),
+        )
+        .expect_err("self-referential inferred type parameters should be rejected");
+    assert!(infer_unresolved
+        .message
+        .contains("cannot infer type parameter `T`"));
+
+    let payload_arity = checker
+        .variant_payload_argument(
+            &[
+                named_arg("value", expr(ExprKind::Int(1))),
+                named_arg("extra", expr(ExprKind::Int(2))),
+            ],
+            span,
+            "Some",
+            "Option",
+        )
+        .expect_err("single-payload helper should reject extra named arguments");
+    assert!(payload_arity
+        .message
+        .contains("expects exactly one payload argument"));
 }
 
 #[test]
@@ -6725,6 +12017,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
             ),
         ]),
         module_registry: BTreeMap::from([("pkg.tools".to_string(), namespace.clone())]),
+        is_entry_module: true,
     };
     let program = check_with_context(
         Module {
@@ -6752,6 +12045,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
                 ImportedBinding::Class(remote_class.clone()),
             )]),
             module_registry: BTreeMap::from([("pkg.tools".to_string(), namespace.clone())]),
+            is_entry_module: true,
         },
     )
     .expect_err("duplicate imported class names should fail");
@@ -6779,6 +12073,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
                 ImportedBinding::Enum(remote_enum),
             )]),
             module_registry: BTreeMap::from([("pkg.tools".to_string(), namespace.clone())]),
+            is_entry_module: true,
         },
     )
     .expect_err("duplicate imported enum names should fail");
@@ -6799,6 +12094,7 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
                 ImportedBinding::Function(remote_function),
             )]),
             module_registry: BTreeMap::from([("pkg.tools".to_string(), namespace)]),
+            is_entry_module: true,
         },
     )
     .expect_err("duplicate imported function names should fail");
@@ -6960,6 +12256,95 @@ fn check_reports_duplicate_recursive_and_copy_class_errors() {
 }
 
 #[test]
+fn check_reports_top_level_lowering_errors_from_source() {
+    for (source, expected) in [
+        (
+            "trait Child: Missing:\n    def label() -> String\n\ndef main():\n    pass\n",
+            "unknown trait `Missing`",
+        ),
+        (
+            "trait Bad:\n    def value() -> Missing\n\ndef main():\n    pass\n",
+            "unknown type `Missing`",
+        ),
+        (
+            "trait Bad:\n    def value() -> borrow[missing] int32\n\ndef main():\n    pass\n",
+            "borrow source `missing` must name a borrowed parameter",
+        ),
+        (
+            "trait Bad:\n    def value[T: Missing](value: T) -> T\n\ndef main():\n    pass\n",
+            "unknown trait `Missing`",
+        ),
+        (
+            "trait Bad:\n    def value() -> int32:\n        pass\n\ndef main():\n    pass\n",
+            "method `value` is missing a return",
+        ),
+        (
+            "enum Bad[T: Missing]:\n    Value(T)\n\ndef main():\n    pass\n",
+            "unknown trait `Missing`",
+        ),
+        (
+            "enum Bad:\n    Value(Missing)\n\ndef main():\n    pass\n",
+            "unknown type `Missing`",
+        ),
+        (
+            "class Bad[T: Missing]:\n    value: T\n\ndef main():\n    pass\n",
+            "unknown trait `Missing`",
+        ),
+        (
+            "class Bad:\n    value: Missing\n\ndef main():\n    pass\n",
+            "unknown type `Missing`",
+        ),
+        (
+            "class Bad:\n    def value[T: Missing](self, value: T) -> T:\n        return value\n\ndef main():\n    pass\n",
+            "unknown trait `Missing`",
+        ),
+        (
+            "class Bad:\n    def value(self) -> Missing:\n        pass\n\ndef main():\n    pass\n",
+            "unknown type `Missing`",
+        ),
+        (
+            "class Bad:\n    def value(self) -> borrow[missing] int32:\n        return 1\n\ndef main():\n    pass\n",
+            "borrow source `missing` must name a borrowed parameter",
+        ),
+        (
+            "def value[T: Missing](value: T) -> T:\n    return value\n\ndef main():\n    pass\n",
+            "unknown trait `Missing`",
+        ),
+        (
+            "def value() -> Missing:\n    pass\n\ndef main():\n    pass\n",
+            "unknown type `Missing`",
+        ),
+        (
+            "trait Show:\n    def render() -> String\n\nclass Box:\n    value: int32\n\nimpl[T: Missing] Show for Box:\n    def render() -> String:\n        return \"x\"\n\ndef main():\n    pass\n",
+            "unknown trait `Missing`",
+        ),
+        (
+            "trait Pair[A, B]:\n    def render() -> String\n\nclass Box:\n    value: int32\n\nimpl Pair for Box:\n    def render() -> String:\n        return \"x\"\n\ndef main():\n    pass\n",
+            "expects exactly 2 type arguments",
+        ),
+        (
+            "trait Transform:\n    def map[T](value: T) -> T\n\nclass Box:\n    value: int32\n\nimpl Transform for Box:\n    def map[T: Missing](value: T) -> T:\n        return value\n\ndef main():\n    pass\n",
+            "unknown trait `Missing`",
+        ),
+        (
+            "trait Show:\n    def render() -> String\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def render() -> Missing:\n        pass\n\ndef main():\n    pass\n",
+            "unknown type `Missing`",
+        ),
+        (
+            "trait Ref:\n    def get(self) -> borrow[self] int32\n\nclass Box:\n    value: int32\n\nimpl Ref for Box:\n    def get(self) -> borrow[missing] int32:\n        return self.value\n\ndef main():\n    pass\n",
+            "borrow source `missing` must name a borrowed parameter",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err("invalid program should fail checking");
+        assert!(
+            error.message.contains(expected),
+            "expected `{expected}` in `{}`",
+            error.message
+        );
+    }
+}
+
+#[test]
 fn check_lowers_generic_top_level_items_and_impls() {
     let program = check(
             crate::parser::parse(
@@ -7050,6 +12435,86 @@ fn check_lowers_generic_top_level_items_and_impls() {
             .return_type,
         Type::TypeParam("T".to_string())
     );
+
+    let supertrait_program = check(
+        crate::parser::parse(include_str!("../../../examples/traits/supertraits.au"))
+            .expect("supertraits example should parse"),
+    )
+    .expect("supertraits example should type check");
+    let labelled = supertrait_program
+        .traits
+        .get("Labelled")
+        .expect("Labelled trait should lower");
+    assert_eq!(labelled.supertraits.len(), 1);
+    assert_eq!(labelled.supertraits[0].trait_name, "Named");
+    assert!(labelled.methods.contains_key("label"));
+
+    let bounded_program = check(
+        crate::parser::parse(include_str!("../../../examples/generics/bounded_types.au"))
+            .expect("bounded generics example should parse"),
+    )
+    .expect("bounded generics example should type check");
+    let wrapper = bounded_program
+        .classes
+        .get("Wrapper")
+        .expect("Wrapper class should lower");
+    assert_eq!(wrapper.type_param_bounds["T"][0].trait_name, "Named");
+    let maybe_named = bounded_program
+        .enums
+        .get("MaybeNamed")
+        .expect("MaybeNamed enum should lower");
+    assert_eq!(maybe_named.type_param_bounds["T"][0].trait_name, "Named");
+
+    let default_method_program = crate::check_source(
+        "\
+trait DefaultMapper[T]:
+    def identity(self, value: T) -> T:
+        return value
+
+class Box:
+    value: int32
+
+impl DefaultMapper[int32] for Box:
+    pass
+
+def main():
+    pass
+",
+    )
+    .expect("impls should inherit default trait methods with substituted signatures");
+    let default_impl = default_method_program
+        .trait_impls
+        .iter()
+        .find(|info| info.trait_name == "DefaultMapper")
+        .expect("DefaultMapper impl should exist");
+    let identity = default_impl
+        .methods
+        .get("identity")
+        .expect("default method should be inherited by the impl");
+    assert_eq!(identity.signature.params, vec![Type::named("int32")]);
+    assert_eq!(identity.signature.return_type, Type::named("int32"));
+
+    let default_associated_program = crate::check_source(
+        "\
+trait Factory:
+    def answer() -> int32:
+        return 42
+
+def main():
+    pass
+",
+    )
+    .expect("default associated trait methods should be checked in trait scope");
+    let factory = default_associated_program
+        .traits
+        .get("Factory")
+        .expect("Factory trait should exist");
+    let answer = factory
+        .methods
+        .get("answer")
+        .expect("default associated method should exist");
+    assert!(answer.signature.params.is_empty());
+    assert_eq!(answer.signature.return_type, Type::named("int32"));
 }
 
 #[test]
@@ -7217,6 +12682,7 @@ fn lower_type_and_imported_context_helpers_cover_builtin_and_context_paths() {
                 ),
             ]),
             module_registry: BTreeMap::from([("pkg.tools".to_string(), registry_root)]),
+            is_entry_module: true,
         },
     )
     .expect("imported binding kinds should seed program context");

@@ -596,5 +596,5 @@ Current expression/ergonomics limitations:
 - queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all use the shared evented runtime scheduler
 - Aurora tasks are scheduler-backed lightweight tasks, and ordinary file I/O now also offloads through the shared scheduler instead of pinning a task on a blocking host thread
 - Unix domain sockets require a Unix host at runtime
-- subprocess APIs are shell-free and use explicit argv vectors; there is not yet a PTY, process-group, or restart-supervisor surface
+- subprocess APIs are shell-free and use explicit argv vectors; process groups and restart supervision are implemented, while PTY support is not
 - borrowed return labels such as `borrow[shared]` are supported on borrowed parameters and returns for advanced zero-copy APIs
