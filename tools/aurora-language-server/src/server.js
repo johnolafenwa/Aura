@@ -12,13 +12,14 @@ const {
   TextDocumentSyncKind
 } = require("vscode-languageserver/node");
 const { TextDocument } = require("vscode-languageserver-textdocument");
+const { pathToFileURL } = require("node:url");
 const {
   completionsForDocument,
   definitionForPosition,
   diagnosticsForDocument,
   documentSymbols,
   hoverForPosition
-} = require("./analysis");
+} = require("./recovery");
 const {
   analyzeWithCompiler,
   completeWithCompiler,
@@ -28,17 +29,27 @@ const {
   compilerSymbolsToLsp,
   setWorkspaceRoots
 } = require("./compiler_bridge");
-const {
-  createDocumentStateCache,
-  validateOpenDocuments
-} = require("./document_state");
+const { createDocumentStateCache } = require("./document_state");
 const { uriToPath } = require("./uri");
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
-const documentStateCache = createDocumentStateCache((document) =>
-  analyzeWithCompiler(document.uri, document.getText())
+const documentStateCache = createDocumentStateCache(
+  (document) => analyzeWithCompiler(document.uri, document.getText()),
+  (analysis) => {
+    const dependencies = new Set();
+    for (const occurrence of analysis && Array.isArray(analysis.occurrences)
+      ? analysis.occurrences
+      : []) {
+      const filePath = occurrence.definition && occurrence.definition.file_path;
+      if (filePath) {
+        dependencies.add(pathToFileURL(filePath).toString());
+      }
+    }
+    return dependencies;
+  }
 );
+const validationTimers = new Map();
 
 connection.onInitialize((params) => {
   setWorkspaceRoots(extractWorkspaceRoots(params));
@@ -55,7 +66,7 @@ connection.onInitialize((params) => {
   };
 });
 
-connection.onCompletion(async (params) => {
+connection.onCompletion(async (params, cancellationToken) => {
   const document = documents.get(params.textDocument.uri);
   if (!document) {
     return [];
@@ -66,7 +77,8 @@ connection.onCompletion(async (params) => {
     document.getText(),
     params.position.line,
     params.position.character,
-    params.context ? params.context.triggerCharacter || null : null
+    params.context ? params.context.triggerCharacter || null : null,
+    cancellationToken
   );
   if (compilerItems) {
     return compilerItems.map((item) => ({
@@ -191,20 +203,20 @@ connection.onDefinition(async (params) => {
 });
 
 documents.onDidOpen((event) => {
-  documentStateCache.invalidateAll();
-  void validateAllDocuments();
+  scheduleValidation(documentStateCache.invalidate(event.document.uri));
 });
 
 documents.onDidChangeContent((event) => {
-  documentStateCache.invalidateAll();
-  void validateAllDocuments();
+  scheduleValidation(documentStateCache.invalidate(event.document.uri));
 });
 
 documents.onDidClose((event) => {
-  documentStateCache.invalidateAll();
+  const affected = documentStateCache.invalidate(event.document.uri);
+  affected.delete(event.document.uri);
   documentStateCache.deleteDocument(event.document.uri);
+  clearValidationTimer(event.document.uri);
   connection.sendDiagnostics({ uri: event.document.uri, diagnostics: [] });
-  void validateAllDocuments();
+  scheduleValidation(affected);
 });
 
 documents.listen(connection);
@@ -251,7 +263,12 @@ function toDocumentSymbol(document, symbol) {
 }
 
 function validateDocument(document) {
+  const requestedVersion = document.version;
   return getDocumentState(document).then((state) => {
+    const current = documents.get(document.uri);
+    if (!current || current.version !== requestedVersion || state.version !== requestedVersion) {
+      return;
+    }
     const diagnostics = state.compilerAnalysis
       ? compilerDiagnosticsToLsp(state.compilerAnalysis)
       : diagnosticsForDocument(document.getText()).map((diagnostic) => ({
@@ -275,8 +292,26 @@ async function getDocumentState(document) {
   return documentStateCache.get(document);
 }
 
-async function validateAllDocuments() {
-  await validateOpenDocuments(documents, validateDocument);
+function clearValidationTimer(uri) {
+  const timer = validationTimers.get(uri);
+  if (timer) {
+    clearTimeout(timer);
+    validationTimers.delete(uri);
+  }
+}
+
+function scheduleValidation(uris) {
+  for (const uri of uris) {
+    clearValidationTimer(uri);
+    const timer = setTimeout(() => {
+      validationTimers.delete(uri);
+      const document = documents.get(uri);
+      if (document) {
+        void validateDocument(document);
+      }
+    }, 150);
+    validationTimers.set(uri, timer);
+  }
 }
 
 function extractWorkspaceRoots(params) {

@@ -10,6 +10,7 @@ const path = require("node:path");
 const {
   analyzeWithCompiler,
   binaryName,
+  CompilerService,
   completeWithCompiler,
   compilerDefinitionAtPosition,
   compilerDefinitionToLspLocation,
@@ -17,12 +18,15 @@ const {
   compilerHoverAtPosition,
   compilerSymbolsToLsp,
   findOccurrence,
+  disposeCompilerService,
   resolveCompilerCommand,
   runCommand,
   setWorkspaceRoots
   ,
   uriToPath
 } = require("../src/compiler_bridge");
+
+test.after(() => disposeCompilerService());
 
 const repoRoot = path.join(__dirname, "../../..");
 const pointPath = path.join(repoRoot, "examples/point.au");
@@ -378,7 +382,7 @@ test("compiler bridge returns null when compiler output fails or is not valid JS
     const invalidJsonScript = path.join(tempRoot, "invalid-json.js");
     fs.writeFileSync(
       invalidJsonScript,
-      "process.stdin.resume();process.stdin.on('end',()=>process.stdout.write('not json'));"
+      "process.stdin.once('data',()=>process.stdout.write('not json\\n'));"
     );
     process.env.AURORA_LSP_AURA_PATH = path.join(tempRoot, "aurora-invalid-json");
     fs.writeFileSync(
@@ -400,6 +404,145 @@ test("compiler bridge returns null when compiler output fails or is not valid JS
   }
 });
 
+test("compiler bridge reuses one persistent compiler process", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-bridge-persistent-"));
+  const originalEnvPath = process.env.AURORA_LSP_AURA_PATH;
+  try {
+    const counterPath = path.join(tempRoot, "starts.txt");
+    const fakeCompiler = path.join(tempRoot, "aurora-persistent");
+    const script = path.join(tempRoot, "persistent.js");
+    fs.writeFileSync(
+      script,
+      [
+        "const fs = require('node:fs');",
+        "const readline = require('node:readline');",
+        `fs.appendFileSync(${JSON.stringify(counterPath)}, 'start\\n');`,
+        "if (process.argv[2] !== 'lsp') process.exit(2);",
+        "const lines = readline.createInterface({ input: process.stdin });",
+        "lines.on('line', (line) => {",
+        "  const request = JSON.parse(line);",
+        "  const result = request.method === 'analyze'",
+        "    ? { diagnostics: [], symbols: [], occurrences: [] }",
+        "    : [{ name: 'len', kind: 'method', detail: 'len() -> intsize' }];",
+        "  process.stdout.write(JSON.stringify({ id: request.id, result }) + '\\n');",
+        "});"
+      ].join("\n")
+    );
+    fs.writeFileSync(fakeCompiler, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+    fs.chmodSync(fakeCompiler, 0o755);
+    process.env.AURORA_LSP_AURA_PATH = fakeCompiler;
+    setWorkspaceRoots([]);
+
+    const analysis = await analyzeWithCompiler("file:///workspace/main.au", "print(1)\n");
+    const completions = await completeWithCompiler(
+      "file:///workspace/main.au",
+      "value.\n",
+      0,
+      6,
+      null
+    );
+    assert.deepEqual(analysis.diagnostics, []);
+    assert.equal(completions[0].name, "len");
+    assert.equal(fs.readFileSync(counterPath, "utf8").trim().split("\n").length, 1);
+  } finally {
+    disposeCompilerService();
+    if (originalEnvPath === undefined) {
+      delete process.env.AURORA_LSP_AURA_PATH;
+    } else {
+      process.env.AURORA_LSP_AURA_PATH = originalEnvPath;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("persistent compiler service handles errors, cancellation, and closed requests", async () => {
+  const script = [
+    "const readline = require('node:readline');",
+    "const lines = readline.createInterface({ input: process.stdin });",
+    "lines.on('line', (line) => {",
+    "  const request = JSON.parse(line);",
+    "  if (request.method === 'error') {",
+    "    process.stdout.write(JSON.stringify({ id: request.id, error: 'compiler boom' }) + '\\n');",
+    "  }",
+    "});"
+  ].join("\n");
+  const command = { cmd: process.execPath, args: ["-e", script], cwd: repoRoot };
+  const service = new CompilerService(command);
+  let responseDisposals = 0;
+  const responseToken = {
+    isCancellationRequested: false,
+    onCancellationRequested() {
+      return { dispose: () => responseDisposals++ };
+    }
+  };
+  await assert.rejects(service.request("error", {}, responseToken), /compiler boom/);
+  assert.equal(responseDisposals, 1);
+  await assert.rejects(
+    service.request("ignored", {}, { isCancellationRequested: true }),
+    /cancelled/
+  );
+
+  let cancel;
+  let cancellationDisposals = 0;
+  const cancellationToken = {
+    isCancellationRequested: false,
+    onCancellationRequested(handler) {
+      cancel = handler;
+      return { dispose: () => cancellationDisposals++ };
+    }
+  };
+  const pending = service.request("hang", {}, cancellationToken);
+  await new Promise((resolve) => setImmediate(resolve));
+  cancel();
+  await assert.rejects(pending, /cancelled/);
+  assert.equal(cancellationDisposals, 1);
+  await assert.rejects(service.request("after-close", {}), /closed/);
+  service.fail(new Error("already closed"));
+  service.dispose();
+});
+
+test("persistent compiler service enforces timeout and response-size limits", async () => {
+  const hanging = new CompilerService(
+    {
+      cmd: process.execPath,
+      args: ["-e", "process.stdin.resume()"],
+      cwd: repoRoot
+    },
+    { requestTimeoutMs: 10, responseLimitBytes: 1024 }
+  );
+  await assert.rejects(hanging.request("analyze", {}), /timed out after 10ms/);
+  hanging.dispose();
+
+  const oversized = new CompilerService(
+    {
+      cmd: process.execPath,
+      args: ["-e", "process.stdin.once('data',()=>process.stdout.write('x'.repeat(32)))"],
+      cwd: repoRoot
+    },
+    { requestTimeoutMs: 1000, responseLimitBytes: 16 }
+  );
+  await assert.rejects(oversized.request("analyze", {}), /exceeded 16 MiB/);
+  oversized.dispose();
+});
+
+test("persistent compiler service reports spawn and empty-stderr exit failures", async () => {
+  const missing = new CompilerService({
+    cmd: path.join(os.tmpdir(), "definitely-missing-aurora-compiler"),
+    args: [],
+    cwd: repoRoot
+  });
+  await assert.rejects(missing.request("analyze", {}), /ENOENT/);
+  missing.dispose();
+
+  const exited = new CompilerService({
+    cmd: process.execPath,
+    args: ["-e", "process.exit(7)"],
+    cwd: repoRoot
+  });
+  await assert.rejects(exited.request("analyze", {}), /status 7/);
+  exited.dispose();
+});
+
 test("compiler bridge accepts non-file URIs when using the compiler subprocess helpers", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-bridge-memory-uri-"));
   const originalEnvPath = process.env.AURORA_LSP_AURA_PATH;
@@ -410,17 +553,16 @@ test("compiler bridge accepts non-file URIs when using the compiler subprocess h
     fs.writeFileSync(
       fakeCompilerScript,
       [
-        "const args = process.argv.slice(2);",
-        "const command = args[0];",
-        "const stdinPath = args[args.indexOf('--stdin') + 1];",
-        "if (command === 'analyze') {",
-        "  process.stdout.write(JSON.stringify({ diagnostics: [], symbols: [], occurrences: [{ line: 0, start_character: 0, end_character: 3, hover: stdinPath, definition: null }] }));",
-        "} else if (command === 'complete') {",
-        "  process.stdout.write(JSON.stringify([{ label: stdinPath }]));",
-        "} else {",
-        "  process.stderr.write('unexpected command');",
-        "  process.exit(1);",
-        "}"
+        "const readline = require('node:readline');",
+        "if (process.argv[2] !== 'lsp') process.exit(2);",
+        "const lines = readline.createInterface({ input: process.stdin });",
+        "lines.on('line', (line) => {",
+        "  const request = JSON.parse(line);",
+        "  const result = request.method === 'analyze'",
+        "    ? { diagnostics: [], symbols: [], occurrences: [{ line: 0, start_character: 0, end_character: 3, hover: request.path, definition: null }] }",
+        "    : [{ label: request.path }];",
+        "  process.stdout.write(JSON.stringify({ id: request.id, result }) + '\\n');",
+        "});"
       ].join("\n")
     );
     fs.writeFileSync(fakeCompiler, `#!/bin/sh\nexec "${process.execPath}" "${fakeCompilerScript}" "$@"\n`);
@@ -1253,6 +1395,40 @@ test("compiler bridge includes builtin process module and resource members", asy
     assert.ok(completedNames.has("stderr"));
     assert.ok(completedNames.has("stdout_bytes"));
     assert.ok(completedNames.has("stderr_bytes"));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge exposes control-plane module completions", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-control-plane-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const modules = ["sys", "path", "json", "toml", "log", "metrics", "trace"];
+    const prelude = [...modules.map((name) => `import ${name}`), "", "def main() -> int32:"];
+    const completions = async (moduleName) => {
+      const line = `    ${moduleName}.`;
+      const source = [...prelude, line, "    return 0"].join("\n");
+      const lineIndex = prelude.length;
+      const items = await completeWithCompiler(
+        mainUri,
+        source,
+        lineIndex,
+        line.length,
+        "."
+      );
+      assert.ok(items);
+      return new Set(items.map((item) => item.name));
+    };
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    assert.ok((await completions("sys")).has("args"));
+    assert.ok((await completions("path")).has("join"));
+    assert.ok((await completions("json")).has("parse_string_map"));
+    assert.ok((await completions("toml")).has("stringify_map"));
+    assert.ok((await completions("log")).has("info"));
+    assert.ok((await completions("metrics")).has("increment"));
+    assert.ok((await completions("trace")).has("event"));
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

@@ -7,42 +7,206 @@ const { spawn } = require("node:child_process");
 const { uriToPath } = require("./uri");
 
 let workspaceRoots = [];
+let compilerService = null;
+let compilerServiceKey = null;
+const COMPILER_REQUEST_TIMEOUT_MS = 15_000;
+const COMPILER_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
 
 function setWorkspaceRoots(roots) {
-  workspaceRoots = Array.isArray(roots) ? roots.filter(Boolean) : [];
+  const nextRoots = Array.isArray(roots) ? roots.filter(Boolean) : [];
+  if (JSON.stringify(nextRoots) !== JSON.stringify(workspaceRoots)) {
+    disposeCompilerService();
+  }
+  workspaceRoots = nextRoots;
 }
 
-async function analyzeWithCompiler(uri, text) {
-  const command = resolveCompilerCommand();
-
+async function analyzeWithCompiler(uri, source) {
   try {
-    const stdout = await runCommand(
-      command.cmd,
-      [...command.args, "analyze", "--stdin", uriToPath(uri) || uri],
-      text,
-      command.cwd
+    return await requestCompiler("analyze", {
+      path: uriToPath(uri) || uri,
+      source
+    });
+  } catch (error) {
+    reportCompilerFailure("analysis", error);
+    return null;
+  }
+}
+
+async function completeWithCompiler(
+  uri,
+  source,
+  line,
+  character,
+  triggerCharacter,
+  cancellationToken
+) {
+  try {
+    return await requestCompiler(
+      "complete",
+      {
+        path: uriToPath(uri) || uri,
+        source,
+        line,
+        character,
+        trigger: triggerCharacter || null
+      },
+      cancellationToken
     );
-    return JSON.parse(stdout);
-  } catch (_error) {
+  } catch (error) {
+    reportCompilerFailure("completion", error);
     return null;
   }
 }
 
-async function completeWithCompiler(uri, text, line, character, triggerCharacter) {
+function requestCompiler(method, params, cancellationToken) {
   const command = resolveCompilerCommand();
-
-  const args = [...command.args, "complete", "--line", String(line), "--character", String(character)];
-  if (triggerCharacter) {
-    args.push("--trigger", triggerCharacter);
+  const key = JSON.stringify(command);
+  if (!compilerService || compilerService.closed || compilerServiceKey !== key) {
+    disposeCompilerService();
+    compilerService = new CompilerService(command);
+    compilerServiceKey = key;
   }
-  args.push("--stdin", uriToPath(uri) || uri);
+  return compilerService.request(method, params, cancellationToken);
+}
 
-  try {
-    const stdout = await runCommand(command.cmd, args, text, command.cwd);
-    return JSON.parse(stdout);
-  } catch (_error) {
-    return null;
+class CompilerService {
+  constructor(
+    command,
+    {
+      requestTimeoutMs = COMPILER_REQUEST_TIMEOUT_MS,
+      responseLimitBytes = COMPILER_RESPONSE_LIMIT_BYTES
+    } = {}
+  ) {
+    this.command = command;
+    this.nextId = 1;
+    this.pending = new Map();
+    this.stdoutBuffer = "";
+    this.stderrBuffer = "";
+    this.closed = false;
+    this.requestTimeoutMs = requestTimeoutMs;
+    this.responseLimitBytes = responseLimitBytes;
+    this.child = spawn(command.cmd, [...command.args, "lsp"], {
+      cwd: command.cwd,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    this.child.stdout.setEncoding("utf8");
+    this.child.stderr.setEncoding("utf8");
+    this.child.stdout.on("data", (chunk) => this.handleStdout(chunk));
+    this.child.stderr.on("data", (chunk) => {
+      this.stderrBuffer = (this.stderrBuffer + chunk).slice(-65_536);
+    });
+    this.child.on("error", (error) => this.fail(error));
+    this.child.on("close", (code) => {
+      this.fail(
+        new Error(
+          this.stderrBuffer || `Aurora compiler service exited with status ${code}`
+        )
+      );
+    });
   }
+
+  request(method, params, cancellationToken) {
+    if (this.closed) {
+      return Promise.reject(new Error("Aurora compiler service is closed"));
+    }
+    if (cancellationToken && cancellationToken.isCancellationRequested) {
+      return Promise.reject(new Error("Aurora compiler request was cancelled"));
+    }
+
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.fail(
+          new Error(
+            `Aurora compiler ${method} request timed out after ${this.requestTimeoutMs}ms`
+          ),
+          true
+        );
+      }, this.requestTimeoutMs);
+      const cancellation = cancellationToken
+        ? cancellationToken.onCancellationRequested(() => {
+            this.fail(new Error(`Aurora compiler ${method} request was cancelled`), true);
+          })
+        : null;
+      this.pending.set(id, { resolve, reject, timer, cancellation });
+      this.child.stdin.write(`${JSON.stringify({ id, method, ...params })}\n`);
+    });
+  }
+
+  handleStdout(chunk) {
+    this.stdoutBuffer += chunk;
+    if (Buffer.byteLength(this.stdoutBuffer, "utf8") > this.responseLimitBytes) {
+      this.fail(new Error("Aurora compiler response exceeded 16 MiB"), true);
+      return;
+    }
+
+    let newline = this.stdoutBuffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = this.stdoutBuffer.slice(0, newline);
+      this.stdoutBuffer = this.stdoutBuffer.slice(newline + 1);
+      if (line) {
+        let response;
+        try {
+          response = JSON.parse(line);
+        } catch (error) {
+          this.fail(new Error(`invalid Aurora compiler response: ${error.message}`), true);
+          return;
+        }
+        const pending = this.pending.get(response.id);
+        if (pending) {
+          this.pending.delete(response.id);
+          clearTimeout(pending.timer);
+          if (pending.cancellation) {
+            pending.cancellation.dispose();
+          }
+          if (Object.prototype.hasOwnProperty.call(response, "error")) {
+            pending.reject(new Error(String(response.error)));
+          } else {
+            pending.resolve(response.result);
+          }
+        }
+      }
+      newline = this.stdoutBuffer.indexOf("\n");
+    }
+  }
+
+  fail(error, kill = false) {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    if (kill) {
+      this.child.kill();
+    }
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      if (pending.cancellation) {
+        pending.cancellation.dispose();
+      }
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
+
+  dispose() {
+    if (!this.closed) {
+      this.fail(new Error("Aurora compiler service disposed"), true);
+    }
+  }
+}
+
+function disposeCompilerService() {
+  if (compilerService) {
+    compilerService.dispose();
+  }
+  compilerService = null;
+  compilerServiceKey = null;
+}
+
+function reportCompilerFailure(operation, error) {
+  process.stderr.write(
+    `[aurora-lsp] compiler ${operation} unavailable; using recovery analysis: ${error.message}\n`
+  );
 }
 
 function findOccurrence(analysis, line, character) {
@@ -166,15 +330,6 @@ function resolveCompilerCommand() {
   }
 
   for (const root of workspaceRoots) {
-    if (
-      fs.existsSync(path.join(root, "Cargo.toml")) &&
-      fs.existsSync(path.join(root, "crates", "aura", "Cargo.toml"))
-    ) {
-      return { cmd: "cargo", args: ["run", "-q", "-p", "aura", "--"], cwd: root };
-    }
-  }
-
-  for (const root of workspaceRoots) {
     const debugBinary = path.join(root, "target", "debug", binaryName());
     if (fs.existsSync(debugBinary)) {
       return { cmd: debugBinary, args: [], cwd: root };
@@ -183,6 +338,15 @@ function resolveCompilerCommand() {
     const releaseBinary = path.join(root, "target", "release", binaryName());
     if (fs.existsSync(releaseBinary)) {
       return { cmd: releaseBinary, args: [], cwd: root };
+    }
+  }
+
+  for (const root of workspaceRoots) {
+    if (
+      fs.existsSync(path.join(root, "Cargo.toml")) &&
+      fs.existsSync(path.join(root, "crates", "aura", "Cargo.toml"))
+    ) {
+      return { cmd: "cargo", args: ["run", "-q", "-p", "aura", "--"], cwd: root };
     }
   }
 
@@ -226,6 +390,7 @@ function runCommand(cmd, args, input, cwd) {
 module.exports = {
   analyzeWithCompiler,
   binaryName,
+  CompilerService,
   completeWithCompiler,
   compilerDefinitionAtPosition,
   compilerDefinitionToLspLocation,
@@ -233,6 +398,7 @@ module.exports = {
   compilerHoverAtPosition,
   compilerSymbolsToLsp,
   findOccurrence,
+  disposeCompilerService,
   resolveCompilerCommand,
   runCommand,
   setWorkspaceRoots,

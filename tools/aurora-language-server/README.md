@@ -19,22 +19,19 @@ Current compiler-backed analysis covers:
 - hover
 - go-to-definition
 
-The server queries:
+The server starts one persistent compiler service:
 
-- `aura analyze --stdin <virtual-path>`
-- `aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>`
+- `aura lsp`
 
-and caches compiler analysis per document version.
+Requests and responses are newline-delimited JSON. The server caches compiler analysis per document version, debounces changes, cancels obsolete completion work, guards asynchronous responses by document version, and invalidates only changed documents and their dependents.
 
-Current lightweight fallback analysis understands:
+If the compiler process cannot be started, the lexical recovery layer provides only:
 
-- top-level functions, classes, and enums
-- built-in generic enums `Result` and `Option`
-- class fields, methods, and associated methods
-- function locals, method `self`, enum match payload bindings, and `for` loop bindings
-- builtin helpers such as `print`, `range`, and `float64.sqrt()`
+- recovered top-level declarations and nested method declarations
+- top-level keywords, builtins, and recovered declaration completions
+- same-file hover and definition for recovered declarations
 
-The fallback path is kept for environments where a usable `aura` compiler command is not available yet, and for buffers the compiler cannot parse or type-check while the user is in the middle of editing.
+The recovery path deliberately has no semantic diagnostics or member inference. Incomplete buffers are normally handled by compiler recovery; JavaScript no longer carries a second Aurora type system.
 
 ## Development
 
@@ -54,11 +51,11 @@ If you want the VS Code extension package to carry the current language server i
 - `src/server.js`
   - LSP transport and request handlers
 - `src/compiler_bridge.js`
-  - invokes the Aurora compiler for machine-readable analysis
-- `src/analysis.js`
-  - fallback Aurora document analysis and completion support
+  - owns the persistent compiler process and machine-readable request lifecycle
+- `src/recovery.js`
+  - lexical compiler-unavailable recovery only
 
 The current direction is:
 
 - keep diagnostics and navigation on compiler-owned analysis
-- keep the local analysis layer only as a fallback path rather than the primary semantic engine
+- keep recovery lexical so semantic behavior has exactly one implementation
