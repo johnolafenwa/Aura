@@ -220,7 +220,7 @@ with file = try fs.open("data.txt"):
     print(text)
 ```
 
-When the block exits, Aurora runs the resource's cleanup path. Cleanup fires on normal exit **and** on runtime errors that unwind through the scope, in both the interpreter and native builds. `with` is the place where "I borrowed a resource" becomes "the resource has definitely been released."
+When the block exits, Aurora runs the resource's cleanup path. Cleanup fires on normal exit **and** on runtime errors that unwind through the scope, in both `aura run` and built programs. `with` is the place where "I borrowed a resource" becomes "the resource has definitely been released."
 
 ## A Checklist
 

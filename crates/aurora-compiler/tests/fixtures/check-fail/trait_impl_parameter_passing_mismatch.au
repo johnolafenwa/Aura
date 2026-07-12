@@ -1,0 +1,9 @@
+trait Show:
+    def show(borrow self, text: borrow String) -> int32
+
+class Box:
+    value: int32
+
+impl Show for Box:
+    def show(borrow self, text: String) -> int32:
+        return self.value

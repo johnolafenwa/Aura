@@ -2,7 +2,7 @@
 
 This directory is the beginning of the Aurora tutorial track: a book-style set of Markdown chapters that explains the language as it exists in the repository today.
 
-These tutorials are intentionally scoped to the implemented subset of Aurora. They should stay in sync with the compiler, the examples, and the language proposal.
+These tutorials are intentionally scoped to the implemented subset of Aurora. They should stay in sync with the compiler, the examples, and the normative Manual. The original language proposal is historical design material, not the source of current behavior.
 
 ## Maintenance Rule
 
@@ -62,6 +62,6 @@ The current tutorial set covers:
 - CLI inspection commands such as `check`, `ast`, `ast-json`, `analyze`, `complete`, and `mir`
 - compiler-backed VS Code diagnostics, navigation, and completions
 
-Use `14-current-language-surface.md` as the compact truth source for the currently implemented subset. The earlier chapters should explain that surface progressively, but that reference chapter should stay exhaustive for the bootstrap compiler.
+Use the normative [Language Specification](../docs/manual/language-specification.md) and [Manual](../docs/manual/index.md) as the exhaustive truth source. `14-current-language-surface.md` is a compact tutorial recap; the earlier chapters should explain the maintained surface progressively.
 
 It does not yet attempt to teach features that are still only in the proposal.

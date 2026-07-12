@@ -126,7 +126,7 @@ See [I/O Module](/manual/io) and [Filesystem Module](/manual/filesystem).
 | --- | --- | --- |
 | `io.write` | `write(text: String) -> Result[None, io.Error]` | Writes text without a newline. |
 | `io.flush` | `flush() -> Result[None, io.Error]` | Flushes standard output. |
-| `io.read_line` | `read_line() -> Result[Option[String], io.Error]` | Reads one line from standard input; `Ok(None)` on EOF. |
+| `io.read_line` | `read_line() -> Result[Option[String], io.Error]` | Reads strict UTF-8 without trailing LF/CRLF; `Ok(None)` on EOF. |
 | `fs.exists` | `exists(path: String) -> bool` | Path existence check. |
 | `fs.read_to_string` | `read_to_string(path: String) -> Result[String, io.Error]` | Reads UTF-8 text, capped at 64 MiB. |
 | `fs.read_bytes` | `read_bytes(path: String) -> Result[Vec[uint8], io.Error]` | Reads bytes, capped at 64 MiB. |
@@ -135,13 +135,13 @@ See [I/O Module](/manual/io) and [Filesystem Module](/manual/filesystem).
 | `fs.append_string` | `append_string(path: String, text: String) -> Result[None, io.Error]` | Appends text. |
 | `fs.append_bytes` | `append_bytes(path: String, bytes: Vec[uint8]) -> Result[None, io.Error]` | Appends bytes. |
 | `fs.create_dir` | `create_dir(path: String) -> Result[None, io.Error]` | Creates one directory. |
-| `fs.read_dir` | `read_dir(path: String) -> Result[Vec[String], io.Error]` | Returns directory entries. |
+| `fs.read_dir` | `read_dir(path: String) -> Result[Vec[String], io.Error]` | Returns sorted immediate entry names, with lossy host-path decoding. |
 | `fs.remove_file` | `remove_file(path: String) -> Result[None, io.Error]` | Removes a file. |
 | `fs.open` | `open(path: String) -> Result[fs.File, io.Error]` | Opens for reading. |
 | `fs.create` | `create(path: String) -> Result[fs.File, io.Error]` | Creates or truncates for writing. |
 | `fs.append` | `append(path: String) -> Result[fs.File, io.Error]` | Opens for append, creating if needed. |
-| `fs.File.read_all` | `read_all() -> Result[String, io.Error]` | Reads remaining file text. |
-| `fs.File.read_bytes` | `read_bytes() -> Result[Vec[uint8], io.Error]` | Reads remaining file bytes. |
+| `fs.File.read_all` | `read_all() -> Result[String, io.Error]` | Reads remaining strict UTF-8 text, capped at 64 MiB. |
+| `fs.File.read_bytes` | `read_bytes() -> Result[Vec[uint8], io.Error]` | Reads remaining bytes, capped at 64 MiB. |
 | `fs.File.write_all` | `write_all(text: String) -> Result[None, io.Error]` | Writes all text. |
 | `fs.File.write_bytes` | `write_bytes(bytes: Vec[uint8]) -> Result[None, io.Error]` | Writes all bytes. |
 | `fs.File.flush` | `flush() -> Result[None, io.Error]` | Flushes pending writes. |
@@ -172,6 +172,8 @@ See [Control-Plane Modules](/manual/control-plane).
 | `metrics.get` | `(name: String) -> int64` |
 | `metrics.reset` | `() -> None` |
 
+Metrics are process-global `int64` counters; missing names read as zero and overflow is a runtime diagnostic. JSON/TOML maps serialize in sorted key order. See the module chapter for exact host-string/path and telemetry-record rules.
+
 ## Network Constructors And HTTP Client Helpers
 
 See [Network Module](/manual/network) for behavior and examples.
@@ -198,6 +200,8 @@ See [Network Module](/manual/network) for behavior and examples.
 | `net.http_request_bytes_timeout` | `http_request_bytes_timeout(method: String, url: String, bytes: Vec[uint8], headers: Map[String, String], timeout: Duration) -> Result[net.HttpResponse, io.Error]` |
 
 ## Network Resource Methods
+
+Bounded stream read counts are `1..=67108864`; UDP receive counts are `1..=65535`. HTTP accepts at most 64 headers and 1 MiB messages; WebSocket limits are 64 MiB per message and 16 MiB per frame/write buffer. See [Network Module](/manual/network) for timeout, EOF, UTF-8, cancellation, and repeated-header contracts.
 
 | Type | API | Signature |
 | --- | --- | --- |
@@ -304,6 +308,8 @@ See [Process Module](/manual/process) for defaults, groups, and supervisor behav
 | `process.Supervisor.stop` | `stop() -> Result[None, process.Error]` |
 | `process.Supervisor.is_empty` | `is_empty() -> bool` |
 | `process.Supervisor.close` | `close() -> None` |
+
+Pipe `read_bytes` returns `Ok(None)` only at EOF; timeout and cancellation are `process.Error` variants. Whole/captured reads are capped at 64 MiB. `process.Completed.stdout()` and `.stderr()` raise a runtime diagnostic on invalid UTF-8, so byte accessors are the safe boundary for untrusted output.
 
 ## Builtin Enum Variants
 

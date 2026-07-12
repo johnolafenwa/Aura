@@ -146,7 +146,7 @@ aura deps update util
 - `aura build -o <output> <file.au>`
   - compile a standalone native binary for a program
   - this accepts `--backend auto|direct`
-  - `auto` is the default and uses the direct native backend for the maintained Aurora surface
+  - `auto` is the default; it first tries the direct native backend and may fall back to a standalone embedded-MIR launcher when direct emission is unavailable
   - `direct` forces the new low-level native backend for the full currently implemented Aurora language surface
   - source-checkout builds can refresh the runtime through Cargo; packaged release builds use the bundled runtime and require only a host C compiler
   - file-backed and stdin-backed programs with local module imports and package dependencies now build correctly through this path
@@ -216,5 +216,5 @@ The current `aura build` matrix is:
 The maintained execution architecture is now:
 
 1. `aura run` executes through the MIR runtime
-2. `aura build --backend auto|direct` produces native binaries through the direct backend
+2. `aura build --backend direct` requires direct native emission; `--backend auto` may instead package MIR with the native runtime when direct emission is unavailable
 3. both execution paths now cover the maintained Aurora language surface, including builtin text/binary file I/O, shell-free subprocess helpers, plus TCP, UDP, HTTP, WebSocket, Unix-socket, and TLS networking

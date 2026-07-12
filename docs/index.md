@@ -59,7 +59,7 @@ These are the ideas the Learn track builds on.
 
 [Learn Aurora](/learn/) is a guided path. It begins with runnable scripts, then grows into programs that have domain types, failure paths, owned resources, child tasks, and I/O.
 
-[The Manual](/manual/) is the language reference and the standard library contract. It is the place to look when you need a precise answer about syntax, ownership behaviour, or an API's return type.
+[The Manual](/manual/) is the normative language reference and standard-library contract. Start with the [Language Specification](/manual/language-specification) for its authority and reading order, then use the complete grammar, semantic chapters, execution model, and API chapters to answer precise questions.
 
 When a concept first appears in Learn, the Manual section that defines it is linked nearby.
 

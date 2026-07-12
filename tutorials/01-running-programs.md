@@ -36,12 +36,12 @@ cargo run -p aura -- build -o ./target/aurora-point examples/point.au
 
 The `build` command accepts a `--backend` flag:
 
-- `--backend auto` (the default) -- uses the direct native backend for the maintained Aurora surface
-- `--backend direct` -- explicitly forces the direct native backend
+- `--backend auto` (the default) -- first tries direct native emission and may fall back to a standalone launcher with embedded MIR
+- `--backend direct` -- requires direct native emission and rejects programs that cannot use it
 
-In practice, the default is what you want. The `direct` flag exists for testing and development.
+In practice, the default is what you want. Use `direct` for backend testing or when an embedded-MIR fallback is unacceptable.
 
-The current build step still requires Cargo/Rust and a host C compiler to produce the final binary. Built binaries preserve file, line, and caret context for runtime failures, so stack traces are readable.
+The build step requires a host C compiler. A source-checkout CLI may use Cargo to refresh the native runtime; installed release archives carry that runtime and do not require Rust. Built binaries preserve file, line, and caret context for runtime failures.
 
 ## Inspection Commands
 

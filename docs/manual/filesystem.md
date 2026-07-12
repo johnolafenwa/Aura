@@ -21,13 +21,15 @@ Filesystem APIs return `Result[..., io.Error]` except `fs.exists(...)`, which re
 | `fs.append_string` | `append_string(path: String, text: String) -> Result[None, io.Error]` | Creates or opens `path` and appends `text`. |
 | `fs.append_bytes` | `append_bytes(path: String, bytes: Vec[uint8]) -> Result[None, io.Error]` | Creates or opens `path` and appends bytes. |
 | `fs.create_dir` | `create_dir(path: String) -> Result[None, io.Error]` | Creates one directory. Parent directories must already exist. |
-| `fs.read_dir` | `read_dir(path: String) -> Result[Vec[String], io.Error]` | Returns directory entry paths as strings. |
+| `fs.read_dir` | `read_dir(path: String) -> Result[Vec[String], io.Error]` | Returns the directory's immediate entry names in sorted order. Names that are not valid UTF-8 are converted lossily. |
 | `fs.remove_file` | `remove_file(path: String) -> Result[None, io.Error]` | Removes a file. |
 | `fs.open` | `open(path: String) -> Result[fs.File, io.Error]` | Opens a file for reading. |
 | `fs.create` | `create(path: String) -> Result[fs.File, io.Error]` | Creates or truncates a file for writing. |
 | `fs.append` | `append(path: String) -> Result[fs.File, io.Error]` | Opens a file for appending, creating it if needed. |
 
-The one-shot read cap is part of the API contract. Use file handles when a program needs an incremental or larger workflow.
+The read cap is part of the API contract and also applies to `fs.File.read_all()` and `fs.File.read_bytes()`. Aurora 0.1 has no chunked file-read API, so a program that must process a larger file needs a host-side helper or must split the data before reading it through Aurora.
+
+`fs.read_dir` reports failure to open the directory, but the current implementation silently skips an individual entry whose metadata/read operation fails after opening. Code that requires a complete audited directory snapshot must validate results through a host helper until that defect is fixed.
 
 ## fs.File
 
@@ -43,8 +45,8 @@ def show_file() -> Result[None, io.Error]:
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `read_all` | `read_all() -> Result[String, io.Error]` | Reads remaining file contents as UTF-8 text. |
-| `read_bytes` | `read_bytes() -> Result[Vec[uint8], io.Error]` | Reads remaining file contents as raw bytes. |
+| `read_all` | `read_all() -> Result[String, io.Error]` | Reads remaining file contents as strict UTF-8 text, capped at 64 MiB. |
+| `read_bytes` | `read_bytes() -> Result[Vec[uint8], io.Error]` | Reads remaining file contents as raw bytes, capped at 64 MiB. |
 | `write_all` | `write_all(text: String) -> Result[None, io.Error]` | Writes all of `text` to the file. |
 | `write_bytes` | `write_bytes(bytes: Vec[uint8]) -> Result[None, io.Error]` | Writes all raw bytes to the file. |
 | `flush` | `flush() -> Result[None, io.Error]` | Flushes pending writes to the operating system. |
@@ -69,6 +71,8 @@ def read_image_size() -> Result[int32, io.Error]:
 ```
 
 The same distinction exists on `fs.File`.
+
+All text reads decode UTF-8 strictly and return `io.Error.InvalidData` for invalid input. A read that exceeds 64 MiB also returns `InvalidData`. File writes are not transactional: after cancellation or a host failure, the caller must not assume that no bytes were written.
 
 ## Example: Append A Line
 

@@ -62,7 +62,7 @@ cargo run -p aura -- build --backend auto -o ./target/app app.au
 cargo run -p aura -- build --backend direct -o ./target/app app.au
 ```
 
-`auto` is the default and selects the maintained direct backend for the current Aurora surface. Built binaries are useful for testing native backend parity and deployment behavior.
+`auto` is the default. It first attempts the maintained direct backend and may fall back to a native launcher that embeds serialized MIR and the MIR runtime when direct emission is unavailable. `--backend direct` forbids that fallback. Both forms are standalone executables and must implement the same checked language behavior.
 
 An installed release archive resolves its native runtime relative to `bin/aura`, under `lib/aurora`, and needs only a host C compiler for the final link. A source-checkout binary falls back to Cargo-built runtime artifacts for contributor convenience.
 
@@ -86,7 +86,9 @@ Stdin analysis and completion do not mutate package lockfiles.
 - hover information
 - definition targets
 
-The language server prefers compiler-backed analysis when it succeeds.
+The output is one JSON object with `diagnostics`, `symbols`, and `occurrences` arrays. Positions are zero-based. Diagnostics contain `line`, `start_character`, `end_character`, `message`, and numeric `severity`; symbols additionally contain `name`, `kind`, `detail`, and recursive `children`; occurrences contain `hover` and an optional `definition` range, whose `file_path` may identify another module.
+
+`analyze` exits successfully even when the JSON contains source diagnostics: the request itself succeeded and the diagnostics are data. The language server prefers this compiler-backed analysis when it succeeds.
 
 ## Complete
 
@@ -97,6 +99,36 @@ cargo run -p aura -- complete --line 12 --character 8 --trigger . app.au
 ```
 
 Completion output is intended for tools, not humans, but it is useful when debugging the LSP.
+
+The JSON result is an array of `{ "name": String, "kind": String, "detail": String }` objects. `line` and `character` are zero-based and `--trigger` uses its first character.
+
+## Machine-Readable And Inspection Formats
+
+`ast-json`, `analyze`, `complete`, and `lsp` emit JSON. The `analyze` and `complete` shapes described here are maintained tooling contracts for Aurora 0.1. `ast`, `ast-json`, and `mir` expose compiler inspection data for people and tests; their exact formatting and internal node/block shape are not a stable cross-version serialization API.
+
+`aura lsp` is a persistent JSON-lines compiler service. Each input line is an object with an optional `id`, `method`, `path`, and `source`. Supported requests are:
+
+```json
+{"id":1,"method":"analyze","path":"/absolute/app.au","source":"print(1)\n"}
+{"id":2,"method":"complete","path":"/absolute/app.au","source":"value.\n","line":0,"character":6,"trigger":"."}
+```
+
+Each response is one line containing the same `id` plus either `result` or an `error` string. Paths give the virtual source a package/import context; ranges and completion positions are zero-based.
+
+## Output And Exit Status
+
+| Outcome | Exit status and streams |
+| --- | --- |
+| help/version | `0`; result on stdout |
+| malformed command usage | `2`; usage on stderr |
+| `check` success | `0`; exactly `ok` plus a newline on stdout |
+| compile, build, or runtime failure | `1`; rendered diagnostic on stderr |
+| `run` with `main() -> None` | `0` |
+| `run` with `main() -> int32` | the returned integer requested as the host process status |
+| successful `analyze` containing source diagnostics | `0`; JSON on stdout |
+| `test` with any failed program | `1`; summary on stdout and diagnostics on stderr |
+
+A broken stdout pipe is intentional clean termination and exits `0`; this lets commands compose with consumers such as `head` without printing a secondary failure.
 
 ## VS Code And LSP
 
@@ -125,6 +157,12 @@ Build it with:
 npm run docs:build
 ```
 
+Validate the normative reference structure and navigation with:
+
+```bash
+npm run check:reference
+```
+
 GitHub Pages builds use the same command with `VITEPRESS_BASE=/Aurora/` so project-page asset URLs are rooted correctly.
 
 ## Repository Gates
@@ -135,6 +173,6 @@ The local repo gate is:
 npm run ci
 ```
 
-That gate checks Rust formatting, Rust tests, native/MIR parity, LSP tests and coverage, VS Code extension tests, compiler coverage, docs build, npm and RustSec audits, Clippy with warnings treated as errors, and repository hygiene.
+That gate checks Rust formatting, Rust tests, native/MIR parity, LSP tests and coverage, VS Code extension tests, compiler coverage, reference integrity, docs build, npm and RustSec audits, Clippy with warnings treated as errors, and repository hygiene.
 
 GitHub Actions runs the repo gate on Linux and macOS. The release workflow publishes `v*` tag builds as GitHub Release assets, including platform CLI archives, the packaged VS Code extension, and a static docs archive.

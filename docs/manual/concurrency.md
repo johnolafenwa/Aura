@@ -34,7 +34,7 @@ with group = TaskGroup():
 
 `start` and `start_soon` currently accept named functions and associated methods without `self`. Arguments are moved into the task unless they are copy types. Borrowed task parameters are not supported.
 
-When a `TaskGroup` scope exits, the runtime waits for children. Unread child failures are surfaced instead of being silently lost.
+On normal scope exit, the runtime joins children that continue making bounded progress. It cancels a child left in an indefinitely blocked group-owned wait so cleanup cannot deadlock forever. A failure already observed through its `Task` result is not raised a second time; an unread child failure aborts the group scope and wakes dependent queue/task waits.
 
 ## Task[T]
 
@@ -56,6 +56,8 @@ When a `TaskGroup` scope exits, the runtime waits for children. Unread child fai
 | `Cancelled` | The wait was interrupted by cancellation. |
 
 Use `result` when the program needs to distinguish failure, timeout, and cancellation. Use `result_or_none` or `result_or` only when those outcomes are intentionally equivalent.
+
+The completed value is stored by the task and cloned for each observation. This is ordinary structural cloning for plain data. A result that contains a runtime-backed resource can therefore create aliases to one host resource; until task/resource ownership becomes stricter, transfer such a result to one designated observer only.
 
 ## Queue[T]
 
@@ -134,7 +136,7 @@ The iterator receives `Item(value)` outcomes until the queue is closed, cancella
 
 Cancellation is cooperative. `group.cancel()` marks child tasks as cancelled. Tasks observe that state through:
 
-- `cancelled()`
+- `cancelled()`; the check is also a cooperative scheduler yield point
 - `sleep(...)`
 - queue send and receive waits
 - task result waits
@@ -147,6 +149,8 @@ Long CPU loops should check `cancelled()` directly:
 while not cancelled():
     do_step()
 ```
+
+Cancellation interrupts Aurora's wait for scheduler-aware or worker-backed operations. It cannot forcibly stop an operating-system call that is already running on a blocking worker; such a call may still complete and perform its side effect after the task stops waiting.
 
 ## Detached Work
 

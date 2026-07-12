@@ -1,13 +1,18 @@
-# Aurora Manual
+# Aurora Language Reference
 
-The manual documents Aurora as an implemented language and runtime. It is written for precise answers: syntax, type rules, ownership behavior, runtime effects, module APIs, and CLI contracts.
+This Manual is the normative reference for the implemented Aurora language and runtime. It is written so a reader can reconstruct the language accurately: complete syntax, name and type rules, ownership behavior, execution, module APIs, diagnostics, limits, and tool contracts.
 
-The Learn track tells a story. The manual defines the rules behind that story.
+The Learn track tells a story. A future book may build a longer learning sequence from this material. The reference defines the facts that those teaching materials must preserve.
+
+Start with [Language Specification](/manual/language-specification) for scope, terminology, authority, and conformance language.
 
 ## Language Reference
 
 - [Lexical Structure](/manual/lexical-structure): files, indentation, comments, identifiers, keywords, literals, f-strings, and duration literals.
+- [Complete Grammar](/manual/grammar): normative EBNF, precedence, associativity, contextual syntax, layout, and unsupported forms.
+- [Names And Scopes](/manual/names-and-scopes): modules, imports, visibility, bindings, block scope, no-shadowing, and member lookup.
 - [Types](/manual/types): primitive types, `None`, `Duration`, generic types, copy and move categories, and type annotations.
+- [Static Semantics](/manual/static-semantics): inference, type equality, assignment, calls, operators, constructors, matching, traits, resources, and entrypoints.
 - [Expressions](/manual/expressions): operators, calls, indexing, member access, literals, `match` expressions, `try`, and f-strings.
 - [Statements](/manual/statements): bindings, assignment, control flow, loops, imports, `with`, `pass`, and top-level execution.
 - [Functions](/manual/functions): signatures, default arguments, named arguments, `main`, borrowed parameters, returns, and call binding.
@@ -15,6 +20,7 @@ The Learn track tells a story. The manual defines the rules behind that story.
 - [Enums And Pattern Matching](/manual/enums-and-match): variants, payloads, exhaustiveness, literal patterns, short-form variants, and match value flow.
 - [Generics And Traits](/manual/generics-and-traits): type parameters, trait declarations, impls, bounds, dispatch, and current restrictions.
 - [Ownership And Borrowing](/manual/ownership-and-borrowing): moves, copies, clones, shared borrows, mutable borrows, field moves, and task boundaries.
+- [Execution Model](/manual/execution-model): evaluation order, entry execution, backends, cleanup, runtime failures, scheduling, cancellation, and external effects.
 
 ## Runtime And Library Reference
 
@@ -27,11 +33,13 @@ The Learn track tells a story. The manual defines the rules behind that story.
 - [Packages](/manual/packages): manifests, package roots, import resolution, lockfiles, and editor analysis behavior.
 - [CLI And Tooling](/manual/cli-and-tooling): `aura` commands, diagnostics, analysis JSON, completions, and build modes.
 - [API Index](/manual/api-index): every maintained builtin function, method, enum, and module type in one place.
+- [Diagnostics](/manual/diagnostics): compile-time/runtime categories, source rendering, machine-readable positions, and CLI exit status.
 - [Current Limits](/manual/current-limits): intentional current boundaries and practical workarounds.
+- [Conformance](/manual/conformance): executable fixture/test mapping and the rules for changing the language safely.
 
 ## Conventions Used In This Manual
 
-Code blocks marked `python` contain Aurora code using Python highlighting as a temporary stand-in until the book ships an Aurora grammar. Shell blocks contain repository commands.
+Code blocks marked `python` contain Aurora code using Python highlighting until the documentation theme ships a dedicated highlighter. The language grammar itself is defined by [Complete Grammar](/manual/grammar). Shell blocks contain repository commands.
 
 Signatures use `Duration = ...` for optional timeout parameters whose default is documented in the relevant API section. In general:
 

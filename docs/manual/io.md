@@ -14,7 +14,7 @@ The top-level `print(value)` builtin is separate. It renders a value, writes a n
 | --- | --- | --- |
 | `io.write` | `write(text: String) -> Result[None, io.Error]` | Writes `text` to standard output without adding a newline. |
 | `io.flush` | `flush() -> Result[None, io.Error]` | Flushes standard output. |
-| `io.read_line` | `read_line() -> Result[Option[String], io.Error]` | Reads one line from standard input. Returns `Ok(None)` on EOF. |
+| `io.read_line` | `read_line() -> Result[Option[String], io.Error]` | Reads one strict UTF-8 line from standard input, removes trailing LF/CRLF, and returns `Ok(None)` on EOF. |
 
 Example:
 

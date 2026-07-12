@@ -7743,6 +7743,41 @@ fn check_reports_duplicate_type_params_across_top_level_item_kinds() {
 }
 
 #[test]
+fn check_rejects_duplicate_ordinary_parameter_names() {
+    let cases = [
+        (
+            "def choose(value: int32, value: int32) -> int32:\n    return value\n",
+            "duplicate parameter `value` on function `choose`",
+        ),
+        (
+            "class Counter:\n    value: int32\n\n    def add(borrow self, amount: int32, amount: int32) -> int32:\n        return self.value + amount\n",
+            "duplicate parameter `amount` on method `add`",
+        ),
+        (
+            "trait Combine:\n    def combine(borrow self, other: int32, other: int32) -> int32\n",
+            "duplicate parameter `other` on trait method `combine`",
+        ),
+        (
+            "trait Combine:\n    def combine(borrow self, left: int32, right: int32) -> int32\n\nclass Counter:\n    value: int32\n\nimpl Combine for Counter:\n    def combine(borrow self, value: int32, value: int32) -> int32:\n        return self.value + value\n",
+            "duplicate parameter `value` on impl method `combine`",
+        ),
+        (
+            "class Counter:\n    value: int32\n\n    def add(borrow self, self: int32) -> int32:\n        return self\n",
+            "parameter `self` conflicts with the receiver on method `add`",
+        ),
+    ];
+
+    for (source, expected) in cases {
+        let error = crate::check_source(source).expect_err("duplicate parameters should fail");
+        assert!(
+            error.message.contains(expected),
+            "expected `{expected}` in `{}`",
+            error.message
+        );
+    }
+}
+
+#[test]
 fn lower_type_covers_builtin_generic_and_error_paths() {
     let type_names = BTreeMap::from([
         ("Box".to_string(), Span::new(1, 1)),
@@ -12188,6 +12223,27 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
     assert!(signature_mismatch
         .message
         .contains("method `map` in impl of `Mapper` does not match the trait signature"));
+
+    for source in [
+        "trait Show:\n    def show(borrow self, text: borrow String) -> int32\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(borrow self, text: String) -> int32:\n        return self.value\n",
+        "trait Named:\n    def name(borrow self) -> borrow String\n\nclass User:\n    name: String\n\nimpl Named for User:\n    def name(borrow self) -> String:\n        return self.name.clone()\n",
+        "trait Choose:\n    def choose(borrow self, left: borrow[left] String, right: borrow[right] String) -> borrow[left] String\n\nclass Picker:\n    value: int32\n\nimpl Choose for Picker:\n    def choose(borrow self, left: borrow[left] String, right: borrow[right] String) -> borrow[right] String:\n        return right\n",
+    ] {
+        let error = crate::check_source(source)
+            .expect_err("trait impl passing and borrow-source mismatches should fail");
+        assert!(
+            error
+                .message
+                .contains("does not match the trait signature"),
+            "unexpected diagnostic: {}",
+            error.message
+        );
+    }
+
+    crate::check_source(
+        "trait Identity:\n    def identity(borrow self, value: borrow[source] String) -> borrow[source] String\n\nclass Picker:\n    value: int32\n\nimpl Identity for Picker:\n    def identity(borrow self, renamed: borrow[origin] String) -> borrow[origin] String:\n        return renamed\n",
+    )
+    .expect("equivalent borrowed return sources may use different parameter names and labels");
 
     let missing_method = check(
             crate::parser::parse(

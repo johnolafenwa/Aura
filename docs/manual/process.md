@@ -32,6 +32,8 @@ Signature: `process.run(command: Vec[String], cwd: Option[String] = None, env: M
 
 `process.run(...)` starts a child, waits for it, and returns a `process.Completed` value. By default, stdin is null and stdout/stderr are captured.
 
+The `env` map augments the inherited host environment and replaces inherited values with matching names. Aurora never invokes a shell for `run` or `start`. Capture occurs only for streams configured with `process.pipe()` and each captured stream is capped at 64 MiB.
+
 ```python
 def run_echo() -> Result[None, process.Error]:
     command = ["/bin/echo", "aurora"]
@@ -93,13 +95,15 @@ The caller is responsible for waiting, killing, terminating, or closing the chil
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `read_all` | `read_all() -> Result[String, process.Error]` | Reads remaining UTF-8 text until EOF. Use byte APIs for arbitrary output. |
-| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[String], process.Error]` | Reads one UTF-8 line, `Ok(None)` on EOF, or an error. |
-| `read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], process.Error]` | Reads up to `max_bytes` raw bytes, `Ok(None)` on EOF or timeout depending on runtime state. |
+| `read_all` | `read_all() -> Result[String, process.Error]` | Reads remaining strict UTF-8 text until EOF, capped at 64 MiB. Use byte APIs for arbitrary output. |
+| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[String], process.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, `Ok(None)` only on EOF, or an error. |
+| `read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], process.Error]` | Reads up to `max_bytes` raw bytes and returns `Ok(None)` only at EOF. `max_bytes` must be in `1..=67108864`. |
 | `write_all` | `write_all(text: String, timeout: Duration = ...) -> Result[None, process.Error]` | Writes all text. |
 | `write_bytes` | `write_bytes(bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, process.Error]` | Writes all bytes. |
 | `flush` | `flush() -> Result[None, process.Error]` | Flushes buffered pipe output. |
 | `close` | `close() -> None` | Closes the pipe handle. |
+
+A pipe deadline expires as `Err(process.Error.TimedOut)`; cancellation becomes `Err(process.Error.Cancelled)`. Neither outcome is reported as `Ok(None)`. `read_bytes(0, ...)` and requests above 64 MiB return `process.Error.Io(io.Error.InvalidInput)`.
 
 Close a child's stdin pipe when the child expects EOF:
 
@@ -122,9 +126,9 @@ def close_stdin(child: process.Child) -> Result[None, process.Error]:
 | --- | --- | --- |
 | `status` | `status() -> process.ExitStatus` | Returns the captured exit status. |
 | `success` | `success() -> bool` | Returns `true` when the status is exit code `0`. |
-| `stdout` | `stdout() -> String` | Returns captured stdout decoded as UTF-8. Use only when stdout is known text. |
+| `stdout` | `stdout() -> String` | Returns captured stdout decoded as strict UTF-8. Invalid UTF-8 raises a runtime diagnostic; use `stdout_bytes` for untrusted output. |
 | `stdout_bytes` | `stdout_bytes() -> Vec[uint8]` | Returns captured stdout as raw bytes. |
-| `stderr` | `stderr() -> String` | Returns captured stderr decoded as UTF-8. Use only when stderr is known text. |
+| `stderr` | `stderr() -> String` | Returns captured stderr decoded as strict UTF-8. Invalid UTF-8 raises a runtime diagnostic; use `stderr_bytes` for untrusted output. |
 | `stderr_bytes` | `stderr_bytes() -> Vec[uint8]` | Returns captured stderr as raw bytes. |
 | `check` | `check() -> Result[None, process.Error]` | Returns `Ok(None)` for successful exit status, otherwise `Err(...)`. |
 
@@ -221,3 +225,5 @@ When restart is enabled, `backoff` must be at least `10ms`.
 Child, pipe, and supervisor values are resources. Prefer `with` for supervisors and call `close()` on children and pipes when ownership is not scoped.
 
 For child processes, `close()` terminates a still-running child. With `group=true`, cleanup targets the process group on maintained Unix hosts.
+
+When `process.run` times out or its Aurora task is cancelled, the runtime terminates the child and waits for cleanup; with `group=true` it applies that policy to the process group on maintained Unix hosts. As with all host I/O, cancellation cannot retroactively undo side effects already performed by the child.

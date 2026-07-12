@@ -20,6 +20,7 @@
     "check:format": "cargo fmt --all --check",
     "check:clippy": "cargo clippy -p aurora-compiler -p aura -- -D warnings",
     "check:hygiene": "bash scripts/check-hygiene.sh",
+    "check:reference": "bash scripts/check-reference.sh",
     "check:audit": "npm audit --audit-level=moderate && cargo audit",
     "build:extension": "npm --prefix tools/vscode-aurora run build",
     "package:extension": "npm --prefix tools/vscode-aurora run package:vsix",
@@ -32,7 +33,7 @@
     "docs:preview": "vitepress preview docs",
     "check:extension": "npm --prefix tools/vscode-aurora run check",
     "test:extension": "npm --prefix tools/vscode-aurora test",
-    "ci": "npm run check:format && npm run test:rust && npm run test:backend-parity && npm run test:lsp && npm run check:extension && npm run test:extension && npm run coverage:compiler:check && npm run coverage:lsp:check && npm run docs:build && npm run check:audit && npm run check:clippy && npm run check:hygiene",
+    "ci": "npm run check:format && npm run test:rust && npm run test:backend-parity && npm run test:lsp && npm run check:extension && npm run test:extension && npm run coverage:compiler:check && npm run coverage:lsp:check && npm run check:reference && npm run docs:build && npm run check:audit && npm run check:clippy && npm run check:hygiene",
     "postinstall": "npm run build:extension"
   },
   "devDependencies": {

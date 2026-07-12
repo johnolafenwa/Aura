@@ -2372,6 +2372,12 @@ fn timeout_resource_error() -> io::Error {
 }
 
 fn validate_udp_datagram_limit(max_bytes: usize) -> io::Result<usize> {
+    if max_bytes == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "UDP reads require `max_bytes` to be greater than zero",
+        ));
+    }
     if max_bytes > MAX_UDP_DATAGRAM_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -2381,7 +2387,7 @@ fn validate_udp_datagram_limit(max_bytes: usize) -> io::Result<usize> {
             ),
         ));
     }
-    Ok(max_bytes.max(1))
+    Ok(max_bytes)
 }
 
 fn normalize_udp_send_error(error: io::Error) -> io::Error {
@@ -2719,6 +2725,12 @@ fn requested_read_limit_error(label: &str) -> io::Error {
 }
 
 fn validate_requested_read_size(label: &str, count: usize) -> io::Result<usize> {
+    if count == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} requires a byte count greater than zero", label),
+        ));
+    }
     if count > MAX_READ_ALL_BYTES {
         return Err(requested_read_limit_error(label));
     }
@@ -6984,7 +6996,7 @@ pub(crate) fn result_err(value: Value) -> Value {
 }
 
 static HOST_MONOTONIC_EPOCH: OnceLock<Instant> = OnceLock::new();
-static HOST_METRICS: OnceLock<Mutex<BTreeMap<String, i128>>> = OnceLock::new();
+static HOST_METRICS: OnceLock<Mutex<BTreeMap<String, i64>>> = OnceLock::new();
 
 fn host_string_arg(args: &[Value], index: usize, call: &str) -> Result<String> {
     match args.get(index) {
@@ -7202,6 +7214,7 @@ pub(crate) fn evaluate_host_builtin(name: &str, args: Vec<Value>) -> Result<Valu
             };
             let value = value
                 .as_i128()
+                .and_then(|value| i64::try_from(value).ok())
                 .ok_or_else(|| Diagnostic::new("metric increment does not fit in `int64`"))?;
             let mut metrics = lock_mutex(HOST_METRICS.get_or_init(|| Mutex::new(BTreeMap::new())));
             let entry = metrics.entry(metric).or_insert(0);
@@ -7214,9 +7227,9 @@ pub(crate) fn evaluate_host_builtin(name: &str, args: Vec<Value>) -> Result<Valu
             host_expect_arity(name, &args, 1)?;
             let metric = host_string_arg(&args, 0, name)?;
             let metrics = lock_mutex(HOST_METRICS.get_or_init(|| Mutex::new(BTreeMap::new())));
-            Ok(Value::Int(IntegerValue::from_signed(
+            Ok(Value::Int(IntegerValue::from_signed(i128::from(
                 metrics.get(&metric).copied().unwrap_or(0),
-            )))
+            ))))
         }
         "metrics::reset" => {
             host_expect_arity(name, &args, 0)?;

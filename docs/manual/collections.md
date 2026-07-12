@@ -76,10 +76,10 @@ for entry in counts.items():
 | `get` | `get(index: int32) -> Option[T]` | Returns a cloned element, or `None` when `index` is out of bounds. |
 | `set` | `set(index: int32, value: T) -> Option[T]` | Replaces the element at `index` and returns the previous element. Out-of-bounds indices raise a runtime error. |
 | `remove` | `remove(index: int32) -> Option[T]` | Removes and returns the element at `index`. Out-of-bounds indices raise a runtime error. |
-| `swap` | `swap(first: int32, second: int32) -> None` | Swaps two elements. Out-of-bounds indices raise a runtime error. |
+| `swap` | `swap(first: int32, second: int32) -> bool` | Swaps two elements and returns `true`. Out-of-bounds indices raise a runtime error. |
 | `contains` | `contains(value: T) -> bool` | Returns `true` when an equal value is present. |
 | `extend` | `extend(other: Vec[T]) -> None` | Moves every element from `other` to the end of the receiver. |
-| `insert` | `insert(index: int32, value: T) -> None` | Inserts `value` before `index`. Out-of-bounds indices raise a runtime error. |
+| `insert` | `insert(index: int32, value: T) -> bool` | Inserts `value` before `index` and returns `true`. Out-of-bounds indices raise a runtime error. |
 | `clear` | `clear() -> None` | Removes all elements. |
 | `reverse` | `reverse() -> None` | Reverses the vector in place. |
 

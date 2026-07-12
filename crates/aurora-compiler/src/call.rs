@@ -1181,12 +1181,12 @@ impl BuiltinMember {
                 "Removes the element at `index` and returns it. Out-of-bounds indices raise a runtime error."
             }
             Self::VecSwap => {
-                "Swaps the elements at `first` and `second`, returning `false` when either index is out of bounds."
+                "Swaps the elements at `first` and `second` and returns `true`. Out-of-bounds indices raise a runtime error."
             }
             Self::VecContains => "Returns true when the vector contains `value`.",
             Self::VecExtend => "Appends the elements of `other` to the end of the vector.",
             Self::VecInsert => {
-                "Inserts `value` at `index`, returning `false` when the index is out of bounds."
+                "Inserts `value` at `index` and returns `true`. Out-of-bounds indices raise a runtime error."
             }
             Self::VecClear => "Removes all elements from the vector.",
             Self::VecReverse => "Reverses the vector elements in place.",

@@ -1,0 +1,9 @@
+trait Choose:
+    def choose(borrow self, left: borrow[left] String, right: borrow[right] String) -> borrow[left] String
+
+class Picker:
+    value: int32
+
+impl Choose for Picker:
+    def choose(borrow self, left: borrow[left] String, right: borrow[right] String) -> borrow[right] String:
+        return right

@@ -301,6 +301,41 @@ def wait_for_sleep_timeout() -> Result[None, process.Error]:
 
 #[cfg(unix)]
 #[test]
+fn zero_sized_process_pipe_read_returns_typed_invalid_input_without_consuming() {
+    let temp = TempDir::new("aurora-process-zero-read");
+    let entry = temp.path().join("main.au");
+    let source = r#"import process
+
+def probe() -> Result[None, process.Error]:
+    with child = try process.start(["/bin/sh", "-c", "printf x"], stdin=process.null(), stdout=process.pipe(), stderr=process.null()):
+        match child.stdout():
+            case Option.Some(pipe):
+                with output = pipe:
+                    print(output.read_bytes(0, timeout=1s))
+                    print(output.read_bytes(1, timeout=1s))
+            case Option.None:
+                pass
+    return Result.Ok(None)
+
+def main() -> int32:
+    match probe():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#;
+
+    let output = run_path_with_source(&entry, source)
+        .expect("zero-sized process reads should be represented as typed results");
+    assert_eq!(
+        output.stdout,
+        "Result.Err(Error.Io(io.Error.InvalidInput))\nResult.Ok(Option.Some([120]))\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn grouped_process_close_terminates_descendants() {
     let temp = TempDir::new("aurora-process-group");
     let entry = temp.path().join("main.au");

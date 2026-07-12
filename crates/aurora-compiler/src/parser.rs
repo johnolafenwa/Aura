@@ -89,7 +89,7 @@ impl Parser {
         self.skip_newlines();
 
         while !self.at_eof() {
-            if self.at_keyword_import() || self.at_keyword_from() {
+            if self.at_keyword_import() || self.at_from_import_start() {
                 imports.push(self.parse_import()?);
             } else if self.at_simple(&TokenKind::KwPublic)
                 || self.at_copy_class_start()
@@ -543,6 +543,12 @@ impl Parser {
         loop {
             if allow_receiver && receiver.is_none() {
                 if self.at_borrow_receiver_start() {
+                    if !params.is_empty() {
+                        return Err(Diagnostic::at(
+                            self.current_span(),
+                            "method receiver must be the first parameter",
+                        ));
+                    }
                     self.bump();
                     let receiver_kind = if self.eat_simple(&TokenKind::KwMut).is_some() {
                         ReceiverKind::BorrowMut
@@ -558,6 +564,12 @@ impl Parser {
                 }
 
                 if self.at_value_receiver_start() {
+                    if !params.is_empty() {
+                        return Err(Diagnostic::at(
+                            self.current_span(),
+                            "method receiver must be the first parameter",
+                        ));
+                    }
                     self.bump();
                     receiver = Some(ReceiverKind::Value);
                     if self.eat_simple(&TokenKind::Comma).is_none() {
@@ -1146,18 +1158,24 @@ impl Parser {
     }
 
     fn parse_not(&mut self) -> Result<Expr> {
-        if let Some(token) = self.eat_simple(&TokenKind::KwNot) {
-            let value = self.parse_not()?;
-            return Ok(Expr {
+        let mut operator_spans = Vec::new();
+        while let Some(token) = self.eat_simple(&TokenKind::KwNot) {
+            operator_spans.push(token.span);
+            self.check_expression_chain_limit(operator_spans.len())?;
+        }
+
+        let mut value = self.parse_equality()?;
+        while let Some(span) = operator_spans.pop() {
+            value = Expr {
                 kind: ExprKind::Unary {
                     op: UnaryOp::Not,
                     expr: Box::new(value),
                 },
-                span: token.span,
-            });
+                span,
+            };
         }
 
-        self.parse_equality()
+        Ok(value)
     }
 
     fn parse_equality(&mut self) -> Result<Expr> {
@@ -1507,6 +1525,10 @@ impl Parser {
                     })
                 }
             }
+            TokenKind::KwFrom => Ok(Expr {
+                kind: ExprKind::Name("from".to_string()),
+                span: token.span,
+            }),
             TokenKind::IntLiteral(value) => Ok(Expr {
                 kind: ExprKind::Int(value),
                 span: token.span,
@@ -1615,7 +1637,12 @@ impl Parser {
 
         loop {
             let span = self.current_span();
-            let argument = if let TokenKind::Identifier(name) = self.current_kind().clone() {
+            let contextual_name = match self.current_kind() {
+                TokenKind::Identifier(name) => Some(name.clone()),
+                TokenKind::KwFrom => Some("from".to_string()),
+                _ => None,
+            };
+            let argument = if let Some(name) = contextual_name {
                 if matches!(self.peek_kind(1), Some(TokenKind::Equal)) {
                     self.bump();
                     self.bump();
@@ -1657,7 +1684,7 @@ impl Parser {
             idx += 1;
         }
 
-        if !matches!(self.peek_kind_at(idx), Some(TokenKind::Identifier(_))) {
+        if !self.is_contextual_identifier_at(idx) {
             return false;
         }
         idx += 1;
@@ -1665,7 +1692,7 @@ impl Parser {
 
         loop {
             if matches!(self.peek_kind_at(idx), Some(TokenKind::Dot))
-                && matches!(self.peek_kind_at(idx + 1), Some(TokenKind::Identifier(_)))
+                && self.is_contextual_identifier_at(idx + 1)
             {
                 saw_suffix = true;
                 idx += 2;
@@ -1764,12 +1791,12 @@ impl Parser {
         if matches!(self.peek_kind_at(idx), Some(TokenKind::KwIndirect)) {
             idx += 1;
         }
-        if !matches!(self.peek_kind_at(idx), Some(TokenKind::Identifier(_))) {
+        if !self.is_contextual_identifier_at(idx) {
             return idx;
         }
         idx += 1;
         while matches!(self.peek_kind_at(idx), Some(TokenKind::Dot))
-            && matches!(self.peek_kind_at(idx + 1), Some(TokenKind::Identifier(_)))
+            && self.is_contextual_identifier_at(idx + 1)
         {
             idx += 2;
         }
@@ -2085,6 +2112,31 @@ impl Parser {
 
     fn at_keyword_from(&self) -> bool {
         self.at_simple(&TokenKind::KwFrom)
+    }
+
+    fn at_from_import_start(&self) -> bool {
+        if !self.at_keyword_from() {
+            return false;
+        }
+
+        let mut index = self.index + 1;
+        if !self.is_contextual_identifier_at(index) {
+            return false;
+        }
+        index += 1;
+        while matches!(self.peek_kind_at(index), Some(TokenKind::Dot))
+            && self.is_contextual_identifier_at(index + 1)
+        {
+            index += 2;
+        }
+        matches!(self.peek_kind_at(index), Some(TokenKind::KwImport))
+    }
+
+    fn is_contextual_identifier_at(&self, index: usize) -> bool {
+        matches!(
+            self.peek_kind_at(index),
+            Some(TokenKind::Identifier(_) | TokenKind::KwFrom)
+        )
     }
 
     fn at_eof(&self) -> bool {

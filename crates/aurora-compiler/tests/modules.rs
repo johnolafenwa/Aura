@@ -64,6 +64,30 @@ def main() -> int32:
 }
 
 #[test]
+fn metrics_int64_overflow_fails_at_runtime_without_exposing_a_wider_value() {
+    let temp = TempDir::new("aurora-metrics-int64-overflow");
+    let main_path = temp.write(
+        "main.au",
+        r#"import metrics
+
+def main() -> int32:
+    metrics.reset()
+    metrics.increment("requests", 9223372036854775807)
+    metrics.increment("requests", 1)
+    print(metrics.get("requests"))
+    return 0
+"#,
+    );
+
+    let error = run_path(&main_path).expect_err("metrics overflow should fail at runtime");
+    assert!(
+        error.message.contains("metric value overflowed `int64`"),
+        "unexpected metrics overflow diagnostic: {}",
+        error.message
+    );
+}
+
+#[test]
 fn dotted_import_binds_module_namespace() {
     let temp = TempDir::new("aurora-modules-dotted-import");
     temp.write(

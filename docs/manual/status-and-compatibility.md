@@ -4,14 +4,16 @@ Aurora 0.1 is an advanced technical preview. It is suitable for compiler and run
 
 ## Canonical Contract
 
-The implemented language contract, in descending order of authority, is:
+The maintained language contract consists of:
 
-1. compiler fixtures and CLI/LSP regression tests
-2. this maintained Manual and the Current Limits page
-3. categorized examples and Learn chapters
-4. the historical language proposal
+1. the normative Language Specification and Manual
+2. compiler fixtures and CLI/LSP regression tests as executable conformance evidence
+3. the compiler, runtime, CLI, and language server as conforming implementations
+4. categorized examples and Learn chapters as teaching material
 
-The proposal is design history. Features mentioned only there—including `Channel`, `select`, detached spawn, tuples, attributes, and registry publishing—are not part of Aurora 0.1.
+The Manual and executable suite are expected to agree. A divergence is a project defect, not an alternate language rule. The historical proposal is design history. Features mentioned only there—including `Channel`, `select`, detached spawn, tuples, attributes, and registry publishing—are not part of Aurora 0.1.
+
+See [Language Specification](/manual/language-specification) and [Conformance](/manual/conformance).
 
 ## Stability Policy
 

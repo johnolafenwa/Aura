@@ -14,7 +14,9 @@ import net
 import io
 ```
 
-Most operations return `Result[..., io.Error]`. Waiting operations usually accept `timeout: Duration = ...`. Pass explicit timeouts for services that need bounded latency or clean shutdown behavior.
+Most operations return `Result[..., io.Error]`. Waiting operations usually accept `timeout: Duration = ...`; omitting it means no caller deadline unless a protocol-specific hard limit is stated below. Pass explicit timeouts for services that need bounded latency or clean shutdown behavior.
+
+Text reads decode UTF-8 strictly and return `io.Error.InvalidData` for invalid bytes. TCP, Unix, and TLS deadlines return `io.Error.TimedOut`; a UDP receive deadline returns `Ok(None)`. Cancellation is reported as `io.Error.Cancelled` where the operation participates in scheduler cancellation.
 
 ## Constructors
 
@@ -49,10 +51,10 @@ Most operations return `Result[..., io.Error]`. Waiting operations usually accep
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `read_all` | `read_all(timeout: Duration = ...) -> Result[String, io.Error]` | Reads UTF-8 text until EOF. Use byte APIs for arbitrary data. |
-| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]` | Reads one UTF-8 line. Returns `Ok(None)` on EOF. |
-| `read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]` | Reads up to `max_bytes` raw bytes. |
-| `read_exact` | `read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]` | Reads exactly `count` bytes or returns an error. |
+| `read_all` | `read_all(timeout: Duration = ...) -> Result[String, io.Error]` | Reads strict UTF-8 text until EOF, capped at 64 MiB. Use byte APIs for arbitrary data. |
+| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, capped at 64 MiB. Returns `Ok(None)` only on EOF. |
+| `read_bytes` | `read_bytes(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]` | Reads up to `max_bytes` raw bytes. The count must be in `1..=67108864`; `Ok(None)` means EOF. |
+| `read_exact` | `read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]` | Reads exactly `count` bytes or returns an error. The count must be in `1..=67108864`. |
 | `write_all` | `write_all(text: String, timeout: Duration = ...) -> Result[None, io.Error]` | Writes all UTF-8 text. |
 | `write_bytes` | `write_bytes(bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, io.Error]` | Writes all raw bytes. |
 | `flush` | `flush() -> Result[None, io.Error]` | Flushes pending stream writes. |
@@ -87,8 +89,8 @@ def handle(stream: net.TcpStream) -> Result[None, io.Error]:
 | --- | --- | --- |
 | `send_text` | `send_text(address: String, text: String, timeout: Duration = ...) -> Result[None, io.Error]` | Sends UTF-8 text to an address. |
 | `send_bytes` | `send_bytes(address: String, bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, io.Error]` | Sends raw bytes to an address. |
-| `recv` | `recv(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]` | Receives bytes from a connected UDP socket. |
-| `recv_from` | `recv_from(max_bytes: int32, timeout: Duration = ...) -> Result[Option[net.UdpDatagram], io.Error]` | Receives a datagram plus source address. |
+| `recv` | `recv(max_bytes: int32, timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]` | Receives bytes from a connected UDP socket. `Ok(None)` means the deadline expired. |
+| `recv_from` | `recv_from(max_bytes: int32, timeout: Duration = ...) -> Result[Option[net.UdpDatagram], io.Error]` | Receives a datagram plus source address. `Ok(None)` means the deadline expired. |
 | `local_addr` | `local_addr() -> Result[String, io.Error]` | Returns the local address. |
 | `peer_addr` | `peer_addr() -> Result[String, io.Error]` | Returns the connected peer address when available. |
 | `close` | `close() -> None` | Closes the socket handle. |
@@ -101,7 +103,7 @@ def handle(stream: net.TcpStream) -> Result[None, io.Error]:
 | `bytes` | `bytes() -> Vec[uint8]` | Returns the datagram payload as raw bytes. |
 | `text` | `text() -> Result[String, io.Error]` | Decodes the payload as UTF-8 text. |
 
-UDP preserves datagram boundaries. A receive with a small `max_bytes` may truncate data according to platform behavior.
+UDP preserves datagram boundaries. `max_bytes` must be in `1..=65535`; zero or a larger request returns `io.Error.InvalidInput` before receiving. A receive with a small buffer may truncate data according to platform behavior. Sends larger than the host datagram limit return `InvalidInput` where the host exposes that condition.
 
 ## HTTP Server
 
@@ -125,7 +127,9 @@ UDP preserves datagram boundaries. A receive with a small `max_bytes` may trunca
 | `respond_text` | `respond_text(status: int32, text: String, headers: Map[String, String]) -> Result[None, io.Error]` | Sends a text response. |
 | `respond_bytes` | `respond_bytes(status: int32, bytes: Vec[uint8], headers: Map[String, String]) -> Result[None, io.Error]` | Sends a byte response. |
 
-Malformed HTTP requests are rejected by the listener path and do not permanently poison the listener. Content-length and chunked request bodies are supported. Oversized or invalid requests are surfaced as HTTP errors where the protocol allows it.
+Malformed HTTP requests are rejected by the listener path and do not permanently poison the listener. Content-length and chunked request bodies are supported. A parsed HTTP message is limited to 1 MiB and 64 headers; oversized or invalid requests are surfaced as HTTP errors where the protocol allows it.
+
+Headers are exposed as `Map[String, String]`. This boundary cannot faithfully represent repeated fields such as multiple `Set-Cookie` lines. The current conversion can expose duplicate equal keys internally despite the normal `Map` uniqueness rule, so applications that require lossless or canonical repeated-header handling must not use this 0.1 high-level HTTP surface.
 
 ## HTTP Client
 
@@ -146,7 +150,7 @@ Malformed HTTP requests are rejected by the listener path and do not permanently
 | `text` | `text() -> Result[String, io.Error]` | Decodes the body as UTF-8. |
 | `bytes` | `bytes() -> Vec[uint8]` | Returns the raw response body. |
 
-Use byte request and response APIs for binary payloads or unknown encodings. Client URLs may use `http://` or certificate-validated `https://`; responses support content length, chunked transfer encoding, and connection-close framing. Redirect following, connection pooling, HTTP/2, proxies, decompression, and custom-CA arguments on the high-level HTTP helpers are not part of 0.1.
+Use byte request and response APIs for binary payloads or unknown encodings. Client URLs may use `http://` or certificate-validated `https://`; responses support content length, chunked transfer encoding, and connection-close framing. The same 1 MiB message and 64-header limits apply. Redirect following, connection pooling, HTTP/2, proxies, decompression, and custom-CA arguments on the high-level HTTP helpers are not part of 0.1.
 
 ## WebSocket
 
@@ -157,17 +161,19 @@ Use byte request and response APIs for binary payloads or unknown encodings. Cli
 | `accept` | `accept(timeout: Duration = ...) -> Result[net.WebSocket, io.Error]` | Waits for the next WebSocket connection. |
 | `local_addr` | `local_addr() -> Result[String, io.Error]` | Returns the bound local address. |
 
+`net.WebSocketListener` has no explicit `close()` member in Aurora 0.1. It is released when its value is dropped, but it cannot currently be used as a user-defined `with` resource. This is a known resource-surface limitation.
+
 `net.WebSocket`:
 
 | API | Signature | Contract |
 | --- | --- | --- |
 | `send_text` | `send_text(text: String, timeout: Duration = ...) -> Result[None, io.Error]` | Sends a text frame. |
 | `send_bytes` | `send_bytes(bytes: Vec[uint8], timeout: Duration = ...) -> Result[None, io.Error]` | Sends a binary frame. |
-| `recv_text` | `recv_text(timeout: Duration = ...) -> Result[Option[String], io.Error]` | Receives a text frame, `Ok(None)` on close. |
-| `recv_bytes` | `recv_bytes(timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]` | Receives a binary frame, `Ok(None)` on close. |
+| `recv_text` | `recv_text(timeout: Duration = ...) -> Result[Option[String], io.Error]` | Receives the next text or binary message decoded as strict UTF-8; `Ok(None)` on close. |
+| `recv_bytes` | `recv_bytes(timeout: Duration = ...) -> Result[Option[Vec[uint8]], io.Error]` | Receives the next text or binary message as bytes; `Ok(None)` on close. |
 | `close` | `close() -> None` | Closes the WebSocket. |
 
-Use text receive for protocols that require text frames. Use bytes for binary protocols.
+Use text receive when the payload must be valid UTF-8 and bytes otherwise. Messages are capped at 64 MiB; individual frames and the write buffer are capped at 16 MiB. WebSocket accept/send/receive cancellation is not yet as complete as the TCP/UDP scheduler surface, and `close()` currently discards host close errors.
 
 ## Unix Domain Sockets
 
@@ -184,8 +190,8 @@ Unix socket APIs are available on Unix hosts.
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]` | Reads one UTF-8 line, `Ok(None)` on EOF. |
-| `read_exact` | `read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]` | Reads exactly `count` bytes. |
+| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, `Ok(None)` on EOF. |
+| `read_exact` | `read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]` | Reads exactly `count` bytes; count must be in `1..=67108864`. |
 | `write_all` | `write_all(text: String, timeout: Duration = ...) -> Result[None, io.Error]` | Writes all text. |
 | `close` | `close() -> None` | Closes the stream. |
 
@@ -207,12 +213,12 @@ TLS APIs use PEM files for certificates and keys. Maintained examples keep test 
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]` | Reads one UTF-8 line, `Ok(None)` on EOF. |
-| `read_exact` | `read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]` | Reads exactly `count` decrypted bytes. |
+| `read_line` | `read_line(timeout: Duration = ...) -> Result[Option[String], io.Error]` | Reads one strict UTF-8 line without its trailing LF/CRLF, `Ok(None)` on EOF. |
+| `read_exact` | `read_exact(count: int32, timeout: Duration = ...) -> Result[Vec[uint8], io.Error]` | Reads exactly `count` decrypted bytes; count must be in `1..=67108864`. |
 | `write_all` | `write_all(text: String, timeout: Duration = ...) -> Result[None, io.Error]` | Writes all text through the TLS stream. |
 | `close` | `close() -> None` | Closes the TLS stream. |
 
-Handshake and accept paths use scheduler-aware waits. Use explicit timeouts for public-facing services.
+Handshake and accept paths use scheduler-aware waits. A TLS handshake also has a hard 10-second cap even when the caller omits a shorter timeout. Use explicit timeouts for public-facing services.
 
 ## Resource Cleanup
 
@@ -228,4 +234,4 @@ def show_addr() -> Result[None, io.Error]:
     return Result.Ok(None)
 ```
 
-When a resource is not scoped with `with`, call its `close()` method when one is provided by the type.
+When a resource is not scoped with `with`, call its `close()` method when one is provided by the type. Cancellation stops Aurora's wait but cannot roll back host I/O that already completed.

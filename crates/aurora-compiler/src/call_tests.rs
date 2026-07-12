@@ -528,6 +528,23 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
 }
 
 #[test]
+fn vec_indexed_mutation_hover_docs_match_runtime_failure_behavior() {
+    for member in [BuiltinMember::VecSwap, BuiltinMember::VecInsert] {
+        let docs = member.docs();
+        assert!(
+            docs.contains("runtime error"),
+            "{} hover docs should describe out-of-bounds runtime errors: {docs}",
+            member.name()
+        );
+        assert!(
+            !docs.contains("returning `false`"),
+            "{} hover docs must not promise a false out-of-bounds result: {docs}",
+            member.name()
+        );
+    }
+}
+
+#[test]
 fn builtin_member_io_network_and_process_metadata_is_stable() {
     let cases = [
         ("fs.File", "read_all", BuiltinMember::FileReadAll),

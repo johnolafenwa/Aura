@@ -1,0 +1,3 @@
+class Counter:
+    def add(value: int32, self):
+        pass

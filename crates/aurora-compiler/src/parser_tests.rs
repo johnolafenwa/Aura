@@ -277,6 +277,87 @@ fn parse_params_and_receivers_cover_error_and_receiver_only_forms() {
     assert!(bad_param
         .message
         .contains("ordinary borrowed parameters must be written as"));
+
+    let late_borrow_receiver = parse_item_from(
+        [
+            "class Counter:",
+            "    def read(value: int32, borrow self):",
+            "        pass",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect_err("borrowed method receivers must come first");
+    assert!(late_borrow_receiver
+        .message
+        .contains("method receiver must be the first parameter"));
+}
+
+#[test]
+fn parser_treats_from_as_a_contextual_expression_and_argument_name() {
+    let name = parse_expression("from").expect("`from` should parse as an expression name");
+    assert!(matches!(name.kind, ExprKind::Name(ref value) if value == "from"));
+
+    let call = parse_expression("choose(from=\"source\")")
+        .expect("`from` should parse as a named argument");
+    let ExprKind::Call { args, .. } = call.kind else {
+        panic!("expected call expression");
+    };
+    assert!(matches!(
+        args.as_slice(),
+        [Argument {
+            name: Some(name),
+            ..
+        }] if name == "from"
+    ));
+
+    let module = parse("from pkg.tools import choose\n").expect("from-import should still parse");
+    assert!(matches!(
+        module.imports.as_slice(),
+        [ImportDecl {
+            kind: ImportKind::From { .. },
+            ..
+        }]
+    ));
+
+    let local_bindings = parse(
+        [
+            "def main() -> int32:",
+            "    mut from = 1",
+            "    from += 1",
+            "    return from",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .expect("`from` should parse in local bindings and reassignment targets");
+    let Item::Function(main) = &local_bindings.items[0] else {
+        panic!("expected function item");
+    };
+    assert!(matches!(
+        main.body.as_slice(),
+        [
+            Stmt::Assign(AssignStmt {
+                target: AssignTarget::Name(first),
+                mutable: true,
+                ..
+            }),
+            Stmt::Assign(AssignStmt {
+                target: AssignTarget::Name(second),
+                op: Some(BinaryOp::Add),
+                ..
+            }),
+            Stmt::Return(_),
+        ] if first == "from" && second == "from"
+    ));
+
+    let top_level_bindings = parse("mut from = 1\nfrom = 2\nprint(from)\n")
+        .expect("`from` should parse in top-level bindings and reassignment targets");
+    assert_eq!(top_level_bindings.imports.len(), 0);
+    assert!(matches!(
+        top_level_bindings.top_level_stmts.as_slice(),
+        [Stmt::Assign(_), Stmt::Assign(_), Stmt::Expr(_)]
+    ));
 }
 
 #[test]
@@ -383,6 +464,16 @@ fn parse_expression_reports_recursion_limit_for_deep_nesting() {
 
     let error = parse_expression(&source).expect_err("deeply nested expressions should fail");
     assert!(error.message.contains("recursion limit"));
+}
+
+#[test]
+fn parse_expression_reports_the_chain_limit_for_many_not_operators() {
+    let supported = format!("{}true", "not ".repeat(crate::limits::RECURSION_LIMIT - 1));
+    parse_expression(&supported).expect("a supported-length `not` chain should parse");
+
+    let excessive = format!("{}true", "not ".repeat(crate::limits::RECURSION_LIMIT + 32));
+    let error = parse_expression(&excessive).expect_err("an excessive `not` chain should fail");
+    assert!(error.message.contains("expression chain exceeds"));
 }
 
 #[test]

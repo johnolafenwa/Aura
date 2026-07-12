@@ -74,7 +74,11 @@ fn assert_value_equals_clone(value: Value) {
 }
 
 #[test]
-fn bounded_read_helpers_reject_oversized_requests_without_allocation() {
+fn bounded_read_helpers_reject_zero_and_oversized_requests_without_allocation() {
+    let error = validate_requested_read_size("read_bytes(...)", 0)
+        .expect_err("zero-byte bounded reads should be rejected before reading");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
     let error = validate_requested_read_size("read_exact(...)", MAX_READ_ALL_BYTES + 1)
         .expect_err("oversized read_exact requests should fail before allocation");
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
@@ -85,6 +89,10 @@ fn bounded_read_helpers_reject_oversized_requests_without_allocation() {
 
     let error = super::validate_udp_datagram_limit(super::MAX_UDP_DATAGRAM_BYTES + 1)
         .expect_err("oversized UDP reads should fail before allocation");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+    let error = super::validate_udp_datagram_limit(0)
+        .expect_err("zero-byte UDP reads should be rejected before receiving a datagram");
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 }
 
@@ -120,6 +128,19 @@ fn fd_reads_check_deadline_and_size_before_ready_reads() {
     )
     .expect_err("oversized read_bytes should fail before allocating");
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+    let mut zero_exact_reader = io::Cursor::new(b"ready".to_vec());
+    let error =
+        read_exact_with_fd_deadline(&mut zero_exact_reader, -1, 0, libc::POLLIN, None, None)
+            .expect_err("zero-byte exact reads should be rejected");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(zero_exact_reader.position(), 0);
+
+    let mut zero_some_reader = io::Cursor::new(b"ready".to_vec());
+    let error = read_some_with_fd_deadline(&mut zero_some_reader, -1, 0, libc::POLLIN, None, None)
+        .expect_err("zero-byte bounded reads should be rejected");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(zero_some_reader.position(), 0);
 
     let mut empty_line_reader = io::Cursor::new(Vec::<u8>::new());
     assert_eq!(
@@ -1748,7 +1769,7 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
         "metrics::increment",
         vec![
             Value::String("overflow".into()),
-            Value::Int(IntegerValue::from_signed(i128::MAX)),
+            Value::Int(IntegerValue::from_signed(i128::from(i64::MAX))),
         ],
     );
     assert!(super::evaluate_host_builtin(
@@ -1759,6 +1780,37 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
         ]
     )
     .is_err());
+    assert_eq!(
+        call("metrics::get", vec![Value::String("overflow".into())]),
+        Value::Int(IntegerValue::from_signed(i128::from(i64::MAX)))
+    );
+    assert!(super::evaluate_host_builtin(
+        "metrics::increment",
+        vec![
+            Value::String("outside-int64".into()),
+            Value::Int(IntegerValue::from_signed(i128::from(i64::MAX) + 1)),
+        ]
+    )
+    .is_err());
+    call(
+        "metrics::increment",
+        vec![
+            Value::String("underflow".into()),
+            Value::Int(IntegerValue::from_signed(i128::from(i64::MIN))),
+        ],
+    );
+    assert!(super::evaluate_host_builtin(
+        "metrics::increment",
+        vec![
+            Value::String("underflow".into()),
+            Value::Int(IntegerValue::from_signed(-1)),
+        ]
+    )
+    .is_err());
+    assert_eq!(
+        call("metrics::get", vec![Value::String("underflow".into())]),
+        Value::Int(IntegerValue::from_signed(i128::from(i64::MIN)))
+    );
     assert!(super::evaluate_host_builtin("missing::call", vec![]).is_err());
 }
 

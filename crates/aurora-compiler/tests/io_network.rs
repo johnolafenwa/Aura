@@ -133,6 +133,36 @@ def main() -> int32:
 }
 
 #[test]
+fn zero_sized_udp_reads_return_typed_invalid_input_without_waiting() {
+    let temp = TempDir::new("aurora-udp-zero-read");
+    let entry = temp.path().join("main.au");
+    let source = r#"import io
+import net
+
+def probe() -> Result[None, io.Error]:
+    with socket = try net.udp_bind("127.0.0.1:0"):
+        print(socket.recv(0, timeout=1ms))
+        print(socket.recv_from(0, timeout=1ms))
+    return Result.Ok(None)
+
+def main() -> int32:
+    match probe():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#;
+
+    let output = run_path_with_source(&entry, source)
+        .expect("zero-sized UDP reads should be represented as typed results");
+    assert_eq!(
+        output.stdout,
+        "Result.Err(io.Error.InvalidInput)\nResult.Err(io.Error.InvalidInput)\n"
+    );
+}
+
+#[test]
 fn advanced_io_and_network_surface_type_checks_from_path_context() {
     let temp = TempDir::new("aurora-io-advanced-check");
     let entry = temp.path().join("main.au");

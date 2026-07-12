@@ -71,7 +71,7 @@ Text and binary one-shot helpers:
 - `fs.read_dir(path)`
 - `fs.remove_file(path)`
 
-The one-shot read helpers cap reads at 64 MiB in both `aura run` and direct-built binaries. Use `fs.open(...)` plus handle reads when you need a larger or incremental file-processing flow.
+The one-shot helpers and `fs.File` whole-file reads are capped at 64 MiB in both `aura run` and built binaries. Aurora 0.1 has no incremental file-read member, so larger files need a host helper or pre-splitting.
 
 Scoped file-handle constructors:
 

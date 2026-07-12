@@ -58,9 +58,13 @@ export default defineConfig({
           text: 'Manual',
           items: [
             { text: 'Overview', link: '/manual/' },
+            { text: 'Language Specification', link: '/manual/language-specification' },
             { text: 'Status And Compatibility', link: '/manual/status-and-compatibility' },
             { text: 'Lexical Structure', link: '/manual/lexical-structure' },
+            { text: 'Complete Grammar', link: '/manual/grammar' },
+            { text: 'Names And Scopes', link: '/manual/names-and-scopes' },
             { text: 'Types', link: '/manual/types' },
+            { text: 'Static Semantics', link: '/manual/static-semantics' },
             { text: 'Expressions', link: '/manual/expressions' },
             { text: 'Statements', link: '/manual/statements' },
             { text: 'Functions', link: '/manual/functions' },
@@ -68,6 +72,7 @@ export default defineConfig({
             { text: 'Enums And Pattern Matching', link: '/manual/enums-and-match' },
             { text: 'Generics And Traits', link: '/manual/generics-and-traits' },
             { text: 'Ownership And Borrowing', link: '/manual/ownership-and-borrowing' },
+            { text: 'Execution Model', link: '/manual/execution-model' },
             { text: 'Collections', link: '/manual/collections' },
             { text: 'Concurrency', link: '/manual/concurrency' },
             { text: 'I/O Module', link: '/manual/io' },
@@ -78,7 +83,9 @@ export default defineConfig({
             { text: 'Packages', link: '/manual/packages' },
             { text: 'CLI And Tooling', link: '/manual/cli-and-tooling' },
             { text: 'API Index', link: '/manual/api-index' },
-            { text: 'Current Limits', link: '/manual/current-limits' }
+            { text: 'Diagnostics', link: '/manual/diagnostics' },
+            { text: 'Current Limits', link: '/manual/current-limits' },
+            { text: 'Conformance', link: '/manual/conformance' }
           ]
         }
       ],

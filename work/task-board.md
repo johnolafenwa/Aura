@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-07-10
+Last updated: 2026-07-13
 
 ## Previous Session (stale record recovered 2026-07-10)
 
@@ -26,6 +26,7 @@ Last updated: 2026-07-10
 
 ## Done
 
+- Completed the July 12-13 language-reference pass in 57m 34s (23:04:44-00:02:18 BST): established the Manual as the normative Aurora 0.1 specification; added the complete grammar, names/scopes, static semantics, execution model, diagnostics, and conformance chapters; expanded the declaration, ownership, package, CLI, runtime, limit, and API contracts enough to derive a future language book; added the reference-integrity CI gate; corrected stale Learn/tutorial/backend/API claims; fixed parser, checker, bounded-read, metrics, and hover-contract defects exposed by the audit with unit, fixture, MIR, and direct-backend regressions; and passed the exact full `npm run ci` gate at 96.05% compiler lines / 96.87% functions / 93.95% regions and 100% LSP coverage.
 - Completed the July 10 directions 1-5 pass in 4h 37m (16:13:01-20:50:49 BST): froze the 0.1 syntax and compiler coverage floor; established a relocatable technical-preview release, CI, documentation, and hygiene surface; added parity, fuzz, scheduler-model/stress, sanitizer, audit, and benchmark safety gates; replaced per-request LSP compiler processes with a persistent, cancellable, dependency-aware service and a small lexical recovery layer; added the ML/agent control-plane foundations (`sys`, `path`, JSON/TOML string maps, logs/traces/metrics, HTTPS/chunked HTTP, and `new`/`fmt`/`test` workflows); fixed all parity and TLS-close regressions discovered by the new gates; eliminated llvm-cov ABI map collisions without changing shipped symbols; and passed the exact full `npm run ci` gate at 96.05% compiler lines / 96.86% functions / 93.94% regions and 100% LSP coverage.
 - Finished the April 24 book correctness pass: validated the external first-time-developer review against the VitePress book; removed invalid call-site `borrow` / `borrow mut` from examples; collapsed runnable Aurora calls and collection literals to current single-line syntax; replaced fragile short-form `Some` / `None` examples with qualified `Option.Some` / `Option.None`; rewrote top-level `try` snippets into function or match shapes; corrected `Vec.insert` / `Vec.swap` contracts; expanded install, current limits, homepage positioning, detached-task wording, and syntax-highlighting tags; and reverified with representative snippet run/checks, `npm run docs:build`, `npm audit --audit-level=moderate`, and `git diff --check`.
 - Finished the April 24 native trap-parity follow-up: validated the native direct-backend divergences where cleanup traps replaced the original body trap diagnostic and recursive `with` frames unwound one extra cleanup compared with `aura run`; added failing-first CLI regressions; fixed the direct runtime to preserve the primary runtime diagnostic while draining cleanup and to skip the saturated recursion-depth cleanup registration; and reverified with focused direct-backend cleanup/recursion tests, `cargo fmt --all --check`, and `git diff --check`.

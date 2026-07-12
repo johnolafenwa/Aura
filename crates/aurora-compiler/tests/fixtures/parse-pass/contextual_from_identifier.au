@@ -1,0 +1,8 @@
+def choose(from: String) -> String:
+    return from
+
+def main() -> int32:
+    mut from = "source"
+    from = "updated"
+    print(choose(from=from))
+    return 0

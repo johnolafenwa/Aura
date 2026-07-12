@@ -346,6 +346,27 @@ fn resolve_return_borrow_source(
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum BorrowSourceSlot {
+    Receiver,
+    Param(usize),
+}
+
+fn borrow_source_slot(
+    receiver: Option<ReceiverKind>,
+    params: &[Param],
+    resolved_source: Option<&str>,
+) -> Option<BorrowSourceSlot> {
+    let source = resolved_source?;
+    if receiver.is_some() && source == "self" {
+        return Some(BorrowSourceSlot::Receiver);
+    }
+    params
+        .iter()
+        .position(|param| param.name == source || param.borrow_label.as_deref() == Some(source))
+        .map(BorrowSourceSlot::Param)
+}
+
 fn type_is_copy_in_context(
     ty: &Type,
     classes: &BTreeMap<String, ClassInfo>,
@@ -588,6 +609,11 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
         let mut methods = BTreeMap::new();
         for method in &trait_decl.methods {
             validate_type_params(&method.type_params, method.span, "trait method")?;
+            validate_params(
+                method.receiver,
+                &method.params,
+                &format!("trait method `{}`", method.name),
+            )?;
             let method_type_param_scope =
                 merged_type_param_scope(&trait_type_param_scope, &method.type_params);
             let params = method
@@ -788,6 +814,11 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
 
         for method in &class_decl.methods {
             validate_type_params(&method.type_params, method.span, "method")?;
+            validate_params(
+                method.receiver,
+                &method.params,
+                &format!("method `{}`", method.name),
+            )?;
             let method_type_param_scope =
                 merged_type_param_scope(&class_type_param_scope, &method.type_params);
             let type_param_bounds = merge_trait_bounds(
@@ -998,6 +1029,11 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
             continue;
         };
         validate_type_params(&function_decl.type_params, function_decl.span, "function")?;
+        validate_params(
+            function_decl.receiver,
+            &function_decl.params,
+            &format!("function `{}`", function_decl.name),
+        )?;
         let function_type_param_scope = type_param_scope(&function_decl.type_params);
         let type_param_bounds = lower_trait_bounds(
             &function_decl.type_param_bounds,
@@ -1151,6 +1187,11 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 ));
             }
             validate_type_params(&method.type_params, method.span, "impl method")?;
+            validate_params(
+                method.receiver,
+                &method.params,
+                &format!("impl method `{}`", method.name),
+            )?;
             let method_type_param_scope =
                 merged_type_param_scope(&impl_type_param_scope, &method.type_params);
             let type_param_bounds = lower_trait_bounds_with_self(
@@ -1198,7 +1239,26 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 .collect::<Vec<_>>();
             let expected_return_type =
                 substitute_type(&trait_method.signature.return_type, &trait_substitutions);
-            if params != expected_params || return_type != expected_return_type {
+            let params_have_matching_passing = method
+                .params
+                .iter()
+                .zip(&trait_method.decl.params)
+                .all(|(actual, expected)| actual.passing == expected.passing);
+            let return_sources_match = borrow_source_slot(
+                method.receiver,
+                &method.params,
+                return_borrow_source.as_deref(),
+            ) == borrow_source_slot(
+                trait_method.decl.receiver,
+                &trait_method.decl.params,
+                trait_method.signature.return_borrow_source.as_deref(),
+            );
+            if params != expected_params
+                || !params_have_matching_passing
+                || return_type != expected_return_type
+                || method.return_passing != trait_method.signature.return_passing
+                || !return_sources_match
+            {
                 return Err(Diagnostic::at(
                     method.span,
                     format!(
@@ -1677,6 +1737,25 @@ fn validate_type_params(
             return Err(Diagnostic::at(
                 span,
                 format!("duplicate type parameter `{}` on {}", name, owner),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_params(receiver: Option<ReceiverKind>, params: &[Param], owner: &str) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for param in params {
+        if receiver.is_some() && param.name == "self" {
+            return Err(Diagnostic::at(
+                param.span,
+                format!("parameter `self` conflicts with the receiver on {}", owner),
+            ));
+        }
+        if !seen.insert(&param.name) {
+            return Err(Diagnostic::at(
+                param.span,
+                format!("duplicate parameter `{}` on {}", param.name, owner),
             ));
         }
     }

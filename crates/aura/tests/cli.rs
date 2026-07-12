@@ -5857,3 +5857,55 @@ def main() -> int32:
         "unix:ping\ntls:ping!\n"
     );
 }
+
+#[test]
+fn zero_sized_udp_reads_return_typed_invalid_input_in_mir_and_direct_backends() {
+    let source = r#"import io
+import net
+
+def probe() -> Result[None, io.Error]:
+    with socket = try net.udp_bind("127.0.0.1:0"):
+        print(socket.recv(0, timeout=1ms))
+        print(socket.recv_from(0, timeout=1ms))
+    return Result.Ok(None)
+
+def main() -> int32:
+    match probe():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-zero-sized-udp-read",
+        source,
+        "Result.Err(io.Error.InvalidInput)\nResult.Err(io.Error.InvalidInput)\n",
+    );
+}
+
+#[test]
+fn direct_backend_metrics_int64_overflow_fails_at_runtime() {
+    let source = r#"import metrics
+
+def main() -> int32:
+    metrics.reset()
+    metrics.increment("requests", 9223372036854775807)
+    metrics.increment("requests", 1)
+    print(metrics.get("requests"))
+    return 0
+"#;
+
+    let (_build, run) = build_and_run_direct_source("aurora-direct-metrics-overflow", source);
+    assert!(!run.status.success(), "metrics overflow should fail");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("metric value overflowed `int64`"),
+        "unexpected direct-backend metrics diagnostic: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        run.stdout.is_empty(),
+        "overflow should stop before metrics.get"
+    );
+}

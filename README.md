@@ -4,7 +4,7 @@ Aurora is a systems programming language designed to have Python-like simplicity
 
 The goal is to build a systems programming language that is easy to learn and very effective for building agents and ML infrastructure.
 
-Aurora 0.1 is an advanced technical preview, not a production release. The canonical implemented contract is the [Status and Compatibility](docs/manual/status-and-compatibility.md) page and Manual; the original language proposal is historical design material. Supported hosts and pinned tools are listed in [SUPPORTED_PLATFORMS.md](SUPPORTED_PLATFORMS.md).
+Aurora 0.1 is an advanced technical preview, not a production release. The canonical implemented contract begins with the normative [Language Specification](docs/manual/language-specification.md), [complete grammar](docs/manual/grammar.md), and Manual; the original language proposal is historical design material. Supported hosts and pinned tools are listed in [SUPPORTED_PLATFORMS.md](SUPPORTED_PLATFORMS.md).
 
 ## Monorepo layout
 
@@ -31,7 +31,7 @@ Compiler build and direct binary usage are documented in [crates/aura/README.md]
 Compiler library testing notes live in [crates/aurora-compiler/README.md](crates/aurora-compiler/README.md).
 The categorized example library is documented in [examples/README.md](examples/README.md).
 The tutorial track lives in [tutorials/README.md](tutorials/README.md).
-The VitePress book lives in [docs/index.md](docs/index.md) and includes the guided Learn track plus the API manual.
+The VitePress book lives in [docs/index.md](docs/index.md) and includes the guided Learn track plus the normative language and API reference.
 The repo testing strategy is documented in [docs/testing_strategy.md](docs/testing_strategy.md).
 The forward-looking ML systems roadmap lives in [docs/ml_systems_support_plan.md](docs/ml_systems_support_plan.md).
 The implementation architecture guide lives in [architecture_docs/README.md](architecture_docs/README.md).
@@ -193,6 +193,8 @@ Current compiler workflow:
   - start the VitePress Aurora book locally
 - `npm run docs:build`
   - build the VitePress Aurora book
+- `npm run check:reference`
+  - verify that the normative language-reference pages, navigation, and core conformance statements stay present
 - `npm run ci`
   - run the current repo-quality gate locally, including formatting, serialized Rust tests, Node tests, coverage floors, docs build, audit, Clippy warnings-as-errors, and diff hygiene
 
@@ -209,7 +211,7 @@ Current `build` status:
 
 - `aura build` now accepts `--backend auto|direct`
 - `aura build` defaults to `auto`
-- `auto` uses the direct native backend for the maintained Aurora surface
+- `auto` first tries the direct native backend and may fall back to a standalone embedded-MIR launcher when direct emission is unavailable
 - `direct` now performs true low-level native code generation for the full currently implemented Aurora language surface
 - the built binary no longer reparses source or compiles a generated Rust runner at build time
 - the built binary no longer depends on the original `.au` source files at runtime

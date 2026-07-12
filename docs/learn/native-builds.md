@@ -36,7 +36,7 @@ aura build --backend auto -o ./app app.au
 aura build --backend direct -o ./app app.au
 ```
 
-`auto` is the default. For the maintained language surface, it uses the direct native backend. Selecting `direct` explicitly is useful when you want to make sure you are exercising that path on CI — for example, so a change that accidentally falls back stays visible.
+`auto` is the default. It first tries the direct native backend and may fall back to a standalone launcher that embeds checked MIR and the MIR runtime. Selecting `direct` explicitly forbids fallback and is useful when CI must prove direct emission remains available.
 
 ## Runtime Diagnostics
 
@@ -59,6 +59,6 @@ Before a native binary goes anywhere important:
 - Run `aura check` on the source.
 - Run the program through `aura run` to confirm behaviour interactively.
 - Build with `aura build` and run the binary against the same scenarios.
-- For programs that do I/O or spawn processes, run them against the real resources — files that exist, sockets that are open, services that are reachable — on the native build, not just the interpreter.
+- For programs that do I/O or start processes, run them against the real resources — files that exist, sockets that are open, services that are reachable — in the built executable, not only through `aura run`.
 
 Reference: [CLI And Tooling](/manual/cli-and-tooling).
