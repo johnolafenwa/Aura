@@ -26,7 +26,7 @@ The resulting binary is self-contained: it does not need the original `.au` sour
 Use `build` when:
 
 - you want a standalone executable you can ship or deploy
-- you are validating native behaviour for a program that will run in production on the direct backend
+- you are validating native behaviour for a controlled deployment on the direct backend
 - a program's runtime characteristics are part of what you are testing
 
 ## Backends

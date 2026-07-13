@@ -62,7 +62,7 @@ Those may become future integrations, but they are not the first milestone.
 Aurora now has a usable first control-plane boundary, but it is still missing the data-plane and exporter depth a production ML systems language needs:
 
 - no maintained host-side dense-array surface for local numeric work
-- no maintained zero-copy shared-memory transport surface
+- no maintained shared-memory or copy-avoiding borrowed-buffer transport surface
 - no nested/schema-derived class and enum codecs or binary serialization format
 - no external metrics exporter, scoped trace spans, or profiler integration
 - no public tensor or device handle model for the later accelerator-aware path
@@ -87,7 +87,7 @@ That means Aurora can already act as a control-plane language, but it cannot yet
    Not every Aurora value should live on every accelerator. Tensors, numeric buffers, and device-capable plain data should be placeable; sockets, files, queues, and many service handles should remain host-bound.
 
 6. Keep semantics explicit.
-   Cross-device transfer, zero-copy borrowing, ownership handoff, and distributed collectives should be explicit in the type system and runtime protocol.
+   Cross-device transfer, copy-avoiding borrowing, ownership handoff, and distributed collectives should be explicit in the type system and runtime protocol.
 
 ## Target Architecture
 
@@ -97,7 +97,7 @@ flowchart LR
     A --> C["Host arrays / tensor-lite"]
     A --> D["Serialization + schemas"]
     A --> E["Observability"]
-    A --> F["Shared memory / zero-copy transport"]
+    A --> F["Shared memory / borrowed-buffer transport"]
     F --> G["Tensor / device handles"]
     B --> H["Python workers"]
     C --> H
@@ -252,13 +252,13 @@ Aurora needs first-class observability so ML systems built in Aurora can be debu
 - process supervision hooks for child lifecycle events
 - optional OpenTelemetry-compatible export path
 
-## 5. Zero-Copy And Shared-Memory Transport
+## 5. Shared-Memory And Copy-Avoiding Transport
 
 Aurora needs a real local data plane, not only strings and copied byte buffers.
 
 ### Why this matters
 
-Without zero-copy transport, Aurora becomes a slow boundary between Python and accelerator-aware runtimes. That is acceptable for orchestration, but weak for high-throughput inference, embedding systems, and local array-heavy pipelines.
+Without a maintained shared-memory, copy-avoiding transport, Aurora remains a copying boundary between Python and accelerator-aware runtimes. That is acceptable for orchestration, but weak for high-throughput inference, embedding systems, and local array-heavy pipelines. This section is a future design target, not a claim about Aurora 0.1.
 
 ### Required surface
 
@@ -371,7 +371,7 @@ Aurora's ownership model is a good fit for ML systems, but it needs extensions f
 - borrowed access to array slices and views
 - borrowed access to shared-memory buffers
 - owned transfer of device handles
-- lifetime-safe aliasing rules for zero-copy views
+- lifetime-safe aliasing rules for copy-avoiding borrowed views
 - explicit synchronization requirements before host reads
 - diagnostics for invalid use after cross-process or cross-device handoff
 
@@ -545,7 +545,7 @@ If Aurora can only fund a small number of milestones first, the recommended orde
 
 1. host-side array / tensor-lite support
 2. schema-derived and binary serialization depth
-3. zero-copy/shared-memory transport
+3. copy-avoiding shared-memory transport
 4. production observability exporters and profiling
 5. tensor/device handle interop
 6. full tensor, placement-aware execution, and distributed runtime work

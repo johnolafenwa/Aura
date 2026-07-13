@@ -122,6 +122,8 @@ match borrow mut result:
         pass
 ```
 
+The scrutinee may be a field such as `holder.state`. Reassigning that field, `holder`, or an ancestor field makes its payload bindings stale, while changing a separate sibling field is allowed. See [examples/enums/match_borrow_mut_fields.au](../examples/enums/match_borrow_mut_fields.au).
+
 See [examples/enums/match_borrow.au](../examples/enums/match_borrow.au).
 
 ## Literal Match Patterns

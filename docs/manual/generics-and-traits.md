@@ -165,6 +165,8 @@ For an explicitly implemented method, conformance compares:
 
 Ordinary parameter names and borrow-label spellings may differ between the trait and implementation when they identify the same parameter position. Changing which parameter supplies a borrowed result is a signature mismatch.
 
+Aurora 0.1 retains these borrowed-return conformance rules even though only copy-valued borrowed-return calls are executable. Calls producing non-copy borrowed results are rejected before backend lowering.
+
 Implementation methods cannot add default ordinary arguments. Extra methods, missing required methods, receiver mismatches, and signature mismatches are rejected before body execution.
 
 ## Trait Method Dispatch

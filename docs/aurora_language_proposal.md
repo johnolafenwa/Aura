@@ -664,7 +664,7 @@ Rules:
 
 ## 6.9 Slices
 
-Aurora supports borrowed slices for zero-copy access to contiguous data.
+Borrowed slices are a future design target for copy-avoiding access to contiguous data; they are not implemented in Aurora 0.1.
 
 - `borrow [T]` is a borrowed slice of elements of type `T`
 - slices are non-owning views and do not allocate
@@ -953,7 +953,7 @@ The concurrency model should be:
 - safe by default
 - efficient
 - compatible with ownership semantics
-- suitable for both I/O and parallel computation
+- suitable for I/O concurrency now and explicitly staged parallel computation later
 
 ## 8.2 Tasks instead of asyncio-style coroutines
 
@@ -2063,7 +2063,7 @@ Attribute syntax and `@test` were proposed here but are not implemented in Auror
 
 Use this as the short public description:
 
-> **Aurora is a readable, Python-inspired compiled language with Rust-like memory safety and Go-like concurrency. It is designed for developers who want clean syntax, native performance, safe parallelism, and one modern toolchain.**
+> **Aurora is a readable, Python-inspired compiled language with explicit ownership and structured concurrency. It is designed for developers who want clean syntax, typed failure, native deployment, and one modern toolchain. Aurora 0.1 task execution is cooperative and single-threaded.**
 
 ---
 

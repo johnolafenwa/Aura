@@ -42,13 +42,13 @@ The examples are organized by topic so they can serve both as quick references a
     - `42`
     - `42`
 - `borrowed_returns.au`
-  - borrowed return values with explicit source syntax like `-> borrow[user] String`
+  - copy-valued borrowed returns with explicit source syntax like `-> borrow[user] int32`
   - prints:
-    - `aurora`
-    - `aurora`
+    - `7`
+    - `7`
 - `borrowed_lifetime_labels.au`
-  - borrowed return labels like `borrow[shared]` flowing through calls and locals
-  - prints `aurora`
+  - borrowed return labels like `borrow[shared]` flowing through copy-valued calls and locals
+  - prints `7`
 - `pass_keyword.au`
   - the `pass` no-op statement in empty classes and functions
   - prints `0`
@@ -216,6 +216,11 @@ The examples are organized by topic so they can serve both as quick references a
 - `match_borrow.au`
   - `match borrow ...:` plus unqualified built-in enum variants like `case Ok(value):`
   - prints `ok`
+- `match_borrow_mut_fields.au`
+  - mutable matching through a field place while a proven-disjoint sibling field changes
+  - prints:
+    - `9`
+    - `11`
 - `rich_match.au`
   - multi-payload enum variants, nested patterns, named payload fields, and expression-form `match`
   - prints:

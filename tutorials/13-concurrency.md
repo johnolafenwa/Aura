@@ -151,6 +151,8 @@ See [examples/concurrency/task_group_associated_method.au](../examples/concurren
 
 ### Task Results
 
+Repeated observation is supported for copy data and explicitly shared synchronized handles. A result containing an exclusive runtime resource is single-observer-only in Aurora 0.1. The checker does not enforce that restriction yet, so give such a result exactly one designated observer.
+
 For ordinary code, use:
 
 ```python
@@ -235,6 +237,8 @@ def worker(out: Queue[int32]):
 If the current `with TaskGroup()` scope is iterating a `Queue[T]` from that scope with `for value in queue:`, `group.cancel()` also wakes that queue iteration so it can finish cleanly instead of parking forever.
 
 Cancellation is cooperative. Aurora does not forcibly kill tasks.
+
+Aurora 0.1 runs task bodies on one cooperative scheduler thread, not in parallel. A CPU-bound task that never calls `cancelled()` or reaches another scheduler-aware operation can starve its siblings. Each lightweight task also reserves a fixed 1 MiB coroutine stack, and readiness checks scale linearly with the current waiting-task set.
 
 Blocking queue/task/network waits are cancellation-aware and surface cancellation through `QueueReceive`, `TaskResult`, `WaitAny`, `WaitAll`, or `io.Error`, depending on the API.
 

@@ -156,17 +156,17 @@ class User:
         return self.name.clone()
 ```
 
-Alternatively, an advanced API may declare a borrowed return tied to `self`:
+Copy-valued APIs may declare a borrowed return tied to `self`; calls materialize a copy:
 
 ```python
-class User:
-    name: String
+class Counter:
+    value: int32
 
-    def name_ref(borrow self) -> borrow[self] String:
-        return self.name
+    def value_ref(borrow self) -> borrow[self] int32:
+        return self.value
 ```
 
-Borrowed return provenance is specified in [Functions](/manual/functions#borrowed-returns).
+Aurora 0.1 rejects a corresponding non-copy call such as `-> borrow[self] String`; return an owned clone or expose an owner method. Borrowed-return provenance is specified in [Functions](/manual/functions#borrowed-returns).
 
 ## `copy class`
 

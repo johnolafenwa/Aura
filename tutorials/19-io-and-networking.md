@@ -16,7 +16,7 @@ import net
 import process
 ```
 
-The current runtime model uses scheduler-backed lightweight tasks, and queue waits, timer waits, and the maintained socket/HTTP surface now share the same evented runtime scheduler underneath instead of spinning or blocking on per-operation sleeps.
+The current runtime model uses scheduler-backed lightweight tasks. Queue waits, timer waits, and the maintained socket/HTTP surface share the same evented runtime scheduler underneath instead of spinning or blocking on per-operation sleeps. Hostname resolution and blocking connect syscalls run on the bounded blocking service, so a slow DNS resolver or connect attempt does not pin the lightweight-task scheduler.
 
 ## Standard Input And Output
 
@@ -433,6 +433,8 @@ See [examples/io/unix_tls_roundtrip.au](../examples/io/unix_tls_roundtrip.au), w
 
 Most maintained socket operations accept optional `timeout=...` arguments. Timeouts are expressed with Aurora `Duration` values such as `100ms`, `1s`, or `2m`.
 
+For connect operations, one timeout budget covers hostname resolution, every resolved-address attempt, and the remaining protocol handshake. Aurora does not restart the full timeout for each address returned by DNS. Cancellation stops the Aurora task's wait immediately; an already-running host resolver or connect syscall may finish later on the bounded blocking service, and its result is discarded safely.
+
 The socket runtime also threads task-group cancellation into maintained socket waits. If a task group is cancelled while a child is waiting on a maintained network operation, that operation returns `io.Error.Cancelled` instead of waiting forever.
 
 ## Current Model
@@ -441,6 +443,7 @@ This surface is deliberately explicit but no longer relies on the old blocking/p
 
 - queue waits, `sleep(...)`, socket waits, and the maintained HTTP helpers all run through the shared runtime scheduler
 - socket-backed networking and HTTP convenience helpers use nonblocking descriptors with timeout and cancellation support
+- hostname resolution, listener binding, UDP destination resolution, and blocking TCP/Unix connect syscalls offload through the bounded blocking service
 - process waits and captured child stdio pipes use the same scheduler-backed wait path
 - Aurora tasks are scheduler-backed lightweight coroutines rather than one-OS-thread-per-task workers
 - ordinary file operations now offload through the shared scheduler-backed runtime instead of pinning a lightweight task on a blocking host thread
@@ -450,6 +453,6 @@ Current process notes:
 - subprocess APIs are shell-free and take explicit argv vectors only
 - grouped children are supported through `group=true` on `process.start(...)` and `process.run(...)`
 - there is not yet a PTY surface
-- there are not yet restart supervisors or pipeline helpers
+- there are not yet pipeline helpers
 
 That keeps the execution model straightforward while removing the old timeout-spin loops, the blocking HTTP special case, and the old synchronous file-I/O mismatch.

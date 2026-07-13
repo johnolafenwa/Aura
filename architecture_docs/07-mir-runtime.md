@@ -58,6 +58,8 @@ Aurora's MIR runtime centers around:
 
 That is why `run` wraps execution in a thread builder instead of just calling a function directly.
 
+This dedicated thread is the one thread that executes Aurora task bodies. It reserves a 64 MiB host stack. Lightweight child tasks are stackful coroutines scheduled on that same thread, with a fixed 1 MiB stack reserved per task. The bounded blocking-I/O pool runs host calls only; it does not make Aurora task code parallel.
+
 ## The core execution loop
 
 At a high level, Aurora executes MIR like this:
@@ -172,10 +174,12 @@ Aurora's MIR runtime supports:
 
 Important details:
 
-- task-group children run on scheduler-backed host threads with shared cancellation state
+- task-group children run as stackful coroutines on the single Aurora scheduler thread, with shared cancellation state
 - task groups provide child cancellation scopes
 - `wait_any(...)` and `wait_all(...)` reuse the shared runtime scheduler deadline helpers
 - `Queue.get(timeout=...)` and I/O methods use deadline-aware helpers
+- scheduling is cooperative, so CPU code without a yield boundary can starve sibling tasks
+- waiter readiness is scanned and a host `poll` set is rebuilt linearly in the number of waiters/descriptors
 
 ## Networking and I/O
 

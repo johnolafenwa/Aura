@@ -16,6 +16,8 @@ import io
 
 Most operations return `Result[..., io.Error]`. Waiting operations usually accept `timeout: Duration = ...`; omitting it means no caller deadline unless a protocol-specific hard limit is stated below. Pass explicit timeouts for services that need bounded latency or clean shutdown behavior.
 
+Hostname resolution, socket binding, UDP destination resolution, and blocking TCP or Unix connect syscalls run on Aurora's bounded blocking service rather than on the lightweight-task scheduler. A connect timeout is one end-to-end budget: it includes DNS resolution and is shared by every resolved-address attempt, then by any remaining TLS, HTTP, or WebSocket handshake work. Cancellation ends the Aurora wait promptly; host work that cannot be interrupted may finish later and is discarded safely.
+
 Text reads decode UTF-8 strictly and return `io.Error.InvalidData` for invalid bytes. TCP, Unix, and TLS deadlines return `io.Error.TimedOut`; a UDP receive deadline returns `Ok(None)`. Cancellation is reported as `io.Error.Cancelled` where the operation participates in scheduler cancellation.
 
 ## Constructors

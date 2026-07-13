@@ -196,7 +196,7 @@ match borrow result:
 print("result is still owned")
 ```
 
-`match borrow mut` requires a mutable place scrutinee. It gives mutable-borrowed payload bindings and reconstructs/writes the enum value back to that place on normal arm exit. Overlapping nested mutable matches are rejected, and a payload binding becomes stale if the matched place is reassigned.
+`match borrow mut` requires a mutable place scrutinee. It gives mutable-borrowed payload bindings and reconstructs/writes the enum value back to that place on normal arm exit. Overlapping nested mutable matches are rejected. A payload binding becomes stale if the exact matched place, its root, or an ancestor field is reassigned; a proven-disjoint sibling-field write remains valid.
 
 Borrowed payloads cannot be moved as owned values. Copy payloads are ordinary copies. The complete place and provenance rules are in [Ownership And Borrowing](/manual/ownership-and-borrowing#borrowed-pattern-matching).
 

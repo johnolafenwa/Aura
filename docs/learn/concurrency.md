@@ -34,6 +34,8 @@ The `with` block defines the task's lifetime. Leaving the block waits for childr
 
 `TaskResult[T]` has four cases — `Ready`, `Error`, `TimedOut`, and `Cancelled` — because those are the four things that can happen to a child task, and a reasonable program might want different behaviour for each.
 
+Repeated observation is supported for copy data and explicitly shared synchronized handles. A result containing an exclusive runtime resource is single-observer-only in Aurora 0.1. The checker does not enforce that restriction yet, so give such a result exactly one designated observer.
+
 ## Fire-And-Forget Inside A Scope
 
 When the program does not need a handle to a child's result, use `start_soon`:
@@ -197,6 +199,8 @@ with group = TaskGroup():
 
 Cancellation is not an exception that lands at arbitrary points in the code. It is a request that tasks observe at well-defined boundaries. That makes cancelled code easy to reason about — and easy to test.
 
+Aurora 0.1 runs Aurora task bodies on one cooperative scheduler thread, not in parallel. CPU code without a scheduler boundary can starve sibling tasks. Each task reserves a fixed 1 MiB coroutine stack, and readiness scanning is linear in the waiting-task set.
+
 ## The Shape Worth Copying
 
 Good Aurora concurrency tends to look the same across programs:
@@ -205,7 +209,7 @@ Good Aurora concurrency tends to look the same across programs:
 - queues owned by the parent, closed by the producers
 - task results inspected through `TaskResult`, `wait_any`, or `wait_all`
 - long CPU loops that check `cancelled()`
-- no detached background work unless the program genuinely wants an unscoped lifetime
+- no detached background work; Aurora 0.1 exposes no detached task form
 
 If you can say, for each child task, which scope created it and which scope waits for it, the program is usually on the right track.
 

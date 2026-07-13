@@ -140,26 +140,28 @@ The bootstrap compiler supports functions returning:
 - `Task[T]`
 - `None`
 
-Borrowed returns are also supported when the source is explicit:
+Copy-valued borrowed returns are supported when the source is explicit:
 
 ```python
 class User:
-    name: String
+    score: int32
 
-def name_ref(user: borrow User) -> borrow[user] String:
-    return user.name
+def score_ref(user: borrow User) -> borrow[user] int32:
+    return user.score
 ```
 
-The same syntax works for methods as `-> borrow[self] T`.
+The call materializes an ordinary `int32` copy. The same syntax works for methods as `-> borrow[self] T`.
 
 When multiple borrowed parameters share the same lifetime, you can give them a shared borrow label and return that label explicitly:
 
 ```python
-def choose_nonempty(left: borrow[shared] String, right: borrow[shared] String) -> borrow[shared] String:
-    if left.len() > 0:
+def choose_positive(left: borrow[shared] int32, right: borrow[shared] int32) -> borrow[shared] int32:
+    if left > 0:
         return left
     return right
 ```
+
+Aurora 0.1 rejects calls producing non-copy borrowed results. For `String`, collections, resources, and ordinary classes, return an owned clone or expose an owner method. Live borrowed aliases are reserved for Phase 6.
 
 See [examples/basics/borrowed_returns.au](../examples/basics/borrowed_returns.au) and [examples/basics/borrowed_lifetime_labels.au](../examples/basics/borrowed_lifetime_labels.au).
 
@@ -177,4 +179,5 @@ The compiler infers type arguments from the arguments you pass and, when needed,
 ## Current Limits
 
 - borrowed return values still require an explicit source or borrow label such as `borrow[self]`, `borrow[param]`, or `borrow[shared]`
+- borrowed-return calls currently require a copy result type
 - broader lifetime inference without an explicit source/label is still outside the bootstrap compiler

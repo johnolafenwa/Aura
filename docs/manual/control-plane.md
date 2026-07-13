@@ -21,7 +21,7 @@ aura run worker.au -- --model small --port 8080
 ./worker --model small --port 8080
 ```
 
-`sys.args()` excludes the executable name. In `aura run`, arguments after `--` become this vector; a built program uses its host command-line arguments. The current runtime transports arguments through an internal environment value, so an ambient `AURORA_PROGRAM_ARGS_JSON` value can spoof arguments in a directly launched built program; treat that name as reserved until this defect is removed.
+`sys.args()` excludes the executable name. In `aura run`, arguments after `--` are passed explicitly into the MIR execution context and inherited by child tasks. A built program reads its real host command line; ambient environment variables cannot override it. On hosts that permit non-Unicode argv bytes, built programs replace invalid byte sequences with the Unicode replacement character.
 
 `sys.env` returns `None` both when a variable is missing and when its host value is not valid Unicode. `sys.current_dir` and the string-producing `path` helpers convert non-Unicode host paths lossily. `unix_time_ms` is milliseconds since the Unix epoch; `monotonic_time_ms` is milliseconds since the first call to that function in the current process and is suitable for elapsed-time comparisons, not wall-clock timestamps.
 

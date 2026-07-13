@@ -512,6 +512,8 @@ The current bootstrap concurrency surface includes:
 - cooperative cancellation
 - duration literals with `ms`, `s`, and `m`
 
+Aurora 0.1 executes task bodies on one cooperative scheduler thread. Task bodies are not parallel, CPU code without a scheduler boundary can starve siblings, each task reserves a fixed 1 MiB coroutine stack, and readiness checks are linear in the waiting-task set. Resource-bearing task results are single-observer-only; the checker does not yet enforce that restriction.
+
 Current collection notes:
 
 - `Vec.len()` returns `int32`, so `range(values.len())` works directly
@@ -580,7 +582,7 @@ Current module/import limitations:
 - directly checking or analyzing a nested package file now infers the nearest package root that satisfies its imports
 - `import a.b` exposes module namespaces for calls like `a.b.func(...)`, `a.b.Type(...)`, and `a.b.Enum.Variant`
 - type annotations may use namespace-imported types such as `a.b.Type`
-- the current MIR-backed runtime stops with a friendly recursion-depth diagnostic after 256 nested Aurora calls
+- both maintained execution paths stop with a friendly recursion-depth diagnostic after 256 nested Aurora calls
 - package manifests, local path dependencies, and git dependencies are now implemented
 
 Current expression/ergonomics limitations:
@@ -596,4 +598,4 @@ Current expression/ergonomics limitations:
 - Aurora tasks are scheduler-backed lightweight tasks, and ordinary file I/O now also offloads through the shared scheduler instead of pinning a task on a blocking host thread
 - Unix domain sockets require a Unix host at runtime
 - subprocess APIs are shell-free and use explicit argv vectors; process groups and restart supervision are implemented, while PTY support is not
-- borrowed return labels such as `borrow[shared]` are supported on borrowed parameters and returns for advanced zero-copy APIs
+- borrowed return labels such as `borrow[shared]` are checked on declarations; copy-valued calls materialize copies, while non-copy borrowed-result calls are rejected until live aliases exist

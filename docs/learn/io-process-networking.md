@@ -157,6 +157,8 @@ with listener = try net.listen("127.0.0.1:0"):
         try stream.shutdown_write()
 ```
 
+Hostname lookup and blocking connect syscalls are sent to the bounded blocking service, so they do not freeze sibling Aurora tasks. The `1s` timeout above is a single budget for DNS and all candidate addresses rather than a fresh second for every address. Task-group cancellation stops waiting promptly even when the host resolver itself cannot be interrupted.
+
 A server usually has its listener at the top of a scope and each accepted connection running in its own task:
 
 ```python

@@ -134,13 +134,15 @@ Explicitly closing a resource before scope exit is permitted only where the reso
 
 ## Tasks And Scheduler
 
-Aurora lightweight tasks run on a cooperative coroutine scheduler. Operations such as queue waits, task waits, sleep, nonblocking sockets, and scheduler-integrated I/O yield instead of creating one OS thread per Aurora task.
+Aurora lightweight tasks run on one cooperative coroutine scheduler thread per program. Aurora 0.1 does not execute Aurora task bodies in parallel. Operations such as queue waits, task waits, sleep, nonblocking sockets, and scheduler-integrated I/O yield instead of creating one OS thread per Aurora task. The bounded blocking-worker pool may execute host calls concurrently, but those workers do not run Aurora code.
+
+The scheduler is not preemptive and does not inject fuel checks into ordinary loops. A task that keeps executing CPU code without calling `cancelled()` or reaching another scheduler-aware operation can starve every other Aurora task. Each lightweight task reserves a fixed 1 MiB coroutine stack. Readiness discovery scans the waiting-task set and constructs the host `poll` set, so its current cost is linear in the number of waiting tasks/descriptors.
 
 Scheduling order among multiple ready tasks is not specified. Programs coordinate through queues, task results, cancellation, and other documented synchronization rather than timing assumptions.
 
 `Task[T]` and `Queue[T]` are copy handles to shared runtime state. Copying a handle does not duplicate the underlying task or queue.
 
-A task stores its completed result. Repeated result observation clones the stored runtime value. For ordinary owned data this produces another owned structural value. Runtime-backed resources use shared internal handles, so observing a task result containing a resource may produce aliases to the same host resource rather than independent host resources. Code should transfer resource ownership through tasks only with a clear single-observer convention until the type system gains a stricter task-resource rule.
+A task stores its completed result. Repeated result observation clones the stored runtime value. For ordinary copy data this produces another ordinary value. A result containing an exclusive runtime resource is single-observer-only in 0.1; the checker does not yet enforce that restriction, and a second observation can alias the same host resource through shared handles. Repeated observation is supported only for copy data or explicitly shared synchronized handles.
 
 ## Task Groups And Failure Observation
 

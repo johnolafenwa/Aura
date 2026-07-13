@@ -17,7 +17,7 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 
 ## Stability Policy
 
-Syntax expansion is frozen for the 0.1 hardening cycle. Work in this cycle prioritizes distribution, correctness, native-runtime safety, editor responsiveness, and the control-plane standard library. Existing documented syntax may still receive correctness fixes, and APIs may change while 0.1 remains untagged.
+The ratified correctness-recovery and Phase 1.5 semantic re-defaults are the final pre-reference language changes for 0.1. Outside those recorded ADR decisions, syntax expansion is frozen for the hardening cycle. Work in this cycle prioritizes correctness, native-runtime safety, editor responsiveness, and an honest control-plane surface. APIs may still change while 0.1 remains untagged.
 
 Compiler coverage is held at the current non-regression floor rather than being pushed to 100%. New behavior still requires focused tests; the freeze only ends marginal coverage work that does not reduce product risk.
 
@@ -32,6 +32,8 @@ Aurora 0.1 uses structured concurrency:
 - `wait_any(...)` and `wait_all(...)` coordinate task completion
 
 There is no `Channel`, language-level `select`, bare `spawn`, or detached task.
+
+Task bodies execute on one cooperative scheduler thread rather than in parallel. CPU code without a scheduler boundary can starve siblings; each task reserves a fixed 1 MiB coroutine stack; readiness scanning is linear in the waiting-task set. Results containing exclusive runtime resources are single-observer-only, although that restriction is not yet statically enforced. See [Execution Model](/manual/execution-model) and [Current Limits](/manual/current-limits).
 
 ## Platform And Distribution Support
 

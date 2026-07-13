@@ -41,6 +41,11 @@ flowchart LR
 13. [12-testing-and-quality.md](12-testing-and-quality.md)
 14. [13-end-to-end-walkthrough.md](13-end-to-end-walkthrough.md)
 
+Accepted language and runtime decisions are recorded separately in
+[`decisions/`](decisions/README.md). The architecture chapters describe the
+current implementation; an accepted decision can therefore precede its
+implementation, and its ADR records the completion gate explicitly.
+
 ## Source anchors
 
 The main implementation files these docs refer to are:

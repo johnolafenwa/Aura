@@ -148,7 +148,7 @@ def bad(user: borrow User) -> String:
     return user.name # rejected
 ```
 
-Use `.clone()` for a new owned value when the type supports it, or expose a borrowed return:
+Use `.clone()` for a new owned value when the type supports it, or expose an owner method that performs the read or mutation:
 
 ```python
 def good(user: borrow User) -> String:
@@ -165,18 +165,18 @@ Block-local bindings do not escape their branch, arm, loop, or `with` body. See 
 
 ## Borrowed Returns And Provenance
 
-A borrowed return does not create ownership. Its signature identifies which receiver or parameter remains the source:
+A borrowed-return signature identifies which receiver or parameter is the source:
 
 ```python
-def identity(value: borrow[source] String) -> borrow[source] String:
+def identity(value: borrow[source] int32) -> borrow[source] int32:
     return value
 ```
 
 The returned expression must derive from the selected source. A source may be named by its parameter name, `self`, or a borrow label. When exactly one eligible source exists, it may be inferred; multiple eligible sources require an explicit selection.
 
-Shared borrowed returns may derive from shared or mutable borrows. Mutable borrowed returns may derive only from mutable borrows. A borrowed return of a copy type becomes an ordinary copied value; a borrowed return of a move type produces a borrowed binding carrying the original provenance.
+Shared borrowed-return declarations may derive from shared or mutable borrows. Mutable borrowed-return declarations may derive only from mutable borrows. A call returning a copy type becomes an ordinary copied value. Aurora 0.1 rejects calls producing non-copy borrowed results because neither maintained backend has live alias storage yet; return an owned clone or expose an owner method instead.
 
-Borrow labels describe source equivalence across a call signature. They do not create arbitrary reference values, permit returning a local owned temporary, or extend the lifetime of a source. The detailed signature rules are in [Functions](/manual/functions#borrowed-returns).
+Borrow labels describe source equivalence across a call signature. They do not create arbitrary reference values, permit returning a local owned non-copy temporary, or extend the lifetime of a source. Non-copy declarations remain checked for provenance so the reserved contract is stable for Phase 6. The detailed signature rules are in [Functions](/manual/functions#borrowed-returns).
 
 ## Borrowed Pattern Matching
 
@@ -192,7 +192,7 @@ match borrow result:
         print(error)
 ```
 
-`match borrow mut` requires a mutable place. Its non-copy payload bindings are mutable borrows, and mutations are written back by reconstructing the enum on normal arm exit. A nested mutable match cannot overlap an already active mutable match. Reassigning the scrutinee invalidates payload bindings tied to the old value.
+`match borrow mut` requires a mutable place. Its non-copy payload bindings are mutable borrows, and mutations are written back by reconstructing the enum on normal arm exit. A nested mutable match cannot overlap an already active mutable match. Reassigning the exact scrutinee, its root, or an ancestor field invalidates payload bindings tied to the old value. A write to a proven-disjoint sibling field does not invalidate them.
 
 Payload bindings are arm-local and cannot shadow a visible binding. Match typing and exhaustiveness are specified in [Enums And Pattern Matching](/manual/enums-and-match).
 

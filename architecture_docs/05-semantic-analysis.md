@@ -102,6 +102,8 @@ Aurora's checker covers more than "basic type checking". It performs:
 
 Aurora's syntax can say `borrow`, `borrow mut`, and borrowed return labels, but those words are only meaningful once the checker validates them.
 
+For Aurora 0.1, the checker permits borrowed-return calls only when the substituted result type is copyable. Those calls materialize copies. Non-copy borrowed-return declarations still receive provenance and trait-conformance checking, but calls are rejected before MIR lowering until Phase 6 supplies live alias storage.
+
 Aurora's `FunctionChecker` tracks local bindings with information such as:
 
 - semantic type
@@ -110,6 +112,8 @@ Aurora's `FunctionChecker` tracks local bindings with information such as:
 - whether it came from a borrow
 - whether it has been moved
 - whether some fields have been partially moved
+
+Places used by move, borrow, iteration-freeze, and mutable-match analysis have a canonical rooted representation: one binding root plus typed field projections. Relative projection paths are a separate type used only inside one binding's partial-move state. Keeping those types distinct prevents a relative field such as `state` from being compared accidentally with a rooted place such as `holder.state`.
 
 That is why move and borrow diagnostics come from `sema.rs`, not the parser.
 

@@ -1,6 +1,6 @@
 # Concurrency
 
-Aurora provides scheduler-backed lightweight tasks, structured task groups, queues, task handles, cancellation checks, sleeping, and multi-task wait helpers.
+Aurora provides single-threaded scheduler-backed lightweight tasks, structured task groups, queues, task handles, cancellation checks, sleeping, and multi-task wait helpers.
 
 The maintained model is structured by default: child tasks should live inside a `TaskGroup`, and leaving the group scope waits for the children. Queue and task waits participate in the scheduler so a blocked task does not block the whole runtime.
 
@@ -57,7 +57,7 @@ On normal scope exit, the runtime joins children that continue making bounded pr
 
 Use `result` when the program needs to distinguish failure, timeout, and cancellation. Use `result_or_none` or `result_or` only when those outcomes are intentionally equivalent.
 
-The completed value is stored by the task and cloned for each observation. This is ordinary structural cloning for plain data. A result that contains a runtime-backed resource can therefore create aliases to one host resource; until task/resource ownership becomes stricter, transfer such a result to one designated observer only.
+The completed value is stored by the task and cloned for each observation. Repeated observation is supported for copy data and explicitly shared synchronized handles. A result containing an exclusive runtime-backed resource is single-observer-only in 0.1. That restriction is not yet enforced statically, so a second observation can alias the same host resource; transfer such a result to exactly one designated observer.
 
 ## Queue[T]
 
@@ -151,6 +151,8 @@ while not cancelled():
 ```
 
 Cancellation interrupts Aurora's wait for scheduler-aware or worker-backed operations. It cannot forcibly stop an operating-system call that is already running on a blocking worker; such a call may still complete and perform its side effect after the task stops waiting.
+
+Aurora 0.1 task scheduling is cooperative and single-threaded. CPU code that never reaches `cancelled()` or another scheduler-aware operation can starve sibling tasks. Each lightweight task reserves a fixed 1 MiB coroutine stack, and the bootstrap scheduler's readiness pass is linear in the number of waiting tasks/descriptors.
 
 ## Detached Work
 

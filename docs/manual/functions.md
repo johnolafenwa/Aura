@@ -151,14 +151,14 @@ def parse_total(left: String, right: String) -> Result[int32, String]:
 
 ## Borrowed Returns
 
-A return annotation may preserve a borrow from one receiver or ordinary parameter:
+A return annotation can identify a borrow source in an API contract:
 
 ```python
-def identity(value: borrow[source] String) -> borrow[source] String:
+def identity(value: borrow[source] int32) -> borrow[source] int32:
     return value
 ```
 
-The source in brackets is either the borrowed parameter name or its borrow label. The result remains tied to the caller's source place; it is not a newly owned `String`.
+The source in brackets is either the borrowed parameter name or its borrow label. In Aurora 0.1, calls returning a copy type materialize an ordinary copied value. Calls returning a non-copy borrowed result are rejected until the Phase 6 live-alias representation is implemented.
 
 Eligible source rules are:
 
@@ -166,17 +166,17 @@ Eligible source rules are:
 - `-> borrow mut T` may derive only from a mutable-borrowed parameter or receiver
 - when exactly one eligible source exists, the source may be omitted and is inferred
 - when multiple eligible sources exist, the return annotation must select one by parameter name, `self`, or label
-- the returned expression must actually derive from the selected source
-- an owned expression cannot satisfy a borrowed return contract
+- for non-copy declarations, the returned expression must actually derive from the selected source
+- an owned non-copy expression cannot satisfy a borrowed return contract
 
 Labels are signature-level provenance names, not general lexical lifetime variables:
 
 ```python
-def choose(left: borrow[left_source] String, right: borrow[right_source] String) -> borrow[left_source] String:
+def choose(left: borrow[left_source] int32, right: borrow[right_source] int32) -> borrow[left_source] int32:
     return left
 ```
 
-A borrowed return of a copy type can be materialized as an ordinary copy value. A borrowed return of a move type creates a borrowed binding and cannot be moved as owned data. Trait implementations must preserve the trait method's parameter passing, return passing, and semantic return-source slot; parameter names and labels themselves may be renamed. See [Ownership And Borrowing](/manual/ownership-and-borrowing#borrowed-returns-and-provenance).
+A borrowed return of a copy type is materialized as an ordinary copy value. A call producing a borrowed `String`, collection, resource, ordinary class, or other non-copy value fails during checking with guidance to return an owned clone or expose an owner method. Non-copy borrowed-return declarations remain checked so source and trait contracts are reserved consistently for Phase 6. Trait implementations must preserve the trait method's parameter passing, return passing, and semantic return-source slot; parameter names and labels themselves may be renamed. See [Ownership And Borrowing](/manual/ownership-and-borrowing#borrowed-returns-and-provenance).
 
 ## Generic Functions
 

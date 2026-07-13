@@ -10,7 +10,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Parser nesting/postfix/binary-chain guards are limited to 128 operations; deeper input is rejected with a diagnostic.
 - Non-numeric casts are not implemented.
 - Direct recursive fields require `indirect`.
-- Borrowed return inference is explicit through borrowed-return sources and labels.
+- Borrowed-return declarations use explicit sources and labels. Calls returning copy types materialize copies; calls producing non-copy borrowed results are rejected until Phase 6 live aliases.
 - Empty list, map, and set literals need an expected collection type.
 - `String(...)` is not a constructor; use string literals and string methods.
 - Newlines are not continuation inside `(...)`, `[...]`, or `{...}`. Keep calls and collection literals on one physical line today.
@@ -26,7 +26,10 @@ This page documents known current limits of the Aurora compiler and runtime.
 
 ## Runtime
 
-- Maintained execution paths stop with a friendly recursion-depth diagnostic after 256 nested Aurora calls.
+- Aurora task code executes on one cooperative scheduler thread per program. Aurora 0.1 does not run two Aurora tasks in parallel; blocking-worker threads perform host operations only.
+- Scheduling is cooperative, not preemptive. A task that runs CPU code without reaching `cancelled()` or another scheduler-aware operation can starve every other Aurora task.
+- Every lightweight task reserves a fixed 1 MiB coroutine stack. The MIR/direct runtime entry thread reserves 64 MiB, and maintained execution paths stop with a friendly recursion-depth diagnostic after 256 nested Aurora calls.
+- The bootstrap scheduler scans waiting tasks for readiness and rebuilds a host `poll` descriptor list. Readiness work is linear in the number of waiting tasks/descriptors; no high-scale task-count claim is made for 0.1.
 - File, process-pipe, TCP, Unix, and TLS whole/bounded reads are capped at 64 MiB. Aurora 0.1 has no chunked file-read API. A bounded byte count of zero is invalid.
 - UDP receives accept `max_bytes` from 1 through 65,535.
 - HTTP parsing accepts at most 64 headers and 1 MiB per message. The high-level map header model cannot preserve repeated equal field names losslessly.
@@ -42,7 +45,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Package support has local path and git dependencies, but no registry publish/install flow.
 - `fs.read_dir` silently skips an individual directory entry that fails after the directory itself was opened.
 - High-level HTTP header conversion may expose duplicate equal map keys when the wire message repeats a header name; repeated headers are not a lossless 0.1 contract.
-- Task results clone their stored value on each observation. A resource returned by a task can therefore be aliased through shared runtime handles; use one designated observer.
+- Resource-bearing task results are single-observer-only in Aurora 0.1. This restriction is not yet enforced statically: each observation clones the stored runtime value and can alias one host resource through shared handles, so use exactly one designated observer. Repeated observation is supported only for copy data or explicitly shared synchronized handles.
 - Cancelling filesystem and other blocking-worker I/O cancels Aurora's wait, not an operating-system call already in progress. External side effects may still complete.
 - `WebSocketListener` has no explicit `close()` method, and WebSocket cancellation/error propagation is not yet fully aligned with TCP and UDP.
 

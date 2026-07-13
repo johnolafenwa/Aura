@@ -137,6 +137,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
   <main>
     <h1 id="aurora">Aurora</h1>
 <p><strong>A readable, Python-inspired systems language with Rust-like memory safety and Go-like concurrency</strong></p>
+<blockquote><p><strong>Status: historical design proposal.</strong> This document is not the implemented language specification. The maintained Manual, Current Limits, and compiler fixtures define Aurora 0.1.</p></blockquote>
 <h2 id="executive-summary">Executive summary</h2>
 <p>Aurora is a programming language designed for developers who love Python’s readability but want the performance, safety, and deployment model of a modern compiled systems language.</p>
 <p>Aurora is <strong>not</strong> a Python runtime, <strong>not</strong> a CPython replacement, and <strong>not</strong> a compatibility layer for the Python ecosystem. It has:</p>
@@ -663,7 +664,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li>converting borrowed text to owned text is explicit, for example <code>String("hello")</code></li>
 </ul>
 <h2 id="69-slices">6.9 Slices</h2>
-<p>Aurora supports borrowed slices for zero-copy access to contiguous data.</p>
+<p>Borrowed slices are a future design target for copy-avoiding access to contiguous data; they are not implemented in Aurora 0.1.</p>
 <ul>
 <li><code>borrow [T]</code> is a borrowed slice of elements of type <code>T</code></li>
 <li>slices are non-owning views and do not allocate</li>
@@ -896,7 +897,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li>safe by default</li>
 <li>efficient</li>
 <li>compatible with ownership semantics</li>
-<li>suitable for both I/O and parallel computation</li>
+<li>suitable for I/O concurrency now and explicitly staged parallel computation later</li>
 </ul>
 <h2 id="82-tasks-instead-of-asyncio-style-coroutines">8.2 Tasks instead of asyncio-style coroutines</h2>
 <p>Aurora should not use Python <code>async</code>/<code>await</code> as the primary concurrency model.</p>
@@ -1750,7 +1751,7 @@ aura<span class="w"> </span>publish
 <h1 id="24-canonical-language-pitch">24. Canonical language pitch</h1>
 <p>Use this as the short public description:</p>
 <blockquote>
-<p><strong>Aurora is a readable, Python-inspired compiled language with Rust-like memory safety and Go-like concurrency. It is designed for developers who want clean syntax, native performance, safe parallelism, and one modern toolchain.</strong></p>
+<p><strong>Aurora is a readable, Python-inspired compiled language with explicit ownership and structured concurrency. It is designed for developers who want clean syntax, typed failure, native deployment, and one modern toolchain. Aurora 0.1 task execution is cooperative and single-threaded.</strong></p>
 </blockquote>
 <hr />
 <h1 id="25-final-guidance-to-codex">25. Final guidance to Codex</h1>
