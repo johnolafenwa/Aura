@@ -27,7 +27,7 @@ pub use diag::{Diagnostic, Result, Span};
 pub use mir::{lower as lower_to_mir, MirModule};
 pub use mir_runtime::{
     run as run_mir, run_serialized_mir, run_with_stdout_sink as run_mir_with_stdout_sink,
-    StdoutSink,
+    run_with_stdout_sink_and_program_args as run_mir_with_stdout_sink_and_program_args, StdoutSink,
 };
 pub use native_codegen::{
     emit_host_object as emit_host_native_object,
@@ -149,6 +149,17 @@ pub fn run_path_with_source_and_stdout_sink(
     run_mir_with_stdout_sink(&mir, Some(stdout_sink))
 }
 
+pub fn run_path_with_source_and_stdout_sink_and_program_args(
+    path: &Path,
+    source: &str,
+    stdout_sink: StdoutSink,
+    program_args: Vec<String>,
+) -> Result<RunOutput> {
+    let program = check_path_with_source(path, source)?;
+    let mir = lower_to_mir(&program);
+    run_mir_with_stdout_sink_and_program_args(&mir, Some(stdout_sink), program_args)
+}
+
 pub fn lower_source_to_mir(source: &str) -> Result<MirModule> {
     let program = check_source(source)?;
     Ok(lower_to_mir(&program))
@@ -250,6 +261,16 @@ pub fn run_path_with_stdout_sink(path: &Path, stdout_sink: StdoutSink) -> Result
     let program = check_path(path)?;
     let mir = lower_to_mir(&program);
     run_mir_with_stdout_sink(&mir, Some(stdout_sink))
+}
+
+pub fn run_path_with_stdout_sink_and_program_args(
+    path: &Path,
+    stdout_sink: StdoutSink,
+    program_args: Vec<String>,
+) -> Result<RunOutput> {
+    let program = check_path(path)?;
+    let mir = lower_to_mir(&program);
+    run_mir_with_stdout_sink_and_program_args(&mir, Some(stdout_sink), program_args)
 }
 
 pub fn lower_path_to_mir(path: &Path) -> Result<MirModule> {

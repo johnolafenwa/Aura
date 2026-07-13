@@ -7,8 +7,9 @@ use std::process::{self, Command};
 use aurora_compiler::{
     analyze_path_source, check_path, check_path_with_source, complete_path_source,
     emit_host_native_object_with_metadata, lower_path_to_mir, lower_path_with_source_to_mir,
-    parse_source, run_path, run_path_with_source_and_stdout_sink, run_path_with_stdout_sink,
-    update_git_dependencies_in_working_dir, Diagnostic, MirModule, Value,
+    parse_source, run_path, run_path_with_source_and_stdout_sink_and_program_args,
+    run_path_with_stdout_sink_and_program_args, update_git_dependencies_in_working_dir, Diagnostic,
+    MirModule, Value,
 };
 use serde_json::Value as JsonValue;
 
@@ -77,20 +78,20 @@ fn main() {
                 None => (remaining.as_slice(), &[][..]),
             };
             let input = read_input(&mut input_args.iter().cloned());
-            let encoded_args = serde_json::to_string(program_args).unwrap_or_else(|error| {
-                eprintln!("failed to encode program arguments: {error}");
-                process::exit(1);
-            });
-            std::env::set_var("AURORA_PROGRAM_ARGS_JSON", encoded_args);
             let stdout_sink = std::sync::Arc::new(|chunk: &str| write_stdout(chunk));
             let result = if input.from_stdin {
-                run_path_with_source_and_stdout_sink(
+                run_path_with_source_and_stdout_sink_and_program_args(
                     Path::new(&input.path),
                     &input.source,
                     stdout_sink,
+                    program_args.to_vec(),
                 )
             } else {
-                run_path_with_stdout_sink(Path::new(&input.path), stdout_sink)
+                run_path_with_stdout_sink_and_program_args(
+                    Path::new(&input.path),
+                    stdout_sink,
+                    program_args.to_vec(),
+                )
             };
             match result {
                 Ok(output) => {
@@ -416,7 +417,6 @@ fn collect_aurora_source_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, Strin
 }
 
 fn handle_test_command(args: Vec<String>) {
-    std::env::set_var("AURORA_PROGRAM_ARGS_JSON", "[]");
     let mut timeout_ms = 30_000u64;
     let mut inputs = Vec::new();
     let mut args = args.into_iter();

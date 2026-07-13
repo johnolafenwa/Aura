@@ -1599,10 +1599,32 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
     }
 
     let previous_program_args = std::env::var_os("AURORA_PROGRAM_ARGS_JSON");
-    std::env::set_var("AURORA_PROGRAM_ARGS_JSON", "[\"alpha\",\"beta\"]");
-    assert_eq!(call("sys::args", vec![]).render(), "[alpha, beta]");
-    std::env::set_var("AURORA_PROGRAM_ARGS_JSON", "not-json");
-    assert!(matches!(call("sys::args", vec![]), Value::Vec(_)));
+    std::env::set_var("AURORA_PROGRAM_ARGS_JSON", "[\"spoofed\"]");
+    let Value::Vec(actual_args) = call("sys::args", vec![]) else {
+        panic!("sys.args should return a Vec");
+    };
+    assert_eq!(
+        actual_args.elements,
+        super::host_process_args()
+            .into_iter()
+            .map(Value::String)
+            .collect::<Vec<_>>(),
+        "the retired environment transport must not override real host argv"
+    );
+    let explicit_args = vec!["alpha".to_string(), "beta".to_string()];
+    let Value::Vec(explicit) =
+        super::evaluate_host_builtin_with_program_args("sys::args", vec![], &explicit_args)
+            .expect("an explicit MIR argv context should be accepted")
+    else {
+        panic!("sys.args should return a Vec");
+    };
+    assert_eq!(
+        explicit.elements,
+        vec![
+            Value::String("alpha".to_string()),
+            Value::String("beta".to_string())
+        ]
+    );
     match previous_program_args {
         Some(value) => std::env::set_var("AURORA_PROGRAM_ARGS_JSON", value),
         None => std::env::remove_var("AURORA_PROGRAM_ARGS_JSON"),
@@ -3460,7 +3482,370 @@ fn lightweight_blocking_io_observes_pre_cancelled_and_wait_cancelled_contexts() 
 }
 
 #[test]
+fn tcp_connect_offloads_slow_resolution_without_starving_a_sibling_timer() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("loopback listener should bind for the injected resolver");
+    let candidate = listener
+        .local_addr()
+        .expect("loopback listener should report its address");
+    let resolver_finished = Arc::new(AtomicBool::new(false));
+    let task_resolver_finished = resolver_finished.clone();
+
+    let result = run_lightweight_root_task(move || {
+        let connect = spawn_lightweight_task(move || {
+            let resolver_finished = task_resolver_finished.clone();
+            let stream = TcpStreamValue::connect_with_operations(
+                "slow.injected.test:443",
+                Some(StdDuration::from_secs(1)),
+                None,
+                move |_address| {
+                    thread::sleep(StdDuration::from_millis(100));
+                    resolver_finished.store(true, Ordering::SeqCst);
+                    Ok(vec![candidate])
+                },
+                |candidate, timeout| match timeout {
+                    Some(timeout) => std::net::TcpStream::connect_timeout(&candidate, timeout),
+                    None => std::net::TcpStream::connect(candidate),
+                },
+            )
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+            stream.close();
+            Ok(Value::Unit)
+        })?;
+
+        let sibling_resolver_finished = resolver_finished.clone();
+        let sibling = spawn_lightweight_task(move || {
+            sleep_with_runtime_scheduler(StdDuration::from_millis(10), None);
+            if sibling_resolver_finished.load(Ordering::SeqCst) {
+                return Err(Diagnostic::new(
+                    "slow DNS resolution blocked the sibling timer",
+                ));
+            }
+            Ok(Value::Unit)
+        })?;
+
+        wait_task_ready(&sibling)?;
+        wait_task_ready(&connect)?;
+        Ok(Value::Unit)
+    });
+
+    assert!(
+        result.is_ok(),
+        "slow resolution should yield the lightweight scheduler: {result:?}"
+    );
+}
+
+#[test]
+fn tcp_connect_timeout_budget_includes_resolution_wait() {
+    let started = Instant::now();
+    let result = run_lightweight_root_task(move || {
+        let error = TcpStreamValue::connect_with_operations(
+            "slow.injected.test:443",
+            Some(StdDuration::from_millis(20)),
+            None,
+            |_address| {
+                thread::sleep(StdDuration::from_millis(150));
+                Ok(vec!["127.0.0.1:9"
+                    .parse()
+                    .expect("test address should parse")])
+            },
+            |candidate, timeout| match timeout {
+                Some(timeout) => std::net::TcpStream::connect_timeout(&candidate, timeout),
+                None => std::net::TcpStream::connect(candidate),
+            },
+        )
+        .expect_err("resolution should consume the whole connect timeout budget");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        Ok(Value::Unit)
+    });
+
+    assert!(result.is_ok(), "timeout path should complete: {result:?}");
+    assert!(
+        started.elapsed() < StdDuration::from_millis(100),
+        "connect timeout must not restart after DNS; elapsed {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn tcp_connect_timeout_offloads_resolution_without_a_lightweight_task_context() {
+    let started = Instant::now();
+    let error = TcpStreamValue::connect_with_operations(
+        "slow.host-entry.test:443",
+        Some(StdDuration::from_millis(20)),
+        None,
+        |_address| {
+            thread::sleep(StdDuration::from_millis(150));
+            Ok(vec!["127.0.0.1:9"
+                .parse()
+                .expect("test address should parse")])
+        },
+        |candidate, timeout| match timeout {
+            Some(timeout) => std::net::TcpStream::connect_timeout(&candidate, timeout),
+            None => std::net::TcpStream::connect(candidate),
+        },
+    )
+    .expect_err("host-entry resolution should honor its timeout");
+
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert!(
+        started.elapsed() < StdDuration::from_millis(100),
+        "host-entry DNS must use the blocking service; elapsed {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn tcp_connect_reports_empty_resolution_with_the_original_address() {
+    let error = TcpStreamValue::connect_with_operations(
+        "empty.injected.test:443",
+        Some(StdDuration::from_secs(1)),
+        None,
+        |_address| Ok(Vec::new()),
+        |_candidate, _timeout| -> io::Result<std::net::TcpStream> {
+            panic!("an empty resolution must not attempt a connection")
+        },
+    )
+    .expect_err("empty DNS results should be rejected");
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert!(
+        error
+            .to_string()
+            .contains("`empty.injected.test:443` did not resolve"),
+        "empty-resolution diagnostics should retain the requested address: {error}"
+    );
+}
+
+#[test]
+fn tcp_connect_cancellation_stops_waiting_for_an_inflight_resolver() {
+    let result = run_lightweight_root_task(move || {
+        let group = TaskGroupValue::new(&CancellationContext::default());
+        let cancellation = group.child_cancellation();
+        let task_cancellation = cancellation.clone();
+        let resolver_started = ChannelValue::new();
+        let task_resolver_started = resolver_started.clone();
+        let (release_resolver, wait_for_release) = std::sync::mpsc::channel();
+
+        let connect = spawn_lightweight_task_with_cancellation(cancellation, move || {
+            let error = TcpStreamValue::connect_with_operations(
+                "cancelled.injected.test:443",
+                None,
+                Some(&task_cancellation),
+                move |_address| {
+                    task_resolver_started
+                        .send(Value::Unit)
+                        .expect("resolver-start signal should remain open");
+                    wait_for_release
+                        .recv()
+                        .expect("test should release the resolver worker");
+                    Err(io::Error::other("resolver released after cancellation"))
+                },
+                |candidate, timeout| match timeout {
+                    Some(timeout) => std::net::TcpStream::connect_timeout(&candidate, timeout),
+                    None => std::net::TcpStream::connect(candidate),
+                },
+            )
+            .expect_err("cancellation should end the scheduler wait");
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(Diagnostic::new(format!(
+                    "expected Interrupted, found {:?}",
+                    error.kind()
+                )));
+            }
+            Ok(Value::Unit)
+        })?;
+
+        resolver_started
+            .recv_with_cancellation(Some(StdDuration::from_secs(1)), None)
+            .ok_or_else(|| Diagnostic::new("resolver worker did not start"))?;
+        group.cancel();
+        let connect_result = wait_task_ready(&connect);
+        release_resolver
+            .send(())
+            .map_err(|_| Diagnostic::new("resolver worker stopped before release"))?;
+        connect_result?;
+        Ok(Value::Unit)
+    });
+
+    assert!(
+        result.is_ok(),
+        "connect cancellation should be prompt and memory-safe: {result:?}"
+    );
+}
+
+#[test]
+fn blocking_service_cancellation_drops_late_results_safely() {
+    #[derive(Debug)]
+    struct DropProbe(Arc<AtomicBool>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let dropped = Arc::new(AtomicBool::new(false));
+    let result = run_lightweight_root_task({
+        let dropped = dropped.clone();
+        move || {
+            let group = TaskGroupValue::new(&CancellationContext::default());
+            let cancellation = group.child_cancellation();
+            let task_cancellation = cancellation.clone();
+            let operation_started = ChannelValue::new();
+            let task_operation_started = operation_started.clone();
+            let (release_operation, wait_for_release) = std::sync::mpsc::channel();
+
+            let operation = spawn_lightweight_task_with_cancellation(cancellation, move || {
+                let error = super::run_blocking_io_with_deadline(
+                    move || {
+                        task_operation_started
+                            .send(Value::Unit)
+                            .expect("operation-start signal should remain open");
+                        wait_for_release
+                            .recv()
+                            .expect("test should release the blocking operation");
+                        Ok(DropProbe(dropped))
+                    },
+                    None,
+                    Some(&task_cancellation),
+                )
+                .expect_err("cancellation should abandon the blocking result");
+                if error.kind() != io::ErrorKind::Interrupted {
+                    return Err(Diagnostic::new(format!(
+                        "expected Interrupted, found {:?}",
+                        error.kind()
+                    )));
+                }
+                Ok(Value::Unit)
+            })?;
+
+            operation_started
+                .recv_with_cancellation(Some(StdDuration::from_secs(1)), None)
+                .ok_or_else(|| Diagnostic::new("blocking operation did not start"))?;
+            group.cancel();
+            wait_task_ready(&operation)?;
+            release_operation
+                .send(())
+                .map_err(|_| Diagnostic::new("blocking operation stopped before release"))?;
+            Ok(Value::Unit)
+        }
+    });
+
+    assert!(
+        result.is_ok(),
+        "late-result cancellation path should complete: {result:?}"
+    );
+    let deadline = Instant::now() + StdDuration::from_secs(1);
+    while !dropped.load(Ordering::SeqCst) && Instant::now() < deadline {
+        thread::sleep(StdDuration::from_millis(1));
+    }
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "a result produced after cancellation must be dropped by the worker"
+    );
+}
+
+#[test]
+fn tcp_connect_candidates_share_one_timeout_budget() {
+    let started = Instant::now();
+    let deadline = started + StdDuration::from_millis(100);
+    let first: std::net::SocketAddr = "127.0.0.1:1".parse().expect("address should parse");
+    let second: std::net::SocketAddr = "127.0.0.1:2".parse().expect("address should parse");
+    let mut clock = [
+        started,
+        started + StdDuration::from_millis(40),
+        started + StdDuration::from_millis(40),
+    ]
+    .into_iter();
+    let mut observed_budgets = Vec::new();
+    let mut attempts = 0;
+
+    let connected = super::connect_resolved_tcp_candidates_with_clock(
+        "injected.test:443",
+        vec![first, second],
+        Some(deadline),
+        || {
+            clock
+                .next()
+                .expect("test clock should cover every observation")
+        },
+        |_candidate, timeout| {
+            observed_budgets.push(timeout.expect("deadline should produce a candidate budget"));
+            attempts += 1;
+            if attempts == 1 {
+                Err(io::Error::new(
+                    io::ErrorKind::ConnectionRefused,
+                    "first candidate refused",
+                ))
+            } else {
+                Ok("connected")
+            }
+        },
+    )
+    .expect("the second candidate should connect within the shared budget");
+
+    assert_eq!(connected, "connected");
+    assert_eq!(
+        observed_budgets,
+        vec![StdDuration::from_millis(100), StdDuration::from_millis(60)],
+        "each candidate must receive only the timeout budget that remains"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_connect_offloads_a_slow_connect_without_starving_a_sibling_timer() {
+    let connect_finished = Arc::new(AtomicBool::new(false));
+    let task_connect_finished = connect_finished.clone();
+    let result = run_lightweight_root_task(move || {
+        let connect = spawn_lightweight_task(move || {
+            let connect_finished = task_connect_finished.clone();
+            let stream = UnixStreamValue::connect_with_operation(
+                "/tmp/injected-slow-connect.sock",
+                Some(StdDuration::from_secs(1)),
+                None,
+                move |_path| {
+                    thread::sleep(StdDuration::from_millis(100));
+                    let (stream, peer) = std::os::unix::net::UnixStream::pair()?;
+                    drop(peer);
+                    connect_finished.store(true, Ordering::SeqCst);
+                    Ok(stream)
+                },
+            )
+            .map_err(|error| Diagnostic::new(error.to_string()))?;
+            stream.close();
+            Ok(Value::Unit)
+        })?;
+
+        let sibling_connect_finished = connect_finished.clone();
+        let sibling = spawn_lightweight_task(move || {
+            sleep_with_runtime_scheduler(StdDuration::from_millis(10), None);
+            if sibling_connect_finished.load(Ordering::SeqCst) {
+                return Err(Diagnostic::new(
+                    "slow Unix connect blocked the sibling timer",
+                ));
+            }
+            Ok(Value::Unit)
+        })?;
+
+        wait_task_ready(&sibling)?;
+        wait_task_ready(&connect)?;
+        Ok(Value::Unit)
+    });
+
+    assert!(
+        result.is_ok(),
+        "Unix connect should yield the lightweight scheduler: {result:?}"
+    );
+}
+
+#[test]
 fn read_all_surfaces_size_limits_for_unbounded_resources() {
+    // This test intentionally transfers the full 64 MiB limit. Keep a deadlock
+    // guard without turning compiler-coverage instrumentation into a throughput test.
+    const NETWORK_TIMEOUT: StdDuration = StdDuration::from_secs(30);
+
     let temp = TempDir::new("aurora-read-all-limit");
     let file_path = temp.path().join("large.txt");
     fs::File::create(&file_path)
@@ -3482,17 +3867,14 @@ fn read_all_surfaces_size_limits_for_unbounded_resources() {
         let chunk = vec![b'x'; CHUNK_SIZE];
         let mut bytes_remaining = super::MAX_READ_ALL_BYTES + 1;
         let stream = server
-            .accept(
-                Some(StdDuration::from_secs(5)),
-                Some(&CancellationContext::default()),
-            )
+            .accept(Some(NETWORK_TIMEOUT), Some(&CancellationContext::default()))
             .expect("accept should succeed");
         while bytes_remaining > 0 {
             let chunk_len = chunk.len().min(bytes_remaining);
             if stream
                 .write_bytes(
                     &chunk[..chunk_len],
-                    Some(StdDuration::from_secs(5)),
+                    Some(NETWORK_TIMEOUT),
                     Some(&CancellationContext::default()),
                 )
                 .is_err()
@@ -3506,16 +3888,18 @@ fn read_all_surfaces_size_limits_for_unbounded_resources() {
 
     let client = TcpStreamValue::connect(
         &address,
-        Some(StdDuration::from_secs(5)),
+        Some(NETWORK_TIMEOUT),
         Some(&CancellationContext::default()),
     )
     .expect("client should connect");
-    let error = client
-        .read_all(
-            Some(StdDuration::from_secs(5)),
-            Some(&CancellationContext::default()),
-        )
-        .expect_err("oversized tcp read_all should fail");
+    let error = match client.read_all(Some(NETWORK_TIMEOUT), Some(&CancellationContext::default()))
+    {
+        Ok(contents) => panic!(
+            "oversized tcp read_all should fail, but returned {} bytes",
+            contents.len()
+        ),
+        Err(error) => error,
+    };
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     server_thread.join().expect("server thread should join");
 }

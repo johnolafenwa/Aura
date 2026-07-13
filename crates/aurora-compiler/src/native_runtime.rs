@@ -1,7 +1,7 @@
 #![cfg_attr(coverage, allow(dead_code))]
 
 use std::borrow::Borrow;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::process;
@@ -29,27 +29,20 @@ use crate::runtime_value::{
     register_task_as_queue_producer_for_values, render_float, result_err, result_ok,
     run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
     send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
-    spawn_lightweight_task_with_cancellation, task_group_cleanup_should_cancel,
-    task_result_cancelled, task_result_error, task_result_ready, task_result_timed_out,
-    wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled,
-    wait_any_error, wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
-    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpListenerValue,
-    HttpResponseValue, InstanceValue, LightweightTaskFailureSignal, MapValue, ProcessChildValue,
-    ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
+    spawn_lightweight_task_with_cancellation,
+    spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
+    task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
+    task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
+    wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
+    wait_for_runtime_scheduler, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, LightweightTaskFailureSignal, MapValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
     ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RuntimeSchedulerWakeReason,
     SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
     TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::Type;
-
-thread_local! {
-    static TASK_RUNTIME_ERROR_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static DIRECT_CLEANUP_STACKS: RefCell<BTreeMap<u64, Vec<DirectCleanupRegistration>>> = const { RefCell::new(BTreeMap::new()) };
-    static DIRECT_NEXT_CLEANUP_ID: Cell<i64> = const { Cell::new(1) };
-    static DIRECT_CLEANUP_DRAINING: Cell<bool> = const { Cell::new(false) };
-    static DIRECT_PRIMARY_RUNTIME_DIAGNOSTIC: RefCell<Option<Diagnostic>> = const { RefCell::new(None) };
-}
 
 struct DirectCleanupRegistration {
     id: i64,
@@ -59,110 +52,234 @@ struct DirectCleanupRegistration {
     call_depth: usize,
 }
 
-fn direct_cleanup_key() -> u64 {
+impl DirectCleanupRegistration {
+    unsafe fn release_args(&mut self) {
+        let args = std::mem::replace(&mut self.args, std::ptr::null_mut());
+        let arg_count = std::mem::take(&mut self.arg_count);
+        unsafe {
+            release_direct_cleanup_args(args, arg_count);
+        }
+    }
+}
+
+impl Drop for DirectCleanupRegistration {
+    fn drop(&mut self) {
+        unsafe {
+            self.release_args();
+        }
+    }
+}
+
+struct DirectTaskRuntimeState {
+    runtime_error_capture: bool,
+    cleanup_stack: Vec<DirectCleanupRegistration>,
+    next_cleanup_id: i64,
+    cleanup_draining: bool,
+    primary_runtime_diagnostic: Option<Diagnostic>,
+    call_depth: usize,
+    fallback_cancellation: CancellationContext,
+}
+
+impl Default for DirectTaskRuntimeState {
+    fn default() -> Self {
+        Self {
+            runtime_error_capture: false,
+            cleanup_stack: Vec::new(),
+            next_cleanup_id: 1,
+            cleanup_draining: false,
+            primary_runtime_diagnostic: None,
+            call_depth: 0,
+            fallback_cancellation: CancellationContext::default(),
+        }
+    }
+}
+
+thread_local! {
+    // Native Aurora tasks are stackful coroutines multiplexed on one OS thread, so
+    // ordinary thread-local flags leak across every yield. Keep all resumable direct
+    // runtime state behind the current lightweight-task identity instead.
+    static DIRECT_TASK_RUNTIME_STATES: RefCell<BTreeMap<u64, DirectTaskRuntimeState>> =
+        const { RefCell::new(BTreeMap::new()) };
+}
+
+fn direct_task_runtime_key() -> u64 {
     current_lightweight_task_id().unwrap_or(0)
 }
 
-fn next_direct_cleanup_id() -> i64 {
-    DIRECT_NEXT_CLEANUP_ID.with(|next| {
-        let id = next.get();
-        let mut next_id = id.checked_add(1).unwrap_or(1);
-        if next_id == 0 {
-            next_id = 1;
-        }
-        next.set(next_id);
-        id
+fn with_direct_task_runtime_state_for_key<T>(
+    key: u64,
+    work: impl FnOnce(&mut DirectTaskRuntimeState) -> T,
+) -> T {
+    DIRECT_TASK_RUNTIME_STATES.with(|states| {
+        let mut states = states.borrow_mut();
+        work(states.entry(key).or_default())
     })
 }
 
-fn push_direct_cleanup_registration(thunk_ptr: i64, args: *mut i64, arg_count: usize) -> i64 {
-    let id = next_direct_cleanup_id();
-    let cleanup_key = direct_cleanup_key();
-    let call_depth = DIRECT_CALL_DEPTH.with(|depth| depth.get());
-    DIRECT_CLEANUP_STACKS.with(|stacks| {
-        stacks
+fn with_direct_task_runtime_state<T>(work: impl FnOnce(&mut DirectTaskRuntimeState) -> T) -> T {
+    with_direct_task_runtime_state_for_key(direct_task_runtime_key(), work)
+}
+
+struct DirectTaskRuntimeScopeGuard {
+    key: u64,
+    previous: Option<DirectTaskRuntimeState>,
+}
+
+impl Drop for DirectTaskRuntimeScopeGuard {
+    fn drop(&mut self) {
+        let (current, restored_previous) = DIRECT_TASK_RUNTIME_STATES.with(|states| {
+            let mut states = states.borrow_mut();
+            let current = states.remove(&self.key);
+            let previous = self.previous.take();
+            let restored_previous = previous.is_some();
+            if let Some(previous) = previous {
+                states.insert(self.key, previous);
+            }
+            (current, restored_previous)
+        });
+        drop(current);
+
+        // Dropping owned cleanup registrations should not need direct runtime state,
+        // but remove any fresh default entry created by a release boundary so a
+        // completed task cannot leave state behind for a reused task id.
+        if !restored_previous {
+            let transient =
+                DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().remove(&self.key));
+            drop(transient);
+        }
+    }
+}
+
+fn with_direct_task_runtime_scope<T>(work: impl FnOnce() -> T) -> T {
+    let key = direct_task_runtime_key();
+    let previous = DIRECT_TASK_RUNTIME_STATES.with(|states| {
+        states
             .borrow_mut()
-            .entry(cleanup_key)
-            .or_default()
-            .push(DirectCleanupRegistration {
-                id,
-                thunk_ptr,
-                args,
-                arg_count,
-                call_depth,
-            });
+            .insert(key, DirectTaskRuntimeState::default())
     });
+    let _guard = DirectTaskRuntimeScopeGuard { key, previous };
+    work()
+}
+
+fn clear_direct_task_runtime_states() {
+    let stale = DIRECT_TASK_RUNTIME_STATES.with(|states| std::mem::take(&mut *states.borrow_mut()));
+    drop(stale);
+}
+
+fn discard_current_direct_task_runtime_state() {
+    let key = direct_task_runtime_key();
+    let state = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().remove(&key));
+    drop(state);
+
+    // Releasing owned cleanup arguments should not create runtime state, but
+    // discard any defensive fallback entry before the task id can be observed
+    // again by scheduler teardown.
+    let transient = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().remove(&key));
+    drop(transient);
+}
+
+fn next_direct_cleanup_id(state: &mut DirectTaskRuntimeState) -> i64 {
+    let id = state.next_cleanup_id;
+    let mut next_id = id.checked_add(1).unwrap_or(1);
+    if next_id == 0 {
+        next_id = 1;
+    }
+    state.next_cleanup_id = next_id;
     id
+}
+
+fn push_direct_cleanup_registration(thunk_ptr: i64, args: *mut i64, arg_count: usize) -> i64 {
+    with_direct_task_runtime_state(|state| {
+        let id = next_direct_cleanup_id(state);
+        state.cleanup_stack.push(DirectCleanupRegistration {
+            id,
+            thunk_ptr,
+            args,
+            arg_count,
+            call_depth: state.call_depth,
+        });
+        id
+    })
 }
 
 fn take_direct_cleanup_registration(id: i64) -> Option<DirectCleanupRegistration> {
     if id == 0 {
         return None;
     }
-    let cleanup_key = direct_cleanup_key();
-    DIRECT_CLEANUP_STACKS.with(|stacks| {
-        let mut stacks = stacks.borrow_mut();
-        let stack = stacks.get_mut(&cleanup_key)?;
-        let registration = stack
+    with_direct_task_runtime_state(|state| {
+        state
+            .cleanup_stack
             .iter()
             .rposition(|registration| registration.id == id)
-            .map(|index| stack.remove(index));
-        if stack.is_empty() {
-            stacks.remove(&cleanup_key);
-        }
-        registration
+            .map(|index| state.cleanup_stack.remove(index))
     })
 }
 
-struct DirectCleanupDrainGuard;
+struct DirectCleanupDrainGuard {
+    key: u64,
+}
 
 impl Drop for DirectCleanupDrainGuard {
     fn drop(&mut self) {
-        DIRECT_CLEANUP_DRAINING.with(|draining| draining.set(false));
+        with_direct_task_runtime_state_for_key(self.key, |state| {
+            state.cleanup_draining = false;
+        });
     }
 }
 
 struct DirectCallDepthGuard {
+    key: u64,
     previous: usize,
 }
 
 impl Drop for DirectCallDepthGuard {
     fn drop(&mut self) {
-        DIRECT_CALL_DEPTH.with(|depth| depth.set(self.previous));
+        with_direct_task_runtime_state_for_key(self.key, |state| {
+            state.call_depth = self.previous;
+        });
     }
 }
 
 struct DirectPrimaryDiagnosticGuard {
+    key: u64,
     installed: bool,
 }
 
 impl DirectPrimaryDiagnosticGuard {
     fn install(diagnostic: Diagnostic) -> Self {
-        let installed = DIRECT_PRIMARY_RUNTIME_DIAGNOSTIC.with(|slot| {
-            let mut slot = slot.borrow_mut();
-            if slot.is_some() {
+        let key = direct_task_runtime_key();
+        let installed = with_direct_task_runtime_state_for_key(key, |state| {
+            if state.primary_runtime_diagnostic.is_some() {
                 false
             } else {
-                *slot = Some(diagnostic);
+                state.primary_runtime_diagnostic = Some(diagnostic);
                 true
             }
         });
-        Self { installed }
+        Self { key, installed }
     }
 }
 
 impl Drop for DirectPrimaryDiagnosticGuard {
     fn drop(&mut self) {
         if self.installed {
-            DIRECT_PRIMARY_RUNTIME_DIAGNOSTIC.with(|slot| {
-                *slot.borrow_mut() = None;
+            with_direct_task_runtime_state_for_key(self.key, |state| {
+                state.primary_runtime_diagnostic = None;
             });
         }
     }
 }
 
 fn direct_primary_runtime_diagnostic() -> Option<Diagnostic> {
-    DIRECT_PRIMARY_RUNTIME_DIAGNOSTIC.with(|slot| slot.borrow().clone())
+    with_direct_task_runtime_state(|state| state.primary_runtime_diagnostic.clone())
+}
+
+fn direct_cleanup_is_draining() -> bool {
+    with_direct_task_runtime_state(|state| state.cleanup_draining)
+}
+
+fn direct_runtime_error_capture_enabled() -> bool {
+    with_direct_task_runtime_state(|state| state.runtime_error_capture)
 }
 
 fn is_call_depth_diagnostic(diagnostic: &Diagnostic) -> bool {
@@ -275,28 +392,35 @@ struct ProgramSourceContext {
     source: String,
 }
 
-thread_local! {
-    static DIRECT_CANCELLATION: RefCell<CancellationContext> =
-        RefCell::new(CancellationContext::default());
-    static DIRECT_CALL_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
 static DIRECT_PROGRAM_SOURCE: OnceLock<ProgramSourceContext> = OnceLock::new();
 
 fn current_cancellation() -> CancellationContext {
     if let Some(cancellation) = current_lightweight_task_cancellation() {
         return cancellation;
     }
-    DIRECT_CANCELLATION.with(|slot| slot.borrow().clone())
+    with_direct_task_runtime_state(|state| state.fallback_cancellation.clone())
 }
 
 fn with_cancellation_scope<T>(cancellation: CancellationContext, work: impl FnOnce() -> T) -> T {
-    DIRECT_CANCELLATION.with(|slot| {
-        let previous = slot.replace(cancellation);
-        let result = work();
-        slot.replace(previous);
-        result
-    })
+    struct CancellationGuard {
+        key: u64,
+        previous: CancellationContext,
+    }
+
+    impl Drop for CancellationGuard {
+        fn drop(&mut self) {
+            with_direct_task_runtime_state_for_key(self.key, |state| {
+                state.fallback_cancellation = self.previous.clone();
+            });
+        }
+    }
+
+    let key = direct_task_runtime_key();
+    let previous = with_direct_task_runtime_state_for_key(key, |state| {
+        std::mem::replace(&mut state.fallback_cancellation, cancellation)
+    });
+    let _guard = CancellationGuard { key, previous };
+    work()
 }
 
 fn extract_duration_millis(value: impl Borrow<Value>) -> i128 {
@@ -731,29 +855,31 @@ unsafe fn release_direct_cleanup_args(args: *mut i64, arg_count: usize) {
 }
 
 fn drain_direct_cleanup_stack() {
-    let already_draining = DIRECT_CLEANUP_DRAINING.with(|draining| {
-        if draining.get() {
+    let key = direct_task_runtime_key();
+    let already_draining = with_direct_task_runtime_state_for_key(key, |state| {
+        if state.cleanup_draining {
             true
         } else {
-            draining.set(true);
+            state.cleanup_draining = true;
             false
         }
     });
     if already_draining {
         return;
     }
-    let _guard = DirectCleanupDrainGuard;
-    let previous_depth = DIRECT_CALL_DEPTH.with(|depth| {
-        let previous = depth.get();
-        depth.set(0);
+    let _guard = DirectCleanupDrainGuard { key };
+    let previous_depth = with_direct_task_runtime_state_for_key(key, |state| {
+        let previous = state.call_depth;
+        state.call_depth = 0;
         previous
     });
     let _depth_guard = DirectCallDepthGuard {
+        key,
         previous: previous_depth,
     };
-    let cleanup_key = direct_cleanup_key();
-    let registrations = DIRECT_CLEANUP_STACKS
-        .with(|stacks| stacks.borrow_mut().remove(&cleanup_key).unwrap_or_default());
+    let registrations = with_direct_task_runtime_state_for_key(key, |state| {
+        std::mem::take(&mut state.cleanup_stack)
+    });
     let skip_max_depth_cleanup = direct_primary_runtime_diagnostic()
         .as_ref()
         .is_some_and(is_call_depth_diagnostic);
@@ -761,9 +887,6 @@ fn drain_direct_cleanup_stack() {
         // Match the interpreter: a cleanup call captured at the saturated Aurora
         // call depth cannot enter its `close` method during recursion unwinding.
         if skip_max_depth_cleanup && registration.call_depth >= DIRECT_MAX_CALL_DEPTH {
-            unsafe {
-                release_direct_cleanup_args(registration.args, registration.arg_count);
-            }
             continue;
         }
         if registration.thunk_ptr != 0 {
@@ -774,14 +897,11 @@ fn drain_direct_cleanup_stack() {
                 aurora_direct_release_value(result);
             }
         }
-        unsafe {
-            release_direct_cleanup_args(registration.args, registration.arg_count);
-        }
     }
 }
 
 fn emit_runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
-    if TASK_RUNTIME_ERROR_CAPTURE.with(|capture| capture.get()) {
+    if direct_runtime_error_capture_enabled() {
         std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
     }
     let _ = writeln!(
@@ -793,7 +913,7 @@ fn emit_runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
 }
 
 fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
-    if DIRECT_CLEANUP_DRAINING.with(|draining| draining.get()) {
+    if direct_cleanup_is_draining() {
         emit_runtime_diagnostic_error(direct_primary_runtime_diagnostic().unwrap_or(diagnostic));
     }
     let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
@@ -811,20 +931,24 @@ fn runtime_error_at(span: Span, message: impl AsRef<str>) -> ! {
 
 fn with_task_runtime_error_capture<T>(f: impl FnOnce() -> T) -> T {
     struct CaptureGuard {
+        key: u64,
         previous: bool,
     }
 
     impl Drop for CaptureGuard {
         fn drop(&mut self) {
-            TASK_RUNTIME_ERROR_CAPTURE.with(|capture| capture.set(self.previous));
+            with_direct_task_runtime_state_for_key(self.key, |state| {
+                state.runtime_error_capture = self.previous;
+            });
         }
     }
 
-    TASK_RUNTIME_ERROR_CAPTURE.with(|capture| {
-        let previous = capture.replace(true);
-        let _guard = CaptureGuard { previous };
-        f()
-    })
+    let key = direct_task_runtime_key();
+    let previous = with_direct_task_runtime_state_for_key(key, |state| {
+        std::mem::replace(&mut state.runtime_error_capture, true)
+    });
+    let _guard = CaptureGuard { key, previous };
+    f()
 }
 
 #[track_caller]
@@ -832,10 +956,18 @@ fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(value) => value,
         Err(payload) if payload.is::<TaskCancelledSignal>() => {
+            if direct_runtime_error_capture_enabled() {
+                drain_direct_cleanup_stack();
+            }
             cancel_current_lightweight_task_boundary()
         }
         Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
-            Ok(signal) => fail_current_lightweight_task(signal.0),
+            Ok(signal) => {
+                if direct_runtime_error_capture_enabled() {
+                    drain_direct_cleanup_stack();
+                }
+                fail_current_lightweight_task(signal.0)
+            }
             Err(payload) => std::panic::resume_unwind(payload),
         },
     }
@@ -1111,9 +1243,7 @@ pub extern "C-unwind" fn aurora_direct_runtime_init(
     source_len: usize,
 ) {
     task_runtime_boundary(|| {
-        DIRECT_CLEANUP_STACKS.with(|stacks| stacks.borrow_mut().clear());
-        DIRECT_NEXT_CLEANUP_ID.with(|next| next.set(1));
-        DIRECT_CLEANUP_DRAINING.with(|draining| draining.set(false));
+        clear_direct_task_runtime_states();
         let _ = DIRECT_PROGRAM_SOURCE.set(ProgramSourceContext {
             path: decode_bytes(path_ptr, path_len),
             source: decode_bytes(source_ptr, source_len),
@@ -1132,9 +1262,11 @@ pub unsafe extern "C-unwind" fn aurora_direct_run_root(thunk_ptr: i64) -> i32 {
             .stack_size(DIRECT_RUNTIME_STACK_SIZE)
             .spawn(move || {
                 run_lightweight_root_task(move || {
-                    with_cancellation_scope(CancellationContext::default(), || {
-                        let result_ptr = unsafe { thunk(std::ptr::null(), 0) };
-                        Ok(unsafe { consume_value(result_ptr) })
+                    with_direct_task_runtime_scope(|| {
+                        with_cancellation_scope(CancellationContext::default(), || {
+                            let result_ptr = unsafe { thunk(std::ptr::null(), 0) };
+                            Ok(unsafe { consume_value(result_ptr) })
+                        })
                     })
                 })
             })
@@ -1163,31 +1295,34 @@ pub unsafe extern "C-unwind" fn aurora_direct_enter_call(
     function_len: usize,
 ) {
     task_runtime_boundary(|| {
-        DIRECT_CALL_DEPTH.with(|slot| {
-            let depth = slot.get();
-            if depth >= DIRECT_MAX_CALL_DEPTH {
-                let function = decode_bytes(function_ptr, function_len);
-                let message = format!(
-                    "maximum call depth of {} exceeded while calling `{}`",
-                    DIRECT_MAX_CALL_DEPTH, function
-                );
-                if line > 0 && column > 0 {
-                    runtime_error_at(Span::new(line as usize, column as usize), message);
-                }
-                runtime_error(message);
+        let depth_exceeded = with_direct_task_runtime_state(|state| {
+            if state.call_depth >= DIRECT_MAX_CALL_DEPTH {
+                true
+            } else {
+                state.call_depth += 1;
+                false
             }
-            slot.set(depth + 1);
         });
+        if depth_exceeded {
+            let function = decode_bytes(function_ptr, function_len);
+            let message = format!(
+                "maximum call depth of {} exceeded while calling `{}`",
+                DIRECT_MAX_CALL_DEPTH, function
+            );
+            if line > 0 && column > 0 {
+                runtime_error_at(Span::new(line as usize, column as usize), message);
+            }
+            runtime_error(message);
+        }
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aurora_direct_exit_call() {
     task_runtime_boundary(|| {
-        DIRECT_CALL_DEPTH.with(|slot| {
-            let depth = slot.get();
-            if depth > 0 {
-                slot.set(depth - 1);
+        with_direct_task_runtime_state(|state| {
+            if state.call_depth > 0 {
+                state.call_depth -= 1;
             }
         });
     })
@@ -2995,6 +3130,9 @@ pub extern "C-unwind" fn aurora_direct_register_cleanup(
             Err(_) => runtime_error("invalid cleanup arg count"),
         };
         if thunk_ptr == 0 {
+            unsafe {
+                release_direct_cleanup_args(args, arg_count);
+            }
             runtime_error("invalid cleanup thunk pointer");
         }
         push_direct_cleanup_registration(thunk_ptr, args, arg_count)
@@ -3004,11 +3142,7 @@ pub extern "C-unwind" fn aurora_direct_register_cleanup(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unregister_cleanup(id: i64) {
     task_runtime_boundary(|| {
-        if let Some(registration) = take_direct_cleanup_registration(id) {
-            unsafe {
-                release_direct_cleanup_args(registration.args, registration.arg_count);
-            }
-        }
+        drop(take_direct_cleanup_registration(id));
     })
 }
 
@@ -3026,11 +3160,7 @@ pub extern "C-unwind" fn aurora_direct_refresh_cleanup(
             Err(_) => runtime_error("invalid cleanup arg count"),
         };
         if active == 0 {
-            if let Some(registration) = take_direct_cleanup_registration(id) {
-                unsafe {
-                    release_direct_cleanup_args(registration.args, registration.arg_count);
-                }
-            }
+            drop(take_direct_cleanup_registration(id));
             unsafe {
                 release_direct_cleanup_args(args, arg_count);
             }
@@ -3040,18 +3170,10 @@ pub extern "C-unwind" fn aurora_direct_refresh_cleanup(
             unsafe {
                 release_direct_cleanup_args(args, arg_count);
             }
-            if let Some(registration) = take_direct_cleanup_registration(id) {
-                unsafe {
-                    release_direct_cleanup_args(registration.args, registration.arg_count);
-                }
-            }
+            drop(take_direct_cleanup_registration(id));
             runtime_error("invalid cleanup thunk pointer");
         }
-        if let Some(registration) = take_direct_cleanup_registration(id) {
-            unsafe {
-                release_direct_cleanup_args(registration.args, registration.arg_count);
-            }
-        }
+        drop(take_direct_cleanup_registration(id));
         push_direct_cleanup_registration(thunk_ptr, args, arg_count)
     })
 }
@@ -6630,13 +6752,46 @@ pub unsafe extern "C-unwind" fn aurora_direct_start_task_call(
             }
         };
         let cancellation = group.child_cancellation();
-        let task = spawn_lightweight_task_with_cancellation(cancellation, move || {
-            Ok(with_task_runtime_error_capture(|| {
-                let result_ptr = unsafe { thunk(args.as_ptr(), args.len()) };
-                unsafe { consume_value(result_ptr) }
-            }))
-        })
-        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        // A direct task can be abandoned while suspended inside generated
+        // Cranelift frames. Keep its raw argument allocation outside the
+        // coroutine stack so the scheduler can reclaim it without unwinding
+        // through those frames.
+        let args_address = Box::into_raw(Box::new(args)) as usize;
+        let entry = move || {
+            with_direct_task_runtime_scope(|| {
+                Ok(with_task_runtime_error_capture(|| {
+                    let args = unsafe { &*(args_address as *const Vec<i64>) };
+                    let result_ptr = unsafe { thunk(args.as_ptr(), args.len()) };
+                    let result = unsafe { consume_value(result_ptr) };
+                    unsafe {
+                        drop(Box::from_raw(args_address as *mut Vec<i64>));
+                    }
+                    result
+                }))
+            })
+        };
+        let forced_exit_cleanup = move || {
+            discard_current_direct_task_runtime_state();
+            unsafe {
+                drop(Box::from_raw(args_address as *mut Vec<i64>));
+            }
+        };
+        let task = unsafe {
+            spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
+                cancellation,
+                entry,
+                forced_exit_cleanup,
+            )
+        };
+        let task = match task {
+            Ok(task) => task,
+            Err(error) => {
+                unsafe {
+                    drop(Box::from_raw(args_address as *mut Vec<i64>));
+                }
+                runtime_diagnostic_error(error)
+            }
+        };
 
         group.register_task(task.clone());
         register_task_as_queue_producer_for_values(queue_producer_args.iter(), &task);

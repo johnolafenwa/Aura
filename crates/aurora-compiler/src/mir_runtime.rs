@@ -15,10 +15,11 @@ use crate::mir::{
     MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
 };
 use crate::runtime_value::{
-    cast_numeric_value, decode_process_restart_policy, decode_process_stdio, evaluate_host_builtin,
-    io_error, io_read_line, option_none, option_some, poll_cancellation, process_error_cancelled,
-    process_error_io, process_error_no_command, process_error_spawn, process_error_timed_out,
-    process_exit_status, process_stdio_inherit, process_stdio_null, process_stdio_pipe,
+    cast_numeric_value, decode_process_restart_policy, decode_process_stdio,
+    evaluate_host_builtin_with_program_args, host_process_args, io_error, io_read_line,
+    option_none, option_some, poll_cancellation, process_error_cancelled, process_error_io,
+    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
+    process_stdio_inherit, process_stdio_null, process_stdio_pipe,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
@@ -51,7 +52,16 @@ pub fn run_with_stdout_sink(
     module: &MirModule,
     stdout_sink: Option<StdoutSink>,
 ) -> Result<RunOutput> {
+    run_with_stdout_sink_and_program_args(module, stdout_sink, Vec::new())
+}
+
+pub fn run_with_stdout_sink_and_program_args(
+    module: &MirModule,
+    stdout_sink: Option<StdoutSink>,
+    program_args: Vec<String>,
+) -> Result<RunOutput> {
     let module = module.clone();
+    let program_args = Arc::new(program_args);
     let handle = match thread::Builder::new()
         .stack_size(MIR_RUNTIME_STACK_SIZE)
         .spawn(move || {
@@ -61,20 +71,22 @@ pub fn run_with_stdout_sink(
                 let task_stdout_sink = stdout_sink.clone();
                 let value_result = if module_uses_lightweight_tasks(&module) {
                     run_lightweight_root_task(move || {
-                        let mut runtime = MirRuntime::new_with_stdout_sink(
+                        let mut runtime = MirRuntime::new_with_stdout_sink_and_program_args(
                             module,
                             task_stdout,
                             task_stdout_sink,
                             CancellationContext::default(),
+                            program_args,
                         );
                         runtime.run_main()
                     })
                 } else {
-                    let mut runtime = MirRuntime::new_with_stdout_sink(
+                    let mut runtime = MirRuntime::new_with_stdout_sink_and_program_args(
                         module,
                         task_stdout,
                         task_stdout_sink,
                         CancellationContext::default(),
+                        program_args,
                     );
                     runtime.run_main()
                 };
@@ -161,7 +173,7 @@ pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> R
     validate_runtime_module_complexity(&module)?;
     let _ = source_path;
     let _ = source;
-    run(&module)
+    run_with_stdout_sink_and_program_args(&module, None, host_process_args())
 }
 
 // Keep the MIR runtime call-depth budget comfortably below the host thread's
@@ -392,6 +404,7 @@ struct MirRuntime {
     stdout: Arc<Mutex<String>>,
     stdout_sink: Option<StdoutSink>,
     cancellation: CancellationContext,
+    program_args: Arc<Vec<String>>,
     call_depth: usize,
     return_type_stack: Vec<Type>,
 }
@@ -604,11 +617,28 @@ impl MirRuntime {
         Self::new_with_stdout_sink(module, stdout, None, cancellation)
     }
 
+    #[cfg(test)]
     fn new_with_stdout_sink(
         module: MirModule,
         stdout: Arc<Mutex<String>>,
         stdout_sink: Option<StdoutSink>,
         cancellation: CancellationContext,
+    ) -> Self {
+        Self::new_with_stdout_sink_and_program_args(
+            module,
+            stdout,
+            stdout_sink,
+            cancellation,
+            Arc::new(Vec::new()),
+        )
+    }
+
+    fn new_with_stdout_sink_and_program_args(
+        module: MirModule,
+        stdout: Arc<Mutex<String>>,
+        stdout_sink: Option<StdoutSink>,
+        cancellation: CancellationContext,
+        program_args: Arc<Vec<String>>,
     ) -> Self {
         let mut functions = HashMap::new();
         for function in &module.functions {
@@ -627,6 +657,7 @@ impl MirRuntime {
             stdout,
             stdout_sink,
             cancellation,
+            program_args,
             call_depth: 0,
             return_type_stack: Vec::new(),
         }
@@ -1916,6 +1947,10 @@ impl MirRuntime {
                         Value::String(text) => {
                             let mut stdout = lock_stdout(&self.stdout);
                             stdout.push_str(text);
+                            drop(stdout);
+                            if let Some(sink) = &self.stdout_sink {
+                                sink(text);
+                            }
                             Ok(result_ok(Value::Unit))
                         }
                         other => Err(Diagnostic::new(format!(
@@ -1978,9 +2013,10 @@ impl MirRuntime {
                 if let Some(arg_names) = host_arg_names {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(arg_names, values)?;
-                    return evaluate_host_builtin(
+                    return evaluate_host_builtin_with_program_args(
                         name,
                         bound.into_iter().map(|argument| argument.value).collect(),
+                        self.program_args.as_slice(),
                     );
                 }
 
@@ -2321,10 +2357,16 @@ impl MirRuntime {
         let module = (*self.module).clone();
         let stdout = self.stdout.clone();
         let stdout_sink = self.stdout_sink.clone();
+        let program_args = self.program_args.clone();
         let function_for_task = function.clone();
         let task = spawn_lightweight_task(move || {
-            let mut runtime =
-                MirRuntime::new_with_stdout_sink(module, stdout, stdout_sink, cancellation);
+            let mut runtime = MirRuntime::new_with_stdout_sink_and_program_args(
+                module,
+                stdout,
+                stdout_sink,
+                cancellation,
+                program_args,
+            );
             runtime
                 .call_function(&function_for_task, None, bound_args)
                 .map(|outcome| outcome.value)

@@ -578,9 +578,15 @@ fn new_fmt_and_test_commands_cover_the_project_workflow() {
 fn run_and_built_programs_receive_arguments_and_environment() {
     let source = r#"import sys
 
+def print_child_arguments():
+    for argument in sys.args():
+        print("child:" + argument)
+
 def main() -> int32:
     for argument in sys.args():
-        print(argument)
+        print("main:" + argument)
+    with TaskGroup() as group:
+        group.start_soon(print_child_arguments)
     match sys.env("AURORA_CLI_TEST_VALUE"):
         case Option.Some(value):
             print(value)
@@ -593,6 +599,7 @@ def main() -> int32:
         .args(["run", source_path.to_str().expect("UTF-8 temp path"), "--"])
         .args(["alpha", "beta"])
         .env("AURORA_CLI_TEST_VALUE", "from-env")
+        .env("AURORA_PROGRAM_ARGS_JSON", "[\"spoofed\"]")
         .output()
         .expect("failed to run aura program with arguments");
     assert!(
@@ -602,7 +609,39 @@ def main() -> int32:
     );
     assert_eq!(
         String::from_utf8_lossy(&interpreted.stdout),
-        "alpha\nbeta\nfrom-env\n"
+        "main:alpha\nmain:beta\nchild:alpha\nchild:beta\nfrom-env\n"
+    );
+
+    let mut stdin_child = Command::new(aura_bin())
+        .arg("run")
+        .arg("--stdin")
+        .arg(&source_path)
+        .arg("--")
+        .args(["alpha", "beta"])
+        .env("AURORA_CLI_TEST_VALUE", "from-env")
+        .env("AURORA_PROGRAM_ARGS_JSON", "[\"spoofed\"]")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run stdin Aurora program with arguments");
+    stdin_child
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(source.as_bytes())
+        .expect("failed to write argv test source to stdin");
+    let stdin_interpreted = stdin_child
+        .wait_with_output()
+        .expect("failed to collect stdin argv test output");
+    assert!(
+        stdin_interpreted.status.success(),
+        "stdin aura run should accept explicit program arguments, stderr was:\n{}",
+        String::from_utf8_lossy(&stdin_interpreted.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&stdin_interpreted.stdout),
+        "main:alpha\nmain:beta\nchild:alpha\nchild:beta\nfrom-env\n"
     );
 
     let output_path = temp.path().join("program");
@@ -620,6 +659,7 @@ def main() -> int32:
     let direct = generated_binary(&output_path)
         .args(["alpha", "beta"])
         .env("AURORA_CLI_TEST_VALUE", "from-env")
+        .env("AURORA_PROGRAM_ARGS_JSON", "[\"spoofed\"]")
         .output()
         .expect("failed to run built program with arguments");
     assert!(
@@ -629,8 +669,53 @@ def main() -> int32:
     );
     assert_eq!(
         String::from_utf8_lossy(&direct.stdout),
-        "alpha\nbeta\nfrom-env\n"
+        "main:alpha\nmain:beta\nchild:alpha\nchild:beta\nfrom-env\n"
     );
+}
+
+#[test]
+fn mir_and_forced_direct_support_one_thousand_simultaneously_suspended_tasks() {
+    let source = r#"def suspend(started: Queue[int32], release: Queue[int32]):
+    started.put(1)
+    match release.get():
+        case QueueReceive.Item(_):
+            pass
+        case QueueReceive.Closed:
+            pass
+        case QueueReceive.TimedOut:
+            pass
+        case QueueReceive.Cancelled:
+            pass
+
+def main() -> int32:
+    started = Queue[int32]()
+    release = Queue[int32]()
+    mut ready: int32 = 0
+
+    with TaskGroup() as group:
+        mut spawned: int32 = 0
+        while spawned < 1000:
+            group.start_soon(suspend, started, release)
+            spawned += 1
+
+        while ready < 1000:
+            match started.get():
+                case QueueReceive.Item(_):
+                    ready += 1
+                case QueueReceive.Closed:
+                    return 2
+                case QueueReceive.TimedOut:
+                    pass
+                case QueueReceive.Cancelled:
+                    return 3
+
+        release.close()
+
+    print(ready)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout("aurora-thousand-suspended-direct-tasks", source, "1000\n");
 }
 
 #[test]
@@ -2236,6 +2321,18 @@ def main() -> int32:
 }
 
 #[test]
+fn run_and_direct_backend_preserve_field_match_writeback_across_sibling_mutation() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/match_borrow_mut_field_sibling_write_preserves_writeback.au"
+    );
+    assert_run_and_direct_source_stdout(
+        "aurora-match-borrow-mut-field-sibling-writeback",
+        source,
+        "9\n11\n",
+    );
+}
+
+#[test]
 fn run_and_direct_backend_match_bare_none_literals_as_option_none() {
     let source = r#"def none_value() -> Option[int32]:
     return None
@@ -2264,10 +2361,56 @@ def main() -> int32:
             print(value)
         case None:
             print(-4)
+
+    nested_left: Option[Option[int32]] = Option.Some(None)
+    nested_right: Option[Option[int32]] = Option.Some(none_value())
+    print(nested_left == nested_right)
     return 0
 "#;
 
-    assert_run_and_direct_source_stdout("aurora-bare-none-direct-match", source, "-1\n-2\n-4\n");
+    assert_run_and_direct_source_stdout(
+        "aurora-bare-none-direct-match",
+        source,
+        "-1\n-2\n-4\ntrue\n",
+    );
+}
+
+#[test]
+fn mir_and_forced_direct_reject_noncopy_borrowed_return_calls() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/check-fail/borrowed_noncopy_return_call.au"
+    );
+    let (temp, source_path) = write_temp_source("aurora-borrowed-return-containment", source);
+    let expected =
+        "produces borrowed non-copy result `String`, which Aurora 0.1 cannot materialize safely";
+
+    let mir = Command::new(aura_bin())
+        .arg("run")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run forced MIR borrowed-return rejection");
+    assert!(!mir.status.success(), "forced MIR should reject the call");
+    assert!(
+        String::from_utf8_lossy(&mir.stderr).contains(expected),
+        "forced MIR diagnostic should explain containment, stderr was:\n{}",
+        String::from_utf8_lossy(&mir.stderr)
+    );
+
+    let direct = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(temp.path().join("out"))
+        .arg(&source_path)
+        .output()
+        .expect("failed to run forced direct borrowed-return rejection");
+    assert!(
+        !direct.status.success(),
+        "forced direct should reject the call before code generation"
+    );
+    assert!(
+        String::from_utf8_lossy(&direct.stderr).contains(expected),
+        "forced direct diagnostic should explain containment, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
 }
 
 #[test]
@@ -2351,6 +2494,47 @@ fn check_rejects_match_borrow_mut_binding_use_after_scrutinee_reassign() {
             .contains("cannot use pattern binding `v` after reassigning match scrutinee `x`"),
         "expected stale-binding diagnostic, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn check_and_forced_direct_reject_stale_field_match_binding() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/check-fail/match_borrow_mut_field_binding_use_after_scrutinee_reassign.au"
+    );
+    let (temp, source_path) = write_temp_source("aurora-stale-field-match-binding", source);
+    let expected =
+        "cannot use pattern binding `v` after reassigning match scrutinee `holder.state`";
+
+    let checked = Command::new(aura_bin())
+        .arg("check")
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura check");
+    assert!(
+        !checked.status.success(),
+        "aura check should reject stale field bindings"
+    );
+    assert!(
+        String::from_utf8_lossy(&checked.stderr).contains(expected),
+        "expected rooted stale-binding diagnostic, stderr was:\n{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+
+    let direct = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(temp.path().join("out"))
+        .arg(&source_path)
+        .output()
+        .expect("failed to run forced direct build");
+    assert!(
+        !direct.status.success(),
+        "forced direct build should reject stale field bindings before code generation"
+    );
+    assert!(
+        String::from_utf8_lossy(&direct.stderr).contains(expected),
+        "forced direct diagnostic should retain the rooted field path, stderr was:\n{}",
+        String::from_utf8_lossy(&direct.stderr)
     );
 }
 
@@ -2588,7 +2772,7 @@ fn build_with_direct_backend_supports_borrowed_lifetime_labels_example() {
     assert_direct_backend_example_runs(
         "examples/basics/borrowed_lifetime_labels.au",
         "borrowed-lifetime-labels-direct",
-        "aurora\n",
+        "7\n",
     );
 }
 
@@ -2867,7 +3051,7 @@ fn default_build_supports_borrowed_lifetime_labels_example() {
     assert_default_backend_example_runs(
         "examples/basics/borrowed_lifetime_labels.au",
         "borrowed-lifetime-labels-auto",
-        "aurora\n",
+        "7\n",
     );
 }
 
@@ -3610,7 +3794,7 @@ fn run_executes_borrowed_lifetime_labels_example() {
         "run should succeed for borrowed lifetime labels example, stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "aurora\n");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
 }
 
 #[test]

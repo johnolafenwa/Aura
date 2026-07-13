@@ -9394,6 +9394,47 @@ fn mir_runtime_print_tolerates_poisoned_stdout_lock() {
 }
 
 #[test]
+fn mir_runtime_io_write_streams_to_stdout_sink() {
+    let stdout = Arc::new(Mutex::new(String::new()));
+    let streamed = Arc::new(Mutex::new(String::new()));
+    let sink_output = streamed.clone();
+    let sink = Arc::new(move |chunk: &str| {
+        sink_output
+            .lock()
+            .expect("sink output should lock")
+            .push_str(chunk);
+    });
+    let mut runtime = MirRuntime::new_with_stdout_sink(
+        MirModule {
+            functions: Vec::new(),
+            classes: Vec::new(),
+            trait_impls: Vec::new(),
+            top_level: None,
+        },
+        stdout.clone(),
+        Some(sink),
+        CancellationContext::default(),
+    );
+    let mut env = Env::default();
+    env.define_typed(
+        "text",
+        Type::named("String"),
+        Value::String("hello".to_string()),
+    );
+
+    runtime
+        .evaluate_call(
+            &CallTarget::Name("io::write".to_string()),
+            &[mir_arg(Some("text"), Operand::Place("text".to_string()))],
+            &mut env,
+        )
+        .expect("io.write should succeed");
+
+    assert_eq!(*stdout.lock().expect("stdout should lock"), "hello");
+    assert_eq!(*streamed.lock().expect("sink output should lock"), "hello");
+}
+
+#[test]
 fn mir_runtime_range_rejects_unsigned_endpoints_outside_signed_index_space() {
     let error = build_range(vec![EvaluatedMirArg {
         name: Some("stop".to_string()),

@@ -24,7 +24,8 @@ use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::panic;
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 
@@ -7406,28 +7407,28 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     assert!(!current_cancellation().is_cancelled());
 
     assert!(super::take_direct_cleanup_registration(42).is_none());
-    super::DIRECT_CLEANUP_DRAINING.with(|draining| {
-        draining.set(true);
-        super::drain_direct_cleanup_stack();
-        assert!(draining.get());
-        draining.set(false);
+    super::with_direct_task_runtime_state(|state| {
+        state.cleanup_draining = true;
     });
+    super::drain_direct_cleanup_stack();
+    assert!(super::direct_cleanup_is_draining());
+    super::with_direct_task_runtime_state(|state| state.cleanup_draining = false);
 
-    super::DIRECT_NEXT_CLEANUP_ID.with(|next| next.set(i64::MAX));
+    super::with_direct_task_runtime_state(|state| state.next_cleanup_id = i64::MAX);
     let max_registration_id = super::push_direct_cleanup_registration(11, std::ptr::null_mut(), 0);
     assert_eq!(max_registration_id, i64::MAX);
     assert!(super::take_direct_cleanup_registration(max_registration_id).is_some());
-    super::DIRECT_NEXT_CLEANUP_ID.with(|next| {
-        assert_eq!(next.get(), 1);
-        next.set(-1);
+    super::with_direct_task_runtime_state(|state| {
+        assert_eq!(state.next_cleanup_id, 1);
+        state.next_cleanup_id = -1;
     });
     let negative_registration_id =
         super::push_direct_cleanup_registration(12, std::ptr::null_mut(), 0);
     assert_eq!(negative_registration_id, -1);
     assert!(super::take_direct_cleanup_registration(negative_registration_id).is_some());
-    super::DIRECT_NEXT_CLEANUP_ID.with(|next| {
-        assert_eq!(next.get(), 1);
-        next.set(1);
+    super::with_direct_task_runtime_state(|state| {
+        assert_eq!(state.next_cleanup_id, 1);
+        state.next_cleanup_id = 1;
     });
     let cleanup_id = super::aurora_direct_register_cleanup(1, std::ptr::null_mut(), 0);
     assert!(cleanup_id > 0);
@@ -7629,6 +7630,353 @@ fn native_runtime_task_boundary_maps_task_signals_and_resumes_unrelated_panics()
     });
 
     assert_eq!(result.expect("root task should complete"), Value::Unit);
+}
+
+#[test]
+fn native_runtime_direct_call_depth_is_isolated_across_suspended_tasks() {
+    const TASK_COUNT: usize = 1_000;
+
+    let result = run_lightweight_root_task(|| {
+        let ready = ChannelValue::new();
+        let release = ChannelValue::new();
+        let mut tasks = Vec::with_capacity(TASK_COUNT);
+
+        for _ in 0..TASK_COUNT {
+            let task_ready = ready.clone();
+            let task_release = release.clone();
+            tasks.push(spawn_lightweight_task(move || {
+                super::with_direct_task_runtime_scope(|| {
+                    Ok(super::with_task_runtime_error_capture(|| {
+                        task_ready
+                            .send(Value::Unit)
+                            .expect("ready channel should remain open");
+                        unsafe {
+                            super::aurora_direct_enter_call(
+                                1,
+                                1,
+                                b"suspended".as_ptr(),
+                                b"suspended".len(),
+                            );
+                        }
+                        let _ = task_release.recv_with_cancellation(None, None);
+                        unsafe {
+                            super::aurora_direct_exit_call();
+                        }
+                        Value::Unit
+                    }))
+                })
+            })?);
+        }
+
+        for _ in 0..TASK_COUNT {
+            ready
+                .recv_with_cancellation(Some(StdDuration::from_secs(10)), None)
+                .ok_or_else(|| Diagnostic::new("timed out waiting for suspended direct tasks"))?;
+        }
+        release.close();
+
+        for (index, task) in tasks.iter().enumerate() {
+            match task
+                .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(10)), None)
+            {
+                TaskWaitStatus::Ready(Ok(Value::Unit)) => {}
+                other => {
+                    return Err(Diagnostic::new(format!(
+                        "suspended direct task {index} did not finish cleanly: {other:?}"
+                    )))
+                }
+            }
+        }
+
+        Ok(Value::Unit)
+    });
+
+    assert_eq!(
+        result.expect("1,000 suspended direct tasks should have independent call depth"),
+        Value::Unit
+    );
+}
+
+#[test]
+fn native_runtime_error_capture_is_isolated_across_suspended_tasks() {
+    let result = run_lightweight_root_task(|| {
+        let ready = ChannelValue::new();
+        let release_first = ChannelValue::new();
+        let release_second = ChannelValue::new();
+
+        let first_ready = ready.clone();
+        let first_release = release_first.clone();
+        let first = spawn_lightweight_task(move || {
+            super::with_direct_task_runtime_scope(|| {
+                Ok(super::with_task_runtime_error_capture(|| {
+                    first_ready
+                        .send(Value::Unit)
+                        .expect("ready channel should remain open");
+                    let _ = first_release.recv_with_cancellation(None, None);
+                    Value::Unit
+                }))
+            })
+        })?;
+
+        let second_ready = ready.clone();
+        let second_release = release_second.clone();
+        let second = spawn_lightweight_task(move || {
+            super::with_direct_task_runtime_scope(|| {
+                let capture_was_preserved = super::with_task_runtime_error_capture(|| {
+                    second_ready
+                        .send(Value::Unit)
+                        .expect("ready channel should remain open");
+                    let _ = second_release.recv_with_cancellation(None, None);
+                    super::direct_runtime_error_capture_enabled()
+                });
+                if capture_was_preserved {
+                    Ok(Value::Unit)
+                } else {
+                    Err(Diagnostic::new(
+                        "another suspended task cleared direct runtime error capture",
+                    ))
+                }
+            })
+        })?;
+
+        for _ in 0..2 {
+            ready
+                .recv_with_cancellation(Some(StdDuration::from_secs(1)), None)
+                .ok_or_else(|| Diagnostic::new("timed out waiting for capture test tasks"))?;
+        }
+
+        release_first.close();
+        match first.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None) {
+            TaskWaitStatus::Ready(Ok(Value::Unit)) => {}
+            other => {
+                return Err(Diagnostic::new(format!(
+                    "first capture test task did not finish cleanly: {other:?}"
+                )))
+            }
+        }
+
+        release_second.close();
+        match second.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None) {
+            TaskWaitStatus::Ready(Ok(Value::Unit)) => Ok(Value::Unit),
+            other => Err(Diagnostic::new(format!(
+                "second capture test task did not preserve its state: {other:?}"
+            ))),
+        }
+    });
+
+    assert_eq!(
+        result.expect("direct runtime error capture should be task-local"),
+        Value::Unit
+    );
+}
+
+#[test]
+fn native_runtime_cleanup_diagnostic_state_is_isolated_across_tasks() {
+    let result = run_lightweight_root_task(|| {
+        let ready = ChannelValue::new();
+        let release = ChannelValue::new();
+
+        let first_ready = ready.clone();
+        let first_release = release.clone();
+        let first = spawn_lightweight_task(move || {
+            super::with_direct_task_runtime_scope(|| {
+                let _primary = super::DirectPrimaryDiagnosticGuard::install(Diagnostic::new(
+                    "first task primary",
+                ));
+                let key = super::direct_task_runtime_key();
+                super::with_direct_task_runtime_state(|state| state.cleanup_draining = true);
+                let _draining = super::DirectCleanupDrainGuard { key };
+                first_ready
+                    .send(Value::Unit)
+                    .expect("ready channel should remain open");
+                let _ = first_release.recv_with_cancellation(None, None);
+                Ok(Value::Unit)
+            })
+        })?;
+
+        ready
+            .recv_with_cancellation(Some(StdDuration::from_secs(1)), None)
+            .ok_or_else(|| Diagnostic::new("timed out waiting for cleanup-state task"))?;
+
+        let second = spawn_lightweight_task(|| {
+            super::with_direct_task_runtime_scope(|| {
+                let draining = super::direct_cleanup_is_draining();
+                let primary = super::direct_primary_runtime_diagnostic();
+                if draining || primary.is_some() {
+                    return Err(Diagnostic::new(
+                        "another suspended task leaked direct cleanup diagnostic state",
+                    ));
+                }
+                Ok(Value::Unit)
+            })
+        })?;
+
+        let second_status =
+            second.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None);
+        release.close();
+        let first_status =
+            first.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None);
+
+        match (first_status, second_status) {
+            (TaskWaitStatus::Ready(Ok(Value::Unit)), TaskWaitStatus::Ready(Ok(Value::Unit))) => {
+                Ok(Value::Unit)
+            }
+            other => Err(Diagnostic::new(format!(
+                "cleanup diagnostic isolation failed: {other:?}"
+            ))),
+        }
+    });
+
+    assert_eq!(
+        result.expect("direct cleanup diagnostic state should be task-local"),
+        Value::Unit
+    );
+}
+
+#[test]
+fn native_runtime_task_exit_unwinds_live_drop_values() {
+    struct DropProbe(Arc<AtomicBool>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let dropped = Arc::new(AtomicBool::new(false));
+    let task_dropped = dropped.clone();
+    let result = run_lightweight_root_task(move || {
+        let task = spawn_lightweight_task(move || {
+            let _probe = DropProbe(task_dropped);
+            super::task_runtime_boundary(|| {
+                std::panic::panic_any(TaskCancelledSignal);
+            });
+            #[allow(unreachable_code)]
+            Ok(Value::Unit)
+        })?;
+
+        match task.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None) {
+            TaskWaitStatus::Cancelled => Ok(Value::Unit),
+            other => Err(Diagnostic::new(format!(
+                "expected cancelled task, got {other:?}"
+            ))),
+        }
+    });
+
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "task exit must unwind live Rust values before reclaiming its coroutine stack"
+    );
+}
+
+#[test]
+fn native_runtime_direct_forced_exit_runs_external_cleanup() {
+    struct DropProbe(Arc<AtomicBool>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let cleaned = Arc::new(AtomicBool::new(false));
+    let cleanup_probe = DropProbe(cleaned.clone());
+    let result = run_lightweight_root_task(move || {
+        let task = unsafe {
+            crate::runtime_value::spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
+                CancellationContext::default(),
+                || {
+                    super::with_direct_task_runtime_scope(|| {
+                        super::with_task_runtime_error_capture(|| {
+                            super::task_runtime_boundary(|| {
+                                std::panic::panic_any(LightweightTaskFailureSignal(
+                                    Diagnostic::new("direct task failure"),
+                                ));
+                            });
+                            #[allow(unreachable_code)]
+                            Ok(Value::Unit)
+                        })
+                    })
+                },
+                move || {
+                    super::discard_current_direct_task_runtime_state();
+                    drop(cleanup_probe);
+                },
+            )?
+        };
+
+        let status =
+            task.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None);
+        let stale_child_state =
+            super::DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow().contains_key(&2));
+        if stale_child_state {
+            return Err(Diagnostic::new(
+                "direct forced exit left task-local runtime state behind",
+            ));
+        }
+        match status {
+            TaskWaitStatus::Ready(Err(error)) if error.message == "direct task failure" => {
+                Ok(Value::Unit)
+            }
+            other => Err(Diagnostic::new(format!(
+                "expected failed direct task, got {other:?}"
+            ))),
+        }
+    });
+
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    assert!(
+        cleaned.load(Ordering::SeqCst),
+        "direct forced exit must run its scheduler-owned external cleanup"
+    );
+}
+
+#[test]
+fn native_runtime_releases_cleanup_arguments_when_cleanup_traps() {
+    unsafe extern "C-unwind" fn failing_cleanup(
+        _args: *const i64,
+        _arg_count: usize,
+    ) -> *mut OpaqueValue {
+        super::runtime_error("cleanup failed")
+    }
+
+    let retained = boxed_value(Value::String("retained cleanup argument".to_string()));
+    let retained_address = retained as usize;
+    let result = run_lightweight_root_task(move || {
+        let task = spawn_lightweight_task(move || {
+            super::with_direct_task_runtime_scope(|| {
+                super::with_task_runtime_error_capture(|| {
+                    let retained = retained_address as *mut OpaqueValue;
+                    let args = super::aurora_direct_arg_buffer_new(1);
+                    super::aurora_direct_arg_buffer_store(args, 0, retained as i64);
+                    super::aurora_direct_register_cleanup(
+                        failing_cleanup as *const () as usize as i64,
+                        args,
+                        1,
+                    );
+                    super::runtime_error("body failed")
+                })
+            })
+        })?;
+
+        match task.wait_result_with_cancellation_observed(Some(StdDuration::from_secs(1)), None) {
+            TaskWaitStatus::Ready(Err(error)) if error.message == "body failed" => Ok(Value::Unit),
+            other => Err(Diagnostic::new(format!(
+                "expected primary body failure, got {other:?}"
+            ))),
+        }
+    });
+
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    assert_eq!(
+        unsafe { &*retained }.ref_count.load(Ordering::SeqCst),
+        1,
+        "cleanup registration must release its retained arguments while unwinding"
+    );
+    unsafe {
+        release_value(retained);
+    }
 }
 
 #[test]
