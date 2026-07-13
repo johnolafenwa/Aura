@@ -140,8 +140,10 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
 }
 
 #[test]
-#[ignore = "full native fixture matrix; invoked by npm run test:backend-parity"]
-fn mir_and_direct_backends_match_every_runtime_fixture() {
+#[ignore = "full forced-backend fixture matrix; invoked by npm run test:backend-parity"]
+fn forced_mir_and_direct_backends_match_every_runtime_fixture() {
+    // `aura run` is the forced MIR product path today. When Phase 4 gives
+    // `run` a backend selector, keep this gate explicit with `--backend mir`.
     let root = repo_root();
     let temp = TempDir::new("aurora-backend-parity");
     let aura = packaged_test_aura(&temp);
@@ -150,6 +152,24 @@ fn mir_and_direct_backends_match_every_runtime_fixture() {
         let relative = fixture
             .strip_prefix(&root)
             .expect("fixture should live under repo root");
+        let mut mir = Command::new(&aura);
+        mir.current_dir(&root).arg("run").arg(relative);
+        let mir = command_output_with_timeout(mir, Duration::from_secs(10));
+        assert!(
+            mir.status.success(),
+            "forced MIR run failed for {}:\n{}",
+            relative.display(),
+            String::from_utf8_lossy(&mir.stderr)
+        );
+        let expected = fs::read(fixture.with_extension("stdout"))
+            .expect("run-pass fixture should have expected stdout");
+        assert_eq!(
+            normalize(&mir.stdout),
+            normalize(&expected),
+            "forced MIR stdout and fixture oracle diverged for {}",
+            relative.display()
+        );
+
         let output_path = temp.path.join(format!("run-pass-{index}"));
         let mut build = Command::new(&aura);
         build
@@ -175,12 +195,10 @@ fn mir_and_direct_backends_match_every_runtime_fixture() {
             relative.display(),
             String::from_utf8_lossy(&direct.stderr)
         );
-        let expected = fs::read(fixture.with_extension("stdout"))
-            .expect("run-pass fixture should have expected stdout");
         assert_eq!(
             normalize(&direct.stdout),
             normalize(&expected),
-            "MIR fixture oracle and direct stdout diverged for {}",
+            "forced MIR/direct stdout diverged for {}",
             relative.display()
         );
     }
@@ -189,6 +207,23 @@ fn mir_and_direct_backends_match_every_runtime_fixture() {
         let relative = fixture
             .strip_prefix(&root)
             .expect("fixture should live under repo root");
+        let mut mir = Command::new(&aura);
+        mir.current_dir(&root).arg("run").arg(relative);
+        let mir = command_output_with_timeout(mir, Duration::from_secs(10));
+        assert!(
+            !mir.status.success(),
+            "forced MIR run unexpectedly succeeded for {}",
+            relative.display()
+        );
+        let expected = fs::read(fixture.with_extension("diag"))
+            .expect("run-fail fixture should have expected diagnostic");
+        assert_eq!(
+            normalize(&mir.stderr),
+            normalize(&expected),
+            "forced MIR diagnostic and fixture oracle diverged for {}",
+            relative.display()
+        );
+
         let output_path = temp.path.join(format!("run-fail-{index}"));
         let mut build = Command::new(&aura);
         build
@@ -213,12 +248,10 @@ fn mir_and_direct_backends_match_every_runtime_fixture() {
             "direct run unexpectedly succeeded for {}",
             relative.display()
         );
-        let expected = fs::read(fixture.with_extension("diag"))
-            .expect("run-fail fixture should have expected diagnostic");
         assert_eq!(
             normalize(&direct.stderr),
             normalize(&expected),
-            "MIR fixture oracle and direct diagnostic diverged for {}",
+            "forced MIR/direct diagnostic diverged for {}",
             relative.display()
         );
     }
