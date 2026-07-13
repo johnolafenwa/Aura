@@ -47,6 +47,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - High-level HTTP header conversion may expose duplicate equal map keys when the wire message repeats a header name; repeated headers are not a lossless 0.1 contract.
 - Resource-bearing task results are single-observer-only in Aurora 0.1. This restriction is not yet enforced statically: each observation clones the stored runtime value and can alias one host resource through shared handles, so use exactly one designated observer. Repeated observation is supported only for copy data or explicitly shared synchronized handles.
 - Cancelling filesystem and other blocking-worker I/O cancels Aurora's wait, not an operating-system call already in progress. External side effects may still complete.
+- The process-wide blocking pool uses 2 through 8 host threads, selected from host parallelism, with no 0.1 configuration or queue backpressure. A timed-out or cancelled host job keeps its worker until the underlying call returns; enough slow or stuck DNS/filesystem jobs can occupy the whole pool and delay unrelated blocking operations queued behind them.
 - `WebSocketListener` has no explicit `close()` method, and WebSocket cancellation/error propagation is not yet fully aligned with TCP and UDP.
 
 ## Tooling

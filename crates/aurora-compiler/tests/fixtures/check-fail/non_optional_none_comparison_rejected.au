@@ -1,0 +1,2 @@
+def invalid(value: int32) -> bool:
+    return value == None

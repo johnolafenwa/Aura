@@ -203,6 +203,24 @@ Those types wrap host resources and expose Aurora-level methods such as:
 - `respond_text`
 - `send_bytes`
 
+### Blocking-service saturation limit
+
+Host operations that can block are submitted to one process-wide worker pool.
+Its worker count is derived from host parallelism and clamped to 2 through 8;
+the count and queue are not configurable in Aurora 0.1.
+
+Timing out or cancelling an Aurora wait does not interrupt a host job that is
+already running. The Aurora task resumes promptly and any eventual result is
+discarded safely, but the job continues to occupy its worker until the host
+operation returns. Enough slow or stuck resolver and filesystem calls can
+therefore occupy every worker, leaving later blocking operations queued behind
+them. The current queue has no admission bound or backpressure policy, and
+resolver-outage throughput under pool saturation is not yet characterized.
+
+Phase 5 scheduler work must treat this as an explicit runtime ticket: make pool
+capacity and queue policy configurable, define the overload behavior, and add
+stress coverage for abandoned DNS jobs and subsequent unrelated blocking work.
+
 ## A tiny interpreter in Rust
 
 This example shows the core idea of an interpreter loop for a very small MIR-like IR.

@@ -1760,6 +1760,12 @@ impl LightweightTaskScheduler {
     fn run_until_root(&mut self, root: &TaskValue) -> std::result::Result<Value, Diagnostic> {
         loop {
             if let Some(result) = root.completed_result() {
+                debug_assert!(
+                    self.tasks
+                        .values()
+                        .all(|record| record.forced_exit_cleanup.is_none()),
+                    "structured concurrency invariant violated: direct task remained suspended at scheduler teardown"
+                );
                 return match result {
                     TaskExecutionResult::Ready(result) => result,
                     TaskExecutionResult::Cancelled => {

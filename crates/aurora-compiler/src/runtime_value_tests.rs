@@ -10,18 +10,19 @@ use super::{
     remove_file_checked, render_float, result_err, result_ok, run_blocking_io,
     run_lightweight_root_task, send_error_cancelled, send_error_closed, send_error_full,
     send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
-    spawn_lightweight_task_with_cancellation, task_group_cleanup_should_cancel,
-    task_result_cancelled, task_result_error, task_result_ready, task_result_timed_out,
-    validate_read_line_capacity, validate_requested_read_size, wait_all_cancelled, wait_all_error,
-    wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error, wait_any_ready,
-    wait_any_timed_out, wait_condvar, wait_for_runtime_scheduler, wait_timeout_condvar,
-    CancellationContext, ChannelValue, EnumVariantValue, FileValue, HttpListenerValue,
-    HttpResponseValue, LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue,
-    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessRestartPolicy,
-    ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, SetValue, TaskCancelledSignal, TaskExecutionResult, TaskGroupValue, TaskValue,
-    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TryRecvResult, UdpDatagramValue,
-    UdpSocketValue, Value, VecValue, WebSocketListenerValue, MAX_READ_ALL_BYTES,
+    spawn_lightweight_task_with_cancellation,
+    spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
+    task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
+    task_result_timed_out, validate_read_line_capacity, validate_requested_read_size,
+    wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled,
+    wait_any_error, wait_any_ready, wait_any_timed_out, wait_condvar, wait_for_runtime_scheduler,
+    wait_timeout_condvar, CancellationContext, ChannelValue, EnumVariantValue, FileValue,
+    HttpListenerValue, HttpResponseValue, LightweightTaskFailureSignal, MapValue,
+    ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
+    ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
+    RangeValue, RecvValueResult, SetValue, TaskCancelledSignal, TaskExecutionResult,
+    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TryRecvResult,
+    UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue, MAX_READ_ALL_BYTES,
 };
 use crate::diag::{Diagnostic, Span};
 use crate::integer::IntegerValue;
@@ -613,6 +614,24 @@ fn lightweight_scheduler_completion_helpers_cover_waiters_and_unbounded_waits() 
         super::yield_current_lightweight_task(super::TaskYield::YieldNow),
         None
     );
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(
+    expected = "structured concurrency invariant violated: direct task remained suspended at scheduler teardown"
+)]
+fn lightweight_scheduler_rejects_abandoned_direct_tasks_at_teardown() {
+    let _ = run_lightweight_root_task(|| {
+        unsafe {
+            spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup(
+                CancellationContext::default(),
+                || Ok(Value::Unit),
+                || {},
+            )?;
+        }
+        Ok(Value::Unit)
+    });
 }
 
 #[cfg(unix)]

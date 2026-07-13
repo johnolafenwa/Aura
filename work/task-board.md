@@ -2,6 +2,13 @@
 
 Last updated: 2026-07-13
 
+## Active Work Session
+
+- Started: 2026-07-13 13:58:22 BST.
+- Elapsed: 9m 58s as of 2026-07-13 14:08:20 BST.
+- Target: Preserve accepted Phase 1 as logical commits, complete cleanup tickets V1-V5, implement ticket 9 int64/uint64 direct unboxing, then complete the Phase 1.5 D3 -> D2 -> D4 -> D5 -> D6 semantic migration with an independently revertable commit and full repository gate after each decision.
+- Stop rule: complete Phase 1.5 and report, encounter a ratified-rule gate failure or unforeseen ambiguity that requires escalation, or reach 12 continuous hours.
+
 ## Previous Session (stale record recovered 2026-07-10)
 
 - Started: 2026-05-18 08:45:19 BST.

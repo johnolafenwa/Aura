@@ -2309,6 +2309,10 @@ fn is_string_type(ty: &Type) -> bool {
     matches!(ty, Type::Named(name, args) if name == "String" && args.is_empty())
 }
 
+fn is_option_type(ty: &Type) -> bool {
+    matches!(ty, Type::Named(name, args) if name == "Option" && args.len() == 1)
+}
+
 fn is_numeric_type(ty: &Type) -> bool {
     is_integer_type(ty) || is_float_type(ty)
 }
@@ -5229,6 +5233,24 @@ impl<'a> FunctionChecker<'a> {
                 {
                     Ok(return_ty)
                 } else if left_ty != right_ty {
+                    let non_optional_none_type = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+                        match (&left_ty, &right_ty) {
+                            (Type::Unit, other) if !is_option_type(other) => Some(other),
+                            (other, Type::Unit) if !is_option_type(other) => Some(other),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(non_optional_ty) = non_optional_none_type {
+                        return Err(Diagnostic::at(
+                            span,
+                            format!(
+                                "type `{}` is not optional; only `Option[T]` values can be compared with `None`",
+                                non_optional_ty
+                            ),
+                        ));
+                    }
                     Err(Diagnostic::at(
                         span,
                         format!(

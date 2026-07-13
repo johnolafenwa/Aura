@@ -1,0 +1,5 @@
+class User:
+    name: String
+
+def invalid(user: borrow User) -> None:
+    mut alias = user

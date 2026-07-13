@@ -76,6 +76,25 @@ The important architectural point is that diagnostics come from the compiler lib
 5. writes captured stdout
 6. exits with the integer value returned by the program when appropriate
 
+### Phase 4 backend-selection invariant
+
+Today, `aura run` is the MIR execution path by construction: it has no backend
+selector, so the backend-parity gate can force MIR by invoking `aura run` and
+force direct execution by building with `--backend direct`.
+
+Phase 4 must preserve an explicit way to select each engine. The change that
+adds backend selection to `run` must:
+
+- add a real `aura run --backend mir` mode
+- update `crates/aura/tests/backend_parity.rs` in the same change so its MIR
+  leg passes `--backend mir` explicitly
+- keep the direct leg explicit rather than using `auto` or another fallback
+
+The parity gate must never infer that the default `run` backend is MIR. If a
+future default changes to direct or automatic selection while the harness keeps
+calling bare `aura run`, the test could compare direct execution with itself
+and silently stop protecting MIR behavior.
+
 ## How `build` works
 
 `build` is more complex.

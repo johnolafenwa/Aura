@@ -45,6 +45,19 @@ fn contextual_none_equality_type_checks_symmetrically() {
     crate::check_source(source).expect("contextual None positions should type-check");
 }
 
+#[test]
+fn contextual_none_rejects_non_optional_comparisons_symmetrically() {
+    for expression in ["value == None", "None != value"] {
+        let source = format!("def invalid(value: int32) -> bool:\n    return {expression}\n");
+        let error = crate::check_source(&source)
+            .expect_err("None comparisons with non-optional values should fail");
+        assert_eq!(
+            error.message,
+            "type `int32` is not optional; only `Option[T]` values can be compared with `None`"
+        );
+    }
+}
+
 fn nested_type_ref(name: &str, args: Vec<TypeRef>) -> TypeRef {
     TypeRef {
         name: name.to_string(),
