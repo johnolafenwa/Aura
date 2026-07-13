@@ -29,9 +29,10 @@ Aurora does not do implicit numeric widening. Mixed expressions like `int32 + in
 
 ## Floating-Point Math
 
-Integer literals default to `int32`. Floating-point literals default to `float64`, but adopt `float32` when the surrounding type context requires it:
+Integer literals default to `int64`, whose shorter alias is `int`. Floating-point literals default to `float64`. Both adopt a compatible expected numeric type when the surrounding context requires it:
 
 ```python
+count: int32 = 12
 ratio: float32 = 3.25
 ```
 
@@ -93,7 +94,7 @@ See [examples/numbers/numeric_casts.au](../examples/numbers/numeric_casts.au).
 | `int128` | `uint128` | |
 | `intsize` | `uintsize` | |
 
-Use `int32` and `float64` by default. Narrower types are useful when you need explicit control over memory layout or value ranges. Full-range `uint128` arithmetic is supported:
+Use `int` (the `int64` alias) and `float64` by default. Other explicit widths are useful when you need control over memory layout, value ranges, or a fixed API contract. APIs declared with `int32` remain `int32`; the new literal default does not widen them. Full-range `uint128` arithmetic is supported:
 
 ```python
 value: uint128 = 340282366920938463463374607431768211455

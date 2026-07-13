@@ -15,6 +15,182 @@ fn type_ref(name: &str) -> TypeRef {
     }
 }
 
+#[test]
+fn d3_int_alias_canonicalizes_across_signatures_generics_and_casts() {
+    let source = r#"
+def identity[T](value: T) -> T:
+    return value
+
+def round_trip(value: int, values: Vec[int]) -> int:
+    casted: int = value as int
+    return identity[int](value=casted)
+
+def main() -> int32:
+    values: Vec[int] = [2147483648]
+    print(round_trip(1, values))
+    return 0
+"#;
+
+    let program = crate::check_source(source).expect("the int alias surface should type check");
+    let round_trip = program
+        .functions
+        .get("round_trip")
+        .expect("round_trip should be registered");
+    assert_eq!(
+        round_trip.signature.params,
+        vec![
+            Type::named("int64"),
+            Type::Named("Vec".to_string(), vec![Type::named("int64")]),
+        ]
+    );
+    assert_eq!(round_trip.signature.return_type, Type::named("int64"));
+
+    assert_eq!(
+        lower_type(
+            &type_ref("int"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("int should lower as a built-in alias"),
+        Type::named("int64")
+    );
+}
+
+#[test]
+fn d3_unhinted_integer_literals_default_to_checked_int64() {
+    let source = r#"
+def accept(value: int64):
+    print(value)
+
+def accept_values(values: Vec[int64]):
+    print(values.len())
+
+def accept_option(value: Option[int64]):
+    print(value != Option.None)
+
+def main() -> int32:
+    positive = 2147483648
+    negative = -2147483649
+    values = [1, 2147483648]
+    maybe = Option.Some(1)
+    accept(positive)
+    accept(negative)
+    accept_values(values)
+    accept_option(maybe)
+    return 0
+"#;
+    crate::check_source(source).expect("unhinted integer expressions should infer int64");
+
+    for (literal, expected_message) in [
+        (
+            "9223372036854775808",
+            "integer literal `9223372036854775808` does not fit in `int64`",
+        ),
+        (
+            "-9223372036854775809",
+            "integer literal `-9223372036854775809` does not fit in `int64`",
+        ),
+    ] {
+        let source = format!("def main():\n    value = {literal}\n");
+        let error = crate::check_source(&source)
+            .expect_err("an unhinted literal outside int64 must be rejected");
+        assert_eq!(error.message, expected_message);
+    }
+
+    crate::check_source(
+        "def main() -> int32:\n    positive: int128 = 9223372036854775808\n    negative: int128 = -9223372036854775809\n    narrow: int32 = 2147483647\n    return 0\n",
+    )
+    .expect("explicit wider and fixed-width integer contexts should remain authoritative");
+}
+
+#[test]
+fn d3_fixed_int32_builtin_and_index_positions_contextually_type_literals() {
+    crate::check_source(
+        r#"
+def main() -> int32:
+    mut values: Vec[int32] = [1]
+    values[0] = 2
+    print(values[0])
+    print(values.get(index=0))
+    jobs = Queue[int32](capacity=4)
+    for value in range(stop=4):
+        print(value)
+    for value in range(1, 4):
+        print(value)
+    jobs.close()
+    return 0
+"#,
+    )
+    .expect("fixed int32 APIs should contextually type ordinary literals");
+
+    for statement in ["print(values[2147483648])", "values[2147483648] = 1"] {
+        let source = format!(
+            "def main() -> int32:\n    mut values: Vec[int32] = [1]\n    {statement}\n    return 0\n"
+        );
+        let error = crate::check_source(&source)
+            .expect_err("vector index literals must remain constrained to int32");
+        assert_eq!(
+            error.message,
+            "integer literal `2147483648` does not fit in `int32`"
+        );
+    }
+}
+
+#[test]
+fn d3_vec_index_contract_rejects_default_int64_variables() {
+    for statement in [
+        "print(values[index])",
+        "values[index] = 2",
+        "print(values.get(index))",
+        "values.set(index, 2)",
+        "values.remove(index)",
+        "values.swap(index, 0)",
+        "values.insert(index, 2)",
+    ] {
+        let source = format!(
+            "def main() -> int32:\n    mut values: Vec[int32] = [1]\n    index = 0\n    {statement}\n    return 0\n"
+        );
+        let error = crate::check_source(&source)
+            .expect_err("default int64 variables must not enter fixed int32 index positions");
+        assert_eq!(
+            error.message, "vector indices must have type `int32`, found `int64`",
+            "unexpected diagnostic for `{statement}`"
+        );
+    }
+}
+
+#[test]
+fn d3_generic_calls_use_expected_results_to_contextually_type_literal_arguments() {
+    crate::check_source(
+        r#"
+def identity[T](value: T) -> T:
+    return value
+
+def main() -> int32:
+    positional: int32 = identity(100)
+    named: int32 = identity(value=5)
+    defaulted: int64 = identity(2147483648)
+    print(positional)
+    print(named)
+    print(defaulted)
+    return 0
+"#,
+    )
+    .expect("the expected generic result should contextually type literal arguments");
+}
+
+#[test]
+fn d3_int_alias_is_a_reserved_builtin_type_name() {
+    let direct = reject_reserved_type_name("int", Span::new(1, 1))
+        .expect_err("the int alias should be reserved");
+    assert_eq!(direct.message, "`int` is a reserved built-in type name");
+
+    let error = crate::check_source("class int:\n    value: int32\n")
+        .expect_err("user types cannot shadow the int alias");
+    assert_eq!(error.message, "`int` is a reserved built-in type name");
+}
+
 fn projection_path(path: &str) -> ProjectionPath {
     if path.is_empty() {
         return ProjectionPath::default();
@@ -1634,7 +1810,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
         )
         .expect_err("vector indices should stay integer-only")
         .message
-        .contains("vector indices must be integers"));
+        .contains("vector indices must have type `int32`"));
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Index {
@@ -1804,7 +1980,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
         )
         .expect_err("vector indices should stay integer-only in assignments")
         .message
-        .contains("vector indices must be integers"));
+        .contains("vector indices must have type `int32`"));
 
     let mut locals = HashMap::from([(
         "scores".to_string(),
@@ -2120,7 +2296,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
         )
         .expect_err("new bindings should honor their annotations")
         .message
-        .contains("binding `fresh` has annotated type `String`, but value has type `int32`"));
+        .contains("binding `fresh` has annotated type `String`, but value has type `int64`"));
     checker
         .check_assign(
             &assign_stmt(
@@ -2136,7 +2312,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
     let fresh = locals
         .get("fresh")
         .expect("fresh binding should be inserted");
-    assert_eq!(fresh.ty, Type::named("int32"));
+    assert_eq!(fresh.ty, Type::named("int64"));
     assert!(fresh.assignable);
     assert!(fresh.mutable_place);
 
@@ -2600,7 +2776,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
                 None,
             )
             .expect("positional class constructors should infer the field type"),
-        Type::Named("Box".to_string(), vec![Type::named("int32")])
+        Type::Named("Box".to_string(), vec![Type::named("int64")])
     );
     assert!(checker
         .type_of_call(
@@ -2648,7 +2824,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
                 None,
             )
             .expect("generic class constructors should infer type parameters from fields"),
-        Type::Named("Box".to_string(), vec![Type::named("int32")])
+        Type::Named("Box".to_string(), vec![Type::named("int64")])
     );
     assert!(checker
         .type_of_call(
@@ -2663,7 +2839,7 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         )
         .expect_err("explicit generic constructors should honor their field type")
         .message
-        .contains("field `value` expects `String`, found `int32`"));
+        .contains("field `value` expects `String`, found `int64`"));
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Name("Phantom".to_string())),
@@ -5109,7 +5285,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::String("ok".to_string()))),
                 arg(expr(ExprKind::Int(1))),
             ],
-            "`put(timeout=...)` expects `Duration`, found `int32`",
+            "`put(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5125,7 +5301,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "get".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`get(timeout=...)` expects `Duration`, found `int32`",
+            "`get(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5133,7 +5309,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "get_or_none".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`get(timeout=...)` expects `Duration`, found `int32`",
+            "`get(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5144,7 +5320,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::String("fallback".to_string()))),
                 arg(expr(ExprKind::Int(1))),
             ],
-            "`get_or(timeout=...)` expects `Duration`, found `int32`",
+            "`get_or(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5160,7 +5336,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "result".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`result(timeout=...)` expects `Duration`, found `int32`",
+            "`result(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5168,7 +5344,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "result_or_none".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`result(timeout=...)` expects `Duration`, found `int32`",
+            "`result(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5176,7 +5352,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "result_or".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(0))), arg(expr(ExprKind::Int(1)))],
-            "`result_or(timeout=...)` expects `Duration`, found `int32`",
+            "`result_or(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5211,7 +5387,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "wait".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`wait(timeout=...)` expects `Duration`, found `int32`",
+            "`wait(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5219,7 +5395,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "wait_or_none".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`wait_or_none(timeout=...)` expects `Duration`, found `int32`",
+            "`wait_or_none(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5227,7 +5403,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "wait_ok".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`wait_ok(timeout=...)` expects `Duration`, found `int32`",
+            "`wait_ok(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5235,7 +5411,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_line".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`read_line(timeout=...)` expects `Duration`, found `int32`",
+            "`read_line(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5251,7 +5427,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_bytes".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
-            "`read_bytes(timeout=...)` expects `Duration`, found `int32`",
+            "`read_bytes(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5270,7 +5446,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::String("ok".to_string()))),
                 arg(expr(ExprKind::Int(1))),
             ],
-            "`write_all(timeout=...)` expects `Duration`, found `int32`",
+            "`write_all(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5286,7 +5462,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "write_bytes".to_string(),
             }),
             vec![arg(bytes_expr()), arg(expr(ExprKind::Int(1)))],
-            "`write_bytes(timeout=...)` expects `Duration`, found `int32`",
+            "`write_bytes(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5422,7 +5598,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 ))]))),
                 named_arg("group", expr(ExprKind::Int(1))),
             ],
-            "`start` expects `bool`, found `int32`",
+            "`start` expects `bool`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5430,7 +5606,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "wait".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`wait(timeout=...)` expects `Duration`, found `int32`",
+            "`wait(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5438,7 +5614,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "wait_or_none".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`wait_or_none(timeout=...)` expects `Duration`, found `int32`",
+            "`wait_or_none(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5446,7 +5622,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "accept".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`accept(timeout=...)` expects `Duration`, found `int32`",
+            "`accept(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5478,7 +5654,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "split".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`split` expects `String`, found `int32`",
+            "`split` expects `String`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5486,7 +5662,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "strip_prefix".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`strip_prefix` expects `String`, found `int32`",
+            "`strip_prefix` expects `String`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5494,7 +5670,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "get".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`get` expects `String`, found `int32`",
+            "`get` expects `String`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5502,7 +5678,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "set".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1))), arg(expr(ExprKind::Int(2)))],
-            "`set` expects key type `String`, found `int32`",
+            "`set` expects key type `String`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5521,7 +5697,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "remove".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`remove` expects `String`, found `int32`",
+            "`remove` expects `String`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5529,7 +5705,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "contains_key".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`contains_key` expects `String`, found `int32`",
+            "`contains_key` expects `String`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5577,7 +5753,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_all".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`read_all(timeout=...)` expects `Duration`, found `int32`",
+            "`read_all(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5585,7 +5761,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_line".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`read_line(timeout=...)` expects `Duration`, found `int32`",
+            "`read_line(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5593,7 +5769,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_bytes".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
-            "`read_bytes(timeout=...)` expects `Duration`, found `int32`",
+            "`read_bytes(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5609,7 +5785,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_exact".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
-            "`read_exact(timeout=...)` expects `Duration`, found `int32`",
+            "`read_exact(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5620,7 +5796,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::String("ok".to_string()))),
                 arg(expr(ExprKind::Int(1))),
             ],
-            "`write_all(timeout=...)` expects `Duration`, found `int32`",
+            "`write_all(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5636,7 +5812,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "write_bytes".to_string(),
             }),
             vec![arg(bytes_expr()), arg(expr(ExprKind::Int(1)))],
-            "`write_bytes(timeout=...)` expects `Duration`, found `int32`",
+            "`write_bytes(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5647,7 +5823,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::Int(1))),
                 arg(expr(ExprKind::String("ok".to_string()))),
             ],
-            "`send_text` expects `String`, found `int32`",
+            "`send_text` expects `String`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5670,7 +5846,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::String("ok".to_string()))),
                 arg(expr(ExprKind::Int(1))),
             ],
-            "`send_text(timeout=...)` expects `Duration`, found `int32`",
+            "`send_text(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5678,7 +5854,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "send_bytes".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1))), arg(bytes_expr())],
-            "`send_bytes` expects `String`, found `int32`",
+            "`send_bytes` expects `String`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5701,7 +5877,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(bytes_expr()),
                 arg(expr(ExprKind::Int(1))),
             ],
-            "`send_bytes(timeout=...)` expects `Duration`, found `int32`",
+            "`send_bytes(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5717,7 +5893,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "recv".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
-            "`recv(timeout=...)` expects `Duration`, found `int32`",
+            "`recv(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5733,7 +5909,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "recv_from".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
-            "`recv_from(timeout=...)` expects `Duration`, found `int32`",
+            "`recv_from(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5741,7 +5917,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "accept".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`accept(timeout=...)` expects `Duration`, found `int32`",
+            "`accept(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5821,7 +5997,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "accept".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`accept(timeout=...)` expects `Duration`, found `int32`",
+            "`accept(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5840,7 +6016,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::String("ok".to_string()))),
                 arg(expr(ExprKind::Int(1))),
             ],
-            "`send_text(timeout=...)` expects `Duration`, found `int32`",
+            "`send_text(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5856,7 +6032,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "send_bytes".to_string(),
             }),
             vec![arg(bytes_expr()), arg(expr(ExprKind::Int(1)))],
-            "`send_bytes(timeout=...)` expects `Duration`, found `int32`",
+            "`send_bytes(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5864,7 +6040,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "recv_text".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`recv_text(timeout=...)` expects `Duration`, found `int32`",
+            "`recv_text(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5872,7 +6048,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "recv_bytes".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`recv_bytes(timeout=...)` expects `Duration`, found `int32`",
+            "`recv_bytes(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5880,7 +6056,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "accept".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`accept(timeout=...)` expects `Duration`, found `int32`",
+            "`accept(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5888,7 +6064,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_line".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`read_line(timeout=...)` expects `Duration`, found `int32`",
+            "`read_line(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5904,7 +6080,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_exact".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
-            "`read_exact(timeout=...)` expects `Duration`, found `int32`",
+            "`read_exact(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5923,7 +6099,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::String("ok".to_string()))),
                 arg(expr(ExprKind::Int(1))),
             ],
-            "`write_all(timeout=...)` expects `Duration`, found `int32`",
+            "`write_all(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5931,7 +6107,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "accept".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`accept(timeout=...)` expects `Duration`, found `int32`",
+            "`accept(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5939,7 +6115,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_line".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(1)))],
-            "`read_line(timeout=...)` expects `Duration`, found `int32`",
+            "`read_line(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5955,7 +6131,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 field: "read_exact".to_string(),
             }),
             vec![arg(expr(ExprKind::Int(8))), arg(expr(ExprKind::Int(1)))],
-            "`read_exact(timeout=...)` expects `Duration`, found `int32`",
+            "`read_exact(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -5974,7 +6150,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(expr(ExprKind::String("ok".to_string()))),
                 arg(expr(ExprKind::Int(1))),
             ],
-            "`write_all(timeout=...)` expects `Duration`, found `int32`",
+            "`write_all(timeout=...)` expects `Duration`, found `int64`",
         ),
         (
             expr(ExprKind::Member {
@@ -6049,7 +6225,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         )
         .expect_err("vec.get() should enforce integer indices")
         .message
-        .contains("vector indices must be integers"));
+        .contains("vector indices must have type `int32`"));
 
     assert!(checker
         .type_of_call(
@@ -6067,7 +6243,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         )
         .expect_err("vec.set() should enforce integer indices")
         .message
-        .contains("vector indices must be integers"));
+        .contains("vector indices must have type `int32`"));
 
     assert!(checker
         .type_of_call(
@@ -6100,7 +6276,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         )
         .expect_err("vec.remove() should enforce integer indices")
         .message
-        .contains("vector indices must be integers"));
+        .contains("vector indices must have type `int32`"));
 
     assert!(checker
         .type_of_call(
@@ -6115,7 +6291,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         )
         .expect_err("vec.swap() should enforce the first integer index")
         .message
-        .contains("vector indices must be integers"));
+        .contains("vector indices must have type `int32`"));
 
     assert!(checker
         .type_of_call(
@@ -6130,7 +6306,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         )
         .expect_err("vec.swap() should enforce integer indices")
         .message
-        .contains("vector indices must be integers"));
+        .contains("vector indices must have type `int32`"));
 
     assert!(checker
         .type_of_call(
@@ -6175,7 +6351,7 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         )
         .expect_err("vec.insert() should enforce integer indices")
         .message
-        .contains("vector indices must be integers"));
+        .contains("vector indices must have type `int32`"));
 
     assert!(checker
         .type_of_call(
@@ -7605,7 +7781,7 @@ fn call_expr_borrow_info_covers_method_return_sources() {
 fn borrowed_copy_return_assignments_bind_as_plain_values() {
     crate::check_source(
         "def id_ref(value: borrow[src] int32) -> borrow[src] int32:\n    return value\n\n\
-def main() -> int32:\n    value = 7\n    mirrored = id_ref(value)\n    return mirrored\n",
+def main() -> int32:\n    value: int32 = 7\n    mirrored = id_ref(value)\n    return mirrored\n",
     )
     .expect("copy-typed borrowed returns should be bindable as plain values");
 }
@@ -8101,7 +8277,7 @@ fn structured_wait_helpers_cover_valid_and_error_paths() {
         .expect_err("wait_all timeout should require Duration");
     assert!(wait_timeout
         .message
-        .contains("`wait_all(timeout=...)` expects `Duration`, found `int32`"));
+        .contains("`wait_all(timeout=...)` expects `Duration`, found `int64`"));
 
     let recv_timeout = crate::check_source(
         "def main() -> int32:\n    jobs = Queue[int32]()\n    return jobs.get(timeout=1)\n",
@@ -8109,7 +8285,7 @@ fn structured_wait_helpers_cover_valid_and_error_paths() {
     .expect_err("queue.get timeout should require Duration");
     assert!(recv_timeout
         .message
-        .contains("`get(timeout=...)` expects `Duration`, found `int32`"));
+        .contains("`get(timeout=...)` expects `Duration`, found `int64`"));
 
     let send_wrong_type = crate::check_source(
         "def main() -> int32:\n    jobs = Queue[int32]()\n    return jobs.put(\"bad\")\n",
@@ -8716,7 +8892,7 @@ fn checker_select_and_assignment_direct_helpers_cover_remaining_error_and_succes
 #[test]
 fn builtin_call_and_member_resolution_surface_type_checks() {
     let program = crate::check_source(
-            "def main() -> int32:\n    text = \"  Aurora  \"\n    pieces: Vec[String] = text.split(\"u\")\n    replaced: String = text.replace(\"Aurora\", \"language\")\n    lowered: String = text.to_lower()\n    raised: String = text.to_upper()\n    prefix: Option[String] = text.strip_prefix(\"  \")\n    suffix: Option[String] = text.strip_suffix(\"  \")\n    text_len: int32 = text.len()\n    text_has: bool = text.contains(\"Aur\")\n    text_start: bool = text.starts_with(\"  A\")\n    text_end: bool = text.ends_with(\"  \")\n    parsed_i32: Result[int32, String] = parse_int32(text=\"7\")\n    parsed_i64: Result[int64, String] = parse_int64(text=\"9\")\n    parsed_f64: Result[float64, String] = parse_float64(text=\"3.5\")\n    abs_i32: int32 = abs(value=-7)\n    min_i32: int32 = min(left=1, right=2)\n    max_i32: int32 = max(left=1, right=2)\n    root: float64 = sqrt(value=9.0)\n    mut values = [1, 2, 3]\n    popped: Option[int32] = values.pop()\n    gotten: Option[int32] = values.get(index=0)\n    inserted: bool = values.insert(index=0, value=9)\n    mut counts = {\"a\": 1}\n    keys: Vec[String] = counts.keys()\n    vals: Vec[int32] = counts.values()\n    entries: Vec[MapEntry[String, int32]] = counts.items()\n    mut names = Set{\"ada\"}\n    has_name: bool = names.contains(\"ada\")\n    inserted_name: bool = names.insert(\"bob\")\n    removed_name: bool = names.remove(\"ada\")\n    return text_len + abs_i32 + min_i32 + max_i32 + (root as int32)\n",
+            "def main() -> int32:\n    text = \"  Aurora  \"\n    pieces: Vec[String] = text.split(\"u\")\n    replaced: String = text.replace(\"Aurora\", \"language\")\n    lowered: String = text.to_lower()\n    raised: String = text.to_upper()\n    prefix: Option[String] = text.strip_prefix(\"  \")\n    suffix: Option[String] = text.strip_suffix(\"  \")\n    text_len: int32 = text.len()\n    text_has: bool = text.contains(\"Aur\")\n    text_start: bool = text.starts_with(\"  A\")\n    text_end: bool = text.ends_with(\"  \")\n    parsed_i32: Result[int32, String] = parse_int32(text=\"7\")\n    parsed_i64: Result[int64, String] = parse_int64(text=\"9\")\n    parsed_f64: Result[float64, String] = parse_float64(text=\"3.5\")\n    negative: int32 = -7\n    one: int32 = 1\n    two: int32 = 2\n    abs_i32: int32 = abs(value=negative)\n    min_i32: int32 = min(left=one, right=two)\n    max_i32: int32 = max(left=one, right=two)\n    root: float64 = sqrt(value=9.0)\n    mut values: Vec[int32] = [1, 2, 3]\n    popped: Option[int32] = values.pop()\n    gotten: Option[int32] = values.get(index=0)\n    inserted: bool = values.insert(index=0, value=9)\n    mut counts: Map[String, int32] = {\"a\": 1}\n    keys: Vec[String] = counts.keys()\n    vals: Vec[int32] = counts.values()\n    entries: Vec[MapEntry[String, int32]] = counts.items()\n    mut names = Set{\"ada\"}\n    has_name: bool = names.contains(\"ada\")\n    inserted_name: bool = names.insert(\"bob\")\n    removed_name: bool = names.remove(\"ada\")\n    return text_len + abs_i32 + min_i32 + max_i32 + (root as int32)\n",
         )
         .expect("builtin call/member surface should type check");
     assert!(program.functions.contains_key("main"));
@@ -8861,7 +9037,7 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
                 named_arg("left", expr(ExprKind::Int(1))),
                 named_arg("right", expr(ExprKind::Int(2))),
             ],
-            int_ty.clone(),
+            Type::named("int64"),
             None,
         ),
         (
@@ -9147,7 +9323,7 @@ fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
                 arg(name("tasks")),
                 named_arg("timeout", expr(ExprKind::Int(1))),
             ],
-            "`wait_all(timeout=...)` expects `Duration`, found `int32`",
+            "`wait_all(timeout=...)` expects `Duration`, found `int64`",
         ),
     ] {
         expect_error(callee, args, None, expected);
@@ -9353,7 +9529,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             ),
             (
                 "def main() -> int32:\n    match 1:\n        case 1.0:\n            return 1\n        case _:\n            return 0\n",
-                "does not match scrutinee type `int32`",
+                "does not match scrutinee type `int64`",
             ),
             (
                 "def main() -> int32:\n    match 1:\n        case _:\n            return 1\n        case 2:\n            return 2\n",
@@ -9361,11 +9537,11 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             ),
             (
                 "def main() -> int32:\n    match 1:\n        case true:\n            return 1\n        case _:\n            return 0\n",
-                "literal pattern `true` does not match scrutinee type `int32`",
+                "literal pattern `true` does not match scrutinee type `int64`",
             ),
             (
                 "def main() -> int32:\n    match 1:\n        case \"aurora\":\n            return 1\n        case _:\n            return 0\n",
-                "literal pattern \"aurora\" does not match scrutinee type `int32`",
+                "literal pattern \"aurora\" does not match scrutinee type `int64`",
             ),
             (
                 "def main() -> int32:\n    match true:\n        case true:\n            return 1\n",
@@ -9377,7 +9553,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             ),
             (
                 "def main() -> int32:\n    match 1:\n        case 1:\n            return 1\n",
-                "`match` over `int32` with literal patterns requires a final `case _:` arm",
+                "`match` over `int64` with literal patterns requires a final `case _:` arm",
             ),
             (
                 "def main() -> int32:\n    value: int8 = 1\n    match value:\n        case 200:\n            return 1\n        case _:\n            return 0\n",
@@ -9433,7 +9609,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             ),
             (
                 "enum Status:\n    Ready\n\ndef main() -> int32:\n    match 1:\n        case Status.Ready:\n            return 1\n        case _:\n            return 0\n",
-                "match over `int32` only supports literal patterns and `_`",
+                "match over `int64` only supports literal patterns and `_`",
             ),
             (
                 "def main() -> int32:\n    match 1:\n        case value:\n            return 1\n",
@@ -9449,11 +9625,11 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             ),
             (
                 "def main() -> int32:\n    jobs = Queue[int32]()\n    return jobs.get(timeout=1)\n",
-                "`get(timeout=...)` expects `Duration`, found `int32`",
+                "`get(timeout=...)` expects `Duration`, found `int64`",
             ),
             (
                 "def main() -> int32:\n    return sleep(duration=1)\n",
-                "`sleep(...)` expects a `Duration`, found `int32`",
+                "`sleep(...)` expects a `Duration`, found `int64`",
             ),
             (
                 "def main() -> int32:\n    return abs(value=\"x\")\n",
@@ -9465,39 +9641,39 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             ),
             (
                 "def main() -> int32:\n    return max(left=1, right=2.0)\n",
-                "`max` arguments must match, found `int32` and `float64`",
+                "`max` arguments must match, found `int64` and `float64`",
             ),
             (
                 "def main() -> int32:\n    return sqrt(value=9)\n",
-                "`sqrt(...)` expects `float32` or `float64`, found `int32`",
+                "`sqrt(...)` expects `float32` or `float64`, found `int64`",
             ),
             (
                 "def main() -> int32:\n    return parse_int32(text=1)\n",
-                "`parse_int32(...)` expects `String`, found `int32`",
+                "`parse_int32(...)` expects `String`, found `int64`",
             ),
             (
                 "def main() -> int32:\n    return parse_int64(text=1)\n",
-                "`parse_int64(...)` expects `String`, found `int32`",
+                "`parse_int64(...)` expects `String`, found `int64`",
             ),
             (
                 "def main() -> int32:\n    return parse_float64(text=1)\n",
-                "`parse_float64(...)` expects `String`, found `int32`",
+                "`parse_float64(...)` expects `String`, found `int64`",
             ),
             (
                 "def main() -> int32:\n    text = \"aurora\"\n    ok: bool = text.contains(1)\n    return 0\n",
-                "`contains` expects `String`, found `int32`",
+                "`contains` expects `String`, found `int64`",
             ),
             (
                 "def main() -> int32:\n    text = \"aurora\"\n    replaced: String = text.replace(1, \"x\")\n    return 0\n",
-                "`replace` expects `String` for `from`, found `int32`",
+                "`replace` expects `String` for `from`, found `int64`",
             ),
             (
                 "def main() -> int32:\n    text = \"aurora\"\n    replaced: String = text.replace(\"a\", 1)\n    return 0\n",
-                "`replace` expects `String` for `to`, found `int32`",
+                "`replace` expects `String` for `to`, found `int64`",
             ),
             (
                 "def main() -> None:\n    mut values = [1]\n    values.push(\"x\")\n",
-                "`push` expects `int32`, found `String`",
+                "`push` expects `int64`, found `String`",
             ),
             (
                 "import fs\n\ndef main() -> int32:\n    file = fs.File()\n    return 0\n",
@@ -9613,7 +9789,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
         ),
         (
             "enum Status:\n    Ready\n\ndef main() -> int32:\n    return match 1:\n        case Status.Ready: 1\n        case _: 0\n",
-            "match over `int32` only supports literal patterns and `_`",
+            "match over `int64` only supports literal patterns and `_`",
         ),
         (
             "def main() -> int32:\n    return match 1:\n        case value: 1\n",
@@ -9633,7 +9809,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
         ),
         (
             "def main() -> int32:\n    return match 1:\n        case 1: 1\n",
-            "match over `int32` requires a final wildcard arm because the domain is open-ended",
+            "match over `int64` requires a final wildcard arm because the domain is open-ended",
         ),
         (
             "def main() -> int32:\n    return match true:\n        case true: 1\n        case false: \"no\"\n",

@@ -1,0 +1,26 @@
+trait Show:
+    def show(borrow self) -> String
+
+impl Show for int32:
+    def show(borrow self) -> String:
+        return "int32"
+
+impl Show for int64:
+    def show(borrow self) -> String:
+        return "int64"
+
+impl Show for uint64:
+    def show(borrow self) -> String:
+        return "uint64"
+
+def render[T: Show](value: T) -> None:
+    print(value.show())
+
+def main() -> int32:
+    narrow: int32 = 7
+    wide: int64 = 8
+    render(narrow)
+    render(wide)
+    render(9)
+    render(9 as uint64)
+    return 0

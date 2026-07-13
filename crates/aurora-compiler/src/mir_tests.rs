@@ -47,6 +47,35 @@ fn arg(value: Expr) -> Argument {
     }
 }
 
+#[test]
+fn d3_mir_canonicalizes_int_and_defaults_unhinted_integer_values_to_int64() {
+    let lowerer = trait_lowerer();
+
+    assert_eq!(lower_type_ref(&type_ref("int")), Type::named("int64"));
+    assert_eq!(
+        lowerer.infer_expr_type(&expr(ExprKind::Int(7))),
+        Some(Type::named("int64"))
+    );
+    assert_eq!(
+        lowerer.infer_expr_type(&expr(ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr: Box::new(expr(ExprKind::Int(7))),
+        })),
+        Some(Type::named("int64"))
+    );
+    assert_eq!(
+        lowerer.infer_option_some_call_type(&expr(ExprKind::Int(7))),
+        Some(Type::Named(
+            "Option".to_string(),
+            vec![Type::named("int64")]
+        ))
+    );
+    assert_eq!(
+        lowerer.infer_operand_type(&Operand::Int(7)),
+        Some(Type::named("int64"))
+    );
+}
+
 fn named_arg(name: &str, value: Expr) -> Argument {
     Argument {
         name: Some(name.to_string()),
@@ -629,7 +658,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
             expr: Box::new(expr(ExprKind::Int(7))),
             type_args: Vec::new(),
         })),
-        Some(Type::named("int32"))
+        Some(Type::named("int64"))
     );
     assert_eq!(
         lowerer.infer_expr_type(&expr(ExprKind::Try(Box::new(expr(ExprKind::Int(1)))))),
@@ -1610,7 +1639,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
     );
     assert_eq!(
         lowerer.infer_operand_type(&Operand::Int(7)),
-        Some(Type::named("int32"))
+        Some(Type::named("int64"))
     );
     assert_eq!(
         lowerer.infer_operand_type(&Operand::Duration(10)),
@@ -1705,10 +1734,10 @@ def main() -> int32:
     mut counter = Counter(value=0)
     positional = Counter(2)
     counter.value += positional.value
-    mut values = [1, 2]
+    mut values: Vec[int32] = [1, 2]
     values[0] = 3
     values[0] += 4
-    mut counts = {"a": 1}
+    mut counts: Map[String, int32] = {"a": 1}
     counts["b"] = 2
     counts["a"] += 5
     seen = Set{"a", "b"}
@@ -1815,7 +1844,7 @@ def main() -> int32:
         ),
         Some(Type::Named(
             "Pair".to_string(),
-            vec![Type::named("String"), Type::named("int32")]
+            vec![Type::named("String"), Type::named("int64")]
         ))
     );
     assert_eq!(
@@ -1991,7 +2020,7 @@ fn lowerer_direct_collection_literals_cover_uninferred_set_and_map_exprs() {
             },
             ..
         } if key_type == &Type::named("String")
-            && value_type == &Type::named("int32")
+            && value_type == &Type::named("int64")
             && entries.len() == 1
     )));
     assert!(instructions.iter().any(|instruction| matches!(
@@ -2140,20 +2169,20 @@ def main() -> int32:
 
     let positive = lowerer.lower_literal_pattern_operand(
         None,
-        &LiteralPatternKind::Int(IntegerValue::Signed(5)),
+        &LiteralPatternKind::Int(IntegerValue::from_signed(5)),
         Span::new(1, 1),
     );
     assert_eq!(positive, Operand::Int(5));
 
     let negative = lowerer.lower_literal_pattern_operand(
         Some(&Type::named("int32")),
-        &LiteralPatternKind::Int(IntegerValue::Signed(-5)),
+        &LiteralPatternKind::Int(IntegerValue::from_signed(-5)),
         Span::new(1, 1),
     );
     assert!(matches!(negative, Operand::Place(_)));
     let negative_unknown = lowerer.lower_literal_pattern_operand(
         None,
-        &LiteralPatternKind::Int(IntegerValue::Signed(-7)),
+        &LiteralPatternKind::Int(IntegerValue::from_signed(-7)),
         Span::new(1, 1),
     );
     assert!(matches!(negative_unknown, Operand::Place(_)));
@@ -2164,7 +2193,7 @@ def main() -> int32:
     lowerer.switch_to(literal_entry);
     let literal_writeback = lowerer.lower_pattern(
         &Pattern::Literal(LiteralPattern {
-            kind: LiteralPatternKind::Int(IntegerValue::Signed(2)),
+            kind: LiteralPatternKind::Int(IntegerValue::from_signed(2)),
             span: Span::new(1, 1),
         }),
         Operand::Int(2),

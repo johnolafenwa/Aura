@@ -46,6 +46,7 @@ const BUILTINS = [
   "bool",
   "float32",
   "float64",
+  "int",
   "int32",
   "int64",
   "print",

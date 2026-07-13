@@ -44,13 +44,26 @@ use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixS
 use std::os::unix::process::CommandExt;
 
 use crate::diag::{Diagnostic, Result, Span};
-use crate::integer::{IntegerBounds, IntegerValue};
+use crate::integer::{IntegerBounds, IntegerKind, IntegerValue};
 use crate::sema::Type;
 
 type HttpHeaders = Vec<(String, String)>;
 type HttpRequestHead = (usize, String, String, HttpHeaders, HttpBodyFraming);
 type HttpResponseHead = (usize, i32, String, HttpHeaders, HttpBodyFraming);
 type HttpRequestParts = (String, String, HttpHeaders, Vec<u8>);
+
+pub(crate) const DIRECT_RUNTIME_TYPE_FIELD: &str = "\0aurora:runtime-type";
+pub(crate) const DIRECT_RUNTIME_TYPE_SEPARATOR: char = '\0';
+
+pub(crate) fn nominal_runtime_base_name(name: &str) -> &str {
+    name.split_once(DIRECT_RUNTIME_TYPE_SEPARATOR)
+        .map_or(name, |(base, _)| base)
+}
+
+pub(crate) fn embedded_nominal_runtime_type_name(name: &str) -> Option<&str> {
+    name.split_once(DIRECT_RUNTIME_TYPE_SEPARATOR)
+        .map(|(_, runtime_type)| runtime_type)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HttpBodyFraming {
@@ -97,13 +110,13 @@ pub enum Value {
     TlsStream(TlsStreamValue),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct InstanceValue {
     pub class_name: String,
     pub fields: BTreeMap<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct EnumVariantValue {
     pub enum_name: String,
     pub variant_name: String,
@@ -116,6 +129,31 @@ impl EnumVariantValue {
             [payload] => Some(payload),
             _ => None,
         }
+    }
+}
+
+impl PartialEq for InstanceValue {
+    fn eq(&self, other: &Self) -> bool {
+        if nominal_runtime_base_name(&self.class_name)
+            != nominal_runtime_base_name(&other.class_name)
+        {
+            return false;
+        }
+        self.fields
+            .iter()
+            .filter(|(name, _)| name.as_str() != DIRECT_RUNTIME_TYPE_FIELD)
+            .eq(other
+                .fields
+                .iter()
+                .filter(|(name, _)| name.as_str() != DIRECT_RUNTIME_TYPE_FIELD))
+    }
+}
+
+impl PartialEq for EnumVariantValue {
+    fn eq(&self, other: &Self) -> bool {
+        nominal_runtime_base_name(&self.enum_name) == nominal_runtime_base_name(&other.enum_name)
+            && self.variant_name == other.variant_name
+            && self.payloads == other.payloads
     }
 }
 
@@ -157,6 +195,7 @@ pub struct ChannelValue {
 struct ChannelState {
     state: Mutex<ChannelInner>,
     producer_tasks: Mutex<Vec<Weak<TaskState>>>,
+    runtime_type_name: Mutex<Option<String>>,
 }
 
 struct ChannelInner {
@@ -276,6 +315,7 @@ struct TaskState {
     observed_failure: AtomicBool,
     group_failure_wake_flags: Mutex<Vec<Arc<AtomicBool>>>,
     group_completion_wake_flags: Mutex<Vec<Arc<AtomicBool>>>,
+    runtime_type_name: Mutex<Option<String>>,
 }
 
 struct TaskGroupState {
@@ -594,8 +634,12 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
             Value::Range(_) => "Range".to_string(),
             Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
             Value::Unit => "None".to_string(),
-            Value::Instance(instance) => instance.class_name.clone(),
-            Value::EnumVariant(variant) => variant.enum_name.clone(),
+            Value::Instance(instance) => {
+                nominal_runtime_base_name(&instance.class_name).to_string()
+            }
+            Value::EnumVariant(variant) => {
+                nominal_runtime_base_name(&variant.enum_name).to_string()
+            }
             Value::Channel(_) => "Queue".to_string(),
             Value::Task(_) => "Task".to_string(),
             Value::TaskGroup(_) => "TaskGroup".to_string(),
@@ -629,6 +673,9 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
                         format!("integer value `{}` does not fit in `{}`", value, target),
                     ));
                 }
+                let value = IntegerKind::from_runtime_type_name(&target.to_string())
+                    .and_then(|kind| value.with_runtime_kind(kind))
+                    .expect("validated integer values should fit their target runtime kind");
                 return Ok(Value::Int(value));
             }
             match target {
@@ -706,6 +753,9 @@ pub(crate) fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>
                         format!("integer value `{}` does not fit in `{}`", coerced, target),
                     ));
                 }
+                let coerced = IntegerKind::from_runtime_type_name(&target.to_string())
+                    .and_then(|kind| coerced.with_runtime_kind(kind))
+                    .expect("validated integer values should fit their target runtime kind");
                 return Ok(Value::Int(coerced));
             }
             match target {
@@ -1555,6 +1605,7 @@ impl LightweightTaskScheduler {
             observed_failure: AtomicBool::new(false),
             group_failure_wake_flags: Mutex::new(Vec::new()),
             group_completion_wake_flags: Mutex::new(Vec::new()),
+            runtime_type_name: Mutex::new(None),
         });
         let context = Box::new(LightweightTaskContext {
             scheduler: self as *mut _,
@@ -2060,11 +2111,17 @@ impl Value {
             Value::TlsListener(_) => "<tls-listener>".to_string(),
             Value::TlsStream(_) => "<tls-stream>".to_string(),
             Value::Instance(instance) => {
-                let mut rendered = format!("{}(", instance.class_name);
-                for (index, (name, value)) in instance.fields.iter().enumerate() {
-                    if index > 0 {
+                let mut rendered = format!("{}(", nominal_runtime_base_name(&instance.class_name));
+                let mut first = true;
+                for (name, value) in instance
+                    .fields
+                    .iter()
+                    .filter(|(name, _)| name.as_str() != DIRECT_RUNTIME_TYPE_FIELD)
+                {
+                    if !first {
                         rendered.push_str(", ");
                     }
+                    first = false;
                     rendered.push_str(name);
                     rendered.push('=');
                     rendered.push_str(&value.render());
@@ -2073,7 +2130,11 @@ impl Value {
                 rendered
             }
             Value::EnumVariant(variant) => {
-                let mut rendered = format!("{}.{}", variant.enum_name, variant.variant_name);
+                let mut rendered = format!(
+                    "{}.{}",
+                    nominal_runtime_base_name(&variant.enum_name),
+                    variant.variant_name
+                );
                 if !variant.payloads.is_empty() {
                     rendered.push('(');
                     for (index, payload) in variant.payloads.iter().enumerate() {
@@ -2128,8 +2189,17 @@ impl ChannelValue {
                     capacity,
                 }),
                 producer_tasks: Mutex::new(Vec::new()),
+                runtime_type_name: Mutex::new(None),
             }),
         }
+    }
+
+    pub(crate) fn runtime_type_name(&self) -> Option<String> {
+        lock_mutex(&self.inner.runtime_type_name).clone()
+    }
+
+    pub(crate) fn set_runtime_type_name(&self, runtime_type_name: String) {
+        *lock_mutex(&self.inner.runtime_type_name) = Some(runtime_type_name);
     }
 }
 
@@ -6989,6 +7059,14 @@ impl TaskGroupValue {
 }
 
 impl TaskValue {
+    pub(crate) fn runtime_type_name(&self) -> Option<String> {
+        lock_mutex(&self.inner.runtime_type_name).clone()
+    }
+
+    pub(crate) fn set_runtime_type_name(&self, runtime_type_name: String) {
+        *lock_mutex(&self.inner.runtime_type_name) = Some(runtime_type_name);
+    }
+
     fn register_group_failure_wake_flag(&self, flag: Arc<AtomicBool>) {
         let mut flags = lock_mutex(&self.inner.group_failure_wake_flags);
         if !flags.iter().any(|existing| Arc::ptr_eq(existing, &flag)) {
@@ -7046,6 +7124,7 @@ impl TaskValue {
             observed_failure: AtomicBool::new(false),
             group_failure_wake_flags: Mutex::new(Vec::new()),
             group_completion_wake_flags: Mutex::new(Vec::new()),
+            runtime_type_name: Mutex::new(None),
         });
         let state = inner.clone();
         thread::spawn(move || {

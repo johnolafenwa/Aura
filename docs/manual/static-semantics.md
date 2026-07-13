@@ -10,12 +10,13 @@ Aurora 0.1 uses nominal types with invariant generic arguments. Two types match 
 
 Examples:
 
+- `int` and `int64` are the same canonical type.
 - `int32` and `int64` are different types.
 - `Vec[int32]` and `Vec[int64]` are different types.
 - two user classes with identical fields are still different types.
 - an imported type retains its defining module identity even when imported under an unqualified binding.
 
-`T?` is syntactic sugar for `Option[T]`. `str` currently canonicalizes to `String`; it is not a distinct runtime string-view type in Aurora 0.1.
+`T?` is syntactic sugar for `Option[T]`. `int` canonicalizes to `int64`, and `str` currently canonicalizes to `String`; neither alias introduces a distinct runtime type.
 
 Every generic type use must supply its declared number of type arguments. Non-generic types reject type arguments. `Self` is available only in supported trait and implementation type positions.
 
@@ -25,7 +26,7 @@ Aurora uses local, contextual inference rather than global inference. Public fun
 
 ### Literals
 
-- An integer literal adopts an expected integer type and must fit it; otherwise it defaults to `int32`.
+- An integer literal adopts an expected integer type and must fit it; otherwise it defaults to `int64`.
 - A negative integer literal is parsed as unary `-` applied to a non-negative literal and must fit the selected signed integer type.
 - A floating literal adopts an expected `float32` or `float64`; otherwise it defaults to `float64`.
 - `true` and `false` have type `bool`.
@@ -68,7 +69,7 @@ The first simple-name assignment introduces a binding. Its type is the annotatio
 
 Compound assignments `+=`, `-=`, `*=`, `/=`, and `%=` read the current target, apply the corresponding binary operation, and write the result. The target must already exist, be mutable, not be moved, and have the operation's result type.
 
-Field assignment requires a mutable base place and a declared field. Index assignment supports `Vec[T]` with an integer index and `Map[K, V]` with a key of exactly `K`. An annotation and `mut` are not permitted on member or index assignment.
+Field assignment requires a mutable base place and a declared field. Index assignment supports `Vec[T]` with exactly an `int32` index and `Map[K, V]` with a key of exactly `K`. An annotation and `mut` are not permitted on member or index assignment.
 
 ## Expression Typing
 
@@ -100,7 +101,7 @@ Operator operands are not implicitly widened. A literal may be contextually type
 
 ### Indexing And Members
 
-Direct indexing supports `Vec[T]` with an integer index and `Map[K, V]` with exactly `K`. A direct read produces `T` or `V` but moving a non-copy vector element by direct indexing is restricted by ownership rules; use `get()` when an explicit clone/optional result is required.
+Direct indexing supports `Vec[T]` with exactly an `int32` index and `Map[K, V]` with exactly `K`. A direct read produces `T` or `V` but moving a non-copy vector element by direct indexing is restricted by ownership rules; use `get()` when an explicit clone/optional result is required. The maintained `Vec.get`, `set`, `remove`, `swap`, and `insert` index parameters are likewise exactly `int32`; an already-bound `int64` value is not implicitly narrowed.
 
 Member access must resolve to a visible field, method, enum variant, module item, or maintained builtin member. Calling a receiver method also validates whether the receiver is consumed, shared-borrowed, or mutable-borrowed.
 

@@ -9,7 +9,7 @@ use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::UnaryOp;
 use crate::diag::{Diagnostic, Result};
-use crate::integer::IntegerValue;
+use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod, MirModule,
     MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
@@ -419,6 +419,7 @@ struct CallOutcome {
 struct EvaluatedMirArg {
     name: Option<String>,
     value: Value,
+    ty: Option<Type>,
     writeback_place: Option<String>,
 }
 
@@ -766,14 +767,16 @@ impl MirRuntime {
                 source_ty, target_error_ty
             )));
         };
-        let outcome = self.call_function(
+        let outcome = self.call_function_for_target(
             &function,
             None,
             vec![EvaluatedMirArg {
                 name: None,
                 value: payload,
+                ty: Some(source_ty.clone()),
                 writeback_place: None,
             }],
+            None,
         )?;
         Ok(outcome.value)
     }
@@ -831,7 +834,7 @@ impl MirRuntime {
 
     fn infer_value_type(value: &Value) -> Option<Type> {
         match value {
-            Value::Int(_) => Some(Type::named("int32")),
+            Value::Int(value) => Some(Type::named(value.runtime_type_name().unwrap_or("int64"))),
             Value::Float(_) => Some(Type::named("float64")),
             Value::Bool(_) => Some(Type::named("bool")),
             Value::String(_) => Some(Type::named("String")),
@@ -986,10 +989,15 @@ impl MirRuntime {
             (Value::Unit, Type::Named(name, args)) if name == "Option" && args.len() == 1 => {
                 option_none()
             }
-            (Value::Int(_), Type::Named(name, _))
-                if name.starts_with("int") || name.starts_with("uint") =>
+            (Value::Int(value), Type::Named(name, args))
+                if args.is_empty() && (name.starts_with("int") || name.starts_with("uint")) =>
             {
-                value
+                match IntegerKind::from_runtime_type_name(name)
+                    .and_then(|kind| (*value).with_runtime_kind(kind))
+                {
+                    Some(value) => Value::Int(value),
+                    None => Value::Int(*value),
+                }
             }
             (Value::Float(_), Type::Named(name, _)) if name == "float32" || name == "float64" => {
                 cast_numeric_value(value, ty, span)?
@@ -1024,16 +1032,31 @@ impl MirRuntime {
             let Type::Named(class_name, args) = current else {
                 return None;
             };
-            if !args.is_empty() {
-                return None;
-            }
             let class = self.classes.get(&class_name)?;
             let field = class.fields.iter().find(|field| field.name == *segment)?;
-            current = field.ty.clone();
+            let substitutions = class
+                .type_params
+                .iter()
+                .cloned()
+                .zip(args)
+                .collect::<HashMap<_, _>>();
+            current = substitute_type(&field.ty, &substitutions);
             index += 1;
         }
 
         Some(current)
+    }
+
+    fn resolve_operand_type(&self, operand: &Operand, env: &Env) -> Option<Type> {
+        match operand {
+            Operand::Place(place) => self.resolve_place_type(place, env),
+            Operand::Int(_) => Some(Type::named("int64")),
+            Operand::Duration(_) => Some(Type::named("Duration")),
+            Operand::Float(_) => Some(Type::named("float64")),
+            Operand::Bool(_) => Some(Type::named("bool")),
+            Operand::String(_) => Some(Type::named("String")),
+            Operand::Unit => Some(Type::Unit),
+        }
     }
 
     fn call_function(
@@ -1041,6 +1064,27 @@ impl MirRuntime {
         function: &MirFunction,
         receiver: Option<Value>,
         args: Vec<EvaluatedMirArg>,
+    ) -> Result<CallOutcome> {
+        self.call_function_for_target(function, receiver, args, None)
+    }
+
+    fn call_function_for_target(
+        &mut self,
+        function: &MirFunction,
+        receiver: Option<Value>,
+        args: Vec<EvaluatedMirArg>,
+        expected_return_type: Option<&Type>,
+    ) -> Result<CallOutcome> {
+        self.call_function_with_receiver_type(function, receiver, args, expected_return_type, None)
+    }
+
+    fn call_function_with_receiver_type(
+        &mut self,
+        function: &MirFunction,
+        receiver: Option<Value>,
+        args: Vec<EvaluatedMirArg>,
+        expected_return_type: Option<&Type>,
+        receiver_type: Option<&Type>,
     ) -> Result<CallOutcome> {
         if self.call_depth >= MAX_CALL_DEPTH {
             return Err(Diagnostic::at(
@@ -1055,8 +1099,32 @@ impl MirRuntime {
         let outcome = (|| {
             let bound_args = bind_args(&function.params, args)?;
             let mut substitutions = HashMap::new();
+            if let Some(receiver_type) = receiver_type {
+                if let Some(receiver_local) = function
+                    .local_types
+                    .iter()
+                    .find(|local| local.name == "self")
+                {
+                    collect_runtime_type_substitutions(
+                        &receiver_local.ty,
+                        receiver_type,
+                        &mut substitutions,
+                    );
+                }
+            }
+            if let Some(expected_return_type) = expected_return_type {
+                collect_runtime_type_substitutions(
+                    &function.return_type,
+                    expected_return_type,
+                    &mut substitutions,
+                );
+            }
             for (param, argument) in function.params.iter().zip(bound_args.iter()) {
-                if let Some(actual_ty) = self.infer_runtime_value_type(&argument.value) {
+                if let Some(actual_ty) = argument
+                    .ty
+                    .clone()
+                    .or_else(|| self.infer_runtime_value_type(&argument.value))
+                {
                     collect_runtime_type_substitutions(&param.ty, &actual_ty, &mut substitutions);
                 }
             }
@@ -1072,10 +1140,10 @@ impl MirRuntime {
                         function.name
                     )));
                 };
-                let receiver_ty = match self.infer_runtime_value_type(&receiver) {
-                    Some(ty) => ty,
-                    None => Type::named("Unknown"),
-                };
+                let receiver_ty = receiver_type
+                    .cloned()
+                    .or_else(|| self.infer_runtime_value_type(&receiver))
+                    .unwrap_or_else(|| Type::named("Unknown"));
                 env.define_typed("self", receiver_ty, receiver);
             }
 
@@ -1198,29 +1266,33 @@ impl MirRuntime {
         cleanup_stack: &mut Vec<String>,
     ) -> Result<Option<Value>> {
         match instruction {
-            Instruction::Assign { target, value } => match self.evaluate_rvalue(value, env)? {
-                RvalueOutcome::Value(evaluated) => {
-                    let span = match value {
-                        Rvalue::Unary { span, .. } | Rvalue::Binary { span, .. } => Some(*span),
-                        _ => None,
-                    };
-                    if let Some(target_ty) = self.resolve_place_type(target, env) {
-                        let evaluated = self.coerce_value_to_type(evaluated, &target_ty, span)?;
-                        if !target.contains('.') {
-                            env.set_place_type(target, target_ty);
+            Instruction::Assign { target, value } => {
+                let target_ty = self.resolve_place_type(target, env);
+                match self.evaluate_rvalue_for_target(value, env, target_ty.as_ref())? {
+                    RvalueOutcome::Value(evaluated) => {
+                        let span = match value {
+                            Rvalue::Unary { span, .. } | Rvalue::Binary { span, .. } => Some(*span),
+                            _ => None,
+                        };
+                        if let Some(target_ty) = target_ty {
+                            let evaluated =
+                                self.coerce_value_to_type(evaluated, &target_ty, span)?;
+                            if !target.contains('.') {
+                                env.set_place_type(target, target_ty);
+                            }
+                            env.write_place(target, evaluated)?;
+                            return Ok(None);
+                        } else if !target.contains('.') {
+                            if let Some(inferred_ty) = self.infer_runtime_value_type(&evaluated) {
+                                env.set_place_type(target, inferred_ty);
+                            }
                         }
                         env.write_place(target, evaluated)?;
-                        return Ok(None);
-                    } else if !target.contains('.') {
-                        if let Some(inferred_ty) = self.infer_runtime_value_type(&evaluated) {
-                            env.set_place_type(target, inferred_ty);
-                        }
+                        Ok(None)
                     }
-                    env.write_place(target, evaluated)?;
-                    Ok(None)
+                    RvalueOutcome::Return(value) => Ok(Some(value)),
                 }
-                RvalueOutcome::Return(value) => Ok(Some(value)),
-            },
+            }
             Instruction::Eval { value } => {
                 let _ = self.evaluate_operand(value, env)?;
                 Ok(None)
@@ -1358,6 +1430,7 @@ impl MirRuntime {
         env: &mut Env,
         cancel_before_cleanup: bool,
     ) -> Result<()> {
+        let resource_type = self.resolve_place_type(place, env);
         let resource = env.read_place(place)?;
         match resource {
             Value::TaskGroup(group) => self.close_task_group(group, cancel_before_cleanup),
@@ -1446,8 +1519,13 @@ impl MirRuntime {
                             method.function_name
                         ))
                     })?;
-                let outcome =
-                    self.call_function(&function, Some(Value::Instance(instance)), Vec::new())?;
+                let outcome = self.call_function_with_receiver_type(
+                    &function,
+                    Some(Value::Instance(instance)),
+                    Vec::new(),
+                    None,
+                    resource_type.as_ref(),
+                )?;
                 if let Some(updated_receiver) = outcome.updated_receiver {
                     env.write_place(place, updated_receiver)?;
                 }
@@ -1460,7 +1538,17 @@ impl MirRuntime {
         }
     }
 
+    #[cfg(test)]
     fn evaluate_rvalue(&mut self, value: &Rvalue, env: &mut Env) -> Result<RvalueOutcome> {
+        self.evaluate_rvalue_for_target(value, env, None)
+    }
+
+    fn evaluate_rvalue_for_target(
+        &mut self,
+        value: &Rvalue,
+        env: &mut Env,
+        expected_type: Option<&Type>,
+    ) -> Result<RvalueOutcome> {
         match value {
             Rvalue::Use(operand) => Ok(RvalueOutcome::Value(self.evaluate_operand(operand, env)?)),
             Rvalue::FormatString { parts } => {
@@ -1509,6 +1597,12 @@ impl MirRuntime {
                 )?))
             }
             Rvalue::Try { value } => {
+                let source_error_ty = match self.resolve_operand_type(value, env) {
+                    Some(Type::Named(name, args)) if name == "Result" && args.len() == 2 => {
+                        args.get(1).cloned()
+                    }
+                    _ => None,
+                };
                 let value = self.evaluate_operand(value, env)?;
                 let Value::EnumVariant(variant) = value else {
                     return Err(Diagnostic::new(format!(
@@ -1525,8 +1619,8 @@ impl MirRuntime {
                 match (variant.variant_name.as_str(), variant.payloads.as_slice()) {
                     ("Ok", [payload]) => Ok(RvalueOutcome::Value(payload.clone())),
                     ("Err", [payload]) => {
-                        let source_ty = self
-                            .infer_runtime_value_type(payload)
+                        let source_ty = source_error_ty
+                            .or_else(|| self.infer_runtime_value_type(payload))
                             .unwrap_or_else(|| Type::named("Unknown"));
                         let payload =
                             self.convert_try_error_via_from(payload.clone(), &source_ty)?;
@@ -1570,9 +1664,9 @@ impl MirRuntime {
                     Some(*span),
                 )?))
             }
-            Rvalue::Call { callee, args } => {
-                Ok(RvalueOutcome::Value(self.evaluate_call(callee, args, env)?))
-            }
+            Rvalue::Call { callee, args } => Ok(RvalueOutcome::Value(
+                self.evaluate_call_for_target(callee, args, env, expected_type)?,
+            )),
             Rvalue::VecLiteral {
                 elements,
                 element_type,
@@ -1684,11 +1778,22 @@ impl MirRuntime {
         }
     }
 
+    #[cfg(test)]
     fn evaluate_call(
         &mut self,
         callee: &CallTarget,
         args: &[MirArg],
         env: &mut Env,
+    ) -> Result<Value> {
+        self.evaluate_call_for_target(callee, args, env, None)
+    }
+
+    fn evaluate_call_for_target(
+        &mut self,
+        callee: &CallTarget,
+        args: &[MirArg],
+        env: &mut Env,
+        expected_return_type: Option<&Type>,
     ) -> Result<Value> {
         match callee {
             CallTarget::Name(name) => {
@@ -1831,16 +1936,22 @@ impl MirRuntime {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(&["value"], values)?;
                     return match bound[0].value.clone() {
-                        Value::Int(IntegerValue::Signed(value)) => value
-                            .checked_abs()
-                            .map(IntegerValue::from_signed)
-                            .map(Value::Int)
-                            .ok_or_else(|| {
-                                Diagnostic::new("`abs(...)` overflowed the signed integer range")
-                            }),
-                        Value::Int(IntegerValue::Unsigned(value)) => {
-                            Ok(Value::Int(IntegerValue::Unsigned(value)))
-                        }
+                        Value::Int(value) => match value.representation() {
+                            IntegerRepresentation::Signed(signed) if signed < 0 => {
+                                if signed == i128::MIN {
+                                    return Err(Diagnostic::new(
+                                        "`abs(...)` overflowed the signed integer range",
+                                    ));
+                                }
+                                value.checked_neg().map(Value::Int).ok_or_else(|| {
+                                    Diagnostic::new(
+                                        "`abs(...)` overflowed the signed integer range",
+                                    )
+                                })
+                            }
+                            IntegerRepresentation::Signed(_)
+                            | IntegerRepresentation::Unsigned(_) => Ok(Value::Int(value)),
+                        },
                         Value::Float(value) => Ok(Value::Float(value.abs())),
                         other => Err(Diagnostic::new(format!(
                             "`abs(...)` expects an integer or float value, found `{}`",
@@ -2072,7 +2183,12 @@ impl MirRuntime {
                         Diagnostic::new(format!("unknown MIR function `{}`", name))
                     })?;
                 let evaluated_args = evaluate_named_args(args, env)?;
-                let outcome = self.call_function(&function, None, evaluated_args.clone())?;
+                let outcome = self.call_function_for_target(
+                    &function,
+                    None,
+                    evaluated_args.clone(),
+                    expected_return_type,
+                )?;
                 self.apply_borrowed_param_writebacks(
                     &function.params,
                     &evaluated_args,
@@ -2086,6 +2202,9 @@ impl MirRuntime {
                 field,
                 receiver_place,
             } => {
+                let receiver_static_ty = self
+                    .resolve_operand_type(object, env)
+                    .filter(|ty| !matches!(ty, Type::TypeParam(_)));
                 let receiver = self.evaluate_operand(object, env)?;
 
                 match &receiver {
@@ -2196,10 +2315,8 @@ impl MirRuntime {
                     Value::ProcessSupervisor(supervisor) => self
                         .evaluate_process_supervisor_method(supervisor.clone(), field, args, env),
                     Value::Instance(instance) => {
-                        let resolved_receiver_ty = receiver_place
-                            .as_ref()
-                            .and_then(|place| self.resolve_place_type(place, env))
-                            .filter(|ty| !matches!(ty, Type::TypeParam(_)))
+                        let resolved_receiver_ty = receiver_static_ty
+                            .clone()
                             .unwrap_or_else(|| Type::named(&instance.class_name));
                         let class =
                             self.classes
@@ -2243,10 +2360,12 @@ impl MirRuntime {
                                 ))
                             })?;
                         let evaluated_args = evaluate_named_args(args, env)?;
-                        let outcome = self.call_function(
+                        let outcome = self.call_function_with_receiver_type(
                             &function,
                             Some(receiver.clone()),
                             evaluated_args.clone(),
+                            expected_return_type,
+                            Some(&resolved_receiver_ty),
                         )?;
                         if method.receiver == Some(MirReceiverKind::BorrowMut) {
                             let updated = outcome.updated_receiver.ok_or_else(|| {
@@ -2268,10 +2387,8 @@ impl MirRuntime {
                         Ok(outcome.value)
                     }
                     other => {
-                        let resolved_receiver_ty = receiver_place
-                            .as_ref()
-                            .and_then(|place| self.resolve_place_type(place, env))
-                            .and_then(|ty| (!matches!(ty, Type::TypeParam(_))).then_some(ty))
+                        let resolved_receiver_ty = receiver_static_ty
+                            .clone()
                             .or_else(|| self.infer_runtime_value_type(other));
                         if let Some(resolved_receiver_ty) = resolved_receiver_ty {
                             if let Some(method) = self
@@ -2289,10 +2406,12 @@ impl MirRuntime {
                                     ))
                                 })?;
                                 let evaluated_args = evaluate_named_args(args, env)?;
-                                let outcome = self.call_function(
+                                let outcome = self.call_function_with_receiver_type(
                                     &function,
                                     Some(receiver.clone()),
                                     evaluated_args.clone(),
+                                    expected_return_type,
+                                    Some(&resolved_receiver_ty),
                                 )?;
                                 if method.receiver == Some(MirReceiverKind::BorrowMut) {
                                     let updated = outcome.updated_receiver.ok_or_else(|| {
@@ -5389,6 +5508,15 @@ enum BlockOutcome {
 fn evaluate_named_args(args: &[MirArg], env: &Env) -> Result<Vec<EvaluatedMirArg>> {
     args.iter()
         .map(|arg| {
+            let ty = match &arg.value {
+                Operand::Place(place) => env.place_type(place).cloned(),
+                Operand::Int(_) => Some(Type::named("int64")),
+                Operand::Duration(_) => Some(Type::named("Duration")),
+                Operand::Float(_) => Some(Type::named("float64")),
+                Operand::Bool(_) => Some(Type::named("bool")),
+                Operand::String(_) => Some(Type::named("String")),
+                Operand::Unit => Some(Type::Unit),
+            };
             let value = match &arg.value {
                 Operand::Place(place) => env.read_place(place)?,
                 Operand::Int(value) => Value::Int(IntegerValue::from_literal(*value)),
@@ -5401,6 +5529,7 @@ fn evaluate_named_args(args: &[MirArg], env: &Env) -> Result<Vec<EvaluatedMirArg
             Ok(EvaluatedMirArg {
                 name: arg.name.clone(),
                 value,
+                ty,
                 writeback_place: arg.writeback_place.clone(),
             })
         })
@@ -5426,6 +5555,7 @@ fn bind_builtin_args(
         let EvaluatedMirArg {
             name,
             value,
+            ty,
             writeback_place,
         } = argument;
         if let Some(name) = name {
@@ -5438,6 +5568,7 @@ fn bind_builtin_args(
             values[index] = Some(EvaluatedMirArg {
                 name: Some(name),
                 value,
+                ty,
                 writeback_place,
             });
             continue;
@@ -5452,6 +5583,7 @@ fn bind_builtin_args(
         values[next_positional] = Some(EvaluatedMirArg {
             name: None,
             value,
+            ty,
             writeback_place,
         });
         next_positional += 1;
@@ -5466,6 +5598,7 @@ fn bind_builtin_args(
                     (expected_names.get(index) == Some(&"timeout")).then(|| EvaluatedMirArg {
                         name: Some("timeout".to_string()),
                         value: Value::Unit,
+                        ty: Some(Type::Unit),
                         writeback_place: None,
                     })
                 })
@@ -5732,7 +5865,12 @@ fn bytes_vec_value(bytes: Vec<u8>) -> Value {
         element_type: Type::named("uint8"),
         elements: bytes
             .into_iter()
-            .map(|byte| Value::Int(IntegerValue::from_signed(byte as i128)))
+            .map(|byte| {
+                Value::Int(
+                    IntegerValue::from_typed_unsigned(byte as u128, IntegerKind::Uint8)
+                        .expect("every byte fits the uint8 runtime kind"),
+                )
+            })
             .collect(),
     })
 }

@@ -41,6 +41,9 @@ test("recovery analysis only recovers declaration structure", () => {
 test("recovery completion exposes keywords builtins and declarations but no member semantics", () => {
   const names = completionsForDocument(source, 8, 4, null).map((item) => item.name);
   assert.ok(names.includes("class"));
+  assert.ok(names.includes("int"));
+  assert.ok(names.includes("int32"));
+  assert.ok(names.includes("int64"));
   assert.ok(names.includes("print"));
   assert.ok(names.includes("Point"));
   assert.ok(names.includes("main"));

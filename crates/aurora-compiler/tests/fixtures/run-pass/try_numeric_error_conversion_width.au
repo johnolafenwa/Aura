@@ -1,0 +1,40 @@
+trait From[T]:
+    def from(value: T) -> Self
+
+enum AppError:
+    Narrow(int32)
+    Wide(int64)
+
+class Resource:
+    label: String
+
+    def close(borrow mut self) -> None:
+        print("closed " + self.label)
+
+impl From[int32] for AppError:
+    def from(value: int32) -> AppError:
+        return AppError.Narrow(value)
+
+impl From[int64] for AppError:
+    def from(value: int64) -> AppError:
+        return AppError.Wide(value)
+
+def read(ok: bool) -> Result[int32, int32]:
+    if ok:
+        return Result.Ok(5)
+    return Result.Err(7)
+
+def load(ok: bool) -> Result[int32, AppError]:
+    value = try read(ok)
+    return Result.Ok(value)
+
+def load_with_cleanup(ok: bool) -> Result[int32, AppError]:
+    with resource = Resource(label="try"):
+        value = try read(ok)
+        return Result.Ok(value)
+
+def main() -> int32:
+    print(load(true))
+    print(load(false))
+    print(load_with_cleanup(false))
+    return 0

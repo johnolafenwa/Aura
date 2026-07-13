@@ -1,4 +1,4 @@
-error: map literal keys must all have type `String`, found `int32`
+error: map literal keys must all have type `String`, found `int64`
  --> crates/aurora-compiler/tests/fixtures/check-fail/map_literal_key_type_mismatch.au:2:48
   |
 2 |     values: Map[String, int32] = {"aurora": 1, 2: 3}

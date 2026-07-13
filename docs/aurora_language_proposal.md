@@ -741,14 +741,15 @@ first = pair.0
 
 ## 6.13 Primitive numeric types
 
-Aurora uses explicit primitive numeric type names in v1:
+Aurora provides a default signed integer spelling plus explicit primitive numeric widths in v1:
 
+- default signed integer: `int`, an alias for `int64`
 - signed integers: `int8`, `int16`, `int32`, `int64`, `int128`, `intsize`
 - unsigned integers: `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize`
 - floating-point: `float32`, `float64`
 - boolean: `bool`
 
-There is no unsuffixed `int` type in v1. Examples should use fixed-width integers or pointer-width integers explicitly.
+`int` is an alias for `int64`, and an unsuffixed integer literal defaults to `int64` when no expected integer type is available. An expected type still wins, so explicitly declared `int32` APIs and literals passed to them remain `int32`.
 
 ## 6.14 Fixed-size arrays
 
@@ -1716,7 +1717,7 @@ Before writing the full compiler, freeze these decisions. The rest of this docum
 15. Generic constraints use inline `T: Trait` bounds with `+` for multiple bounds; `try expr` supports `From[SourceError] for TargetError` conversions; and default arguments are evaluated at the call site and are not part of trait method declarations in v1.
 16. Functions may omit `-> None`, and executable entry files may use top-level statements instead of an explicit `main`, but a file may not use both entry styles at once in v1.
 17. Control flow uses Python-style `if`/`elif`/`else` plus `while`; loops support `break` and `continue`; conditions must be `bool`; and tuple syntax uses `(T1, T2, ...)` with dotted numeric field access.
-18. Primitive numeric types use explicit names like `int32`, `uint64`, `uintsize`, and `float64`; there is no bare `int` in v1; fixed-size owned arrays are deferred until after v1.
+18. Primitive numeric types use names such as `int`, `int32`, `uint64`, `uintsize`, and `float64`; `int` aliases `int64`, unsuffixed integer literals default to `int64`, and fixed-size owned arrays are deferred until after v1.
 19. `with` lowers through a standard enter/exit protocol, and `@test` is part of a small built-in attribute syntax rather than a general decorator system in v1.
 
 Do not start implementation until these decisions are treated as fixed.
@@ -2049,9 +2050,9 @@ Tuple syntax was proposed here but is not implemented in Aurora 0.1.
 
 ## 23.13 Primitive types and proposed attributes
 
-Aurora v1 primitive scalar types are `bool`, `int8`, `int16`, `int32`, `int64`, `int128`, `intsize`, `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize`, `float32`, and `float64`.
+Aurora v1 primitive scalar type spellings are `bool`, `int`, `int8`, `int16`, `int32`, `int64`, `int128`, `intsize`, `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize`, `float32`, and `float64`.
 
-There is no bare `int` type in v1.
+`int` is an alias for `int64`; unsuffixed integer literals default to `int64` when they have no expected integer type. Explicit fixed-width API contracts, including those that use `int32`, are unchanged.
 
 Fixed-size owned arrays are deferred until after v1.
 

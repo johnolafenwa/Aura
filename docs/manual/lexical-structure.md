@@ -132,7 +132,7 @@ An integer literal is one or more decimal digits:
 INTEGER = digit, { digit } ;
 ```
 
-Examples are `0`, `42`, and `170000`. The lexical value must fit an unsigned 128-bit integer. Static checking then selects an expected integer type when available and verifies that the value fits; otherwise the literal defaults to `int32`.
+Examples are `0`, `42`, and `170000`. The lexical value must fit an unsigned 128-bit integer. Static checking then selects an expected integer type when available and verifies that the value fits; otherwise the literal defaults to `int64`. The source spelling `int` is an alias for `int64`.
 
 `-7` is not one signed token. It is unary `-` applied to the positive integer literal `7`. Aurora has no hexadecimal, octal, binary, or underscore-separated integer syntax.
 

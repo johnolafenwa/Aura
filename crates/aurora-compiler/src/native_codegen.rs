@@ -79,10 +79,35 @@ impl ScalarKind {
             ScalarKind::Int32 | ScalarKind::Int64 | ScalarKind::Uint64
         )
     }
+}
 
-    fn is_signed_integer(self) -> bool {
-        matches!(self, ScalarKind::Int32 | ScalarKind::Int64)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i64)]
+enum WideIntegerKind {
+    Int64 = 0,
+    Uint64 = 1,
+}
+
+impl WideIntegerKind {
+    fn scalar_kind(self) -> ScalarKind {
+        match self {
+            WideIntegerKind::Int64 => ScalarKind::Int64,
+            WideIntegerKind::Uint64 => ScalarKind::Uint64,
+        }
     }
+
+    fn is_signed(self) -> bool {
+        matches!(self, WideIntegerKind::Int64)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i64)]
+enum WideOverflowOp {
+    Add = 0,
+    Sub = 1,
+    Mul = 2,
+    Div = 3,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -198,6 +223,8 @@ struct NativeCodegen<'a> {
     unregister_cleanup: FuncId,
     refresh_cleanup: FuncId,
     close_value: FuncId,
+    tag_value_type: FuncId,
+    box_i32: FuncId,
     box_i64: FuncId,
     box_u64: FuncId,
     box_uint_literal: FuncId,
@@ -285,6 +312,7 @@ struct NativeCodegen<'a> {
     cast_integer_to_float: FuncId,
     cast_float_to_integer: FuncId,
     value_type_matches: FuncId,
+    value_has_runtime_type: FuncId,
     enum_variant: FuncId,
     variant_matches: FuncId,
     variant_payload: FuncId,
@@ -649,6 +677,8 @@ impl<'a> NativeCodegen<'a> {
             unregister_cleanup => ("aurora_direct_unregister_cleanup", [types::I64], None),
             refresh_cleanup => ("aurora_direct_refresh_cleanup", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             close_value => ("aurora_direct_close_value", [types::I64, types::I64], Some(types::I64)),
+            tag_value_type => ("aurora_direct_tag_value_type", [types::I64, types::I64, types::I64], None),
+            box_i32 => ("aurora_direct_box_i32", [types::I64], Some(types::I64)),
             box_i64 => ("aurora_direct_box_i64", [types::I64], Some(types::I64)),
             box_u64 => ("aurora_direct_box_u64", [types::I64], Some(types::I64)),
             box_uint_literal => ("aurora_direct_box_uint_literal", [types::I64, types::I64], Some(types::I64)),
@@ -736,6 +766,7 @@ impl<'a> NativeCodegen<'a> {
             cast_integer_to_float => ("aurora_direct_cast_integer_to_float", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::F64)),
             cast_float_to_integer => ("aurora_direct_cast_float_to_integer", [types::F64, types::I64, types::I64, types::I64], Some(types::I64)),
             value_type_matches => ("aurora_direct_value_type_matches", [types::I64, types::I64, types::I64], Some(types::I64)),
+            value_has_runtime_type => ("aurora_direct_value_has_runtime_type", [types::I64], Some(types::I64)),
             enum_variant => ("aurora_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_matches => ("aurora_direct_variant_matches", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_payload => ("aurora_direct_variant_payload", [types::I64, types::I64], Some(types::I64)),
@@ -1015,6 +1046,8 @@ impl<'a> NativeCodegen<'a> {
             unregister_cleanup,
             refresh_cleanup,
             close_value,
+            tag_value_type,
+            box_i32,
             box_i64,
             box_u64,
             box_uint_literal,
@@ -1102,6 +1135,7 @@ impl<'a> NativeCodegen<'a> {
             cast_integer_to_float,
             cast_float_to_integer,
             value_type_matches,
+            value_has_runtime_type,
             enum_variant,
             variant_matches,
             variant_payload,
@@ -1603,6 +1637,10 @@ impl<'a> NativeCodegen<'a> {
         let refresh_cleanup = self
             .object
             .declare_func_in_func(self.refresh_cleanup, builder.func);
+        let tag_value_type = self
+            .object
+            .declare_func_in_func(self.tag_value_type, builder.func);
+        let box_i32 = self.object.declare_func_in_func(self.box_i32, builder.func);
         let box_i64 = self.object.declare_func_in_func(self.box_i64, builder.func);
         let box_u64 = self.object.declare_func_in_func(self.box_u64, builder.func);
         let box_uint_literal = self
@@ -1848,6 +1886,9 @@ impl<'a> NativeCodegen<'a> {
         let value_type_matches = self
             .object
             .declare_func_in_func(self.value_type_matches, builder.func);
+        let value_has_runtime_type = self
+            .object
+            .declare_func_in_func(self.value_has_runtime_type, builder.func);
         let enum_variant = self
             .object
             .declare_func_in_func(self.enum_variant, builder.func);
@@ -2404,6 +2445,8 @@ impl<'a> NativeCodegen<'a> {
             register_cleanup,
             unregister_cleanup,
             refresh_cleanup,
+            tag_value_type,
+            box_i32,
             box_i64,
             box_u64,
             box_uint_literal,
@@ -2491,6 +2534,7 @@ impl<'a> NativeCodegen<'a> {
             cast_integer_to_float,
             cast_float_to_integer,
             value_type_matches,
+            value_has_runtime_type,
             enum_variant,
             variant_matches,
             variant_payload,
@@ -3049,6 +3093,8 @@ struct FunctionCompiler<'a> {
     register_cleanup: cranelift_codegen::ir::FuncRef,
     unregister_cleanup: cranelift_codegen::ir::FuncRef,
     refresh_cleanup: cranelift_codegen::ir::FuncRef,
+    tag_value_type: cranelift_codegen::ir::FuncRef,
+    box_i32: cranelift_codegen::ir::FuncRef,
     box_i64: cranelift_codegen::ir::FuncRef,
     box_u64: cranelift_codegen::ir::FuncRef,
     box_uint_literal: cranelift_codegen::ir::FuncRef,
@@ -3136,6 +3182,7 @@ struct FunctionCompiler<'a> {
     cast_integer_to_float: cranelift_codegen::ir::FuncRef,
     cast_float_to_integer: cranelift_codegen::ir::FuncRef,
     value_type_matches: cranelift_codegen::ir::FuncRef,
+    value_has_runtime_type: cranelift_codegen::ir::FuncRef,
     enum_variant: cranelift_codegen::ir::FuncRef,
     variant_matches: cranelift_codegen::ir::FuncRef,
     variant_payload: cranelift_codegen::ir::FuncRef,
@@ -3451,45 +3498,7 @@ impl<'a> FunctionCompiler<'a> {
                     self.compile_try_assign(target, target_ty, try_value)?;
                 } else {
                     let target_ty = self.type_of_place(target)?;
-                    let compiled = match value {
-                        Rvalue::EnumVariant {
-                            enum_name,
-                            variant_name,
-                            payloads,
-                        } => self.compile_enum_variant_for_target(
-                            enum_name,
-                            variant_name,
-                            payloads,
-                            Some(&target_ty),
-                        )?,
-                        Rvalue::VecLiteral {
-                            elements,
-                            element_type,
-                        } => self.compile_vec_literal_for_target(
-                            elements,
-                            element_type,
-                            Some(&target_ty),
-                        )?,
-                        Rvalue::MapLiteral {
-                            entries,
-                            key_type,
-                            value_type,
-                        } => self.compile_map_literal_for_target(
-                            entries,
-                            key_type,
-                            value_type,
-                            Some(&target_ty),
-                        )?,
-                        Rvalue::SetLiteral {
-                            elements,
-                            element_type,
-                        } => self.compile_set_literal_for_target(
-                            elements,
-                            element_type,
-                            Some(&target_ty),
-                        )?,
-                        _ => self.compile_rvalue_for_target(value, Some(&target_ty))?,
-                    };
+                    let compiled = self.compile_rvalue_for_target(value, &target_ty)?;
                     let assignment_span = match value {
                         Rvalue::Unary { span, .. }
                         | Rvalue::Cast { span, .. }
@@ -3529,12 +3538,7 @@ impl<'a> FunctionCompiler<'a> {
             Terminator::Return(operand) => {
                 let value = self.load_operand_for_target(operand, return_ty)?;
                 let coerced = self.coerce_value(value, return_ty)?;
-                self.emit_pending_cleanups(true)?;
-                let return_values = self.build_return_values(coerced)?;
-                self.release_all_temporary_owned();
-                self.release_all_opaque_roots()?;
-                self.builder.ins().call(self.exit_call, &[]);
-                self.builder.ins().return_(&return_values);
+                self.emit_return_value(coerced)?;
             }
             Terminator::Goto(label) => {
                 self.release_all_temporary_owned();
@@ -3615,23 +3619,30 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    fn emit_return_value(&mut self, value: ValueRef) -> std::result::Result<(), String> {
+        let mut return_values = self.export_return_value(value);
+        self.emit_pending_cleanups(true)?;
+        self.append_writeback_return_values(&mut return_values)?;
+        self.release_all_temporary_owned();
+        self.release_all_opaque_roots()?;
+        self.builder.ins().call(self.exit_call, &[]);
+        self.builder.ins().return_(&return_values);
+        Ok(())
+    }
+
     fn compile_rvalue_for_target(
         &mut self,
         rvalue: &Rvalue,
-        target: Option<&DirectType>,
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         match rvalue {
             Rvalue::Use(operand) => {
-                let integer_hint = target
-                    .and_then(DirectType::scalar_kind)
-                    .filter(|kind| kind.is_integer());
+                let integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
                 self.load_operand_with_integer_hint(operand, integer_hint)
             }
             Rvalue::FormatString { parts } => self.compile_format_string(parts),
             Rvalue::Unary { op, value, span } => {
-                let integer_hint = target
-                    .and_then(DirectType::scalar_kind)
-                    .filter(|kind| kind.is_integer());
+                let integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
                 if matches!(op, UnaryOp::Neg)
                     && matches!(integer_hint, Some(ScalarKind::Int64))
                     && matches!(value, Operand::Int(magnitude) if *magnitude == (i64::MAX as u128) + 1)
@@ -3656,7 +3667,7 @@ impl<'a> FunctionCompiler<'a> {
                 span,
             } => {
                 let integer_hint = target
-                    .and_then(DirectType::scalar_kind)
+                    .scalar_kind()
                     .filter(|kind| kind.is_integer())
                     .or_else(|| self.operand_integer_kind(left))
                     .or_else(|| self.operand_integer_kind(right));
@@ -3664,21 +3675,23 @@ impl<'a> FunctionCompiler<'a> {
                 let right = self.load_operand_with_integer_hint(right, integer_hint)?;
                 self.compile_binary(*op, left, right, Some(*span))
             }
-            Rvalue::Call { callee, args } => self.compile_call(callee, args),
+            Rvalue::Call { callee, args } => self.compile_call(callee, args, Some(target)),
             Rvalue::VecLiteral {
                 elements,
                 element_type,
-            } => self.compile_vec_literal_for_target(elements, element_type, None),
+            } => self.compile_vec_literal_for_target(elements, element_type, Some(target)),
             Rvalue::MapLiteral {
                 entries,
                 key_type,
                 value_type,
-            } => self.compile_map_literal_for_target(entries, key_type, value_type, None),
+            } => self.compile_map_literal_for_target(entries, key_type, value_type, Some(target)),
             Rvalue::SetLiteral {
                 elements,
                 element_type,
-            } => self.compile_set_literal_for_target(elements, element_type, None),
-            Rvalue::Construct { class_name, fields } => self.compile_construct(class_name, fields),
+            } => self.compile_set_literal_for_target(elements, element_type, Some(target)),
+            Rvalue::Construct { class_name, fields } => {
+                self.compile_construct(class_name, fields, target)
+            }
             Rvalue::Member { object, field } => {
                 let object = self.load_operand(object)?;
                 self.extract_field(object, field)
@@ -3687,7 +3700,12 @@ impl<'a> FunctionCompiler<'a> {
                 enum_name,
                 variant_name,
                 payloads,
-            } => self.compile_enum_variant_for_target(enum_name, variant_name, payloads, None),
+            } => self.compile_enum_variant_for_target(
+                enum_name,
+                variant_name,
+                payloads,
+                Some(target),
+            ),
             Rvalue::VariantPayload {
                 scrutinee,
                 variant_name: _,
@@ -3702,10 +3720,7 @@ impl<'a> FunctionCompiler<'a> {
                 function,
                 args,
             } => self.compile_start_task(*returns_handle, task_group, function, args),
-            other => Err(format!(
-                "direct backend does not support MIR rvalue `{:?}`",
-                other
-            )),
+            Rvalue::Try { .. } => unreachable!("try rvalues are handled before target lowering"),
         }
     }
 
@@ -3834,26 +3849,16 @@ impl<'a> FunctionCompiler<'a> {
                 values: vec![self.builder.ins().ineg(value.values[0])],
                 ty: DirectType::Scalar(ScalarKind::Int32),
             }),
-            (UnaryOp::Neg, Some(kind @ (ScalarKind::Int64 | ScalarKind::Uint64))) => {
-                let zero = self.builder.ins().iconst(types::I64, 0);
-                let (result, overflow) = if kind.is_signed_integer() {
-                    self.builder.ins().ssub_overflow(zero, value.values[0])
-                } else {
-                    self.builder.ins().usub_overflow(zero, value.values[0])
-                };
-                self.emit_integer_overflow_failure_branch(
-                    overflow,
-                    kind,
-                    BinaryOp::Sub,
-                    zero,
-                    value.values[0],
-                    span,
-                )?;
-                Ok(ValueRef {
-                    values: vec![result],
-                    ty: DirectType::Scalar(kind),
-                })
-            }
+            (UnaryOp::Neg, Some(ScalarKind::Int64)) => self.compile_wide_integer_negation(
+                WideIntegerKind::Int64,
+                value.values[0],
+                span,
+            ),
+            (UnaryOp::Neg, Some(ScalarKind::Uint64)) => self.compile_wide_integer_negation(
+                WideIntegerKind::Uint64,
+                value.values[0],
+                span,
+            ),
             (UnaryOp::Neg, Some(kind)) if kind.is_float() => Ok(ValueRef {
                 values: vec![self.builder.ins().fneg(value.values[0])],
                 ty: DirectType::Scalar(kind),
@@ -3871,6 +3876,32 @@ impl<'a> FunctionCompiler<'a> {
                 op
             )),
         }
+    }
+
+    fn compile_wide_integer_negation(
+        &mut self,
+        kind: WideIntegerKind,
+        value: Value,
+        span: Option<Span>,
+    ) -> std::result::Result<ValueRef, String> {
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let (result, overflow) = if kind.is_signed() {
+            self.builder.ins().ssub_overflow(zero, value)
+        } else {
+            self.builder.ins().usub_overflow(zero, value)
+        };
+        self.emit_integer_overflow_failure_branch(
+            overflow,
+            kind,
+            WideOverflowOp::Sub,
+            zero,
+            value,
+            span,
+        )?;
+        Ok(ValueRef {
+            values: vec![result],
+            ty: DirectType::Scalar(kind.scalar_kind()),
+        })
     }
 
     fn compile_cast(
@@ -4016,9 +4047,22 @@ impl<'a> FunctionCompiler<'a> {
             (Some(ScalarKind::Int32), Some(ScalarKind::Int32)) => {
                 self.compile_int32_binary(op, left.values[0], right.values[0], span)
             }
-            (Some(kind @ (ScalarKind::Int64 | ScalarKind::Uint64)), Some(rhs)) if kind == rhs => {
-                self.compile_wide_integer_binary(kind, op, left.values[0], right.values[0], span)
-            }
+            (Some(ScalarKind::Int64), Some(ScalarKind::Int64)) => self
+                .compile_wide_integer_binary(
+                    WideIntegerKind::Int64,
+                    op,
+                    left.values[0],
+                    right.values[0],
+                    span,
+                ),
+            (Some(ScalarKind::Uint64), Some(ScalarKind::Uint64)) => self
+                .compile_wide_integer_binary(
+                    WideIntegerKind::Uint64,
+                    op,
+                    left.values[0],
+                    right.values[0],
+                    span,
+                ),
             (Some(lhs), Some(rhs)) if lhs.is_float() && rhs.is_float() => {
                 self.compile_float_binary(op, left.values[0], right.values[0], lhs, span)
             }
@@ -4096,34 +4140,69 @@ impl<'a> FunctionCompiler<'a> {
 
     fn compile_wide_integer_binary(
         &mut self,
-        kind: ScalarKind,
+        kind: WideIntegerKind,
         op: BinaryOp,
         left: Value,
         right: Value,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
-        let ty = DirectType::Scalar(kind);
+        let ty = DirectType::Scalar(kind.scalar_kind());
         let arithmetic = |value| ValueRef {
             values: vec![value],
             ty: ty.clone(),
         };
         let value = match op {
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
-                let (result, overflow) = match (kind.is_signed_integer(), op) {
-                    (true, BinaryOp::Add) => self.builder.ins().sadd_overflow(left, right),
-                    (true, BinaryOp::Sub) => self.builder.ins().ssub_overflow(left, right),
-                    (true, BinaryOp::Mul) => self.builder.ins().smul_overflow(left, right),
-                    (false, BinaryOp::Add) => self.builder.ins().uadd_overflow(left, right),
-                    (false, BinaryOp::Sub) => self.builder.ins().usub_overflow(left, right),
-                    (false, BinaryOp::Mul) => self.builder.ins().umul_overflow(left, right),
-                    _ => unreachable!("wide integer arithmetic opcode should be exhaustive"),
+            BinaryOp::Add => {
+                let (result, overflow) = if kind.is_signed() {
+                    self.builder.ins().sadd_overflow(left, right)
+                } else {
+                    self.builder.ins().uadd_overflow(left, right)
                 };
-                self.emit_integer_overflow_failure_branch(overflow, kind, op, left, right, span)?;
+                self.emit_integer_overflow_failure_branch(
+                    overflow,
+                    kind,
+                    WideOverflowOp::Add,
+                    left,
+                    right,
+                    span,
+                )?;
+                arithmetic(result)
+            }
+            BinaryOp::Sub => {
+                let (result, overflow) = if kind.is_signed() {
+                    self.builder.ins().ssub_overflow(left, right)
+                } else {
+                    self.builder.ins().usub_overflow(left, right)
+                };
+                self.emit_integer_overflow_failure_branch(
+                    overflow,
+                    kind,
+                    WideOverflowOp::Sub,
+                    left,
+                    right,
+                    span,
+                )?;
+                arithmetic(result)
+            }
+            BinaryOp::Mul => {
+                let (result, overflow) = if kind.is_signed() {
+                    self.builder.ins().smul_overflow(left, right)
+                } else {
+                    self.builder.ins().umul_overflow(left, right)
+                };
+                self.emit_integer_overflow_failure_branch(
+                    overflow,
+                    kind,
+                    WideOverflowOp::Mul,
+                    left,
+                    right,
+                    span,
+                )?;
                 arithmetic(result)
             }
             BinaryOp::Div => {
                 self.emit_int_division_guard(right, span)?;
-                if kind.is_signed_integer() {
+                if kind.is_signed() {
                     let min = self.builder.ins().iconst(types::I64, i64::MIN);
                     let negative_one = self.builder.ins().iconst(types::I64, -1);
                     let is_min = self.builder.ins().icmp(IntCC::Equal, left, min);
@@ -4131,7 +4210,12 @@ impl<'a> FunctionCompiler<'a> {
                         self.builder.ins().icmp(IntCC::Equal, right, negative_one);
                     let overflow = self.builder.ins().band(is_min, is_negative_one);
                     self.emit_integer_overflow_failure_branch(
-                        overflow, kind, op, left, right, span,
+                        overflow,
+                        kind,
+                        WideOverflowOp::Div,
+                        left,
+                        right,
+                        span,
                     )?;
                     arithmetic(self.builder.ins().sdiv(left, right))
                 } else {
@@ -4140,7 +4224,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             BinaryOp::Mod => {
                 self.emit_int_division_guard(right, span)?;
-                if kind.is_signed_integer() {
+                if kind.is_signed() {
                     let min = self.builder.ins().iconst(types::I64, i64::MIN);
                     let negative_one = self.builder.ins().iconst(types::I64, -1);
                     let is_min = self.builder.ins().icmp(IntCC::Equal, left, min);
@@ -4172,7 +4256,7 @@ impl<'a> FunctionCompiler<'a> {
             BinaryOp::Eq => self.boolean_from_icmp(IntCC::Equal, left, right),
             BinaryOp::NotEq => self.boolean_from_icmp(IntCC::NotEqual, left, right),
             BinaryOp::Less => self.boolean_from_icmp(
-                if kind.is_signed_integer() {
+                if kind.is_signed() {
                     IntCC::SignedLessThan
                 } else {
                     IntCC::UnsignedLessThan
@@ -4181,7 +4265,7 @@ impl<'a> FunctionCompiler<'a> {
                 right,
             ),
             BinaryOp::LessEq => self.boolean_from_icmp(
-                if kind.is_signed_integer() {
+                if kind.is_signed() {
                     IntCC::SignedLessThanOrEqual
                 } else {
                     IntCC::UnsignedLessThanOrEqual
@@ -4190,7 +4274,7 @@ impl<'a> FunctionCompiler<'a> {
                 right,
             ),
             BinaryOp::Greater => self.boolean_from_icmp(
-                if kind.is_signed_integer() {
+                if kind.is_signed() {
                     IntCC::SignedGreaterThan
                 } else {
                     IntCC::UnsignedGreaterThan
@@ -4199,7 +4283,7 @@ impl<'a> FunctionCompiler<'a> {
                 right,
             ),
             BinaryOp::GreaterEq => self.boolean_from_icmp(
-                if kind.is_signed_integer() {
+                if kind.is_signed() {
                     IntCC::SignedGreaterThanOrEqual
                 } else {
                     IntCC::UnsignedGreaterThanOrEqual
@@ -4333,34 +4417,12 @@ impl<'a> FunctionCompiler<'a> {
     fn emit_integer_overflow_failure_branch(
         &mut self,
         overflow: Value,
-        kind: ScalarKind,
-        op: BinaryOp,
+        kind: WideIntegerKind,
+        op: WideOverflowOp,
         left: Value,
         right: Value,
         span: Option<Span>,
     ) -> std::result::Result<(), String> {
-        let kind_code = match kind {
-            ScalarKind::Int64 => 0,
-            ScalarKind::Uint64 => 1,
-            _ => {
-                return Err(format!(
-                    "direct backend cannot report wide overflow for `{}`",
-                    render_direct_type(&DirectType::Scalar(kind))
-                ))
-            }
-        };
-        let op_code = match op {
-            BinaryOp::Add => 0,
-            BinaryOp::Sub => 1,
-            BinaryOp::Mul => 2,
-            BinaryOp::Div => 3,
-            _ => {
-                return Err(format!(
-                    "direct backend cannot report overflow for operation `{:?}`",
-                    op
-                ))
-            }
-        };
         let fail_block = self.builder.create_block();
         let continue_block = self.builder.create_block();
         self.builder
@@ -4368,8 +4430,8 @@ impl<'a> FunctionCompiler<'a> {
             .brif(overflow, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
         self.emit_pending_cleanups(true)?;
-        let kind_code = self.builder.ins().iconst(types::I64, kind_code);
-        let op_code = self.builder.ins().iconst(types::I64, op_code);
+        let kind_code = self.builder.ins().iconst(types::I64, kind as i64);
+        let op_code = self.builder.ins().iconst(types::I64, op as i64);
         let (line, column) = self.span_values(span);
         self.builder.ins().call(
             self.fail_integer_overflow,
@@ -4419,10 +4481,11 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         callee: &CallTarget,
         args: &[MirArg],
+        target: Option<&DirectType>,
     ) -> std::result::Result<ValueRef, String> {
         match callee {
             CallTarget::Name(name) if name == "print" => self.compile_print(args),
-            CallTarget::Name(name) => self.compile_named_call(name, args),
+            CallTarget::Name(name) => self.compile_named_call(name, args, target),
             CallTarget::Member {
                 object,
                 field,
@@ -4507,6 +4570,7 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         name: &str,
         args: &[MirArg],
+        target: Option<&DirectType>,
     ) -> std::result::Result<ValueRef, String> {
         if name == "range" {
             return self.compile_range(args);
@@ -4857,17 +4921,53 @@ impl<'a> FunctionCompiler<'a> {
             .get(name)
             .cloned()
             .unwrap_or_default();
+        let mut substitutions = HashMap::new();
+        if let (Some(target), Some(return_type)) = (target, self.function_return_types.get(name)) {
+            collect_direct_runtime_type_substitutions(
+                &direct_type_to_type(return_type),
+                &direct_type_to_type(target),
+                &mut substitutions,
+            );
+        }
+        for (expected_ty, argument) in expected.iter().zip(args.iter()) {
+            if let Some(actual_ty) =
+                infer_operand_type(&argument.value, &self.variable_types, &self.classes)
+            {
+                collect_direct_runtime_type_substitutions(
+                    &direct_type_to_type(expected_ty),
+                    &direct_type_to_type(&actual_ty),
+                    &mut substitutions,
+                );
+            }
+        }
         let mut writeback_places = Vec::new();
         for (index, argument) in args.iter().enumerate() {
-            let loaded = if let Some(expected_ty) = expected.get(index) {
+            let semantic_expected = expected
+                .get(index)
+                .map(|expected_ty| {
+                    let specialized =
+                        substitute_type(&direct_type_to_type(expected_ty), &substitutions);
+                    ensure_direct_type(
+                        &specialized,
+                        &self.classes,
+                        &format!("specialized argument {} for `{name}`", index + 1),
+                    )
+                })
+                .transpose()?;
+            let loaded = if let Some(expected_ty) = semantic_expected.as_ref() {
                 self.load_operand_for_target(&argument.value, expected_ty)?
             } else {
                 self.load_operand(&argument.value)?
             };
-            let coerced = if let Some(expected_ty) = expected.get(index) {
+            let semantic_coerced = if let Some(expected_ty) = semantic_expected.as_ref() {
                 self.coerce_value(loaded, expected_ty)?
             } else {
                 loaded
+            };
+            let coerced = if let Some(abi_expected) = expected.get(index) {
+                self.coerce_value(semantic_coerced, abi_expected)?
+            } else {
+                semantic_coerced
             };
             if let Some(place) = &argument.writeback_place {
                 writeback_places.push(place.clone());
@@ -5525,12 +5625,17 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         class_name: &str,
         fields: &[crate::mir::MirFieldInit],
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
-        let ty = ensure_direct_type(
-            &Type::named(class_name),
-            &self.classes,
-            &format!("class `{}`", class_name),
-        )?;
+        let ty = match target {
+            DirectType::PlainClass(class) if class.class_name == class_name => target.clone(),
+            DirectType::Opaque(Type::Named(name, _)) if name == class_name => target.clone(),
+            _ => ensure_direct_type(
+                &Type::named(class_name),
+                &self.classes,
+                &format!("class `{}`", class_name),
+            )?,
+        };
         match &ty {
             DirectType::PlainClass(class_ty) => {
                 let mut by_name = HashMap::new();
@@ -5554,7 +5659,9 @@ impl<'a> FunctionCompiler<'a> {
                     ty: ty.clone(),
                 })
             }
-            DirectType::Opaque(_) => self.compile_opaque_construct(class_name, fields),
+            DirectType::Opaque(target_ty) => {
+                self.compile_opaque_construct(class_name, fields, target_ty)
+            }
             DirectType::Scalar(_) => Err(format!(
                 "direct backend could not construct non-class type `{}`",
                 class_name
@@ -5592,7 +5699,7 @@ impl<'a> FunctionCompiler<'a> {
                 if let Ok(narrowed) = i64::try_from(*value) {
                     return Ok(ValueRef {
                         values: vec![self.builder.ins().iconst(types::I64, narrowed)],
-                        ty: DirectType::Scalar(ScalarKind::Int32),
+                        ty: DirectType::Scalar(ScalarKind::Int64),
                     });
                 }
                 let (ptr, len) = self.string_constant(value.to_string().as_bytes())?;
@@ -5777,6 +5884,9 @@ impl<'a> FunctionCompiler<'a> {
             if matches!(target.scalar_kind(), Some(ScalarKind::Int32)) {
                 self.emit_int32_bounds_check(value.values[0], span)?;
             }
+            if let DirectType::Opaque(target_ty) = target {
+                self.tag_opaque_runtime_type(&value, target_ty)?;
+            }
             return Ok(value);
         }
 
@@ -5786,6 +5896,7 @@ impl<'a> FunctionCompiler<'a> {
             {
                 let none =
                     self.compile_enum_variant_for_target("Option", "None", &[], Some(target))?;
+                self.tag_opaque_runtime_type(&none, target_ty)?;
                 return Ok(ValueRef {
                     values: none.values,
                     ty: target.clone(),
@@ -5804,9 +5915,13 @@ impl<'a> FunctionCompiler<'a> {
                     self.builder.inst_results(inst).to_vec(),
                     direct_type_to_type(target),
                 );
+                self.tag_opaque_runtime_type(&casted, target_ty)?;
                 return Ok(casted);
             }
-            return self.ensure_opaque(value);
+            let mut boxed = self.ensure_opaque(value)?;
+            self.tag_opaque_runtime_type(&boxed, target_ty)?;
+            boxed.ty = target.clone();
+            return Ok(boxed);
         }
 
         if matches!(value.ty, DirectType::Opaque(_)) {
@@ -5889,16 +6004,10 @@ impl<'a> FunctionCompiler<'a> {
                 values: value.values,
                 ty: target.clone(),
             }),
-            (Some(ScalarKind::Int32), Some(ScalarKind::Uint64)) => {
-                let source_code = self.builder.ins().iconst(types::I64, 0);
-                let target_code = self.builder.ins().iconst(types::I64, 2);
-                let (line, column) = self.span_values(span);
-                let inst = self.builder.ins().call(
-                    self.cast_integer_to_integer,
-                    &[value.values[0], source_code, target_code, line, column],
-                );
+            (Some(ScalarKind::Int64), Some(ScalarKind::Int32)) => {
+                self.emit_int32_bounds_check(value.values[0], span)?;
                 Ok(ValueRef {
-                    values: self.builder.inst_results(inst).to_vec(),
+                    values: value.values,
                     ty: target.clone(),
                 })
             }
@@ -5935,6 +6044,26 @@ impl<'a> FunctionCompiler<'a> {
             }
             _ => Ok(value),
         }
+    }
+
+    fn tag_opaque_runtime_type(
+        &mut self,
+        value: &ValueRef,
+        ty: &Type,
+    ) -> std::result::Result<(), String> {
+        if runtime_type_is_wildcard(ty) {
+            return Ok(());
+        }
+        let [raw] = value.values.as_slice() else {
+            return Err(format!(
+                "direct backend expected opaque `{ty}` to use one runtime value"
+            ));
+        };
+        let (type_ptr, type_len) = self.string_constant(ty.to_string().as_bytes())?;
+        self.builder
+            .ins()
+            .call(self.tag_value_type, &[*raw, type_ptr, type_len]);
+        Ok(())
     }
 
     fn emit_int32_bounds_check(
@@ -6117,15 +6246,20 @@ impl<'a> FunctionCompiler<'a> {
     fn ensure_opaque(&mut self, value: ValueRef) -> std::result::Result<ValueRef, String> {
         match value.ty {
             DirectType::Opaque(_) => Ok(value),
-            DirectType::Scalar(kind @ (ScalarKind::Int32 | ScalarKind::Int64)) => {
+            DirectType::Scalar(ScalarKind::Int32) => {
+                let inst = self.builder.ins().call(self.box_i32, &[value.values[0]]);
+                let boxed = ValueRef {
+                    values: self.builder.inst_results(inst).to_vec(),
+                    ty: DirectType::Opaque(Type::named("int32")),
+                };
+                self.mark_temporary_opaque_owned(&boxed);
+                Ok(boxed)
+            }
+            DirectType::Scalar(ScalarKind::Int64) => {
                 let inst = self.builder.ins().call(self.box_i64, &[value.values[0]]);
                 let boxed = ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
-                    ty: DirectType::Opaque(Type::named(match kind {
-                        ScalarKind::Int32 => "int32",
-                        ScalarKind::Int64 => "int64",
-                        _ => unreachable!("signed integer boxing kind should be exhaustive"),
-                    })),
+                    ty: DirectType::Opaque(Type::named("int64")),
                 };
                 self.mark_temporary_opaque_owned(&boxed);
                 Ok(boxed)
@@ -6397,9 +6531,7 @@ impl<'a> FunctionCompiler<'a> {
         let error_result = if source_error_ty == target_error_ty {
             value.clone()
         } else {
-            let mut payload = self.compile_variant_payload(value.clone(), 0)?;
-            payload.ty = direct_type(&source_error_ty, &self.classes)
-                .unwrap_or(DirectType::Opaque(source_error_ty.clone()));
+            let payload = self.compile_variant_payload(value.clone(), 0)?;
             let converted =
                 self.convert_try_error_via_from(payload, &source_error_ty, &target_error_ty)?;
             self.compile_enum_variant_from_values(
@@ -6409,9 +6541,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.return_type.clone(),
             )?
         };
-        self.emit_pending_cleanups(true)?;
-        let return_values = self.build_return_values(error_result)?;
-        self.builder.ins().return_(&return_values);
+        self.emit_return_value(error_result)?;
         self.builder.seal_block(err_block);
 
         self.builder.switch_to_block(join_block);
@@ -6652,17 +6782,16 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn build_return_values(
+    fn append_writeback_return_values(
         &mut self,
-        primary: ValueRef,
-    ) -> std::result::Result<Vec<Value>, String> {
-        let mut values = self.export_return_value(primary);
+        values: &mut Vec<Value>,
+    ) -> std::result::Result<(), String> {
         for (name, ty) in self.writeback_locals.clone() {
             let current = self.load_root(&name)?;
             let coerced = self.coerce_value(current, &ty)?;
             values.extend(self.export_return_value(coerced));
         }
-        Ok(values)
+        Ok(())
     }
 
     fn split_call_results(
@@ -10348,6 +10477,7 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         class_name: &str,
         fields: &[crate::mir::MirFieldInit],
+        target_ty: &Type,
     ) -> std::result::Result<ValueRef, String> {
         let class = self.classes.get(class_name).cloned().ok_or(format!(
             "direct backend does not know class `{}`",
@@ -10358,16 +10488,23 @@ impl<'a> FunctionCompiler<'a> {
             .builder
             .ins()
             .call(self.instance_empty, &[class_ptr, class_len]);
-        let mut current = self.owned_opaque_result(
-            self.builder.inst_results(init).to_vec(),
-            Type::named(class_name),
-        );
+        let mut current =
+            self.owned_opaque_result(self.builder.inst_results(init).to_vec(), target_ty.clone());
+        let substitutions = match target_ty {
+            Type::Named(name, args) if name == class_name => class
+                .type_params
+                .iter()
+                .cloned()
+                .zip(args.iter().cloned())
+                .collect::<HashMap<_, _>>(),
+            _ => HashMap::new(),
+        };
         for field in fields {
             let field_ty = class
                 .fields
                 .iter()
                 .find(|candidate| candidate.name == field.name)
-                .map(|candidate| candidate.ty.clone())
+                .map(|candidate| substitute_type(&candidate.ty, &substitutions))
                 .ok_or({
                     format!(
                         "direct backend construction for `{}` is missing field metadata for `{}`",
@@ -10387,10 +10524,8 @@ impl<'a> FunctionCompiler<'a> {
                 self.instance_set_field,
                 &[current.values[0], field_ptr, field_len, loaded.values[0]],
             );
-            current = self.owned_opaque_result(
-                self.builder.inst_results(inst).to_vec(),
-                Type::named(class_name),
-            );
+            current = self
+                .owned_opaque_result(self.builder.inst_results(inst).to_vec(), target_ty.clone());
         }
         Ok(current)
     }
@@ -10499,14 +10634,40 @@ impl<'a> FunctionCompiler<'a> {
             Type::Unit => self.value_matches_type(value, "None"),
             Type::Module(path) => self.value_matches_type(value, &format!("module {}", path)),
             Type::Named(name, args) => {
-                let mut matched = self.value_matches_type(value, name)?;
                 if args.is_empty() {
-                    return Ok(matched);
+                    return self.value_matches_type(value, name);
                 }
 
-                let Some(class) = self.classes.get(name).cloned() else {
-                    return Ok(matched);
+                let exact = if runtime_type_is_wildcard(ty) {
+                    self.value_matches_type(value, &render_runtime_type_pattern(ty))?
+                } else {
+                    self.value_matches_type(value, &ty.to_string())?
                 };
+                let base_matches = self.value_matches_type(value, name)?;
+
+                let Some(class) = self.classes.get(name).cloned() else {
+                    return Ok(exact);
+                };
+                let inspect_block = self.builder.create_block();
+                let join_block = self.builder.create_block();
+                self.builder.append_block_param(join_block, types::I64);
+                let structural_block = self.builder.create_block();
+                let tagged = self
+                    .builder
+                    .ins()
+                    .call(self.value_has_runtime_type, &[value]);
+                let tagged = self.builder.inst_results(tagged)[0];
+                self.builder
+                    .ins()
+                    .brif(tagged, join_block, &[exact], structural_block, &[]);
+                self.builder.switch_to_block(structural_block);
+                self.builder
+                    .ins()
+                    .brif(base_matches, inspect_block, &[], join_block, &[exact]);
+                self.builder.seal_block(structural_block);
+                self.builder.switch_to_block(inspect_block);
+
+                let mut structural = base_matches;
                 let substitutions = class
                     .type_params
                     .iter()
@@ -10525,9 +10686,15 @@ impl<'a> FunctionCompiler<'a> {
                         .call(self.instance_get_field, &[value, field_ptr, field_len]);
                     let field_value = self.builder.inst_results(inst)[0];
                     let field_matches = self.value_matches_runtime_type(field_value, &field_ty)?;
-                    matched = self.builder.ins().band(matched, field_matches);
+                    self.release_opaque_handle(field_value);
+                    structural = self.builder.ins().band(structural, field_matches);
                 }
-                Ok(matched)
+                let matched = self.builder.ins().bor(exact, structural);
+                self.builder.ins().jump(join_block, &[matched]);
+                self.builder.seal_block(inspect_block);
+                self.builder.switch_to_block(join_block);
+                self.builder.seal_block(join_block);
+                Ok(self.builder.block_params(join_block)[0])
             }
         }
     }
@@ -12532,7 +12699,7 @@ fn infer_operand_type(
         }
         Operand::Int(value) => {
             if i64::try_from(*value).is_ok() {
-                Some(DirectType::Scalar(ScalarKind::Int32))
+                Some(DirectType::Scalar(ScalarKind::Int64))
             } else {
                 Some(DirectType::Opaque(Type::named("Unknown")))
             }
@@ -12600,7 +12767,14 @@ fn box_thunk_value(
                 render_direct_type(ty)
             )
         }),
-        DirectType::Scalar(ScalarKind::Int32) | DirectType::Scalar(ScalarKind::Int64) => {
+        DirectType::Scalar(ScalarKind::Int32) => {
+            let box_i32 = codegen
+                .object
+                .declare_func_in_func(codegen.box_i32, builder.func);
+            let inst = builder.ins().call(box_i32, &[values[0]]);
+            Ok(builder.inst_results(inst)[0])
+        }
+        DirectType::Scalar(ScalarKind::Int64) => {
             let box_i64 = codegen
                 .object
                 .declare_func_in_func(codegen.box_i64, builder.func);
@@ -12884,6 +13058,32 @@ fn direct_type_to_type(ty: &DirectType) -> Type {
     }
 }
 
+fn collect_direct_runtime_type_substitutions(
+    pattern: &Type,
+    actual: &Type,
+    substitutions: &mut HashMap<String, Type>,
+) {
+    match pattern {
+        Type::TypeParam(name) => {
+            substitutions
+                .entry(name.clone())
+                .or_insert_with(|| actual.clone());
+        }
+        Type::Named(name, pattern_args) => {
+            let Type::Named(actual_name, actual_args) = actual else {
+                return;
+            };
+            if name != actual_name || pattern_args.len() != actual_args.len() {
+                return;
+            }
+            for (pattern_arg, actual_arg) in pattern_args.iter().zip(actual_args.iter()) {
+                collect_direct_runtime_type_substitutions(pattern_arg, actual_arg, substitutions);
+            }
+        }
+        Type::Unit | Type::Module(_) => {}
+    }
+}
+
 fn is_numeric_type_name(ty: &Type) -> bool {
     match ty {
         Type::Named(name, args) if args.is_empty() => {
@@ -12902,6 +13102,23 @@ fn runtime_type_is_wildcard(ty: &Type) -> bool {
         Type::Named(name, _) if name == "Unknown" => true,
         Type::Named(_, args) => args.iter().any(runtime_type_is_wildcard),
         Type::Unit | Type::Module(_) => false,
+    }
+}
+
+fn render_runtime_type_pattern(ty: &Type) -> String {
+    match ty {
+        Type::TypeParam(name) => format!("?{name}"),
+        Type::Named(name, args) if args.is_empty() => name.clone(),
+        Type::Named(name, args) => format!(
+            "{}[{}]",
+            name,
+            args.iter()
+                .map(render_runtime_type_pattern)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Type::Unit => "None".to_string(),
+        Type::Module(path) => format!("module {path}"),
     }
 }
 

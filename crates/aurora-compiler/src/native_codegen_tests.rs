@@ -49,6 +49,39 @@ fn object_referenced_symbols(bytes: &[u8]) -> BTreeSet<String> {
 }
 
 #[test]
+fn d3_native_unhinted_integer_operands_use_the_unboxed_int64_path() {
+    assert_eq!(
+        infer_operand_type(&Operand::Int(7), &HashMap::new(), &HashMap::new()),
+        Some(DirectType::Scalar(ScalarKind::Int64))
+    );
+
+    let source = r#"
+def identity(value: int64) -> int64:
+    return value
+
+def main() -> int32:
+    value = 2147483648
+    print(identity(value))
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("default int64 source should lower to MIR");
+    let object = emit_host_object(&mir).expect("default int64 source should compile directly");
+    let referenced = object_referenced_symbols(&object);
+
+    for forbidden in [
+        "aurora_direct_box_uint_literal",
+        "aurora_direct_binary_value_at",
+        "aurora_direct_cast_value_at",
+        "aurora_direct_unbox_i64",
+    ] {
+        assert!(
+            !referenced.iter().any(|symbol| symbol.contains(forbidden)),
+            "default int64 values must not reference `{forbidden}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
 fn host_builtin_return_types_cover_the_control_plane_surface() {
     for name in [
         "sys::args",
@@ -609,7 +642,7 @@ def main() -> int32:
     copy_into(source=first, target=second)
     print(second.value)
 
-    mut total = 0
+    mut total: int32 = 0
     for i in range(stop=3):
         total += i
     print(total)
@@ -973,6 +1006,10 @@ fn direct_backend_scalar_bool_range_and_coercion_paths_compile() {
                     ty: Type::named("bool"),
                 },
                 MirLocalType {
+                    name: "%int32_value".to_string(),
+                    ty: Type::named("int32"),
+                },
+                MirLocalType {
                     name: "%unit_as_int".to_string(),
                     ty: Type::named("int32"),
                 },
@@ -1032,8 +1069,12 @@ fn direct_backend_scalar_bool_range_and_coercion_paths_compile() {
                         },
                     },
                     Instruction::Assign {
-                        target: "%int_as_bool".to_string(),
+                        target: "%int32_value".to_string(),
                         value: Rvalue::Use(Operand::Int(1)),
+                    },
+                    Instruction::Assign {
+                        target: "%int_as_bool".to_string(),
+                        value: Rvalue::Use(Operand::Place("%int32_value".to_string())),
                     },
                     Instruction::Assign {
                         target: "%unit_as_int".to_string(),
@@ -4327,7 +4368,7 @@ def main() -> int32:
     short = range(3)
     long = range(start=1, stop=4)
     print(ready)
-    return value + floor + ceil + root as int32
+    return (value + floor + ceil) as int32 + root as int32
 "#;
     let success_mir =
         lower_source_to_mir(success_source).expect("builtin matrix source should lower");
@@ -5099,12 +5140,12 @@ def main() -> int32:
     trimmed = text.trim()
     joined = ", ".join(parts)
 
-    value = 7
+    value: int32 = 7
     label = value.to_string()
     tagged = value.tag()
     root = 9.0.sqrt()
 
-    mut values = [1, 2, 3]
+    mut values: Vec[int32] = [1, 2, 3]
     empty = values.is_empty()
     length2 = values.len()
     values.push(4)
@@ -5117,11 +5158,11 @@ def main() -> int32:
     contains = values.contains(2)
     inserted = values.insert(0, 5)
     values.reverse()
-    other_values = [8, 9]
+    other_values: Vec[int32] = [8, 9]
     values.extend(other_values)
     values.clear()
 
-    mut counts = {"a": 1, "b": 2}
+    mut counts: Map[String, int32] = {"a": 1, "b": 2}
     map_empty = counts.is_empty()
     map_len = counts.len()
     current = counts.get("a")
@@ -5729,7 +5770,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
                 object: Operand::Int(1),
                 field: "missing".to_string(),
             }),
-            "direct backend does not know field `missing` on `int32`",
+            "direct backend does not know field `missing` on `int64`",
         ),
         (
             "integer boolean op",
@@ -5774,7 +5815,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
                 ty: Type::named("bool"),
                 span: Span::new(1, 1),
             }),
-            "direct backend only supports numeric casts, found `int32` to `bool`",
+            "direct backend only supports numeric casts, found `int64` to `bool`",
         ),
         (
             "nonnumeric cast source",

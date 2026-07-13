@@ -81,7 +81,7 @@ def identity[T](value: T) -> T:
 The compiler infers type arguments from call arguments and the expected return type:
 
 ```python
-print(identity(7))               # infers T = int32
+print(identity(7))               # infers T = int64
 text: String = identity("aurora") # infers T = String
 print(text)
 ```

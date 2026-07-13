@@ -1810,15 +1810,13 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> Operand {
         match pattern {
-            LiteralPatternKind::Int(value) => match value {
-                crate::integer::IntegerValue::Unsigned(value) => Operand::Int(*value),
-                crate::integer::IntegerValue::Signed(value) => {
-                    if *value >= 0 {
-                        Operand::Int(*value as u128)
+            LiteralPatternKind::Int(value) => match value.representation() {
+                crate::integer::IntegerRepresentation::Unsigned(value) => Operand::Int(value),
+                crate::integer::IntegerRepresentation::Signed(value) => {
+                    if value >= 0 {
+                        Operand::Int(value as u128)
                     } else {
-                        let ty = scrutinee_ty
-                            .cloned()
-                            .unwrap_or_else(|| Type::named("int32"));
+                        let ty = scrutinee_ty.cloned().unwrap_or(Type::named("int64"));
                         let target = self.new_typed_temp(ty);
                         self.emit(Instruction::Assign {
                             target: target.clone(),
@@ -3471,7 +3469,7 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Group(inner) => self.infer_expr_type(inner),
             ExprKind::Cast { ty, .. } => Some(lower_type_ref(ty)),
-            ExprKind::Int(_) => Some(Type::named("int32")),
+            ExprKind::Int(_) => Some(Type::named("int64")),
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
             ExprKind::String(_) => Some(Type::named("String")),
@@ -4755,7 +4753,7 @@ impl<'a> Lowerer<'a> {
     fn infer_operand_type(&self, operand: &Operand) -> Option<Type> {
         match operand {
             Operand::Place(place) => self.local_types.get(place).cloned(),
-            Operand::Int(_) => Some(Type::named("int32")),
+            Operand::Int(_) => Some(Type::named("int64")),
             Operand::Duration(_) => Some(Type::named("Duration")),
             Operand::Float(_) => Some(Type::named("float64")),
             Operand::Bool(_) => Some(Type::named("bool")),
@@ -4863,10 +4861,10 @@ fn lower_type_ref(type_ref: &crate::ast::TypeRef) -> Type {
     if type_ref.name == "None" {
         return Type::Unit;
     }
-    let name = if type_ref.name == "str" {
-        "String"
-    } else {
-        &type_ref.name
+    let name = match type_ref.name.as_str() {
+        "str" => "String",
+        "int" => "int64",
+        name => name,
     };
     Type::Named(
         name.to_string(),

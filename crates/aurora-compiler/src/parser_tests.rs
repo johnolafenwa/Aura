@@ -36,6 +36,15 @@ fn tokens_with_newline_after_first_indent(source: &str) -> Vec<Token> {
 }
 
 #[test]
+fn d3_parser_accepts_int_alias_as_numeric_cast_target() {
+    let cast = parse_expression("value as int").expect("`int` should be a numeric cast target");
+    assert!(matches!(
+        cast.kind,
+        ExprKind::Cast { ty, .. } if ty.name == "int" && ty.args.is_empty()
+    ));
+}
+
+#[test]
 fn parse_expression_reports_trailing_tokens_and_primary_errors() {
     let lex_error =
         parse_expression("\"unterminated").expect_err("expected expression lexing failure");

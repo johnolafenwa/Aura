@@ -2767,11 +2767,13 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
         &["left", "right"],
         vec![
             EvaluatedMirArg {
+                ty: None,
                 name: Some("right".to_string()),
                 value: Value::Int(IntegerValue::from_signed(2)),
                 writeback_place: None,
             },
             EvaluatedMirArg {
+                ty: None,
                 name: None,
                 value: Value::Int(IntegerValue::from_signed(1)),
                 writeback_place: None,
@@ -2786,11 +2788,13 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
         &["value", "timeout"],
         vec![
             EvaluatedMirArg {
+                ty: None,
                 name: Some("value".to_string()),
                 value: Value::Int(IntegerValue::from_signed(9)),
                 writeback_place: None,
             },
             EvaluatedMirArg {
+                ty: None,
                 name: None,
                 value: Value::Duration(25),
                 writeback_place: None,
@@ -2822,6 +2826,7 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
     let missing = bind_builtin_args(
         &["value"],
         vec![EvaluatedMirArg {
+            ty: None,
             name: Some("other".to_string()),
             value: Value::Bool(true),
             writeback_place: None,
@@ -2835,11 +2840,13 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
         &["value"],
         vec![
             EvaluatedMirArg {
+                ty: None,
                 name: Some("value".to_string()),
                 value: Value::Int(IntegerValue::from_signed(1)),
                 writeback_place: None,
             },
             EvaluatedMirArg {
+                ty: None,
                 name: Some("value".to_string()),
                 value: Value::Int(IntegerValue::from_signed(2)),
                 writeback_place: None,
@@ -2853,11 +2860,13 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
         &["value"],
         vec![
             EvaluatedMirArg {
+                ty: None,
                 name: None,
                 value: Value::Bool(true),
                 writeback_place: None,
             },
             EvaluatedMirArg {
+                ty: None,
                 name: None,
                 value: Value::Bool(false),
                 writeback_place: None,
@@ -2872,11 +2881,13 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
         &["left", "right"],
         vec![
             EvaluatedMirArg {
+                ty: None,
                 name: Some("left".to_string()),
                 value: Value::Int(IntegerValue::from_signed(1)),
                 writeback_place: None,
             },
             EvaluatedMirArg {
+                ty: None,
                 name: None,
                 value: Value::Int(IntegerValue::from_signed(2)),
                 writeback_place: None,
@@ -2902,6 +2913,7 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
     let optional_unknown = bind_optional_builtin_args(
         &["value"],
         vec![EvaluatedMirArg {
+            ty: None,
             name: Some("other".to_string()),
             value: Value::Int(IntegerValue::from_signed(1)),
             writeback_place: None,
@@ -2915,11 +2927,13 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
         &["value"],
         vec![
             EvaluatedMirArg {
+                ty: None,
                 name: Some("value".to_string()),
                 value: Value::Int(IntegerValue::from_signed(1)),
                 writeback_place: None,
             },
             EvaluatedMirArg {
+                ty: None,
                 name: None,
                 value: Value::Int(IntegerValue::from_signed(2)),
                 writeback_place: None,
@@ -2934,6 +2948,7 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
     let missing_required = bind_builtin_args(
         &["left", "right"],
         vec![EvaluatedMirArg {
+            ty: None,
             name: None,
             value: Value::Int(IntegerValue::from_signed(1)),
             writeback_place: None,
@@ -3224,11 +3239,13 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
     ];
     let evaluated_args = vec![
         EvaluatedMirArg {
+            ty: None,
             name: Some("source".to_string()),
             value: Value::Int(IntegerValue::from_signed(1)),
             writeback_place: None,
         },
         EvaluatedMirArg {
+            ty: None,
             name: Some("target".to_string()),
             value: Value::Int(IntegerValue::from_signed(1)),
             writeback_place: Some("target".to_string()),
@@ -3256,11 +3273,13 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
             &params,
             &[
                 EvaluatedMirArg {
+                    ty: None,
                     name: Some("source".to_string()),
                     value: Value::Int(IntegerValue::from_signed(1)),
                     writeback_place: None,
                 },
                 EvaluatedMirArg {
+                    ty: None,
                     name: Some("target".to_string()),
                     value: Value::Int(IntegerValue::from_signed(1)),
                     writeback_place: None,
@@ -6376,11 +6395,13 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
 fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
     let range = build_range(vec![
         EvaluatedMirArg {
+            ty: None,
             name: None,
             value: Value::Int(IntegerValue::from_signed(2)),
             writeback_place: None,
         },
         EvaluatedMirArg {
+            ty: None,
             name: None,
             value: Value::Int(IntegerValue::from_signed(5)),
             writeback_place: None,
@@ -6389,6 +6410,7 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
     .expect("range should build");
     assert_eq!(range, Value::Range(RangeValue { start: 2, end: 5 }));
     let named_range = build_range(vec![EvaluatedMirArg {
+        ty: None,
         name: Some("stop".to_string()),
         value: Value::Int(IntegerValue::from_signed(3)),
         writeback_place: None,
@@ -6396,6 +6418,7 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
     .expect("named stop should build range from zero");
     assert_eq!(named_range, Value::Range(RangeValue { start: 0, end: 3 }));
     let range_error = build_range(vec![EvaluatedMirArg {
+        ty: None,
         name: Some("unknown".to_string()),
         value: Value::Int(IntegerValue::from_signed(1)),
         writeback_place: None,
@@ -6404,11 +6427,13 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
     assert!(range_error.message.contains("unknown MIR `range` argument"));
     let named_start_stop_range = build_range(vec![
         EvaluatedMirArg {
+            ty: None,
             name: Some("start".to_string()),
             value: Value::Int(IntegerValue::from_signed(4)),
             writeback_place: None,
         },
         EvaluatedMirArg {
+            ty: None,
             name: Some("stop".to_string()),
             value: Value::Int(IntegerValue::from_signed(9)),
             writeback_place: None,
@@ -6420,6 +6445,7 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
         Value::Range(RangeValue { start: 4, end: 9 })
     );
     let non_int_range_error = build_range(vec![EvaluatedMirArg {
+        ty: None,
         name: None,
         value: Value::String("5".to_string()),
         writeback_place: None,
@@ -6430,16 +6456,19 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
         .contains("requires integer arguments"));
     let too_many_range_args = build_range(vec![
         EvaluatedMirArg {
+            ty: None,
             name: None,
             value: Value::Int(IntegerValue::from_signed(1)),
             writeback_place: None,
         },
         EvaluatedMirArg {
+            ty: None,
             name: None,
             value: Value::Int(IntegerValue::from_signed(2)),
             writeback_place: None,
         },
         EvaluatedMirArg {
+            ty: None,
             name: None,
             value: Value::Int(IntegerValue::from_signed(3)),
             writeback_place: None,
@@ -6450,6 +6479,7 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
         .message
         .contains("takes at most two arguments"));
     let missing_stop_range = build_range(vec![EvaluatedMirArg {
+        ty: None,
         name: Some("start".to_string()),
         value: Value::Int(IntegerValue::from_signed(1)),
         writeback_place: None,
@@ -6918,7 +6948,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
                 Value::Int(IntegerValue::from_signed(9)),
             )]),
         }),
-        Some(Type::Named("Box".to_string(), vec![Type::named("int32")]))
+        Some(Type::Named("Box".to_string(), vec![Type::named("int64")]))
     );
     let entrypoint_error = missing_entrypoint_runtime
         .run_main()
@@ -8796,7 +8826,7 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
     let sub_overflow = runtime
         .eval_binary(
             crate::ast::BinaryOp::Sub,
-            Value::Int(IntegerValue::Signed(i128::MIN)),
+            Value::Int(IntegerValue::from_signed(i128::MIN)),
             Value::Int(IntegerValue::from_signed(1)),
             span,
         )
@@ -8805,7 +8835,7 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
     let sub_overflow_without_span = runtime
         .eval_binary(
             crate::ast::BinaryOp::Sub,
-            Value::Int(IntegerValue::Signed(i128::MIN)),
+            Value::Int(IntegerValue::from_signed(i128::MIN)),
             Value::Int(IntegerValue::from_signed(1)),
             None,
         )
@@ -9437,6 +9467,7 @@ fn mir_runtime_io_write_streams_to_stdout_sink() {
 #[test]
 fn mir_runtime_range_rejects_unsigned_endpoints_outside_signed_index_space() {
     let error = build_range(vec![EvaluatedMirArg {
+        ty: None,
         name: Some("stop".to_string()),
         value: Value::Int(IntegerValue::from_literal((i128::MAX as u128) + 1)),
         writeback_place: None,
@@ -9447,11 +9478,13 @@ fn mir_runtime_range_rejects_unsigned_endpoints_outside_signed_index_space() {
         .contains("must fit in signed index space in MIR runtime"));
     let start_error = build_range(vec![
         EvaluatedMirArg {
+            ty: None,
             name: Some("start".to_string()),
             value: Value::Int(IntegerValue::from_literal((i128::MAX as u128) + 1)),
             writeback_place: None,
         },
         EvaluatedMirArg {
+            ty: None,
             name: Some("stop".to_string()),
             value: Value::Int(IntegerValue::from_signed(1)),
             writeback_place: None,
@@ -9760,7 +9793,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
         }),
         Some(Type::Named(
             "Pair".to_string(),
-            vec![Type::named("int32"), Type::named("Unknown")],
+            vec![Type::named("int64"), Type::named("Unknown")],
         )),
     );
     assert_eq!(
@@ -9781,7 +9814,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
         runtime.infer_runtime_value_type(&result_ok(Value::Int(IntegerValue::from_signed(4)))),
         Some(Type::Named(
             "Result".to_string(),
-            vec![Type::named("int32"), Type::named("Unknown")],
+            vec![Type::named("int64"), Type::named("Unknown")],
         )),
     );
 
@@ -9812,7 +9845,10 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
             vec![Type::named("int32"), Type::named("bool")]
         ))
     );
-    assert_eq!(runtime.resolve_place_type("pair.left", &env), None);
+    assert_eq!(
+        runtime.resolve_place_type("pair.left", &env),
+        Some(Type::named("int32"))
+    );
     assert_eq!(runtime.resolve_place_type("number.value", &env), None);
     runtime
         .validate_value_fits_type(&Value::Bool(true), &Type::named("int32"), None)
@@ -9910,6 +9946,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
                 )]),
             })),
             vec![EvaluatedMirArg {
+                ty: None,
                 name: None,
                 value: Value::Int(IntegerValue::from_signed(11)),
                 writeback_place: Some("value".to_string()),

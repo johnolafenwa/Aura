@@ -16,6 +16,6 @@ def render[T: Show](value: T) -> None:
     print(value.show())
 
 def main() -> int32:
-    render(Box(value=7))
+    render(Box[int32](value=7))
     render(Box(value="hi"))
     return 0

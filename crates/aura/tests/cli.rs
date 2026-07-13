@@ -2066,7 +2066,7 @@ fn build_with_auto_backend_falls_back_for_rich_match_example() {
 fn build_with_direct_backend_supports_indexed_member_chains_and_fstring_indexing() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-index-chain-fstring",
-        "def main() -> int32:\n    keys = [\"a\", \"b\"]\n    idx = 1\n    mut counts = {\"key\": 7}\n    match keys.get(idx):\n        case Some(key):\n            print(key)\n        case None:\n            print(\"missing\")\n    print(f\"val: {counts[\"key\"]}\")\n    return 0\n",
+        "def main() -> int32:\n    keys = [\"a\", \"b\"]\n    idx: int32 = 1\n    mut counts = {\"key\": 7}\n    match keys.get(idx):\n        case Some(key):\n            print(key)\n        case None:\n            print(\"missing\")\n    print(f\"val: {counts[\"key\"]}\")\n    return 0\n",
     );
 
     assert!(
@@ -2329,6 +2329,85 @@ fn run_and_direct_backend_preserve_field_match_writeback_across_sibling_mutation
         "aurora-match-borrow-mut-field-sibling-writeback",
         source,
         "9\n11\n",
+    );
+}
+
+#[test]
+fn run_and_direct_backends_preserve_int64_defaulting_boundaries_aliases_and_casts() {
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/default_integer_is_int64.au");
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/default_integer_is_int64.stdout"
+    );
+    assert_run_and_direct_source_stdout("aurora-int64-defaulting", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_preserve_contextual_int32_literal_inference() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/contextual_int32_literals_remain_int32.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/contextual_int32_literals_remain_int32.stdout"
+    );
+    assert_run_and_direct_source_stdout("aurora-contextual-int32-inference", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_preserve_default_integer_generic_dispatch() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/default_integer_generic_dispatch.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/default_integer_generic_dispatch.stdout"
+    );
+    assert_run_and_direct_source_stdout("aurora-default-int64-generic-dispatch", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_preserve_generic_numeric_receiver_dispatch() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/generic_numeric_receiver_dispatch.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/generic_numeric_receiver_dispatch.stdout"
+    );
+    assert_run_and_direct_source_stdout("generic-numeric-receiver-dispatch", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_preserve_nested_numeric_generic_dispatch() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/nested_numeric_generic_dispatch.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/nested_numeric_generic_dispatch.stdout"
+    );
+    assert_run_and_direct_source_stdout("nested-numeric-generic-dispatch", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_preserve_try_error_conversion_width() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/try_numeric_error_conversion_width.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/try_numeric_error_conversion_width.stdout"
+    );
+    assert_run_and_direct_source_stdout("try-numeric-error-conversion-width", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_preserve_default_int64_to_uint64_negation_failure() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-fail/uint64_unary_negation_underflow.au"
+    );
+    assert_run_and_direct_source_failure_with_timeout(
+        "aurora-default-int64-uint64-negation",
+        source,
+        std::time::Duration::from_secs(15),
+        "",
+        "integer value `-1` does not fit in `uint64`",
     );
 }
 
@@ -2693,7 +2772,7 @@ fn build_with_direct_backend_supports_generic_trait_impl_example() {
 fn build_with_direct_backend_prefers_more_specific_trait_impls() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-trait-specificity",
-        "trait Show:\n    def show(borrow self) -> String\n\nclass Box[T]:\n    value: T\n\nimpl[T] Show for Box[T]:\n    def show(borrow self) -> String:\n        return \"generic\"\n\nimpl Show for Box[int32]:\n    def show(borrow self) -> String:\n        return \"int32\"\n\ndef main() -> int32:\n    value = Box(value=7)\n    print(value.show())\n    return 0\n",
+        "trait Show:\n    def show(borrow self) -> String\n\nclass Box[T]:\n    value: T\n\nimpl[T] Show for Box[T]:\n    def show(borrow self) -> String:\n        return \"generic\"\n\nimpl Show for Box[int32]:\n    def show(borrow self) -> String:\n        return \"int32\"\n\ndef main() -> int32:\n    value = Box[int32](value=7)\n    print(value.show())\n    return 0\n",
     );
 
     assert!(
@@ -2948,7 +3027,7 @@ fn build_with_direct_backend_supports_vec_literals_and_iteration() {
 fn build_with_direct_backend_supports_vec_methods_and_constructor() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-vec-methods",
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = Vec[int32]()\n    print(values.is_empty())\n    mut items = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print_int_option(items.set(index=1, value=20))\n    print_int_option(items.remove(0))\n    items.push(99)\n    print_int_option(items.pop())\n    mut total = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = Vec[int32]()\n    print(values.is_empty())\n    mut items: Vec[int32] = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print_int_option(items.set(index=1, value=20))\n    print_int_option(items.remove(0))\n    items.push(99)\n    print_int_option(items.pop())\n    mut total: int32 = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
     );
 
     assert!(
@@ -2966,7 +3045,7 @@ fn build_with_direct_backend_supports_vec_methods_and_constructor() {
 fn build_with_direct_backend_supports_string_map_and_numeric_builtins() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-string-map-numbers",
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aurora repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts = {\"aurora\": 1, \"codex\": 2}\n    print(counts.len())\n    print(counts.contains_key(\"aurora\"))\n    print_int_option(counts.get(\"aurora\"))\n    print_int_option(counts.set(key=\"aurora\", value=5))\n    print(counts[\"aurora\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aurora repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: Map[String, int32] = {\"aurora\": 1, \"codex\": 2}\n    print(counts.len())\n    print(counts.contains_key(\"aurora\"))\n    print_int_option(counts.get(\"aurora\"))\n    print_int_option(counts.set(key=\"aurora\", value=5))\n    print(counts[\"aurora\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
     );
 
     assert!(
@@ -3907,7 +3986,7 @@ fn run_executes_vec_methods_and_constructor() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = Vec[int32]()\n    print(values.is_empty())\n    mut items = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print_int_option(items.set(index=1, value=20))\n    print_int_option(items.remove(0))\n    items.push(99)\n    print_int_option(items.pop())\n    mut total = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    values = Vec[int32]()\n    print(values.is_empty())\n    mut items: Vec[int32] = [1, 2, 3]\n    print(items.len())\n    print_int_option(items.get(1))\n    print_int_option(items.set(index=1, value=20))\n    print_int_option(items.remove(0))\n    items.push(99)\n    print_int_option(items.pop())\n    mut total: int32 = 0\n    for value in items:\n        total += value\n    print(total)\n    return 0\n",
     )
     .expect("failed to write vec methods source");
 
@@ -4231,7 +4310,7 @@ fn run_executes_string_map_and_numeric_builtins() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aurora repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts = {\"aurora\": 1, \"codex\": 2}\n    print(counts.len())\n    print(counts.contains_key(\"aurora\"))\n    print_int_option(counts.get(\"aurora\"))\n    print_int_option(counts.set(key=\"aurora\", value=5))\n    print(counts[\"aurora\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
+        "def print_int_option(value: Option[int32]):\n    match value:\n        case Some(inner):\n            print(inner)\n        case None:\n            print(-1)\n\ndef main() -> int32:\n    text = \"  aurora repo  \"\n    print(text.len())\n    print(text.contains(\"repo\"))\n    print(text.starts_with(\"  au\"))\n    print(text.ends_with(\"  \"))\n    print(text.trim())\n    print(abs(-7))\n    print(min(9, 2))\n    print(max(4, 12))\n    print(sqrt(81.0))\n    mut counts: Map[String, int32] = {\"aurora\": 1, \"codex\": 2}\n    print(counts.len())\n    print(counts.contains_key(\"aurora\"))\n    print_int_option(counts.get(\"aurora\"))\n    print_int_option(counts.set(key=\"aurora\", value=5))\n    print(counts[\"aurora\"])\n    print(counts.keys().len())\n    print(counts.values().len())\n    print_int_option(counts.remove(\"codex\"))\n    print(counts.is_empty())\n    return 0\n",
     )
     .expect("failed to write string/map/numbers source");
 
@@ -4461,7 +4540,7 @@ def render[T: Show](value: T) -> None:
     print(value.show())
 
 def main() -> int32:
-    render(Box(value=7))
+    render(Box[int32](value=7))
     render(Box(value="hi"))
     return 0
 "#;
@@ -4890,7 +4969,7 @@ def main() -> int32:
 fn task_results_surface_errors_without_aborting_the_program() {
     let source = r#"
 def bad() -> int32:
-    values = [1, 2]
+    values: Vec[int32] = [1, 2]
     return values[7]
 
 def main() -> int32:
@@ -4929,7 +5008,7 @@ def main() -> int32:
 fn unread_task_failures_abort_task_group_scope() {
     let source = r#"
 def boom() -> int32:
-    values = [1, 2]
+    values: Vec[int32] = [1, 2]
     return values[7]
 
 def main() -> int32:
@@ -4991,7 +5070,7 @@ def main() -> int32:
 fn cancelled_yields_for_cpu_bound_lightweight_tasks() {
     let source = r#"
 def worker() -> int32:
-    mut n = 0
+    mut n: int32 = 0
     while n < 1000000:
         if cancelled():
             return 9999

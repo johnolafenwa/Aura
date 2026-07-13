@@ -9,7 +9,7 @@ use super::{
 };
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
-use crate::integer::IntegerValue;
+use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::runtime_value::{
     run_lightweight_root_task, spawn_lightweight_task, CancellationContext, ChannelValue,
     EnumVariantValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue,
@@ -19,6 +19,7 @@ use crate::runtime_value::{
     TcpStreamValue, TlsListenerValue, TlsStreamValue, UdpDatagramValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
+use crate::sema::Type;
 use rcgen::generate_simple_self_signed;
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -60,7 +61,14 @@ fn string_vec(values: &[&str]) -> *mut OpaqueValue {
 fn int_vec(values: &[i64]) -> *mut OpaqueValue {
     let vec = super::aurora_direct_vec_empty();
     for value in values {
-        super::aurora_direct_vec_push_in_place(vec, int_value(*value));
+        let value = u8::try_from(*value).expect("test byte vectors only contain uint8 values");
+        super::aurora_direct_vec_push_in_place(
+            vec,
+            boxed_value(Value::Int(
+                IntegerValue::from_typed_unsigned(value as u128, IntegerKind::Uint8)
+                    .expect("every byte fits the uint8 runtime kind"),
+            )),
+        );
     }
     vec
 }
@@ -1017,8 +1025,12 @@ fn direct_uint64_boxing_helpers_preserve_the_full_range() {
     for value in [0, (i64::MAX as u64) + 1, u64::MAX] {
         let boxed = super::aurora_direct_box_u64(value);
         match unsafe { value_ref(boxed) } {
-            Value::Int(IntegerValue::Unsigned(actual)) => {
-                assert_eq!(actual, u128::from(value));
+            Value::Int(actual) => {
+                assert_eq!(
+                    actual.representation(),
+                    IntegerRepresentation::Unsigned(u128::from(value))
+                );
+                assert_eq!(actual.runtime_type_name(), Some("uint64"));
             }
             other => panic!("expected canonical unsigned integer, found {:?}", other),
         }
@@ -1026,6 +1038,249 @@ fn direct_uint64_boxing_helpers_preserve_the_full_range() {
         unsafe {
             release_value(boxed);
         }
+    }
+}
+
+#[test]
+fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
+    let value = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "Option".to_string(),
+        variant_name: "Some".to_string(),
+        payloads: vec![Value::Int(IntegerValue::from_i32(7))],
+    }));
+    super::aurora_direct_tag_value_type(value, b"Option[int32]".as_ptr(), "Option[int32]".len());
+
+    for candidate in [value, super::aurora_direct_clone_value(value)] {
+        assert_eq!(
+            super::aurora_direct_value_type_matches(
+                candidate,
+                b"Option[int32]".as_ptr(),
+                "Option[int32]".len(),
+            ),
+            1
+        );
+        assert_eq!(
+            super::aurora_direct_value_type_matches(
+                candidate,
+                b"Option[int64]".as_ptr(),
+                "Option[int64]".len(),
+            ),
+            0
+        );
+        assert_eq!(
+            super::aurora_direct_value_type_matches(candidate, b"Option".as_ptr(), "Option".len(),),
+            1
+        );
+        assert_eq!(
+            super::aurora_direct_value_type_matches(
+                candidate,
+                b"Option[?T]".as_ptr(),
+                "Option[?T]".len(),
+            ),
+            1
+        );
+        assert_eq!(
+            super::aurora_direct_value_type_matches(
+                candidate,
+                b"Option[Vec[?T]]".as_ptr(),
+                "Option[Vec[?T]]".len(),
+            ),
+            0
+        );
+        unsafe {
+            release_value(candidate);
+        }
+    }
+
+    let nested = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "Option".to_string(),
+        variant_name: "Some".to_string(),
+        payloads: vec![Value::Vec(VecValue {
+            element_type: Type::named("int64"),
+            elements: vec![Value::Int(
+                IntegerValue::from_typed_signed(9, IntegerKind::Int64).expect("9 fits int64"),
+            )],
+        })],
+    }));
+    super::aurora_direct_tag_value_type(
+        nested,
+        b"Option[Vec[int64]]".as_ptr(),
+        "Option[Vec[int64]]".len(),
+    );
+    assert_eq!(
+        super::aurora_direct_value_type_matches(nested, b"Option[?T]".as_ptr(), "Option[?T]".len(),),
+        1
+    );
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            nested,
+            b"Option[Vec[?T]]".as_ptr(),
+            "Option[Vec[?T]]".len(),
+        ),
+        1
+    );
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            nested,
+            b"Option[Vec[int32]]".as_ptr(),
+            "Option[Vec[int32]]".len(),
+        ),
+        0
+    );
+    unsafe {
+        release_value(nested);
+    }
+
+    let mixed_map = boxed_value(Value::Map(MapValue {
+        key_type: Type::named("Unknown"),
+        value_type: Type::named("Unknown"),
+        entries: Vec::new(),
+    }));
+    super::aurora_direct_tag_value_type(
+        mixed_map,
+        b"Map[int32, int64]".as_ptr(),
+        "Map[int32, int64]".len(),
+    );
+    match unsafe { value_ref(mixed_map) } {
+        Value::Map(map) => {
+            assert_eq!(map.key_type, Type::named("int32"));
+            assert_eq!(map.value_type, Type::named("int64"));
+        }
+        other => panic!("expected tagged map, found {other:?}"),
+    }
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            mixed_map,
+            b"Map[?K, ?V]".as_ptr(),
+            "Map[?K, ?V]".len(),
+        ),
+        1
+    );
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            mixed_map,
+            b"Map[?T, ?T]".as_ptr(),
+            "Map[?T, ?T]".len(),
+        ),
+        0
+    );
+    unsafe {
+        release_value(mixed_map);
+    }
+
+    let vector = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("Unknown"),
+        elements: Vec::new(),
+    }));
+    super::aurora_direct_tag_value_type(vector, b"Vec[int32]".as_ptr(), "Vec[int32]".len());
+    assert_eq!(super::aurora_direct_value_has_runtime_type(vector), 1);
+    match unsafe { value_ref(vector) } {
+        Value::Vec(vector) => assert_eq!(vector.element_type, Type::named("int32")),
+        other => panic!("expected tagged vector, found {other:?}"),
+    }
+    assert_eq!(
+        super::aurora_direct_value_type_matches(vector, b"Vec[?T]".as_ptr(), "Vec[?T]".len(),),
+        1
+    );
+    unsafe {
+        release_value(vector);
+    }
+
+    let set = boxed_value(Value::Set(SetValue {
+        element_type: Type::named("Unknown"),
+        elements: Vec::new(),
+    }));
+    super::aurora_direct_tag_value_type(set, b"Set[int64]".as_ptr(), "Set[int64]".len());
+    match unsafe { value_ref(set) } {
+        Value::Set(set) => assert_eq!(set.element_type, Type::named("int64")),
+        other => panic!("expected tagged set, found {other:?}"),
+    }
+    assert_eq!(
+        super::aurora_direct_value_type_matches(set, b"Set[?T]".as_ptr(), "Set[?T]".len(),),
+        1
+    );
+    unsafe {
+        release_value(set);
+    }
+
+    let instance = boxed_value(Value::Instance(InstanceValue {
+        class_name: "Marker".to_string(),
+        fields: BTreeMap::new(),
+    }));
+    super::aurora_direct_tag_value_type(instance, b"Marker[int64]".as_ptr(), "Marker[int64]".len());
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            instance,
+            b"Marker[?T]".as_ptr(),
+            "Marker[?T]".len(),
+        ),
+        1
+    );
+    let cloned_instance = super::aurora_direct_clone_value(instance);
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            cloned_instance,
+            b"Marker[int64]".as_ptr(),
+            "Marker[int64]".len(),
+        ),
+        1
+    );
+    unsafe {
+        release_value(instance);
+        release_value(cloned_instance);
+    }
+
+    let queue = boxed_value(Value::Channel(ChannelValue::new()));
+    super::aurora_direct_tag_value_type(queue, b"Queue[int32]".as_ptr(), "Queue[int32]".len());
+    assert_eq!(
+        super::aurora_direct_value_type_matches(queue, b"Queue[?T]".as_ptr(), "Queue[?T]".len(),),
+        1
+    );
+    unsafe {
+        release_value(queue);
+    }
+
+    let task = boxed_value(Value::Task(TaskValue::from_handle(thread::spawn(|| {
+        Ok(Value::Unit)
+    }))));
+    super::aurora_direct_tag_value_type(task, b"Task[int64]".as_ptr(), "Task[int64]".len());
+    assert_eq!(
+        super::aurora_direct_value_type_matches(task, b"Task[?T]".as_ptr(), "Task[?T]".len(),),
+        1
+    );
+    unsafe {
+        release_value(task);
+    }
+
+    let unit = boxed_value(Value::Unit);
+    assert_eq!(super::aurora_direct_value_has_runtime_type(unit), 0);
+    unsafe {
+        release_value(unit);
+    }
+
+    let untagged = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "Option".to_string(),
+        variant_name: "Some".to_string(),
+        payloads: vec![Value::Int(IntegerValue::from_i32(11))],
+    }));
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            untagged,
+            b"Option[?T]".as_ptr(),
+            "Option[?T]".len(),
+        ),
+        1
+    );
+    assert_eq!(
+        super::aurora_direct_value_type_matches(
+            untagged,
+            b"Option[Vec[?T]]".as_ptr(),
+            "Option[Vec[?T]]".len(),
+        ),
+        0
+    );
+    unsafe {
+        release_value(untagged);
     }
 }
 
@@ -1063,8 +1318,16 @@ fn direct_unboxed_wide_cast_helpers_preserve_checked_numeric_semantics() {
         (1_u64 << 63) as f64
     );
     assert_eq!(
+        super::aurora_direct_cast_integer_to_float(42, 0, 0, 0, 0),
+        42.0_f32 as f64
+    );
+    assert_eq!(
         super::aurora_direct_cast_float_to_integer(4_294_967_296.75, 1, 0, 0),
         4_294_967_296
+    );
+    assert_eq!(
+        super::aurora_direct_cast_float_to_integer(-42.75, 1, 0, 0),
+        (-42_i64) as u64
     );
 }
 
@@ -4246,6 +4509,96 @@ fn int32_overflow_helper_exits_with_error() {
 }
 
 #[test]
+fn wide_integer_overflow_and_cast_helpers_report_precise_diagnostics() {
+    const HELPER_ENV: &str = "AURORA_DIRECT_RUNTIME_WIDE_INTEGER_ERROR_HELPER";
+    if let Ok(helper) = std::env::var(HELPER_ENV) {
+        match helper.as_str() {
+            "signed-overflow-with-span" => {
+                let source = b"def main() -> int32:\n    value = 9223372036854775807 + 1\n";
+                super::aurora_direct_runtime_init(
+                    b"/virtual/wide.au".as_ptr(),
+                    b"/virtual/wide.au".len(),
+                    source.as_ptr(),
+                    source.len(),
+                );
+                super::aurora_direct_fail_integer_overflow(0, 0, i64::MAX as u64, 1, 2, 13);
+            }
+            "unsigned-underflow-without-span" => {
+                super::aurora_direct_fail_integer_overflow(1, 1, 0, 1, 0, 0);
+            }
+            "integer-cast-with-span" => {
+                let source = b"def main() -> int32:\n    value = high as int64\n";
+                super::aurora_direct_runtime_init(
+                    b"/virtual/cast.au".as_ptr(),
+                    b"/virtual/cast.au".len(),
+                    source.as_ptr(),
+                    source.len(),
+                );
+                super::aurora_direct_cast_integer_to_integer(u64::MAX, 1, 1, 2, 13);
+            }
+            "float-cast-without-span" => {
+                super::aurora_direct_cast_float_to_integer(4_294_967_296.75, 0, 0, 0);
+            }
+            other => panic!("unknown wide-integer error helper `{other}`"),
+        }
+    }
+
+    for (helper, expected_message, expected_location) in [
+        (
+            "signed-overflow-with-span",
+            "integer value `9223372036854775808` does not fit in `int64`",
+            Some(" --> /virtual/wide.au:2:13"),
+        ),
+        (
+            "unsigned-underflow-without-span",
+            "integer value `-1` does not fit in `uint64`",
+            None,
+        ),
+        (
+            "integer-cast-with-span",
+            "integer value `18446744073709551615` does not fit in `int64`",
+            Some(" --> /virtual/cast.au:2:13"),
+        ),
+        (
+            "float-cast-without-span",
+            "integer value `4294967296` does not fit in `int32`",
+            None,
+        ),
+    ] {
+        let output = Command::new(std::env::current_exe().expect("test binary should exist"))
+            .arg("--exact")
+            .arg(
+                "native_runtime::tests::wide_integer_overflow_and_cast_helpers_report_precise_diagnostics",
+            )
+            .arg("--nocapture")
+            .env(HELPER_ENV, helper)
+            .output()
+            .expect("child test process should run");
+
+        assert!(
+            !output.status.success(),
+            "{helper} should exit with a diagnostic"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.starts_with(&format!("error: {expected_message}\n")),
+            "unexpected diagnostic for {helper}:\n{stderr}"
+        );
+        match expected_location {
+            Some(location) => assert!(
+                stderr.contains(location),
+                "diagnostic for {helper} should include `{location}`:\n{stderr}"
+            ),
+            None => assert_eq!(
+                stderr,
+                format!("error: {expected_message}\n"),
+                "spanless diagnostic for {helper} should not invent a source location"
+            ),
+        }
+    }
+}
+
+#[test]
 fn direct_root_entrypoint_helper_exits_for_invalid_thunks_and_return_types() {
     if let Ok(helper) = std::env::var("AURORA_DIRECT_RUNTIME_HELPER") {
         match helper.as_str() {
@@ -6726,6 +7079,14 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         crate::sema::Type::named("float64")
     );
     assert_eq!(
+        inferred_collection_type(&Value::Int(IntegerValue::from_i32(7))),
+        crate::sema::Type::named("int32")
+    );
+    assert_eq!(
+        inferred_collection_type(&Value::Int(IntegerValue::from_signed(7))),
+        crate::sema::Type::named("Unknown")
+    );
+    assert_eq!(
         inferred_collection_type(&Value::String("text".to_string())),
         crate::sema::Type::named("String")
     );
@@ -6800,8 +7161,8 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         eval_binary_value(
-            Value::Int(IntegerValue::Signed(i128::MIN)),
-            Value::Int(IntegerValue::Unsigned(1)),
+            Value::Int(IntegerValue::from_signed(i128::MIN)),
+            Value::Int(IntegerValue::from_literal(1)),
             BinaryOp::Sub,
         )
         .expect_err("subtraction beyond the signed integer range should fail")
@@ -6810,8 +7171,8 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         eval_binary_value(
-            Value::Int(IntegerValue::Unsigned(u128::MAX)),
-            Value::Int(IntegerValue::Unsigned(2)),
+            Value::Int(IntegerValue::from_literal(u128::MAX)),
+            Value::Int(IntegerValue::from_literal(2)),
             BinaryOp::Mul,
         )
         .expect_err("unsigned multiplication beyond u128 should fail")
@@ -7149,13 +7510,36 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     }));
     let unit_value = super::boxed_value(Value::Unit);
 
+    let int64_value = int_value(7);
     assert_eq!(
-        super::aurora_direct_value_type_matches(int_value(7), b"int32".as_ptr(), "int32".len(),),
+        super::aurora_direct_value_type_matches(int64_value, b"int64".as_ptr(), "int64".len(),),
         1
     );
     assert_eq!(
-        super::aurora_direct_value_type_matches(int_value(7), b"uint64".as_ptr(), "uint64".len(),),
+        super::aurora_direct_value_type_matches(int64_value, b"int32".as_ptr(), "int32".len(),),
+        0
+    );
+    assert_eq!(
+        super::aurora_direct_value_type_matches(int64_value, b"uint64".as_ptr(), "uint64".len(),),
+        0
+    );
+    let int32_value = super::aurora_direct_box_i32(7);
+    assert_eq!(
+        super::aurora_direct_value_type_matches(int32_value, b"int32".as_ptr(), "int32".len(),),
         1
+    );
+    assert_eq!(
+        super::aurora_direct_value_type_matches(int32_value, b"int64".as_ptr(), "int64".len(),),
+        0
+    );
+    let uint64_value = super::aurora_direct_box_u64(7);
+    assert_eq!(
+        super::aurora_direct_value_type_matches(uint64_value, b"uint64".as_ptr(), "uint64".len(),),
+        1
+    );
+    assert_eq!(
+        super::aurora_direct_value_type_matches(uint64_value, b"int64".as_ptr(), "int64".len(),),
+        0
     );
     assert_eq!(
         super::aurora_direct_value_type_matches(

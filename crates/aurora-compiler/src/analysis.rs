@@ -2167,7 +2167,7 @@ impl<'a> AnalysisBuilder<'a> {
 
     fn infer_expr_type(&self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) -> Option<Type> {
         match &expr.kind {
-            ExprKind::Int(_) => Some(Type::named("int32")),
+            ExprKind::Int(_) => Some(Type::named("int64")),
             ExprKind::DurationMillis(_) => Some(Type::named("Duration")),
             ExprKind::Float(_) => Some(Type::named("float64")),
             ExprKind::Bool(_) => Some(Type::named("bool")),
@@ -2765,7 +2765,11 @@ fn lower_type_ref(ty: &TypeRef) -> Type {
     if ty.name == "None" {
         return Type::Unit;
     }
-    let name = if ty.name == "str" { "String" } else { &ty.name };
+    let name = match ty.name.as_str() {
+        "str" => "String",
+        "int" => "int64",
+        name => name,
+    };
     Type::Named(
         name.to_string(),
         ty.args.iter().map(lower_type_ref).collect(),
@@ -3648,8 +3652,8 @@ fn placeholder_stmt_for_return_type(return_type: &str) -> Option<String> {
         "float32" | "float64" => Some("return 0.0".to_string()),
         "String" | "str" => Some("return \"\"".to_string()),
         "Duration" => Some("return 0ms".to_string()),
-        "int8" | "int16" | "int32" | "int64" | "int128" | "intsize" | "uint8" | "uint16"
-        | "uint32" | "uint64" | "uint128" | "uintsize" => Some("return 0".to_string()),
+        "int" | "int8" | "int16" | "int32" | "int64" | "int128" | "intsize" | "uint8"
+        | "uint16" | "uint32" | "uint64" | "uint128" | "uintsize" => Some("return 0".to_string()),
         ty if ty.starts_with("Option[") => Some("return Option.None".to_string()),
         _ => None,
     }

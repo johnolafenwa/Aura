@@ -13,18 +13,19 @@ use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
-use crate::integer::IntegerValue;
+use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::runtime_value::{
     cancel_current_lightweight_task_boundary, cast_numeric_value,
     current_lightweight_task_cancellation, current_lightweight_task_id,
-    decode_process_restart_policy, decode_process_stdio, evaluate_host_builtin,
-    fail_current_lightweight_task, io_error, io_read_line, option_none, option_some,
-    poll_cancellation, process_error_cancelled, process_error_io, process_error_no_command,
-    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
-    process_stdio_null, process_stdio_pipe, process_supervisor_wait_cancelled,
-    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
-    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
-    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
+    decode_process_restart_policy, decode_process_stdio, embedded_nominal_runtime_type_name,
+    evaluate_host_builtin, fail_current_lightweight_task, io_error, io_read_line,
+    nominal_runtime_base_name, option_none, option_some, poll_cancellation,
+    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
+    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
+    process_stdio_pipe, process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
+    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
+    queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration,
     register_task_as_queue_producer_for_values, render_float, result_err, result_ok,
     run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
@@ -41,6 +42,7 @@ use crate::runtime_value::{
     SendValueError, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
     TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::sema::Type;
 
@@ -381,6 +383,7 @@ fn int32_overflow_message(value: i64) -> String {
 pub struct OpaqueValue {
     ref_count: AtomicUsize,
     value: RwLock<Value>,
+    runtime_type_name: RwLock<Option<String>>,
 }
 
 type NativeThunk = unsafe extern "C-unwind" fn(*const i64, usize) -> *mut OpaqueValue;
@@ -440,9 +443,18 @@ fn extract_duration_millis(value: impl Borrow<Value>) -> i128 {
 }
 
 fn boxed_value(value: Value) -> *mut OpaqueValue {
+    boxed_value_with_type(value, None)
+}
+
+fn boxed_typed_value(value: Value, runtime_type_name: &str) -> *mut OpaqueValue {
+    boxed_value_with_type(value, Some(runtime_type_name.to_string()))
+}
+
+fn boxed_value_with_type(value: Value, runtime_type_name: Option<String>) -> *mut OpaqueValue {
     Box::into_raw(Box::new(OpaqueValue {
         ref_count: AtomicUsize::new(1),
         value: RwLock::new(value),
+        runtime_type_name: RwLock::new(runtime_type_name),
     }))
 }
 
@@ -497,6 +509,195 @@ unsafe fn with_value<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -
 
 unsafe fn value_ref(ptr: *mut OpaqueValue) -> Value {
     with_value(ptr, Clone::clone)
+}
+
+unsafe fn explicit_runtime_type_name(ptr: *mut OpaqueValue) -> Option<String> {
+    match ptr.as_ref() {
+        Some(value) => match value.runtime_type_name.read() {
+            Ok(runtime_type_name) => runtime_type_name.clone(),
+            Err(_) => runtime_error("direct runtime type lock was poisoned"),
+        },
+        None => runtime_error("direct runtime received a null opaque value pointer"),
+    }
+}
+
+fn embedded_runtime_type_name(value: &Value) -> Option<String> {
+    match value {
+        Value::Int(value) => value.runtime_type_name().map(str::to_string),
+        Value::Vec(vector) => {
+            Some(Type::Named("Vec".to_string(), vec![vector.element_type.clone()]).to_string())
+        }
+        Value::Set(set) => {
+            Some(Type::Named("Set".to_string(), vec![set.element_type.clone()]).to_string())
+        }
+        Value::Map(map) => Some(
+            Type::Named(
+                "Map".to_string(),
+                vec![map.key_type.clone(), map.value_type.clone()],
+            )
+            .to_string(),
+        ),
+        Value::Instance(instance) => {
+            instance
+                .fields
+                .get(DIRECT_RUNTIME_TYPE_FIELD)
+                .and_then(|value| match value {
+                    Value::String(runtime_type_name) => Some(runtime_type_name.clone()),
+                    _ => None,
+                })
+        }
+        Value::EnumVariant(variant) => {
+            embedded_nominal_runtime_type_name(&variant.enum_name).map(str::to_string)
+        }
+        Value::Channel(channel) => channel.runtime_type_name(),
+        Value::Task(task) => task.runtime_type_name(),
+        _ => None,
+    }
+}
+
+unsafe fn effective_runtime_type_name(ptr: *mut OpaqueValue) -> Option<String> {
+    explicit_runtime_type_name(ptr).or_else(|| with_value(ptr, embedded_runtime_type_name))
+}
+
+fn runtime_type_from_name(name: &str) -> Type {
+    if name == "None" {
+        return Type::Unit;
+    }
+    if let Some(module) = name.strip_prefix("module ") {
+        return Type::Module(module.to_string());
+    }
+    let Some(open) = name.find('[') else {
+        return Type::named(name);
+    };
+    if !name.ends_with(']') {
+        return Type::named(name);
+    }
+    let base = &name[..open];
+    let inner = &name[open + 1..name.len() - 1];
+    let mut args = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, character) in inner.char_indices() {
+        match character {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                args.push(runtime_type_from_name(inner[start..index].trim()));
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < inner.len() {
+        args.push(runtime_type_from_name(inner[start..].trim()));
+    }
+    Type::Named(base.to_string(), args)
+}
+
+fn runtime_type_pattern_from_name(name: &str) -> Type {
+    fn decode_pattern(ty: Type) -> Type {
+        match ty {
+            Type::Named(name, args) if args.is_empty() && name.starts_with('?') => {
+                Type::TypeParam(name[1..].to_string())
+            }
+            Type::Named(name, args) => Type::Named(
+                name,
+                args.into_iter().map(decode_pattern).collect::<Vec<_>>(),
+            ),
+            Type::Unit | Type::Module(_) | Type::TypeParam(_) => ty,
+        }
+    }
+
+    decode_pattern(runtime_type_from_name(name))
+}
+
+fn runtime_type_pattern_matches(
+    pattern: &Type,
+    actual: &Type,
+    substitutions: &mut BTreeMap<String, Type>,
+) -> bool {
+    match pattern {
+        Type::TypeParam(name) => match substitutions.get(name) {
+            Some(existing) => existing == actual,
+            None => {
+                substitutions.insert(name.clone(), actual.clone());
+                true
+            }
+        },
+        Type::Named(name, pattern_args) => {
+            let Type::Named(actual_name, actual_args) = actual else {
+                return false;
+            };
+            name == actual_name
+                && pattern_args.len() == actual_args.len()
+                && pattern_args
+                    .iter()
+                    .zip(actual_args)
+                    .all(|(pattern_arg, actual_arg)| {
+                        runtime_type_pattern_matches(pattern_arg, actual_arg, substitutions)
+                    })
+        }
+        Type::Module(path) => matches!(actual, Type::Module(actual_path) if path == actual_path),
+        Type::Unit => *actual == Type::Unit,
+    }
+}
+
+unsafe fn set_explicit_runtime_type_name(ptr: *mut OpaqueValue, runtime_type_name: String) {
+    match ptr.as_ref() {
+        Some(value) => match value.runtime_type_name.write() {
+            Ok(mut stored) => *stored = Some(runtime_type_name.clone()),
+            Err(_) => runtime_error("direct runtime type lock was poisoned"),
+        },
+        None => runtime_error("direct runtime received a null opaque value pointer"),
+    }
+    let parsed = runtime_type_from_name(&runtime_type_name);
+    unsafe {
+        value_mut(ptr, |value| match value {
+            Value::Int(integer) => {
+                if let Some(kind) = IntegerKind::from_runtime_type_name(&runtime_type_name) {
+                    if let Some(typed) = integer.with_runtime_kind(kind) {
+                        *integer = typed;
+                    }
+                }
+            }
+            Value::Vec(vector) => {
+                if let Type::Named(name, args) = &parsed {
+                    if name == "Vec" && args.len() == 1 {
+                        vector.element_type = args[0].clone();
+                    }
+                }
+            }
+            Value::Set(set) => {
+                if let Type::Named(name, args) = &parsed {
+                    if name == "Set" && args.len() == 1 {
+                        set.element_type = args[0].clone();
+                    }
+                }
+            }
+            Value::Map(map) => {
+                if let Type::Named(name, args) = &parsed {
+                    if name == "Map" && args.len() == 2 {
+                        map.key_type = args[0].clone();
+                        map.value_type = args[1].clone();
+                    }
+                }
+            }
+            Value::Instance(instance) if runtime_type_name.contains('[') => {
+                instance.fields.insert(
+                    DIRECT_RUNTIME_TYPE_FIELD.to_string(),
+                    Value::String(runtime_type_name.clone()),
+                );
+            }
+            Value::EnumVariant(variant) if runtime_type_name.contains('[') => {
+                let base = nominal_runtime_base_name(&variant.enum_name);
+                variant.enum_name =
+                    format!("{base}{DIRECT_RUNTIME_TYPE_SEPARATOR}{runtime_type_name}");
+            }
+            Value::Channel(channel) => channel.set_runtime_type_name(runtime_type_name.clone()),
+            Value::Task(task) => task.set_runtime_type_name(runtime_type_name.clone()),
+            _ => {}
+        });
+    }
 }
 
 unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> T) -> T {
@@ -554,7 +755,12 @@ fn bytes_vec_value(bytes: Vec<u8>) -> Value {
         element_type: Type::named("uint8"),
         elements: bytes
             .into_iter()
-            .map(|byte| Value::Int(IntegerValue::from_signed(byte as i128)))
+            .map(|byte| {
+                Value::Int(
+                    IntegerValue::from_typed_unsigned(byte as u128, IntegerKind::Uint8)
+                        .expect("every byte fits the uint8 runtime kind"),
+                )
+            })
             .collect(),
     })
 }
@@ -756,12 +962,14 @@ fn expect_optional_string_value(value: &Value, label: &str) -> Option<String> {
     match value {
         Value::Unit => None,
         Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "None" =>
+            if nominal_runtime_base_name(&variant.enum_name) == "Option"
+                && variant.variant_name == "None" =>
         {
             None
         }
         Value::EnumVariant(variant)
-            if variant.enum_name == "Option" && variant.variant_name == "Some" =>
+            if nominal_runtime_base_name(&variant.enum_name) == "Option"
+                && variant.variant_name == "Some" =>
         {
             match variant.payloads.as_slice() {
                 [text] => Some(expect_string_value(text, label)),
@@ -993,8 +1201,8 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::Range(_) => "Range".to_string(),
         Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
         Value::Unit => "None".to_string(),
-        Value::Instance(instance) => instance.class_name.clone(),
-        Value::EnumVariant(variant) => variant.enum_name.clone(),
+        Value::Instance(instance) => nominal_runtime_base_name(&instance.class_name).to_string(),
+        Value::EnumVariant(variant) => nominal_runtime_base_name(&variant.enum_name).to_string(),
         Value::Channel(_) => "Queue".to_string(),
         Value::Task(_) => "Task".to_string(),
         Value::TaskGroup(_) => "TaskGroup".to_string(),
@@ -1020,6 +1228,9 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
 }
 
 fn inferred_collection_type(value: &Value) -> Type {
+    if let Some(runtime_type_name) = embedded_runtime_type_name(value) {
+        return runtime_type_from_name(&runtime_type_name);
+    }
     match value {
         Value::String(_) => Type::named("String"),
         Value::Bool(_) => Type::named("bool"),
@@ -1032,8 +1243,8 @@ fn inferred_collection_type(value: &Value) -> Type {
         ),
         Value::Duration(_) => Type::named("Duration"),
         Value::Range(_) => Type::named("Range"),
-        Value::Instance(instance) => Type::named(instance.class_name.clone()),
-        Value::EnumVariant(variant) => Type::named(variant.enum_name.clone()),
+        Value::Instance(instance) => Type::named(nominal_runtime_base_name(&instance.class_name)),
+        Value::EnumVariant(variant) => Type::named(nominal_runtime_base_name(&variant.enum_name)),
         Value::Channel(_) => Type::named("Queue"),
         Value::Task(_) => Type::named("Task"),
         Value::TaskGroup(_) => Type::named("TaskGroup"),
@@ -1055,7 +1266,8 @@ fn inferred_collection_type(value: &Value) -> Type {
         Value::ProcessPipe(_) => Type::named("process.Pipe"),
         Value::ProcessCompleted(_) => Type::named("process.Completed"),
         Value::ProcessSupervisor(_) => Type::named("process.Supervisor"),
-        Value::Int(_) | Value::ModuleNamespace(_) | Value::Unit => Type::named("Unknown"),
+        Value::Int(_) => Type::named("Unknown"),
+        Value::ModuleNamespace(_) | Value::Unit => Type::named("Unknown"),
     }
 }
 
@@ -1360,12 +1572,21 @@ pub extern "C-unwind" fn aurora_direct_print_bool(value: i64) {
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_box_i64(value: i64) -> *mut OpaqueValue {
-    task_runtime_boundary(|| boxed_value(Value::Int(IntegerValue::from_signed(value as i128))))
+    task_runtime_boundary(|| boxed_typed_value(Value::Int(IntegerValue::from_i64(value)), "int64"))
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_box_i32(value: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let value =
+            i32::try_from(value).unwrap_or_else(|_| runtime_error(int32_overflow_message(value)));
+        boxed_typed_value(Value::Int(IntegerValue::from_i32(value)), "int32")
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_box_u64(value: u64) -> *mut OpaqueValue {
-    task_runtime_boundary(|| boxed_value(Value::Int(IntegerValue::from_literal(u128::from(value)))))
+    task_runtime_boundary(|| boxed_typed_value(Value::Int(IntegerValue::from_u64(value)), "uint64"))
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -1702,15 +1923,23 @@ pub extern "C-unwind" fn aurora_direct_abs(value: *mut OpaqueValue) -> *mut Opaq
     task_runtime_boundary(|| {
         let value = unsafe { take_value(value) };
         match value {
-            Value::Int(IntegerValue::Signed(value)) => value
-                .checked_abs()
-                .map(IntegerValue::from_signed)
-                .map(Value::Int)
-                .map(boxed_value)
-                .unwrap_or_else(|| runtime_error("`abs(...)` overflowed the signed integer range")),
-            Value::Int(IntegerValue::Unsigned(value)) => {
-                boxed_value(Value::Int(IntegerValue::Unsigned(value)))
-            }
+            Value::Int(value) => match value.representation() {
+                IntegerRepresentation::Signed(signed) if signed < 0 => {
+                    if signed == i128::MIN {
+                        runtime_error("`abs(...)` overflowed the signed integer range");
+                    }
+                    value
+                        .checked_neg()
+                        .map(Value::Int)
+                        .map(boxed_value)
+                        .unwrap_or_else(|| {
+                            runtime_error("`abs(...)` overflowed the signed integer range")
+                        })
+                }
+                IntegerRepresentation::Signed(_) | IntegerRepresentation::Unsigned(_) => {
+                    boxed_value(Value::Int(value))
+                }
+            },
             Value::Float(value) => boxed_value(Value::Float(value.abs())),
             other => runtime_error(format!(
                 "`abs(...)` expects an integer or float value, found `{}`",
@@ -2664,7 +2893,21 @@ pub extern "C-unwind" fn aurora_direct_set_index_option(
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_clone_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| boxed_value(unsafe { value_ref(value) }))
+    task_runtime_boundary(|| {
+        let runtime_type_name = unsafe { explicit_runtime_type_name(value) };
+        boxed_value_with_type(unsafe { value_ref(value) }, runtime_type_name)
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_tag_value_type(
+    value: *mut OpaqueValue,
+    type_ptr: *const u8,
+    type_len: usize,
+) {
+    task_runtime_boundary(|| unsafe {
+        set_explicit_runtime_type_name(value, decode_bytes(type_ptr, type_len));
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -2928,8 +3171,10 @@ pub extern "C-unwind" fn aurora_direct_cast_integer_to_integer(
             &target,
             None,
         ) {
-            Ok(Value::Int(IntegerValue::Signed(value))) => (value as i64) as u64,
-            Ok(Value::Int(IntegerValue::Unsigned(value))) => value as u64,
+            Ok(Value::Int(value)) => match value.representation() {
+                IntegerRepresentation::Signed(value) => (value as i64) as u64,
+                IntegerRepresentation::Unsigned(value) => value as u64,
+            },
             Ok(other) => runtime_error(format!(
                 "direct integer cast unexpectedly produced `{}`",
                 value_type_name(&other)
@@ -2974,8 +3219,10 @@ pub extern "C-unwind" fn aurora_direct_cast_float_to_integer(
     task_runtime_boundary(|| {
         let target = direct_integer_cast_target(target_kind);
         match cast_numeric_value(Value::Float(value), &target, None) {
-            Ok(Value::Int(IntegerValue::Signed(value))) => (value as i64) as u64,
-            Ok(Value::Int(IntegerValue::Unsigned(value))) => value as u64,
+            Ok(Value::Int(value)) => match value.representation() {
+                IntegerRepresentation::Signed(value) => (value as i64) as u64,
+                IntegerRepresentation::Unsigned(value) => value as u64,
+            },
             Ok(other) => runtime_error(format!(
                 "direct integer cast unexpectedly produced `{}`",
                 value_type_name(&other)
@@ -3013,10 +3260,34 @@ pub extern "C-unwind" fn aurora_direct_value_type_matches(
 ) -> i64 {
     task_runtime_boundary(|| {
         let expected = decode_bytes(type_ptr, type_len);
+        let explicit_type = unsafe { effective_runtime_type_name(value) };
         let actual = unsafe { value_ref(value) };
-        let matches = match &actual {
-            Value::Instance(instance) => instance.class_name == expected,
-            Value::EnumVariant(variant) => variant.enum_name == expected,
+        if expected.contains('?') {
+            let pattern = runtime_type_pattern_from_name(&expected);
+            if let Some(actual_type) = explicit_type.as_deref() {
+                return i64::from(runtime_type_pattern_matches(
+                    &pattern,
+                    &runtime_type_from_name(actual_type),
+                    &mut BTreeMap::new(),
+                ));
+            }
+            let untagged_outer_wildcard = match &pattern {
+                Type::Named(name, args) => {
+                    value_type_name(&actual) == *name
+                        && args.iter().all(|arg| matches!(arg, Type::TypeParam(_)))
+                }
+                Type::Unit | Type::Module(_) | Type::TypeParam(_) => false,
+            };
+            return i64::from(untagged_outer_wildcard);
+        }
+        let explicit_matches = explicit_type.as_deref() == Some(expected.as_str());
+        let structural_matches = match &actual {
+            Value::Instance(instance) => {
+                nominal_runtime_base_name(&instance.class_name) == expected
+            }
+            Value::EnumVariant(variant) => {
+                nominal_runtime_base_name(&variant.enum_name) == expected
+            }
             Value::String(_) => expected == "String",
             Value::Vec(_) => expected == "Vec",
             Value::Set(_) => expected == "Set",
@@ -3046,12 +3317,20 @@ pub extern "C-unwind" fn aurora_direct_value_type_matches(
             Value::Range(_) => expected == "Range",
             Value::Bool(_) => expected == "bool",
             Value::Float(_) => expected == "float64" || expected == "float32",
-            Value::Int(_) => expected.starts_with("int") || expected.starts_with("uint"),
+            Value::Int(value) => value.runtime_type_name().map_or_else(
+                || expected.starts_with("int") || expected.starts_with("uint"),
+                |actual| actual == expected,
+            ),
             Value::Unit => expected == "None",
             Value::ModuleNamespace(_) => expected.starts_with("module "),
         };
-        i64::from(matches)
+        i64::from(explicit_matches || structural_matches)
     })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_value_has_runtime_type(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| i64::from(unsafe { effective_runtime_type_name(value) }.is_some()))
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -3091,7 +3370,8 @@ pub extern "C-unwind" fn aurora_direct_variant_matches(
         let expected_variant = decode_bytes(variant_ptr, variant_len);
         match unsafe { value_ref(value) } {
             Value::EnumVariant(variant) => i64::from(
-                variant.enum_name == expected_enum && variant.variant_name == expected_variant,
+                nominal_runtime_base_name(&variant.enum_name) == expected_enum
+                    && variant.variant_name == expected_variant,
             ),
             _ => 0,
         }
@@ -3108,7 +3388,9 @@ pub extern "C-unwind" fn aurora_direct_variant_payload(
             Some(payload) => boxed_value(payload.clone()),
             None => runtime_error(format!(
                 "enum variant `{}.{}` does not carry a payload at index {}",
-                variant.enum_name, variant.variant_name, index
+                nominal_runtime_base_name(&variant.enum_name),
+                variant.variant_name,
+                index
             )),
         },
         other => runtime_error(format!(

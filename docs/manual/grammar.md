@@ -457,7 +457,7 @@ argument      = [ identifier, "=" ], expression ;
 numeric-cast-suffix = "as", numeric-type ;
 
 numeric-type
-    = "int8" | "int16" | "int32" | "int64" | "int128" | "intsize"
+    = "int" | "int8" | "int16" | "int32" | "int64" | "int128" | "intsize"
     | "uint8" | "uint16" | "uint32" | "uint64" | "uint128" | "uintsize"
     | "float32" | "float64" ;
 ```

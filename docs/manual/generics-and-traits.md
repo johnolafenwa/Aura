@@ -48,7 +48,7 @@ The exact parameter-list forms are in [Grammar](/manual/grammar#type-references-
 Generic calls infer substitutions by unifying argument types with parameter type patterns. An available expected result type may add constraints. Generic class and enum construction similarly use provided fields/payloads and an expected constructed type.
 
 ```python
-boxed = Box(value=7)          # Box[int32]
+boxed = Box(value=7)          # Box[int64]
 value = identity("Aurora")   # String
 ```
 

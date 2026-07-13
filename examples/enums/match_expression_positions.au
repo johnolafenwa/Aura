@@ -10,7 +10,7 @@ def emit(value: int32) -> None:
     print(value)
 
 def describe(outer: Outer, inner: Inner) -> int32:
-    label = match outer:
+    label: int32 = match outer:
         case Outer.A: 10
         case Outer.B: 20
 

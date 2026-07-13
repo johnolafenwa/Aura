@@ -1,15 +1,18 @@
 # Task Board
 
-Last updated: 2026-07-13
+Last updated: 2026-07-14
 
-## Paused Work Session
+## Active Work Session
 
 - Started: 2026-07-13 13:58:22 BST.
-- Paused: 2026-07-13 15:16:57 BST.
-- Elapsed: 1h 18m 35s.
+- Resumed after ratification: 2026-07-13 16:40:01 BST.
+- Paused for D3 gate escalation: 2026-07-13 18:10:47 BST.
+- Resumed after G1-G3 ratification: 2026-07-13 19:50:02 BST.
+- Current continuous elapsed: 4h 50m 24s as of 2026-07-14 00:40:26 BST; prior completed elapsed: 2h 49m 21s.
 - Target: Preserve accepted Phase 1 as logical commits, complete cleanup tickets V1-V5, implement ticket 9 int64/uint64 direct unboxing, then complete the Phase 1.5 D3 -> D2 -> D4 -> D5 -> D6 semantic migration with an independently revertable commit and full repository gate after each decision.
 - Stop rule: complete Phase 1.5 and report, encounter a ratified-rule gate failure or unforeseen ambiguity that requires escalation, or reach 12 continuous hours.
-- Pause reason: the D2 implementation audit exposed four semantics not ratified by the authoritative rulings: whether `to_float()` is exact or rounding, whether `//` and floor `%` apply to floats, whether `//` participates in a trait, and whether `//=` exists. Per the stop rule, implementation is paused before D3/D2 rather than silently choosing language behavior.
+- Resume authority: S1-S4 are now ratified; D3 -> D2 -> D4 -> D5 -> D6 resumes with one full-gated commit per decision. V6 is scheduled after Phase 1.5 and before or with Phase 4.
+- Resume authority: G1 permits behavior-focused tests to close coverage-only gaps without escalation, freezes compiler coverage floors at 96.01% lines / 96.71% functions / 93.94% regions through Phase 1.5, and requires one re-ratchet at sign-off. G2 rejects all explicit ownership modifiers on Queue iteration. G3 permits shared-borrow and `own` defaults but rejects `borrow mut` defaults. D3 has passed its complete gate above `856054c` and is ready for its independent commit; D2 has not started.
 
 ## Previous Session (stale record recovered 2026-07-10)
 
@@ -29,6 +32,7 @@ Last updated: 2026-07-13
 
 ## Todo
 
+- After Phase 1.5 and before or with Phase 4, complete V6: diagnose why the direct int32 10M loop is roughly 2x slower than int64, fix or document the cause, and retain both measurements in the benchmark baseline.
 - Publish signed 0.1 preview archives for every supported platform after the release workflow has passed on each target.
 - Use the host-array / tensor-lite layer as the next ML systems milestone, starting with a small dtype and shape surface before tensor or accelerator syntax.
 - Expand control-plane serialization and networking from the current honest baseline only when real agent-service examples require nested schemas, pooling, redirects, HTTP/2, or server-side TLS.

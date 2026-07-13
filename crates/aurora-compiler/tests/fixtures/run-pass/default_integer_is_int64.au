@@ -1,0 +1,60 @@
+def identity[T](value: T) -> T:
+    return value
+
+def alias_identity(value: int) -> int:
+    return value
+
+class Inner:
+    value: int
+
+class Outer:
+    inner: Inner
+
+def print_int64(value: int64):
+    print(value)
+
+def print_first(values: Vec[int64]):
+    print(values[0])
+
+def print_optional(value: Option[int64]):
+    match value:
+        case Option.Some(inner):
+            print(inner)
+        case Option.None:
+            print(0)
+
+def main() -> int32:
+    positive = 41
+    negative = -42
+    collection = [43, 44]
+    generic = identity(value=2147483648)
+    optional = Option.Some(46)
+    alias_value: int = 2147483648
+    minimum = -9223372036854775808
+    maximum = 9223372036854775807
+    narrowed: int32 = positive as int32
+    widened: uint64 = narrowed as uint64
+    unsigned_limit: uint64 = 42
+    minimum_wide: int128 = minimum as int128
+    maximum_wide: int128 = maximum as int128
+    mut outer = Outer(inner=Inner(value=2147483648))
+    outer.inner.value = maximum
+
+    print_int64(positive)
+    print_int64(negative)
+    print_first(collection)
+    print_int64(generic)
+    print_optional(optional)
+    print_int64(alias_value)
+    print(alias_identity(maximum))
+    print(f"bounds: {minimum}..{maximum}")
+    print(minimum != maximum)
+    print(maximum >= minimum)
+    print(widened < unsigned_limit)
+    print(widened <= unsigned_limit)
+    print(unsigned_limit >= widened)
+    print(narrowed)
+    print(f"nested alias: {outer.inner.value}")
+    print(minimum_wide < maximum_wide)
+    print(maximum_wide > minimum_wide)
+    return 0

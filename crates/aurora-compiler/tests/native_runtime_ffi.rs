@@ -130,6 +130,8 @@ unsafe fn byte_vec(values: &[u8]) -> *mut OpaqueValue {
     let vec = aurora_direct_vec_empty();
     for value in values {
         let item = unsafe { int_value(i64::from(*value)) };
+        let runtime_type = "uint8";
+        aurora_direct_tag_value_type(item, runtime_type.as_ptr(), runtime_type.len());
         release(aurora_direct_vec_push_in_place(vec, item));
         release(item);
     }

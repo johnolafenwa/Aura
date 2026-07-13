@@ -115,10 +115,12 @@ Integer arithmetic, division, remainder, negation, and casts are checked for ove
 `expression as NumericType` performs an explicit numeric conversion. Supported target spellings are:
 
 ```text
-int8 int16 int32 int64 int128 intsize
+int int8 int16 int32 int64 int128 intsize
 uint8 uint16 uint32 uint64 uint128 uintsize
 float32 float64
 ```
+
+The target spelling `int` is exactly the same target type as `int64`.
 
 Casts are postfix and bind more tightly than arithmetic:
 
@@ -211,7 +213,7 @@ values[0]
 counts["ready"]
 ```
 
-Vector indices are integers and zero-based. A map index must have exactly the map's key type. Invalid indices produce the documented runtime failure.
+Vector indices have exactly type `int32` and are zero-based. A contextually typed integer literal may adopt `int32`, but an already-bound `int64` value is not implicitly narrowed. A map index must have exactly the map's key type. Invalid indices produce the documented runtime failure.
 
 A direct vector read of a copy element returns the value. Moving a non-copy vector element by direct indexing is restricted; use `get(index)` when the intended operation is an explicit cloned/optional read. Index assignment is a statement target and is covered by [Statements](/manual/statements#bindings-and-assignment).
 

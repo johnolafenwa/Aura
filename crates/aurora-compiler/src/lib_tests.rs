@@ -891,6 +891,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
     ));
     assert_eq!(logical_module_name(temp.path(), &user_path), "pkg.user");
     assert!(is_builtin_export_type("String"));
+    assert!(is_builtin_export_type("int"));
     assert!(!is_builtin_export_type("Box"));
 
     let mut program = check_path(&user_path).expect("user module should check");
@@ -2143,7 +2144,7 @@ def main() -> int32:
     copy_into(source=first, target=second)
     print(second.value)
 
-    mut total = 0
+    mut total: int32 = 0
     for i in range(stop=3):
         total += i
     print(total)
@@ -2462,7 +2463,7 @@ def sleeper(started: Queue[int32]) -> None:
         sleep(10s)
 
 def wait_for_count(queue: Queue[int32], expected: int32):
-    mut seen = 0
+    mut seen: int32 = 0
     while seen < expected:
         match queue.get():
             case QueueReceive.Item(_):

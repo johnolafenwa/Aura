@@ -177,7 +177,7 @@ def main() -> int32:
     parsed_result = parse_and_offset("7")
     print(parsed_result)
 
-    mut values = [1, 2]
+    mut values: Vec[int32] = [1, 2]
     values.push(3)
     print(values.get(1))
     print(values[0])
@@ -191,7 +191,7 @@ def main() -> int32:
     values.extend([5, 6])
     print(values == [3, 7, 8, 5, 6])
     print_int_option(values.get(0))
-    mut range_total = 0
+    mut range_total: int32 = 0
     for number in range(values.len()):
         range_total += number
     print(range_total)

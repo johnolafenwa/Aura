@@ -1,0 +1,5 @@
+def main() -> int32:
+    narrow: int32 = 1
+    wide: uint64 = narrow
+    print(wide)
+    return 0

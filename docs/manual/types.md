@@ -13,6 +13,7 @@ The type system is designed to keep three facts visible:
 | Type | Description |
 | --- | --- |
 | `bool` | Boolean value: `true` or `false`. |
+| `int` | Alias for `int64`; it is not a distinct type. |
 | `int8`, `int16`, `int32`, `int64`, `int128`, `intsize` | Signed integers. |
 | `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize` | Unsigned integers. |
 | `float32`, `float64` | Floating-point values. |
@@ -40,6 +41,10 @@ Integer bounds are exact:
 | `uintsize` | host-pointer-width unsigned range |
 
 `float32` and `float64` use IEEE-754 binary32 and binary64 representations. Literal lexing first requires a finite binary64 value; contextual `float32` conversion may round or overflow as recorded in [Current Limits](/manual/current-limits). Runtime operations may produce NaN, but Aurora 0.1 makes division and remainder by zero explicit runtime failures rather than producing infinity or NaN through those operators.
+
+`int` is an alias for `int64`, so the two spellings have identical bounds, type identity, layout, and runtime behavior. An unsuffixed integer literal uses an expected integer type when one is available and otherwise defaults to `int64`.
+
+The default does not widen explicitly typed APIs. Existing fixed `int32` contracts remain `int32`, including `main()` exit statuses, `range(...)` bounds and yielded values, collection lengths, Vec indexes, queue capacities, and byte-count parameters. A literal passed to one of those positions adopts the expected `int32` type and must fit it.
 
 `Duration` stores a non-negative integral count of milliseconds representable by signed 128-bit storage. Literal units are normalized to milliseconds. `Range` contains `int32` start/end values and iterates from the start inclusive to the end exclusive.
 

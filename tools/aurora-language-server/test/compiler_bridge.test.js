@@ -1139,7 +1139,7 @@ test("compiler bridge includes Set collection members and MapEntry fields", asyn
     const source = [
       "def main() -> int32:",
       "    mut seen = {1, 2, 3}",
-      "    counts = {\"a\": 1, \"b\": 2}",
+      "    counts: Map[String, int32] = {\"a\": 1, \"b\": 2}",
       "    entries: Vec[MapEntry[String, int32]] = counts.items()",
       "    match entries.get(index=0):",
       "        case Some(found):",
@@ -1442,7 +1442,7 @@ test("compiler bridge analyzes indexed member chains and f-string indexed lookup
     const source = [
       "def main() -> int32:",
       "    keys = [\"a\", \"b\"]",
-      "    idx = 1",
+      "    idx: int32 = 1",
       "    mut counts = {\"key\": 7}",
       "    match keys.get(index=idx):",
       "        case Some(key):",

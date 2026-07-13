@@ -7,7 +7,7 @@ def main() -> int32:
     mut values = Vec[int32]()
     values.extend([4, 5])
 
-    mut total = 0
+    mut total: int32 = 0
     for value in values:
         total += value
     print(total)

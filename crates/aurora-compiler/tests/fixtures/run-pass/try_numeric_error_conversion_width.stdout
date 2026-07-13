@@ -1,0 +1,4 @@
+Result.Ok(5)
+Result.Err(AppError.Narrow(7))
+closed try
+Result.Err(AppError.Narrow(7))

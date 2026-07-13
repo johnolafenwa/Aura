@@ -1486,10 +1486,10 @@ fn lower_type_with_self(
     type_params: &BTreeMap<String, ()>,
     self_type: Option<&Type>,
 ) -> Result<Type> {
-    let type_name = if type_ref.name == "str" {
-        "String"
-    } else {
-        type_ref.name.as_str()
+    let type_name = match type_ref.name.as_str() {
+        "str" => "String",
+        "int" => "int64",
+        name => name,
     };
 
     if type_name == "Self" {
@@ -2227,6 +2227,7 @@ fn is_builtin_type(name: &str) -> bool {
     matches!(
         name,
         "bool"
+            | "int"
             | "int8"
             | "int16"
             | "int32"
@@ -2547,6 +2548,23 @@ enum BlockFlow {
 }
 
 impl<'a> FunctionChecker<'a> {
+    fn check_vec_index_type(
+        &self,
+        index: &Expr,
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let expected = Type::named("int32");
+        let actual = self.type_of_expr_hint(index, locals, Some(&expected))?;
+        if actual != expected {
+            return Err(Diagnostic::at(
+                span,
+                format!("vector indices must have type `int32`, found `{}`", actual),
+            ));
+        }
+        Ok(())
+    }
+
     fn bound_argument<'b>(
         &self,
         ordered_args: &'b [Option<&'b Argument>],
@@ -4113,13 +4131,7 @@ impl<'a> FunctionChecker<'a> {
 
             let object_ty = self.type_of_expr(object, locals)?;
             let target_ty = if let Some(target_ty) = vec_element_type(&object_ty).cloned() {
-                let index_ty = self.type_of_expr(index, locals)?;
-                if !is_integer_type(&index_ty) {
-                    return Err(Diagnostic::at(
-                        index.span,
-                        format!("vector indices must be integers, found `{}`", index_ty),
-                    ));
-                }
+                self.check_vec_index_type(index, index.span, locals)?;
                 target_ty
             } else if let Some((key_ty, value_ty)) = map_key_value_types(&object_ty) {
                 let index_ty = self.type_of_expr_hint(index, locals, Some(key_ty))?;
@@ -4515,7 +4527,7 @@ impl<'a> FunctionChecker<'a> {
                 let target_ty = expected
                     .filter(|ty| is_integer_type(ty))
                     .cloned()
-                    .unwrap_or_else(|| Type::named("int32"));
+                    .unwrap_or_else(|| Type::named("int64"));
                 self.validate_integer_literal(*value, &target_ty, expr.span)?;
                 Ok(target_ty)
             }
@@ -4803,7 +4815,7 @@ impl<'a> FunctionChecker<'a> {
                             let target_ty = expected
                                 .filter(|ty| is_integer_type(ty))
                                 .cloned()
-                                .unwrap_or_else(|| Type::named("int32"));
+                                .unwrap_or_else(|| Type::named("int64"));
                             self.validate_negative_integer_literal(*inner, &target_ty, expr.span)?;
                             target_ty
                         }
@@ -5151,13 +5163,7 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Index { object, index } => {
                 let object_ty = self.type_of_expr(object, locals)?;
                 if let Some(element_ty) = vec_element_type(&object_ty).cloned() {
-                    let index_ty = self.type_of_expr(index, locals)?;
-                    if !is_integer_type(&index_ty) {
-                        return Err(Diagnostic::at(
-                            index.span,
-                            format!("vector indices must be integers, found `{}`", index_ty),
-                        ));
-                    }
+                    self.check_vec_index_type(index, index.span, locals)?;
                     if !self.is_copy_type(&element_ty) {
                         return Err(Diagnostic::at(
                             expr.span,
@@ -5734,7 +5740,11 @@ impl<'a> FunctionChecker<'a> {
                     }
                     BuiltinFunction::Range => {
                         for argument in ordered_args.into_iter().flatten() {
-                            let actual = self.type_of_expr(&argument.value, locals)?;
+                            let actual = self.type_of_expr_hint(
+                                &argument.value,
+                                locals,
+                                Some(&Type::named("int32")),
+                            )?;
                             if actual != Type::named("int32") {
                                 return Err(Diagnostic::at(
                                     argument.span,
@@ -6774,20 +6784,11 @@ impl<'a> FunctionChecker<'a> {
                                         span,
                                         "`get` requires exactly one argument",
                                     )?;
-                                    let index_ty = self.type_of_expr_hint(
+                                    self.check_vec_index_type(
                                         &index_arg.value,
+                                        index_arg.span,
                                         locals,
-                                        Some(&Type::named("int32")),
                                     )?;
-                                    if !is_integer_type(&index_ty) {
-                                        return Err(Diagnostic::at(
-                                            index_arg.span,
-                                            format!(
-                                                "vector indices must be integers, found `{}`",
-                                                index_ty
-                                            ),
-                                        ));
-                                    }
                                     Ok(Type::Named(
                                         "Option".to_string(),
                                         vec![receiver_args[0].clone()],
@@ -6801,20 +6802,11 @@ impl<'a> FunctionChecker<'a> {
                                         span,
                                         "`set` requires an `index` argument",
                                     )?;
-                                    let index_ty = self.type_of_expr_hint(
+                                    self.check_vec_index_type(
                                         &index_arg.value,
+                                        index_arg.span,
                                         locals,
-                                        Some(&Type::named("int32")),
                                     )?;
-                                    if !is_integer_type(&index_ty) {
-                                        return Err(Diagnostic::at(
-                                            index_arg.span,
-                                            format!(
-                                                "vector indices must be integers, found `{}`",
-                                                index_ty
-                                            ),
-                                        ));
-                                    }
                                     let value_arg = self.bound_argument(
                                         &ordered_args,
                                         1,
@@ -6851,20 +6843,11 @@ impl<'a> FunctionChecker<'a> {
                                         span,
                                         "`remove` requires exactly one argument",
                                     )?;
-                                    let index_ty = self.type_of_expr_hint(
+                                    self.check_vec_index_type(
                                         &index_arg.value,
+                                        index_arg.span,
                                         locals,
-                                        Some(&Type::named("int32")),
                                     )?;
-                                    if !is_integer_type(&index_ty) {
-                                        return Err(Diagnostic::at(
-                                            index_arg.span,
-                                            format!(
-                                                "vector indices must be integers, found `{}`",
-                                                index_ty
-                                            ),
-                                        ));
-                                    }
                                     Ok(Type::Named(
                                         "Option".to_string(),
                                         vec![receiver_args[0].clone()],
@@ -6878,40 +6861,22 @@ impl<'a> FunctionChecker<'a> {
                                         span,
                                         "`swap` requires a `first` argument",
                                     )?;
-                                    let first_ty = self.type_of_expr_hint(
+                                    self.check_vec_index_type(
                                         &first_arg.value,
+                                        first_arg.span,
                                         locals,
-                                        Some(&Type::named("int32")),
                                     )?;
-                                    if !is_integer_type(&first_ty) {
-                                        return Err(Diagnostic::at(
-                                            first_arg.span,
-                                            format!(
-                                                "vector indices must be integers, found `{}`",
-                                                first_ty
-                                            ),
-                                        ));
-                                    }
                                     let second_arg = self.bound_argument(
                                         &ordered_args,
                                         1,
                                         span,
                                         "`swap` requires a `second` argument",
                                     )?;
-                                    let second_ty = self.type_of_expr_hint(
+                                    self.check_vec_index_type(
                                         &second_arg.value,
+                                        second_arg.span,
                                         locals,
-                                        Some(&Type::named("int32")),
                                     )?;
-                                    if !is_integer_type(&second_ty) {
-                                        return Err(Diagnostic::at(
-                                            second_arg.span,
-                                            format!(
-                                                "vector indices must be integers, found `{}`",
-                                                second_ty
-                                            ),
-                                        ));
-                                    }
                                     Ok(Type::named("bool"))
                                 }
                                 BuiltinMember::VecContains => {
@@ -6970,20 +6935,11 @@ impl<'a> FunctionChecker<'a> {
                                         span,
                                         "`insert` requires an `index` argument",
                                     )?;
-                                    let index_ty = self.type_of_expr_hint(
+                                    self.check_vec_index_type(
                                         &index_arg.value,
+                                        index_arg.span,
                                         locals,
-                                        Some(&Type::named("int32")),
                                     )?;
-                                    if !is_integer_type(&index_ty) {
-                                        return Err(Diagnostic::at(
-                                            index_arg.span,
-                                            format!(
-                                                "vector indices must be integers, found `{}`",
-                                                index_ty
-                                            ),
-                                        ));
-                                    }
                                     let value_arg = self.bound_argument(
                                         &ordered_args,
                                         1,
@@ -12076,6 +12032,25 @@ impl<'a> FunctionChecker<'a> {
         )?;
 
         let mut substitutions = seed_substitutions;
+        if let Some(expected_return) = expected_return {
+            if let Err(error) = unify_type_pattern(return_type, expected_return, &mut substitutions)
+            {
+                let resolved_return_type = substitute_type(return_type, &substitutions);
+                self.ensure_call_result_materializable(
+                    span,
+                    callee_name,
+                    &resolved_return_type,
+                    return_passing,
+                )?;
+                return Err(Diagnostic::at(
+                    span,
+                    format!(
+                        "result type mismatch for {}: {}",
+                        callee_name, error.message
+                    ),
+                ));
+            }
+        }
         let mut resolved_args = Vec::new();
         for ((argument, expected), param_decl) in ordered_args
             .into_iter()
@@ -12127,26 +12102,6 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
             resolved_args.push((argument, actual, nested_moved_places));
-        }
-
-        if let Some(expected_return) = expected_return {
-            if let Err(error) = unify_type_pattern(return_type, expected_return, &mut substitutions)
-            {
-                let resolved_return_type = substitute_type(return_type, &substitutions);
-                self.ensure_call_result_materializable(
-                    span,
-                    callee_name,
-                    &resolved_return_type,
-                    return_passing,
-                )?;
-                return Err(Diagnostic::at(
-                    span,
-                    format!(
-                        "result type mismatch for {}: {}",
-                        callee_name, error.message
-                    ),
-                ));
-            }
         }
 
         for type_param in callee_type_params {

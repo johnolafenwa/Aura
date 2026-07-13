@@ -12,7 +12,7 @@ b = 100
 total = a + b
 ```
 
-Here `a`, `b`, and `total` are all `int32` because integer literals default to `int32`.
+Here `a`, `b`, and `total` are all `int64` because integer literals default to `int64`. The shorter type spelling `int` is an alias for `int64`.
 
 See [examples/basics/top_level_script.au](../examples/basics/top_level_script.au).
 
@@ -63,12 +63,13 @@ Functions that omit a return type annotation implicitly return `None`. You will 
 
 ## Builtin Scalar Types
 
-Aurora has a rich set of numeric types. If you are not sure which to use, start with `int32` for integers and `float64` for decimals:
+Aurora has a rich set of numeric types. If you are not sure which to use, start with `int` for integers and `float64` for decimals:
 
 | Type | Description | When to use |
 |------|-------------|-------------|
-| `int32` | 32-bit signed integer | Default for most integer work |
-| `int64` | 64-bit signed integer | Large counts, timestamps |
+| `int` | Alias for `int64` | Default integer spelling |
+| `int32` | 32-bit signed integer | Fixed-width APIs and 32-bit range/layout contracts |
+| `int64` | 64-bit signed integer | Same type as `int`; large counts and timestamps |
 | `float64` | 64-bit floating point | Default for decimal math |
 | `float32` | 32-bit floating point | When memory or precision constraints require it |
 | `bool` | `true` or `false` | Conditions and flags |
@@ -76,13 +77,18 @@ Aurora has a rich set of numeric types. If you are not sure which to use, start 
 | `Duration` | Time span | Concurrency timeouts (`5ms`, `1s`, `2m`) |
 | `None` | Unit type | Functions with no meaningful return |
 
-The full set of integer types covers `int8` through `int128`, `uint8` through `uint128`, plus `intsize` and `uintsize` for platform-sized integers. Use the narrower types when you need explicit control over memory layout or value ranges.
+The full set of integer types covers `int8` through `int128`, `uint8` through `uint128`, plus `intsize` and `uintsize` for platform-sized integers. `int` is not an additional width: it is exactly `int64`. Use other explicit widths when you need control over memory layout, value ranges, or a fixed-width API contract.
 
-Integer literals default to `int32`. Floating-point literals default to `float64`, but adopt `float32` when the surrounding annotation or parameter type requires it:
+Integer literals default to `int64`. Floating-point literals default to `float64`, but both kinds of literal adopt a compatible expected numeric type from an annotation, parameter, return type, or field:
 
 ```python
+count: int32 = 12
 ratio: float32 = 3.25
 ```
+
+The default-type change does not alter APIs that explicitly use `int32`. For example, `range(...)`, Vec indexes, collection lengths, queue capacities, and a numeric `main()` exit status remain `int32`; literals passed to them adopt that expected type.
+
+That context applies to the literal expression itself, not to a binding created earlier. `values.get(0)` uses the required `int32` context, but `index = 0` creates an `int64` binding and cannot later be used as a Vec index. Write `index: int32 = 0` when the binding is meant for a fixed-width index API.
 
 ## Builtin Container Types
 
@@ -244,7 +250,7 @@ See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 
 Summary of literal type rules:
 
-- integer literals default to `int32`
+- integer literals default to `int64` (`int` is an alias for `int64`)
 - floating-point literals default to `float64`
 - duration literals like `5ms`, `1s`, and `2m` have type `Duration`
 - negative literals are supported: `-5`, `-3.5`

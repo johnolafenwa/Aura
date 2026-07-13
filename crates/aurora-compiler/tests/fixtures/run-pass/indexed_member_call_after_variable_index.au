@@ -1,6 +1,6 @@
 def main() -> int32:
     keys = ["a", "b"]
-    idx = 1
+    idx: int32 = 1
     match keys.get(idx):
         case Option.Some(value):
             print(value.clone())

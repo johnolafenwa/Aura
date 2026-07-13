@@ -78,7 +78,7 @@ A type annotation is allowed only on a simple-name target. `mut` also belongs on
 # mut point.x = 4.0
 ```
 
-Field assignment requires a mutable base place and a declared field. Vector index assignment requires an integer index. Map index assignment requires exactly the map's key type.
+Field assignment requires a mutable base place and a declared field. Vector index assignment requires exactly `int32`. Map index assignment requires exactly the map's key type.
 
 ### Compound Assignment
 

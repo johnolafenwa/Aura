@@ -1,0 +1,5 @@
+def main() -> int32:
+    stop = 3
+    for value in range(stop=stop):
+        print(value)
+    return 0

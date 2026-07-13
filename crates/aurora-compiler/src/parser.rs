@@ -1486,7 +1486,8 @@ impl Parser {
             Some(TokenKind::Identifier(name))
                 if matches!(
                     name.as_str(),
-                    "int8"
+                    "int"
+                        | "int8"
                         | "int16"
                         | "int32"
                         | "int64"

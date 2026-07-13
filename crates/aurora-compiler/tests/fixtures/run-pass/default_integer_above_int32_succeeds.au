@@ -1,0 +1,4 @@
+def main() -> int32:
+    value = 2147483648
+    print(value)
+    return 0

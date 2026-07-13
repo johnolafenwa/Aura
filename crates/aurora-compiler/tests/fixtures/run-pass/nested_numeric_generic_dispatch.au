@@ -1,0 +1,94 @@
+trait Show:
+    def show(borrow self) -> String
+
+class Box[T]:
+    value: T
+
+class Marker[T]:
+    label: String
+
+class Pair[T, U]:
+    first: T
+    second: U
+
+impl Show for int32:
+    def show(borrow self) -> String:
+        return "int32"
+
+impl Show for int64:
+    def show(borrow self) -> String:
+        return "int64"
+
+impl Show for Box[int32]:
+    def show(borrow self) -> String:
+        return "box-int32"
+
+impl Show for Box[int64]:
+    def show(borrow self) -> String:
+        return "box-int64"
+
+impl Show for Marker[int32]:
+    def show(borrow self) -> String:
+        return "marker-int32"
+
+impl Show for Marker[int64]:
+    def show(borrow self) -> String:
+        return "marker-int64"
+
+impl Show for Option[int32]:
+    def show(borrow self) -> String:
+        return "option-int32"
+
+impl[T] Show for Option[T]:
+    def show(borrow self) -> String:
+        return "option-generic"
+
+impl[T] Show for Option[Vec[T]]:
+    def show(borrow self) -> String:
+        return "option-vec"
+
+impl[T] Show for Pair[T, None]:
+    def show(borrow self) -> String:
+        return "pair-none"
+
+def render[T: Show](value: T) -> None:
+    print(value.show())
+
+def render_first[T: Show](values: Vec[T]) -> None:
+    match values.get(0):
+        case Option.Some(value):
+            print(value.show())
+        case Option.None:
+            print("missing")
+
+def identity_option[T](value: Option[T]) -> Option[T]:
+    return value
+
+def main() -> int32:
+    render(Box[int32](value=7))
+    render(Box[int64](value=8))
+    render(Marker[int32](label="narrow"))
+    render(Marker[int64](label="wide"))
+    narrow: Option[int32] = Option.Some(9)
+    wide: Option[int64] = Option.Some(10)
+    nested: Option[Vec[int64]] = Option.Some([15])
+    render(narrow)
+    render(wide)
+    render(nested)
+    missing: Option[int64] = identity_option(value=None)
+    render(missing)
+    pair: Pair[int64, None] = Pair[int64, None](first=2147483648, second=None)
+    render(pair)
+    narrow_values: Vec[int32] = [11]
+    wide_values: Vec[int64] = [12]
+    render_first(narrow_values)
+    render_first(wide_values)
+    narrow_markers: Vec[Marker[int32]] = [Marker[int32](label="narrow")]
+    wide_markers: Vec[Marker[int64]] = [Marker[int64](label="wide")]
+    render_first(narrow_markers)
+    render_first(wide_markers)
+    narrow_options: Vec[Option[int32]] = [Option.Some(13)]
+    wide_options: Vec[Option[int64]] = [Option.Some(14)]
+    render_first(narrow_options)
+    render_first(wide_options)
+    return 0

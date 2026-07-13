@@ -1,0 +1,5 @@
+error: integer literal `9223372036854775808` does not fit in `int64`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/default_integer_above_int64_rejected.au:2:13
+  |
+2 |     value = 9223372036854775808
+  |             ^

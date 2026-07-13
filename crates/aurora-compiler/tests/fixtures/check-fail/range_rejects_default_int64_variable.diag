@@ -1,0 +1,5 @@
+error: `range` arguments must have type `int32`, found `int64`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/range_rejects_default_int64_variable.au:3:24
+  |
+3 |     for value in range(stop=stop):
+  |                        ^

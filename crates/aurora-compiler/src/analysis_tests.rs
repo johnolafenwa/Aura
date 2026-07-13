@@ -149,6 +149,39 @@ fn expr(kind: ExprKind) -> Expr {
 }
 
 #[test]
+fn d3_analysis_reports_canonical_int64_for_aliases_and_defaulted_expressions() {
+    assert_eq!(lower_type_ref(&type_ref("int")), Type::named("int64"));
+
+    let source = r#"
+def main() -> int32:
+    scalar = 1
+    numbers = [1, 2]
+    maybe = Option.Some(1)
+    print(scalar)
+    print(numbers.len())
+    print(maybe != Option.None)
+    return 0
+"#;
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+
+    for expected_hover in [
+        "binding scalar: int64",
+        "binding numbers: Vec[int64]",
+        "binding maybe: Option[int64]",
+    ] {
+        assert!(
+            output
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.hover.contains(expected_hover)),
+            "missing hover `{expected_hover}` in {:?}",
+            output.occurrences
+        );
+    }
+}
+
+#[test]
 fn machine_readable_analysis_covers_symbols_and_occurrences() {
     let source = include_str!("../../../examples/point.au");
     let analysis = analyze_source(source);
@@ -671,7 +704,7 @@ fn analysis_scope_and_call_inference_helpers_cover_methods_assignments_and_built
             &[arg(expr(ExprKind::Int(4)))],
             &BTreeMap::new(),
         ),
-        Some(Type::named("int32"))
+        Some(Type::named("int64"))
     );
     assert_eq!(
         builder.infer_call_type(
@@ -706,7 +739,7 @@ fn analysis_scope_and_call_inference_helpers_cover_methods_assignments_and_built
 fn completion_scope_walks_past_if_else_and_while_blocks() {
     let source = [
         "def scoped(flag: bool) -> int32:",
-        "    mut total = 0",
+        "    mut total: int32 = 0",
         "    if flag:",
         "        in_if = total",
         "    else:",
@@ -1206,7 +1239,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             ])),
             &scope,
         ),
-        Some(Type::Named("Vec".to_string(), vec![Type::named("int32")]))
+        Some(Type::Named("Vec".to_string(), vec![Type::named("int64")]))
     );
     assert_eq!(
         builder.infer_expr_type(
@@ -1228,7 +1261,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         ),
         Some(Type::Named(
             "Map".to_string(),
-            vec![Type::named("String"), Type::named("int32")],
+            vec![Type::named("String"), Type::named("int64")],
         ))
     );
     assert_eq!(
@@ -1354,7 +1387,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             &expr(ExprKind::Group(Box::new(expr(ExprKind::Int(3))))),
             &scope
         ),
-        Some(Type::named("int32"))
+        Some(Type::named("int64"))
     );
     assert_eq!(
         builder.infer_expr_type(&expr(ExprKind::Name("pkg".to_string())), &scope),
@@ -1442,7 +1475,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             }),
             &scope,
         ),
-        Some(Type::named("int32"))
+        Some(Type::named("int64"))
     );
     assert_eq!(
         builder.infer_expr_type(
@@ -1548,7 +1581,7 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         ),
         Some(Type::Named(
             "Option".to_string(),
-            vec![Type::named("int32")]
+            vec![Type::named("int64")]
         ))
     );
     assert_eq!(

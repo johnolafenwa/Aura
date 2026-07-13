@@ -6,8 +6,8 @@ def print_int_option(value: Option[int32]):
             print(-1)
 
 def main() -> int32:
-    mut counts = {"aurora": 1}
-    other = {"codex": 2, "repo": 3}
+    mut counts: Map[String, int32] = {"aurora": 1}
+    other: Map[String, int32] = {"codex": 2, "repo": 3}
     counts.extend(other)
     print(counts.len())
     print(counts.contains_key("aurora"))

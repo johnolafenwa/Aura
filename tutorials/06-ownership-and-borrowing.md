@@ -28,7 +28,7 @@ Copy types are small, fixed-size values that are cheap to duplicate. When you as
 
 The built-in copy types are:
 
-- all integer types: `int8`, `int16`, `int32`, `int64`, `int128`, `intsize`
+- all integer types: `int` (the `int64` alias), `int8`, `int16`, `int32`, `int64`, `int128`, `intsize`
 - all unsigned types: `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize`
 - `float32`, `float64`
 - `bool`

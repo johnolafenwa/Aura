@@ -6,7 +6,7 @@ def print_bool(value: bool):
             print("false")
 
 def main() -> int32:
-    literal_numbers = [1, 2, 3]
+    literal_numbers: Vec[int32] = [1, 2, 3]
     mut pushed_numbers: Vec[int32] = []
     pushed_numbers.push(1)
     pushed_numbers.push(2)

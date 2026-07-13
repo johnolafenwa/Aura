@@ -1,0 +1,6 @@
+def consume[T](value: T):
+    print(value)
+
+def main() -> int32:
+    consume(missing)
+    return 0

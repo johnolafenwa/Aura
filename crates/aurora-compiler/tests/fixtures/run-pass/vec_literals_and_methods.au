@@ -6,7 +6,7 @@ def print_int_option(value: Option[int32]):
             print(-1)
 
 def main() -> int32:
-    mut values = [1, 2, 3]
+    mut values: Vec[int32] = [1, 2, 3]
     print(values.len())
     print(values.is_empty())
     print_int_option(values.get(1))
@@ -14,7 +14,7 @@ def main() -> int32:
     print_int_option(values.remove(0))
     values.push(99)
     print_int_option(values.pop())
-    mut total = 0
+    mut total: int32 = 0
     for value in values:
         total += value
     print(total)

@@ -33,13 +33,14 @@ Do not mix top-level executable statements with `main` in the same file.
 
 Floating-point literals default to `float64`, but they can adopt an expected `float32` type from an annotation, parameter, return type, or class field.
 
-Integer literals now support the full `uint128` range in the checker, MIR runtime, and direct backend.
+Unsuffixed integer literals default to `int64`, and `int` is an alias for `int64`. Expected integer types still take precedence, so fixed `int32` APIs and annotations remain `int32`. Integer literals support the full `uint128` range when that type is expected.
 
 ## Types
 
 Builtin scalar and utility type names currently accepted by the compiler:
 
 - `bool`
+- `int` (an alias for `int64`)
 - `int8`, `int16`, `int32`, `int64`, `int128`, `intsize`
 - `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize`
 - `float32`, `float64`

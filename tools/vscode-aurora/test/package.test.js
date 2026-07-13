@@ -59,6 +59,9 @@ test("syntax grammar tracks maintained builtin types", () => {
   assert.ok(typeRule);
   const typePattern = new RegExp(typeRule.match);
   for (const typeName of [
+    "int",
+    "int32",
+    "int64",
     "Queue",
     "QueueReceive",
     "TaskResult",

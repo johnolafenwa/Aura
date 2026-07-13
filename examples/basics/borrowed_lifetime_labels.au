@@ -7,8 +7,8 @@ def identity(value: borrow[src] int32) -> borrow[src] int32:
     return value
 
 def main() -> int32:
-    left = 0
-    right = 7
+    left: int32 = 0
+    right: int32 = 7
     picked = choose_positive(left=left, right=right)
     aliased = identity(value=picked)
     print(aliased)

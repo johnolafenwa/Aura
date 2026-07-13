@@ -43,6 +43,7 @@ use package::PackageGraph;
 #[cfg(coverage)]
 #[doc(hidden)]
 pub mod native_runtime_coverage {
+    pub use super::native_runtime::aurora_direct_tag_value_type;
     pub use super::native_runtime::{
         aurora_direct_binary_value, aurora_direct_binary_value_at, aurora_direct_box_bool,
         aurora_direct_box_i64, aurora_direct_box_u64, aurora_direct_cast_float_to_integer,
@@ -692,6 +693,7 @@ fn is_builtin_export_type(name: &str) -> bool {
     matches!(
         name,
         "bool"
+            | "int"
             | "int8"
             | "int16"
             | "int32"

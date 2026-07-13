@@ -725,14 +725,15 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 </code></pre></div>
 
 <h2 id="613-primitive-numeric-types">6.13 Primitive numeric types</h2>
-<p>Aurora uses explicit primitive numeric type names in v1:</p>
+<p>Aurora provides a default signed integer spelling plus explicit primitive numeric widths in v1:</p>
 <ul>
+<li>default signed integer: <code>int</code>, an alias for <code>int64</code></li>
 <li>signed integers: <code>int8</code>, <code>int16</code>, <code>int32</code>, <code>int64</code>, <code>int128</code>, <code>intsize</code></li>
 <li>unsigned integers: <code>uint8</code>, <code>uint16</code>, <code>uint32</code>, <code>uint64</code>, <code>uint128</code>, <code>uintsize</code></li>
 <li>floating-point: <code>float32</code>, <code>float64</code></li>
 <li>boolean: <code>bool</code></li>
 </ul>
-<p>There is no unsuffixed <code>int</code> type in v1. Examples should use fixed-width integers or pointer-width integers explicitly.</p>
+<p><code>int</code> is an alias for <code>int64</code>, and an unsuffixed integer literal defaults to <code>int64</code> when no expected integer type is available. An expected type still wins, so explicitly declared <code>int32</code> APIs and literals passed to them remain <code>int32</code>.</p>
 <h2 id="614-fixed-size-arrays">6.14 Fixed-size arrays</h2>
 <p>Fixed-size owned arrays are deferred until after v1.</p>
 <p>Aurora v1 standard sequence types are:</p>
@@ -1473,7 +1474,7 @@ aura<span class="w"> </span>publish
 <li>Generic constraints use inline <code>T: Trait</code> bounds with <code>+</code> for multiple bounds; <code>try expr</code> supports <code>From[SourceError] for TargetError</code> conversions; and default arguments are evaluated at the call site and are not part of trait method declarations in v1.</li>
 <li>Functions may omit <code>-&gt; None</code>, and executable entry files may use top-level statements instead of an explicit <code>main</code>, but a file may not use both entry styles at once in v1.</li>
 <li>Control flow uses Python-style <code>if</code>/<code>elif</code>/<code>else</code> plus <code>while</code>; loops support <code>break</code> and <code>continue</code>; conditions must be <code>bool</code>; and tuple syntax uses <code>(T1, T2, ...)</code> with dotted numeric field access.</li>
-<li>Primitive numeric types use explicit names like <code>int32</code>, <code>uint64</code>, <code>uintsize</code>, and <code>float64</code>; there is no bare <code>int</code> in v1; fixed-size owned arrays are deferred until after v1.</li>
+<li>Primitive numeric types use names such as <code>int</code>, <code>int32</code>, <code>uint64</code>, <code>uintsize</code>, and <code>float64</code>; <code>int</code> aliases <code>int64</code>, unsuffixed integer literals default to <code>int64</code>, and fixed-size owned arrays are deferred until after v1.</li>
 <li><code>with</code> lowers through a standard enter/exit protocol, and <code>@test</code> is part of a small built-in attribute syntax rather than a general decorator system in v1.</li>
 </ol>
 <p>Do not start implementation until these decisions are treated as fixed.</p>
@@ -1743,8 +1744,8 @@ aura<span class="w"> </span>publish
 <p>Loops support <code>break</code> and <code>continue</code>.</p>
 <p>Tuple syntax uses <code>(T1, T2, ...)</code> for types, <code>(v1, v2, ...)</code> for values, and <code>.0</code>, <code>.1</code>, ... for element access.</p>
 <h2 id="2313-primitive-types-and-attributes">23.13 Primitive types and attributes</h2>
-<p>Aurora v1 primitive scalar types are <code>bool</code>, <code>int8</code>, <code>int16</code>, <code>int32</code>, <code>int64</code>, <code>int128</code>, <code>intsize</code>, <code>uint8</code>, <code>uint16</code>, <code>uint32</code>, <code>uint64</code>, <code>uint128</code>, <code>uintsize</code>, <code>float32</code>, and <code>float64</code>.</p>
-<p>There is no bare <code>int</code> type in v1.</p>
+<p>Aurora v1 primitive scalar type spellings are <code>bool</code>, <code>int</code>, <code>int8</code>, <code>int16</code>, <code>int32</code>, <code>int64</code>, <code>int128</code>, <code>intsize</code>, <code>uint8</code>, <code>uint16</code>, <code>uint32</code>, <code>uint64</code>, <code>uint128</code>, <code>uintsize</code>, <code>float32</code>, and <code>float64</code>.</p>
+<p><code>int</code> is an alias for <code>int64</code>; unsuffixed integer literals default to <code>int64</code> when they have no expected integer type. Explicit fixed-width API contracts, including those that use <code>int32</code>, are unchanged.</p>
 <p>Fixed-size owned arrays are deferred until after v1.</p>
 <p>Aurora supports a small built-in <code>@name</code> attribute syntax in v1, and <code>@test</code> is the canonical built-in attribute for the test runner.</p>
 <hr />
