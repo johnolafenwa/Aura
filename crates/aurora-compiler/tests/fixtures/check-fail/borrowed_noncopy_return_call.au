@@ -6,5 +6,5 @@ def name_ref(user: borrow User) -> borrow[user] String:
 
 def main():
     user = User(name="aurora")
-    mut alias = name_ref(user)
+    alias = name_ref(user)
     print(alias)

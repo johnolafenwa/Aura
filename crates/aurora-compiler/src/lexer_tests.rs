@@ -12,7 +12,7 @@ fn kinds(source: &str) -> Vec<TokenKind> {
 #[test]
 fn lexes_keywords_operators_and_delimiters() {
     let tokens = kinds(
-            "class enum def trait impl import from mut borrow indirect public return if elif else and or not match case for in while break continue pass try with as select spawn detached true false name ? ( ) [ ] { } : , . = == != < <= > >= + += * *= / /= % %= - -> -=\n",
+            "class enum def trait impl import from mut borrow indirect public return if elif else and or not match case for in is while break continue pass try with as select spawn detached true false name ? ( ) [ ] { } : , . = == != < <= > >= + += * *= / /= % %= - -> -=\n",
         );
 
     assert!(tokens.contains(&TokenKind::KwClass));
@@ -37,6 +37,7 @@ fn lexes_keywords_operators_and_delimiters() {
     assert!(tokens.contains(&TokenKind::KwCase));
     assert!(tokens.contains(&TokenKind::KwFor));
     assert!(tokens.contains(&TokenKind::KwIn));
+    assert!(tokens.contains(&TokenKind::KwIs));
     assert!(tokens.contains(&TokenKind::KwWhile));
     assert!(tokens.contains(&TokenKind::KwBreak));
     assert!(tokens.contains(&TokenKind::KwContinue));

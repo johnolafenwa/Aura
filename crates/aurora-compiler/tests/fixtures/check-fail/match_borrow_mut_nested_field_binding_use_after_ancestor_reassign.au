@@ -1,0 +1,19 @@
+enum Opt:
+    Some(int32)
+    None
+
+class Inner:
+    state: Opt
+
+class Outer:
+    inner: Inner
+
+def main() -> int32:
+    mut outer = Outer(inner=Inner(state=Opt.Some(10)))
+    match borrow mut outer.inner.state:
+        case Some(v):
+            outer.inner = Inner(state=Opt.Some(v))
+            v = v + 1
+        case None:
+            pass
+    return 0

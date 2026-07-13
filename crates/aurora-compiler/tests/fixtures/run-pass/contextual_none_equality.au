@@ -1,0 +1,27 @@
+def no_value() -> Option[int32]:
+    return None
+
+def is_empty[T](value: borrow Option[T]) -> bool:
+    return value == None
+
+def main() -> int32:
+    value: Option[int32] = no_value()
+    print(value == None)
+    print(None == value)
+    print((None) == value)
+    print(value == ((None)))
+    print(((None)) == value)
+    print(value != None)
+    print(None != value)
+    print(None == None)
+    print(None != None)
+    present: Option[int32] = Option.Some(7)
+    print(present == None)
+    print(None == present)
+    print(present != None)
+    print(None != present)
+    print(is_empty[int32](value=value))
+    nested_left: Option[Option[int32]] = Option.Some(None)
+    nested_right: Option[Option[int32]] = Option.Some(no_value())
+    print(nested_left == nested_right)
+    return 0

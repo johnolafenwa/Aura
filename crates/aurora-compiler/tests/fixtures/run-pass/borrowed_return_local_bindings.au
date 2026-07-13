@@ -1,15 +1,15 @@
 class User:
-    name: String
+    score: int32
 
-def name_ref(user: borrow User) -> borrow[user] String:
-    return user.name
+def score_ref(user: borrow User) -> borrow[user] int32:
+    return user.score
 
-def echo_name(user: borrow User) -> borrow[user] String:
-    alias = name_ref(user)
+def echo_score(user: borrow User) -> borrow[user] int32:
+    alias = score_ref(user)
     return alias
 
 def main():
-    user = User(name="aurora")
-    alias = name_ref(user)
+    user = User(score=7)
+    alias = score_ref(user)
     print(alias)
-    print(echo_name(user))
+    print(echo_score(user))

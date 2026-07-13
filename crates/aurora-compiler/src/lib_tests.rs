@@ -1966,7 +1966,7 @@ fn categorized_examples_run_with_expected_output() {
             (
                 "examples/basics/borrowed_lifetime_labels.au",
                 EXAMPLE_CASES[44].1,
-                "aurora\n",
+                "7\n",
             ),
             (
                 "examples/io/process_run.au",

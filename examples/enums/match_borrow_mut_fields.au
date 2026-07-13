@@ -1,0 +1,24 @@
+enum Opt:
+    Some(int32)
+    None
+
+class Holder:
+    state: Opt
+    other: int32
+
+def main() -> int32:
+    mut holder = Holder(state=Opt.Some(10), other=0)
+    match borrow mut holder.state:
+        case Some(value):
+            holder.other = 9
+            value = value + 1
+        case None:
+            pass
+
+    print(holder.other)
+    match borrow holder.state:
+        case Some(value):
+            print(value)
+        case None:
+            print(-1)
+    return 0

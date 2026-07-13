@@ -15,6 +15,36 @@ fn type_ref(name: &str) -> TypeRef {
     }
 }
 
+fn projection_path(path: &str) -> ProjectionPath {
+    if path.is_empty() {
+        return ProjectionPath::default();
+    }
+    ProjectionPath(
+        path.split('.')
+            .map(|field| PlaceProjection::Field(field.to_string()))
+            .collect(),
+    )
+}
+
+fn place_path(path: &str) -> PlacePath {
+    let mut segments = path.split('.');
+    let root = segments.next().expect("test place paths require a root");
+    PlacePath {
+        root: root.to_string(),
+        projections: ProjectionPath(
+            segments
+                .map(|field| PlaceProjection::Field(field.to_string()))
+                .collect(),
+        ),
+    }
+}
+
+#[test]
+fn contextual_none_equality_type_checks_symmetrically() {
+    let source = include_str!("../tests/fixtures/check-pass/contextual_none_positions.au");
+    crate::check_source(source).expect("contextual None positions should type-check");
+}
+
 fn nested_type_ref(name: &str, args: Vec<TypeRef>) -> TypeRef {
     TypeRef {
         name: name.to_string(),
@@ -303,7 +333,7 @@ fn local_binding(
         moved,
         moved_fields: moved_fields
             .iter()
-            .map(|field| (*field).to_string())
+            .map(|field| projection_path(field))
             .collect(),
         frozen_places: BTreeSet::new(),
     }
@@ -6823,7 +6853,9 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
             &mut member_locals,
         )
         .expect("moving a non-copy field from an owned binding should be tracked");
-    assert!(member_locals["holder"].moved_fields.contains("text"));
+    assert!(member_locals["holder"]
+        .moved_fields
+        .contains(&projection_path("text")));
 
     let mut match_locals = HashMap::from([
         (
@@ -6942,20 +6974,20 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
         .get_mut("holder")
         .expect("branch binding should exist");
     branch_binding.moved = true;
-    branch_binding.moved_fields.insert("text".to_string());
-    branch_binding.stale_match_borrow_mut_place = Some("holder.text".to_string());
+    branch_binding.moved_fields.insert(projection_path("text"));
+    branch_binding.stale_match_borrow_mut_place = Some(place_path("holder.text"));
     let branch_without_binding = HashMap::new();
     checker.merge_control_flow_moves(
         &mut merged_locals,
         &[&branch_with_stale_match_borrow, &branch_without_binding],
     );
     assert!(merged_locals["holder"].moved);
-    assert!(merged_locals["holder"].moved_fields.contains("text"));
+    assert!(merged_locals["holder"]
+        .moved_fields
+        .contains(&projection_path("text")));
     assert_eq!(
-        merged_locals["holder"]
-            .stale_match_borrow_mut_place
-            .as_deref(),
-        Some("holder.text")
+        merged_locals["holder"].stale_match_borrow_mut_place,
+        Some(place_path("holder.text"))
     );
 
     assert_eq!(
@@ -7296,9 +7328,10 @@ fn type_pattern_and_collection_helpers_cover_recursive_and_error_paths() {
         )),
         Some((&Type::named("String"), &Type::named("int32")))
     );
-    assert!(borrow_places_overlap("counter.value", "counter"));
-    assert!(borrow_places_overlap("counter", "counter.value"));
-    assert!(!borrow_places_overlap("left.value", "right.value"));
+    assert!(place_path("counter.value").overlaps(&place_path("counter")));
+    assert!(place_path("counter").overlaps(&place_path("counter.value")));
+    assert!(!place_path("counter.left").overlaps(&place_path("counter.right")));
+    assert!(!place_path("left.value").overlaps(&place_path("right.value")));
 }
 
 #[test]
@@ -11219,8 +11252,8 @@ fn checker_module_resolution_helpers_cover_current_module_and_index_wrappers() {
         )
         .expect("module-qualified class methods should collect borrowed arguments");
     assert_eq!(borrowed_places.len(), 2);
-    assert_eq!(borrowed_places[0].path, "left");
-    assert_eq!(borrowed_places[1].path, "right");
+    assert_eq!(borrowed_places[0].path, place_path("left"));
+    assert_eq!(borrowed_places[1].path, place_path("right"));
 
     let module_checker = checker(
         "helpers.math",
@@ -11513,7 +11546,10 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 match_borrow_mut_place: None,
                 stale_match_borrow_mut_place: None,
                 moved: false,
-                moved_fields: BTreeSet::from(["other".to_string(), "value.inner".to_string()]),
+                moved_fields: BTreeSet::from([
+                    projection_path("other"),
+                    projection_path("value.inner"),
+                ]),
                 frozen_places: BTreeSet::new(),
             },
         ),
@@ -11584,7 +11620,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
         .expect("member place should resolve"));
     assert_eq!(
         checker.borrow_call_place(&member_expr),
-        Some("counter.value".to_string())
+        Some(place_path("counter.value"))
     );
     assert_eq!(
         checker.render_member_target(&expr(ExprKind::Name("counter".to_string())), "value"),
@@ -11611,20 +11647,23 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
     );
     assert_eq!(
         checker.member_access_path(&member_expr),
-        Some(("counter".to_string(), "value".to_string()))
+        Some(place_path("counter.value"))
     );
     assert_eq!(
         checker.member_target_path(&expr(ExprKind::Name("counter".to_string())), "value"),
-        Some(("counter".to_string(), "value".to_string()))
+        Some(place_path("counter.value"))
     );
     assert!(FunctionChecker::field_path_is_moved(
         locals.get("counter").unwrap(),
-        "value"
+        &projection_path("value")
     ));
     let binding = locals.get_mut("counter").unwrap();
-    FunctionChecker::clear_moved_field_path(binding, "value");
-    assert!(!FunctionChecker::field_path_is_moved(binding, "value"));
-    assert!(binding.moved_fields.contains("other"));
+    FunctionChecker::clear_moved_field_path(binding, &projection_path("value"));
+    assert!(!FunctionChecker::field_path_is_moved(
+        binding,
+        &projection_path("value")
+    ));
+    assert!(binding.moved_fields.contains(&projection_path("other")));
 
     assert_eq!(
         checker
@@ -11805,11 +11844,11 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
     let consumed_then_borrowed = checker
         .reject_overlapping_borrow(
             &[BorrowedCallPlace {
-                path: "counter".to_string(),
+                path: place_path("counter"),
                 passing: ReceiverKind::Value,
                 param_name: "owned".to_string(),
             }],
-            "counter",
+            &place_path("counter"),
             ReceiverKind::Borrow,
             "borrowed",
             "function `use_counter`",
@@ -11827,6 +11866,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             &[],
             &[],
             &Type::TypeParam("T".to_string()),
+            ReceiverKind::Value,
             &BTreeMap::new(),
             &[],
             span,
@@ -11846,6 +11886,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             &[],
             &[],
             &Type::TypeParam("T".to_string()),
+            ReceiverKind::Value,
             &BTreeMap::new(),
             &[],
             span,

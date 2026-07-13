@@ -1,0 +1,9 @@
+class Holder:
+    values: Vec[int32]
+    other: int32
+
+def main():
+    mut holder = Holder(values=[1, 2, 3], other=0)
+    for value in borrow holder.values:
+        holder.other = value
+    print(holder.other)

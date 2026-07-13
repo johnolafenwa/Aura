@@ -1,0 +1,5 @@
+error: cannot mutate `holder.values` while `holder.values` is borrowed for iteration
+ --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_field_iteration_rejects_overlapping_mut_borrow.au:10:16
+   |
+10 |         append(value=holder.values)
+   |                ^

@@ -1,0 +1,9 @@
+def identity[T](value: borrow[src] T) -> borrow[src] T:
+    return value
+
+def main() -> int32:
+    value = 7
+    mut copy = identity[int32](value=value)
+    copy += 1
+    print(copy)
+    return 0

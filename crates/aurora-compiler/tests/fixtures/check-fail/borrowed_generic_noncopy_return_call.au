@@ -1,0 +1,7 @@
+def identity[T](value: borrow[src] T) -> borrow[src] T:
+    return value
+
+def main():
+    text = "aurora"
+    alias = identity[String](value=text)
+    print(alias)

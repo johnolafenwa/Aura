@@ -3821,6 +3821,11 @@ impl<'a> FunctionCompiler<'a> {
             (Some(ScalarKind::Bool), Some(ScalarKind::Bool)) => {
                 self.compile_bool_binary(op, left.values[0], right.values[0])
             }
+            (Some(ScalarKind::Unit), Some(ScalarKind::Unit))
+                if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) =>
+            {
+                self.compile_bool_binary(op, left.values[0], right.values[0])
+            }
             _ => Err(format!(
                 "direct backend does not support binary operation `{:?}` for the current operand types",
                 op

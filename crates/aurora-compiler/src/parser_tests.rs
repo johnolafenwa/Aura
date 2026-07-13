@@ -56,6 +56,12 @@ fn parse_expression_reports_trailing_tokens_and_primary_errors() {
         .message
         .contains("call arguments cannot start with `borrow`"));
 
+    let identity = parse_expression("value is None").expect_err("`is` should be rejected");
+    assert_eq!(
+        identity.message,
+        "`is` is not supported; use `== None` or `match` for optional values"
+    );
+
     let bool_expr = parse_expression("true").expect("bool literal should parse");
     assert!(matches!(bool_expr.kind, ExprKind::Bool(true)));
 

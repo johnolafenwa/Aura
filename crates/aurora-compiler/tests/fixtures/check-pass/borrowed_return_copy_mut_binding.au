@@ -1,0 +1,11 @@
+class User:
+    score: int32
+
+def score_ref(user: borrow User) -> borrow[user] int32:
+    return user.score
+
+def main():
+    user = User(score=7)
+    mut copy = score_ref(user)
+    copy += 1
+    print(copy)

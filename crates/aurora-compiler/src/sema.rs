@@ -2388,18 +2388,88 @@ fn is_builtin_io_resource_type(name: &str, args: &[Type]) -> bool {
         )
 }
 
-fn borrow_places_overlap(left: &str, right: &str) -> bool {
-    let left_segments = left.split('.').collect::<Vec<_>>();
-    let right_segments = right.split('.').collect::<Vec<_>>();
-    if left_segments.first() != right_segments.first() {
-        return false;
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum PlaceProjection {
+    Field(String),
+}
+
+impl fmt::Display for PlaceProjection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Field(field) => write!(f, "{}", field),
+        }
     }
-    let shared = left_segments
-        .iter()
-        .zip(right_segments.iter())
-        .take_while(|(lhs, rhs)| lhs == rhs)
-        .count();
-    shared == left_segments.len() || shared == right_segments.len()
+}
+
+#[derive(Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+struct ProjectionPath(Vec<PlaceProjection>);
+
+impl ProjectionPath {
+    fn with_field(&self, field: impl Into<String>) -> Self {
+        let mut projections = self.0.clone();
+        projections.push(PlaceProjection::Field(field.into()));
+        Self(projections)
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        self.0.starts_with(&other.0) || other.0.starts_with(&self.0)
+    }
+
+    fn is_descendant_of_or_equal(&self, other: &Self) -> bool {
+        self.0.starts_with(&other.0)
+    }
+}
+
+impl fmt::Display for ProjectionPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, projection) in self.0.iter().enumerate() {
+            if index > 0 {
+                write!(f, ".")?;
+            }
+            write!(f, "{}", projection)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct PlacePath {
+    root: String,
+    projections: ProjectionPath,
+}
+
+impl PlacePath {
+    fn root(root: impl Into<String>) -> Self {
+        Self {
+            root: root.into(),
+            projections: ProjectionPath::default(),
+        }
+    }
+
+    fn with_field(&self, field: impl Into<String>) -> Self {
+        Self {
+            root: self.root.clone(),
+            projections: self.projections.with_field(field),
+        }
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        self.root == other.root && self.projections.overlaps(&other.projections)
+    }
+
+    fn is_root(&self) -> bool {
+        self.projections.0.is_empty()
+    }
+}
+
+impl fmt::Display for PlacePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.root)?;
+        if !self.projections.0.is_empty() {
+            write!(f, ".{}", self.projections)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -2411,11 +2481,11 @@ struct LocalBinding {
     passing: ReceiverKind,
     borrow_origin: Option<String>,
     borrow_label: Option<String>,
-    match_borrow_mut_place: Option<String>,
-    stale_match_borrow_mut_place: Option<String>,
+    match_borrow_mut_place: Option<PlacePath>,
+    stale_match_borrow_mut_place: Option<PlacePath>,
     moved: bool,
-    moved_fields: BTreeSet<String>,
-    frozen_places: BTreeSet<String>,
+    moved_fields: BTreeSet<ProjectionPath>,
+    frozen_places: BTreeSet<PlacePath>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2427,7 +2497,7 @@ struct BorrowSourceInfo {
 
 #[derive(Clone)]
 struct BorrowedCallPlace {
-    path: String,
+    path: PlacePath,
     passing: ReceiverKind,
     param_name: String,
 }
@@ -2448,7 +2518,7 @@ struct FunctionChecker<'a> {
     current_return_borrow_source: Option<String>,
     type_params: BTreeMap<String, ()>,
     type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
-    active_match_borrow_mut_places: Rc<RefCell<Vec<String>>>,
+    active_match_borrow_mut_places: Rc<RefCell<Vec<PlacePath>>>,
 }
 
 #[derive(Clone)]
@@ -2754,6 +2824,7 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        self.ensure_place_not_frozen_for_move(&PlacePath::root(name.to_string()), span, locals)?;
         let binding = locals
             .get_mut(name)
             .ok_or_else(|| Diagnostic::at(span, format!("unknown name `{}`", name)))?;
@@ -2828,18 +2899,19 @@ impl<'a> FunctionChecker<'a> {
                             ),
                         ));
                     }
-                    if let Some((binding_name, path)) = self.member_access_path(expr) {
-                        if let Some(binding) = locals.get_mut(&binding_name) {
+                    if let Some(path) = self.member_access_path(expr) {
+                        self.ensure_place_not_frozen_for_move(&path, expr.span, locals)?;
+                        if let Some(binding) = locals.get_mut(&path.root) {
                             if binding.managed_resource {
                                 return Err(Diagnostic::at(
                                     expr.span,
                                     format!(
                                         "cannot move non-copy field `{}` out of managed `with` resource `{}`",
-                                        field, binding_name
+                                        field, path.root
                                     ),
                                 ));
                             }
-                            binding.moved_fields.insert(path);
+                            binding.moved_fields.insert(path.projections);
                         }
                     }
                 }
@@ -2864,7 +2936,7 @@ impl<'a> FunctionChecker<'a> {
                         &scrutinee_ty,
                         &mut arm_locals,
                         *borrow_mode,
-                        match_borrow_mut_place.as_deref(),
+                        match_borrow_mut_place.as_ref(),
                     )?;
                     self.consume_value_expr(&arm.value, &mut arm_locals)?;
                     arm_states.push(arm_locals);
@@ -2968,14 +3040,14 @@ impl<'a> FunctionChecker<'a> {
 
     fn invalidate_match_borrow_mut_bindings_for_place(
         &self,
-        place: &str,
+        place: &PlacePath,
         locals: &mut HashMap<String, LocalBinding>,
     ) {
         for binding in locals.values_mut() {
             if binding
                 .match_borrow_mut_place
-                .as_deref()
-                .is_some_and(|binding_place| borrow_places_overlap(binding_place, place))
+                .as_ref()
+                .is_some_and(|binding_place| binding_place.overlaps(place))
             {
                 binding.stale_match_borrow_mut_place = binding.match_borrow_mut_place.clone();
             }
@@ -3613,13 +3685,15 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     if let Some(value) = &return_stmt.value {
-                        if self.current_return_passing != ReceiverKind::Value {
+                        if self.current_return_passing != ReceiverKind::Value
+                            && !self.is_copy_type(return_type)
+                        {
                             let actual_source = self.expr_borrow_info(value, locals)?.ok_or_else(|| {
-                                    Diagnostic::at(
-                                        value.span,
-                                        "borrowed return expression must come from a borrowed parameter or receiver",
-                                    )
-                                })?;
+                                Diagnostic::at(
+                                    value.span,
+                                    "borrowed return expression must come from a borrowed parameter or receiver",
+                                )
+                            })?;
                             let expected_source = self
                                 .current_return_borrow_source
                                 .as_deref()
@@ -3814,6 +3888,11 @@ impl<'a> FunctionChecker<'a> {
                             ))
                         }
                     };
+                    if for_stmt.borrow_mode == Some(ReceiverKind::BorrowMut) {
+                        if let Some(place) = self.borrow_call_place(&for_stmt.iterable) {
+                            self.ensure_place_not_frozen(&place, for_stmt.iterable.span, locals)?;
+                        }
+                    }
                     if matches!(
                         (&iterable_ty, for_stmt.borrow_mode),
                         (Type::Named(name, args), Some(ReceiverKind::BorrowMut))
@@ -3840,20 +3919,18 @@ impl<'a> FunctionChecker<'a> {
                     let mut body_locals = locals.clone();
                     if let Some(borrow_mode) = for_stmt.borrow_mode {
                         if let Some(place) = self.borrow_call_place(&for_stmt.iterable) {
-                            let root = place.split('.').next().map(str::to_string);
-                            if let Some(root) = root {
-                                if let Some(binding) = body_locals.get_mut(&root) {
-                                    if place == root {
-                                        binding.assignable = false;
-                                    }
+                            let root = place.root.clone();
+                            if let Some(binding) = body_locals.get_mut(&root) {
+                                if place.is_root() {
+                                    binding.assignable = false;
                                     binding.mutable_place = false;
-                                    binding.frozen_places.insert(place.clone());
                                     if binding.passing == ReceiverKind::Value {
                                         binding.passing = borrow_mode;
-                                        binding.borrow_origin = Some(root.clone());
+                                        binding.borrow_origin = Some(root);
                                         binding.borrow_label = None;
                                     }
                                 }
+                                binding.frozen_places.insert(place.clone());
                             }
                         }
                     }
@@ -4017,10 +4094,10 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
 
+            if let Some(place) = self.borrow_call_place(object) {
+                self.ensure_place_not_frozen(&place, assign.span, locals)?;
+            }
             if !self.is_mutable_place(object, locals)? {
-                if let Some(place) = self.borrow_call_place(object) {
-                    self.ensure_place_not_frozen(&place, assign.span, locals)?;
-                }
                 return Err(Diagnostic::at(
                     assign.span,
                     format!(
@@ -4092,10 +4169,10 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
 
+            if let Some(path) = self.member_target_path(object, field) {
+                self.ensure_place_not_frozen(&path, assign.span, locals)?;
+            }
             if !self.is_mutable_place(object, locals)? {
-                if let Some((_binding_name, path)) = self.member_target_path(object, field) {
-                    self.ensure_place_not_frozen(&path, assign.span, locals)?;
-                }
                 return Err(Diagnostic::at(
                     assign.span,
                     format!(
@@ -4105,14 +4182,15 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
 
-            if let Some((binding_name, path)) = self.member_target_path(object, field) {
-                if let Some(binding) = locals.get(&binding_name) {
-                    if assign.op.is_some() && Self::field_path_is_moved(binding, &path) {
+            if let Some(path) = self.member_target_path(object, field) {
+                if let Some(binding) = locals.get(&path.root) {
+                    if assign.op.is_some() && Self::field_path_is_moved(binding, &path.projections)
+                    {
                         return Err(Diagnostic::at(
                             assign.span,
                             format!(
                                 "cannot read moved field `{}` from `{}` in compound assignment",
-                                path, binding_name
+                                path.projections, path.root
                             ),
                         ));
                     }
@@ -4140,9 +4218,9 @@ impl<'a> FunctionChecker<'a> {
             }
 
             self.consume_value_expr(&assign.value, locals)?;
-            if let Some((binding_name, path)) = self.member_target_path(object, field) {
-                if let Some(binding) = locals.get_mut(&binding_name) {
-                    Self::clear_moved_field_path(binding, &path);
+            if let Some(path) = self.member_target_path(object, field) {
+                if let Some(binding) = locals.get_mut(&path.root) {
+                    Self::clear_moved_field_path(binding, &path.projections);
                 }
                 self.invalidate_match_borrow_mut_bindings_for_place(&path, locals);
             }
@@ -4199,8 +4277,12 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
 
+            self.ensure_place_not_frozen(
+                &PlacePath::root(binding_name.clone()),
+                assign.span,
+                locals,
+            )?;
             if !existing.assignable && !existing.mutable_place {
-                self.ensure_place_not_frozen(binding_name, assign.span, locals)?;
                 return Err(Diagnostic::at(
                     assign.span,
                     format!("cannot assign to immutable binding `{}`", binding_name),
@@ -4250,7 +4332,10 @@ impl<'a> FunctionChecker<'a> {
                 existing.moved = false;
                 existing.moved_fields.clear();
             }
-            self.invalidate_match_borrow_mut_bindings_for_place(binding_name, locals);
+            self.invalidate_match_borrow_mut_bindings_for_place(
+                &PlacePath::root(binding_name.clone()),
+                locals,
+            );
             return Ok(());
         }
 
@@ -4365,6 +4450,14 @@ impl<'a> FunctionChecker<'a> {
             binding.stale_match_borrow_mut_place = None;
         }
         self.type_of_expr_hint(expr, &mut snapshot, expected)
+    }
+
+    fn is_contextual_none_expr(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Name(name) => name == "None",
+            ExprKind::Group(inner) => Self::is_contextual_none_expr(inner),
+            _ => false,
+        }
     }
 
     fn type_of_expr_hint(
@@ -4830,7 +4923,23 @@ impl<'a> FunctionChecker<'a> {
                     | BinaryOp::GreaterEq => None,
                     _ => expected,
                 };
-                let mut left_ty = self.type_of_expr_hint(left, locals, operand_expected)?;
+                let contextual_left_expected = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                    && Self::is_contextual_none_expr(left)
+                    && !Self::is_contextual_none_expr(right)
+                {
+                    self.type_of_expr_without_move_state(right, locals, None)
+                        .ok()
+                        .filter(|ty| {
+                            matches!(ty, Type::Named(name, args) if name == "Option" && args.len() == 1)
+                        })
+                } else {
+                    None
+                };
+                let mut left_ty = self.type_of_expr_hint(
+                    left,
+                    locals,
+                    contextual_left_expected.as_ref().or(operand_expected),
+                )?;
                 let locals_after_left = locals.clone();
                 let mut right_ty = self.type_of_expr_hint(right, locals, Some(&left_ty))?;
                 if left_ty != right_ty && matches!(left.kind, ExprKind::Int(_) | ExprKind::Float(_))
@@ -4866,12 +4975,15 @@ impl<'a> FunctionChecker<'a> {
                 self.type_of_binary(expr.span, *op, left_ty, right_ty)
             }
             ExprKind::Member { object, field } => {
-                if let Some((binding_name, path)) = self.member_access_path(expr) {
-                    if let Some(binding) = locals.get(&binding_name) {
-                        if Self::field_path_is_moved(binding, &path) {
+                if let Some(path) = self.member_access_path(expr) {
+                    if let Some(binding) = locals.get(&path.root) {
+                        if Self::field_path_is_moved(binding, &path.projections) {
                             return Err(Diagnostic::at(
                                 expr.span,
-                                format!("use of moved field `{}` from `{}`", path, binding_name),
+                                format!(
+                                    "use of moved field `{}` from `{}`",
+                                    path.projections, path.root
+                                ),
                             ));
                         }
                     }
@@ -5134,6 +5246,25 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    fn ensure_call_result_materializable(
+        &self,
+        span: crate::diag::Span,
+        callee_name: &str,
+        return_type: &Type,
+        return_passing: ReceiverKind,
+    ) -> Result<()> {
+        if return_passing != ReceiverKind::Value && !self.is_copy_type(return_type) {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "call to {} produces borrowed non-copy result `{}`, which Aurora 0.1 cannot materialize safely; return an owned clone or expose an owner method instead",
+                    callee_name, return_type
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn type_of_unary_operator_via_trait(
         &self,
         span: crate::diag::Span,
@@ -5144,16 +5275,37 @@ impl<'a> FunctionChecker<'a> {
             return Ok(None);
         };
         if let Type::TypeParam(type_param_name) = value_ty {
-            return self
-                .operator_method_from_type_param(type_param_name, trait_name, method_name, None)
-                .map(|method| method.map(|method| method.signature.return_type));
+            let Some(method) = self.operator_method_from_type_param(
+                type_param_name,
+                trait_name,
+                method_name,
+                None,
+            )?
+            else {
+                return Ok(None);
+            };
+            let return_type = method.signature.return_type;
+            self.ensure_call_result_materializable(
+                span,
+                &format!("operator trait `{}.{}`", trait_name, method_name),
+                &return_type,
+                method.signature.return_passing,
+            )?;
+            return Ok(Some(return_type));
         }
-        self.operator_method_for_concrete_type(span, value_ty, trait_name, method_name, None)
-            .map(|method| {
-                method.map(|(method, substitutions)| {
-                    substitute_type(&method.signature.return_type, &substitutions)
-                })
-            })
+        let Some((method, substitutions)) =
+            self.operator_method_for_concrete_type(span, value_ty, trait_name, method_name, None)?
+        else {
+            return Ok(None);
+        };
+        let return_type = substitute_type(&method.signature.return_type, &substitutions);
+        self.ensure_call_result_materializable(
+            span,
+            &format!("operator trait `{}.{}`", trait_name, method_name),
+            &return_type,
+            method.signature.return_passing,
+        )?;
+        Ok(Some(return_type))
     }
 
     fn type_of_binary_operator_via_trait(
@@ -5167,46 +5319,55 @@ impl<'a> FunctionChecker<'a> {
             return Ok(None);
         };
         if let Type::TypeParam(type_param_name) = left_ty {
-            return self
-                .operator_method_from_type_param(
-                    type_param_name,
-                    trait_name,
-                    method_name,
-                    Some(right_ty),
-                )
-                .map(|method| method.map(|method| method.signature.return_type));
+            let Some(method) = self.operator_method_from_type_param(
+                type_param_name,
+                trait_name,
+                method_name,
+                Some(right_ty),
+            )?
+            else {
+                return Ok(None);
+            };
+            let return_type = method.signature.return_type;
+            self.ensure_call_result_materializable(
+                span,
+                &format!("operator trait `{}.{}`", trait_name, method_name),
+                &return_type,
+                method.signature.return_passing,
+            )?;
+            return Ok(Some(return_type));
         }
-        self.operator_method_for_concrete_type(
+        let Some((method, substitutions)) = self.operator_method_for_concrete_type(
             span,
             left_ty,
             trait_name,
             method_name,
             Some(right_ty),
-        )
-        .and_then(|method| {
-            method
-                .map(|(method, substitutions)| {
-                    substitute_type(&method.signature.return_type, &substitutions)
-                })
-                .map(|return_ty| {
-                    if matches!(
-                        op,
-                        BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq
-                    ) && return_ty != Type::named("bool")
-                    {
-                        Err(Diagnostic::at(
-                            span,
-                            format!(
-                                "operator trait `{}` for `{}` must return `bool`",
-                                trait_name, method_name
-                            ),
-                        ))
-                    } else {
-                        Ok(return_ty)
-                    }
-                })
-                .transpose()
-        })
+        )?
+        else {
+            return Ok(None);
+        };
+        let return_type = substitute_type(&method.signature.return_type, &substitutions);
+        self.ensure_call_result_materializable(
+            span,
+            &format!("operator trait `{}.{}`", trait_name, method_name),
+            &return_type,
+            method.signature.return_passing,
+        )?;
+        if matches!(
+            op,
+            BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq
+        ) && return_type != Type::named("bool")
+        {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "operator trait `{}` for `{}` must return `bool`",
+                    trait_name, method_name
+                ),
+            ));
+        }
+        Ok(Some(return_type))
     }
 
     fn operator_method_from_type_param(
@@ -5849,6 +6010,7 @@ impl<'a> FunctionChecker<'a> {
                     &function.decl.params,
                     &function.signature.params,
                     &function.signature.return_type,
+                    function.signature.return_passing,
                     &function.type_param_bounds,
                     args,
                     span,
@@ -6075,6 +6237,7 @@ impl<'a> FunctionChecker<'a> {
                                         &method.decl.params,
                                         &method.signature.params,
                                         &method.signature.return_type,
+                                        method.signature.return_passing,
                                         &method.type_param_bounds,
                                         args,
                                         span,
@@ -6145,6 +6308,7 @@ impl<'a> FunctionChecker<'a> {
                                 &method.decl.params,
                                 &method.signature.params,
                                 &method.signature.return_type,
+                                method.signature.return_passing,
                                 &method.type_param_bounds,
                                 args,
                                 span,
@@ -6403,6 +6567,7 @@ impl<'a> FunctionChecker<'a> {
                             &function.decl.params,
                             &function.signature.params,
                             &function.signature.return_type,
+                            function.signature.return_passing,
                             &function.type_param_bounds,
                             args,
                             span,
@@ -7487,6 +7652,7 @@ impl<'a> FunctionChecker<'a> {
                                     &callable.decl.params,
                                     &callable.signature.params,
                                     &callable.signature.return_type,
+                                    callable.signature.return_passing,
                                     &callable.type_param_bounds,
                                     spawn_args,
                                     span,
@@ -8893,6 +9059,7 @@ impl<'a> FunctionChecker<'a> {
                                 &method.decl.params,
                                 &method.signature.params,
                                 &method.signature.return_type,
+                                method.signature.return_passing,
                                 &method.type_param_bounds,
                                 args,
                                 span,
@@ -8922,6 +9089,7 @@ impl<'a> FunctionChecker<'a> {
                             &method.decl.params,
                             &method.signature.params,
                             &method.signature.return_type,
+                            method.signature.return_passing,
                             &method.type_param_bounds,
                             args,
                             span,
@@ -8956,6 +9124,7 @@ impl<'a> FunctionChecker<'a> {
                         &method.decl.params,
                         &substituted_params,
                         &substituted_return_type,
+                        method.signature.return_passing,
                         &method.type_param_bounds,
                         args,
                         span,
@@ -9185,7 +9354,7 @@ impl<'a> FunctionChecker<'a> {
                                 &scrutinee_ty,
                                 &mut arm_locals,
                                 match_stmt.borrow_mode,
-                                active_match_borrow.as_deref(),
+                                active_match_borrow.as_ref(),
                             )?;
                         }
                     }
@@ -9402,7 +9571,7 @@ impl<'a> FunctionChecker<'a> {
         expected_ty: &Type,
         locals: &mut HashMap<String, LocalBinding>,
         borrow_mode: Option<ReceiverKind>,
-        match_borrow_mut_place: Option<&str>,
+        match_borrow_mut_place: Option<&PlacePath>,
     ) -> Result<()> {
         match pattern {
             Pattern::Wildcard(_) => Ok(()),
@@ -9430,7 +9599,7 @@ impl<'a> FunctionChecker<'a> {
                         passing: borrow_mode.unwrap_or(ReceiverKind::Value),
                         borrow_origin: None,
                         borrow_label: None,
-                        match_borrow_mut_place: match_borrow_mut_place.map(str::to_string),
+                        match_borrow_mut_place: match_borrow_mut_place.cloned(),
                         stale_match_borrow_mut_place: None,
                         moved: false,
                         moved_fields: BTreeSet::new(),
@@ -9687,7 +9856,7 @@ impl<'a> FunctionChecker<'a> {
                                 &scrutinee_ty,
                                 &mut arm_locals,
                                 borrow_mode,
-                                active_match_borrow.as_deref(),
+                                active_match_borrow.as_ref(),
                             )?;
                         }
                     }
@@ -10133,13 +10302,13 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
-    fn borrow_call_place(&self, expr: &Expr) -> Option<String> {
+    fn borrow_call_place(&self, expr: &Expr) -> Option<PlacePath> {
         match &expr.kind {
-            ExprKind::Name(name) => Some(name.clone()),
+            ExprKind::Name(name) => Some(PlacePath::root(name.clone())),
             ExprKind::Group(inner) => self.borrow_call_place(inner),
             ExprKind::Member { object, field } => {
                 let parent = self.borrow_call_place(object)?;
-                Some(format!("{}.{}", parent, field))
+                Some(parent.with_field(field.clone()))
             }
             _ => None,
         }
@@ -10198,13 +10367,12 @@ impl<'a> FunctionChecker<'a> {
         locals: &HashMap<String, LocalBinding>,
     ) -> Option<BorrowSourceInfo> {
         let place = self.borrow_call_place(expr)?;
-        let root = place.split('.').next()?;
-        let binding = locals.get(root)?;
+        let binding = locals.get(&place.root)?;
         Some(BorrowSourceInfo {
             origin: binding
                 .borrow_origin
                 .clone()
-                .unwrap_or_else(|| root.to_string()),
+                .unwrap_or_else(|| place.root.clone()),
             borrow_label: binding.borrow_label.clone(),
             passing: binding.passing,
         })
@@ -10450,12 +10618,12 @@ impl<'a> FunctionChecker<'a> {
     fn reject_expr_borrow_move_overlap(
         &self,
         borrowed_places: &[BorrowedCallPlace],
-        moved_places: &[String],
+        moved_places: &[PlacePath],
         span: crate::diag::Span,
     ) -> Result<()> {
         for moved in moved_places {
             for borrowed in borrowed_places {
-                if borrow_places_overlap(&borrowed.path, moved) {
+                if borrowed.path.overlaps(moved) {
                     return Err(Diagnostic::at(
                         span,
                         format!(
@@ -10691,11 +10859,11 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
-        if self.is_mutable_place(object, locals)? {
-            return Ok(());
-        }
         if let Some(place) = self.borrow_call_place(object) {
             self.ensure_place_not_frozen(&place, span, locals)?;
+        }
+        if self.is_mutable_place(object, locals)? {
+            return Ok(());
         }
         Err(Diagnostic::at(
             span,
@@ -10706,14 +10874,14 @@ impl<'a> FunctionChecker<'a> {
     fn reject_overlapping_borrow(
         &self,
         borrowed_places: &[BorrowedCallPlace],
-        current_path: &str,
+        current_path: &PlacePath,
         current_passing: ReceiverKind,
         current_param_name: &str,
         callee_name: &str,
         span: crate::diag::Span,
     ) -> Result<()> {
         for prior in borrowed_places {
-            if !borrow_places_overlap(&prior.path, current_path) {
+            if !prior.path.overlaps(current_path) {
                 continue;
             }
             let shared =
@@ -10781,19 +10949,22 @@ impl<'a> FunctionChecker<'a> {
         &self,
         before: &HashMap<String, LocalBinding>,
         after: &HashMap<String, LocalBinding>,
-    ) -> Vec<String> {
+    ) -> Vec<PlacePath> {
         let mut moved = Vec::new();
         for (name, current) in after {
             let previous = before.get(name);
             let previously_moved = previous.map(|binding| binding.moved).unwrap_or(false);
             if current.moved && !previously_moved {
-                moved.push(name.clone());
+                moved.push(PlacePath::root(name.clone()));
             }
             let previous_fields = previous
                 .map(|binding| binding.moved_fields.clone())
                 .unwrap_or_default();
             for field in current.moved_fields.difference(&previous_fields) {
-                moved.push(format!("{}.{}", name, field));
+                moved.push(PlacePath {
+                    root: name.clone(),
+                    projections: field.clone(),
+                });
             }
         }
         moved
@@ -10801,21 +10972,20 @@ impl<'a> FunctionChecker<'a> {
 
     fn find_frozen_place_conflict(
         &self,
-        place: &str,
+        place: &PlacePath,
         locals: &HashMap<String, LocalBinding>,
-    ) -> Option<String> {
-        let root = place.split('.').next()?;
-        let binding = locals.get(root)?;
+    ) -> Option<PlacePath> {
+        let binding = locals.get(&place.root)?;
         binding
             .frozen_places
             .iter()
-            .find(|frozen| borrow_places_overlap(frozen, place))
+            .find(|frozen| frozen.overlaps(place))
             .cloned()
     }
 
     fn ensure_place_not_frozen(
         &self,
-        place: &str,
+        place: &PlacePath,
         span: crate::diag::Span,
         locals: &HashMap<String, LocalBinding>,
     ) -> Result<()> {
@@ -10831,18 +11001,37 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    fn ensure_place_not_frozen_for_move(
+        &self,
+        place: &PlacePath,
+        span: crate::diag::Span,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        if let Some(frozen) = self.find_frozen_place_conflict(place, locals) {
+            return Err(Diagnostic::at(
+                span,
+                format!(
+                    "cannot move `{}` while `{}` is borrowed for iteration",
+                    place, frozen
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn begin_match_borrow_mut(
         &self,
         scrutinee: &Expr,
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<PlacePath>> {
         let Some(place) = self.borrow_call_place(scrutinee) else {
             return Err(Diagnostic::at(
                 span,
                 "`match borrow mut` requires a mutable place scrutinee",
             ));
         };
+        self.ensure_place_not_frozen(&place, span, locals)?;
         if !self.is_mutable_place(scrutinee, locals)? {
             return Err(Diagnostic::at(
                 span,
@@ -10853,7 +11042,7 @@ impl<'a> FunctionChecker<'a> {
             .active_match_borrow_mut_places
             .borrow()
             .iter()
-            .find(|active| borrow_places_overlap(active, &place))
+            .find(|active| active.overlaps(&place))
             .cloned()
         {
             return Err(Diagnostic::at(
@@ -10870,7 +11059,7 @@ impl<'a> FunctionChecker<'a> {
         Ok(Some(place))
     }
 
-    fn end_match_borrow_mut(&self, active_place: Option<String>) {
+    fn end_match_borrow_mut(&self, active_place: Option<PlacePath>) {
         if active_place.is_none() {
             return;
         }
@@ -11201,47 +11390,36 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
-    fn member_access_path(&self, expr: &Expr) -> Option<(String, String)> {
+    fn member_access_path(&self, expr: &Expr) -> Option<PlacePath> {
         match &expr.kind {
-            ExprKind::Name(name) => Some((name.clone(), String::new())),
+            ExprKind::Name(name) => Some(PlacePath::root(name.clone())),
             ExprKind::Group(inner)
             | ExprKind::Cast { expr: inner, .. }
             | ExprKind::Specialize { expr: inner, .. } => self.member_access_path(inner),
             ExprKind::Member { object, field } => {
-                let (root, prefix) = self.member_access_path(object)?;
-                let path = if prefix.is_empty() {
-                    field.clone()
-                } else {
-                    format!("{}.{}", prefix, field)
-                };
-                Some((root, path))
+                let parent = self.member_access_path(object)?;
+                Some(parent.with_field(field.clone()))
             }
             _ => None,
         }
     }
 
-    fn member_target_path(&self, object: &Expr, field: &str) -> Option<(String, String)> {
-        let (root, prefix) = self.member_access_path(object)?;
-        let path = if prefix.is_empty() {
-            field.to_string()
-        } else {
-            format!("{}.{}", prefix, field)
-        };
-        Some((root, path))
+    fn member_target_path(&self, object: &Expr, field: &str) -> Option<PlacePath> {
+        let parent = self.member_access_path(object)?;
+        Some(parent.with_field(field.to_string()))
     }
 
-    fn field_path_is_moved(binding: &LocalBinding, path: &str) -> bool {
-        binding.moved_fields.iter().any(|moved_path| {
-            moved_path == path
-                || moved_path.starts_with(&format!("{}.", path))
-                || path.starts_with(&format!("{}.", moved_path))
-        })
+    fn field_path_is_moved(binding: &LocalBinding, path: &ProjectionPath) -> bool {
+        binding
+            .moved_fields
+            .iter()
+            .any(|moved_path| moved_path.overlaps(path))
     }
 
-    fn clear_moved_field_path(binding: &mut LocalBinding, path: &str) {
-        binding.moved_fields.retain(|moved_path| {
-            moved_path != path && !moved_path.starts_with(&format!("{}.", path))
-        });
+    fn clear_moved_field_path(binding: &mut LocalBinding, path: &ProjectionPath) {
+        binding
+            .moved_fields
+            .retain(|moved_path| !moved_path.is_descendant_of_or_equal(path));
     }
 
     fn type_of_member_object_expr(
@@ -11825,6 +12003,7 @@ impl<'a> FunctionChecker<'a> {
         param_decls: &[Param],
         param_types: &[Type],
         return_type: &Type,
+        return_passing: ReceiverKind,
         callee_type_param_bounds: &BTreeMap<String, Vec<TraitBound>>,
         args: &[Argument],
         span: crate::diag::Span,
@@ -11838,6 +12017,7 @@ impl<'a> FunctionChecker<'a> {
             param_decls,
             param_types,
             return_type,
+            return_passing,
             callee_type_param_bounds,
             args,
             span,
@@ -11856,6 +12036,7 @@ impl<'a> FunctionChecker<'a> {
         param_decls: &[Param],
         param_types: &[Type],
         return_type: &Type,
+        return_passing: ReceiverKind,
         callee_type_param_bounds: &BTreeMap<String, Vec<TraitBound>>,
         args: &[Argument],
         span: crate::diag::Span,
@@ -11929,6 +12110,13 @@ impl<'a> FunctionChecker<'a> {
         if let Some(expected_return) = expected_return {
             if let Err(error) = unify_type_pattern(return_type, expected_return, &mut substitutions)
             {
+                let resolved_return_type = substitute_type(return_type, &substitutions);
+                self.ensure_call_result_materializable(
+                    span,
+                    callee_name,
+                    &resolved_return_type,
+                    return_passing,
+                )?;
                 return Err(Diagnostic::at(
                     span,
                     format!(
@@ -11974,6 +12162,14 @@ impl<'a> FunctionChecker<'a> {
                 .collect::<Vec<_>>();
             self.assert_type_satisfies_bounds(resolved_ty, &resolved_bounds, span)?;
         }
+
+        let resolved_return_type = substitute_type(return_type, &substitutions);
+        self.ensure_call_result_materializable(
+            span,
+            callee_name,
+            &resolved_return_type,
+            return_passing,
+        )?;
 
         let mut borrowed_places = seeded_borrowed_places;
         for ((((argument, actual), nested_moved_places), expected), param_decl) in resolved_args
@@ -12062,6 +12258,7 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         if let Some(place) = self.borrow_call_place(&argument.value) {
+                            self.ensure_place_not_frozen(&place, argument.span, locals)?;
                             self.reject_overlapping_borrow(
                                 &borrowed_places,
                                 &place,
@@ -12083,7 +12280,7 @@ impl<'a> FunctionChecker<'a> {
 
         self.invalidate_match_borrow_mut_bindings_for_borrowed_places(&borrowed_places, locals);
 
-        Ok(substitute_type(return_type, &substitutions))
+        Ok(resolved_return_type)
     }
 
     fn enum_variants_for_type(&self, ty: &Type) -> Option<Vec<(String, Vec<Type>)>> {

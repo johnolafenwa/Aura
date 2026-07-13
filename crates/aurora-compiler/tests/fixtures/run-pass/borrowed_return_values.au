@@ -1,21 +1,21 @@
 class User:
-    name: String
+    score: int32
 
-def name_ref(user: borrow User) -> borrow[user] String:
-    return user.name
+def score_ref(user: borrow User) -> borrow[user] int32:
+    return user.score
 
 class Holder:
-    value: String
+    value: int32
 
-    def value_ref(borrow self) -> borrow[self] String:
+    def value_ref(borrow self) -> borrow[self] int32:
         return self.value
 
-def print_name(name: borrow String):
-    print(name)
+def print_score(score: borrow int32):
+    print(score)
 
 def main():
-    user = User(name="aurora")
-    holder = Holder(value="engine")
-    print(name_ref(user))
+    user = User(score=7)
+    holder = Holder(value=9)
+    print(score_ref(user))
     print(holder.value_ref())
-    print_name(name_ref(user))
+    print_score(score_ref(user))

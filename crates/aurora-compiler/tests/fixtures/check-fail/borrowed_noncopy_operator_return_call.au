@@ -1,0 +1,15 @@
+trait Add[Rhs, Out]:
+    def add(borrow self, rhs: Rhs) -> borrow[self] Out
+
+class Label:
+    value: String
+
+impl Add[Label, String] for Label:
+    def add(borrow self, rhs: Label) -> borrow[self] String:
+        return self.value
+
+def main():
+    left = Label(value="left")
+    right = Label(value="right")
+    alias = left + right
+    print(alias)

@@ -77,6 +77,16 @@ fn direct_backend_emits_object_for_supported_scalar_program() {
 }
 
 #[test]
+fn direct_backend_emits_contextual_none_and_unit_equality() {
+    let source = include_str!("../tests/fixtures/run-pass/contextual_none_equality.au");
+    let mir = lower_source_to_mir(source).expect("contextual None source should lower to MIR");
+    let object = emit_host_object(&mir)
+        .expect("direct backend should support contextual None and scalar unit equality");
+
+    assert!(!object.is_empty());
+}
+
+#[test]
 fn direct_field_type_rejects_malformed_builtin_map_entry_shapes_without_panicking() {
     let malformed = DirectType::Opaque(Type::Named(
         "MapEntry".to_string(),

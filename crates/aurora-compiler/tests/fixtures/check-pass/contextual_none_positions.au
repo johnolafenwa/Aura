@@ -1,0 +1,24 @@
+def accepts(value: Option[int32]):
+    pass
+
+def no_value() -> Option[int32]:
+    return None
+
+def is_empty[T](value: borrow Option[T]) -> bool:
+    return value == None
+
+def main() -> int32:
+    left: Option[int32] = None
+    accepts(None)
+    left_first = left == None
+    right_first = None == left
+    grouped = (None) == left
+    grouped_right = left == ((None))
+    unequal_left = left != None
+    unequal_right = None != left
+    units_equal = None == None
+    units_unequal = None != None
+    returned: Option[int32] = no_value()
+    accepts(returned)
+    generic = is_empty[int32](value=returned)
+    return 0

@@ -1,0 +1,5 @@
+error: cannot move `holder` while `holder.values` is borrowed for iteration
+ --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_field_iteration_rejects_owner_move.au:10:17
+   |
+10 |         consume(holder)
+   |                 ^

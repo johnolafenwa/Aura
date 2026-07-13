@@ -2201,3 +2201,34 @@ fn lower_path_to_mir_covers_imported_module_surface() {
         .any(|impl_info| impl_info.trait_name == "Named"));
     assert!(module.top_level.is_none());
 }
+
+#[test]
+fn contextual_none_equality_lowers_none_as_option_variants() {
+    let source = include_str!("../tests/fixtures/run-pass/contextual_none_equality.au");
+    let module = crate::lower_source_to_mir(source).expect("contextual None source should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should be lowered");
+    let contextual_none_count = main
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.iter())
+        .filter(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::EnumVariant {
+                        enum_name,
+                        variant_name,
+                        payloads,
+                    },
+                    ..
+                } if enum_name == "Option" && variant_name == "None" && payloads.is_empty()
+            )
+        })
+        .count();
+
+    assert_eq!(contextual_none_count, 12);
+}

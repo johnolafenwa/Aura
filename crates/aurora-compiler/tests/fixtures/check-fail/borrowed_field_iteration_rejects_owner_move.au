@@ -1,0 +1,10 @@
+class Holder:
+    values: Vec[int32]
+
+def consume(holder: Holder):
+    pass
+
+def main():
+    holder = Holder(values=[1, 2, 3])
+    for value in borrow holder.values:
+        consume(holder)

@@ -1,15 +1,15 @@
-def choose_nonempty(left: borrow[shared] String, right: borrow[shared] String) -> borrow[shared] String:
-    if left.len() > 0:
+def choose_positive(left: borrow[shared] int32, right: borrow[shared] int32) -> borrow[shared] int32:
+    if left > 0:
         return left
     return right
 
-def identity(text: borrow[src] String) -> borrow[src] String:
-    return text
+def identity(value: borrow[src] int32) -> borrow[src] int32:
+    return value
 
 def main() -> int32:
-    left = ""
-    right = "aurora"
-    picked = choose_nonempty(left=left, right=right)
-    aliased = identity(text=picked)
+    left = 0
+    right = 7
+    picked = choose_positive(left=left, right=right)
+    aliased = identity(value=picked)
     print(aliased)
     return 0

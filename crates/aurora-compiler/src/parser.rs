@@ -1183,6 +1183,12 @@ impl Parser {
         let mut chain_len = 0usize;
 
         loop {
+            if let Some(token) = self.eat_simple(&TokenKind::KwIs) {
+                return Err(Diagnostic::at(
+                    token.span,
+                    "`is` is not supported; use `== None` or `match` for optional values",
+                ));
+            }
             let op = if self.eat_simple(&TokenKind::EqEq).is_some() {
                 Some(BinaryOp::Eq)
             } else if self.eat_simple(&TokenKind::NotEq).is_some() {

@@ -1224,7 +1224,8 @@ impl<'a> Lowerer<'a> {
             }
             Stmt::Return(return_stmt) => {
                 let value = if let Some(value) = &return_stmt.value {
-                    self.lower_expr(value)
+                    let return_type = self.return_type.clone();
+                    self.lower_expr_with_expected(value, Some(&return_type))
                 } else {
                     Operand::Unit
                 };
@@ -1451,7 +1452,7 @@ impl<'a> Lowerer<'a> {
             }
         }
 
-        let value = self.lower_expr(&assign.value);
+        let value = self.lower_expr_with_expected(&assign.value, target_ty.as_ref());
         if let (Some(target_ty), Operand::Place(place)) = (target_ty, &value) {
             self.local_types.insert(place.clone(), target_ty);
         }
@@ -1469,7 +1470,7 @@ impl<'a> Lowerer<'a> {
                 Some(Rvalue::VecLiteral {
                     elements: elements
                         .iter()
-                        .map(|element| self.lower_expr(element))
+                        .map(|element| self.lower_expr_with_expected(element, Some(&args[0])))
                         .collect(),
                     element_type: args[0].clone(),
                 })
@@ -1480,7 +1481,7 @@ impl<'a> Lowerer<'a> {
                 Some(Rvalue::SetLiteral {
                     elements: elements
                         .iter()
-                        .map(|element| self.lower_expr(element))
+                        .map(|element| self.lower_expr_with_expected(element, Some(&args[0])))
                         .collect(),
                     element_type: args[0].clone(),
                 })
@@ -1500,8 +1501,8 @@ impl<'a> Lowerer<'a> {
                     entries: entries
                         .iter()
                         .map(|entry| MirMapEntry {
-                            key: self.lower_expr(&entry.key),
-                            value: self.lower_expr(&entry.value),
+                            key: self.lower_expr_with_expected(&entry.key, Some(&args[0])),
+                            value: self.lower_expr_with_expected(&entry.value, Some(&args[1])),
                         })
                         .collect(),
                     key_type: args[0].clone(),
@@ -2407,8 +2408,16 @@ impl<'a> Lowerer<'a> {
                     });
                     return Operand::Place(temp);
                 }
-                let left = self.lower_expr(left);
-                let right = self.lower_expr(right);
+                let left_ty = self.infer_expr_type(left);
+                let right_ty = self.infer_expr_type(right);
+                let left_expected = matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                    .then(|| right_ty.as_ref())
+                    .flatten();
+                let right_expected = matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                    .then(|| left_ty.as_ref())
+                    .flatten();
+                let left = self.lower_expr_with_expected(left, left_expected);
+                let right = self.lower_expr_with_expected(right, right_expected);
                 let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
@@ -2508,12 +2517,43 @@ impl<'a> Lowerer<'a> {
                 });
                 Operand::Place(temp)
             }
-            ExprKind::Call { callee, args } => self.lower_call(expr, callee, args),
+            ExprKind::Call { callee, args } => self.lower_call(expr, callee, args, None),
             ExprKind::Match {
                 scrutinee,
                 borrow_mode,
                 arms,
             } => self.lower_match_expr(expr, scrutinee, *borrow_mode, arms),
+        }
+    }
+
+    fn lower_expr_with_expected(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
+        if Self::is_contextual_none_expr(expr)
+            && matches!(expected, Some(Type::Named(name, args)) if name == "Option" && args.len() == 1)
+        {
+            let expected = expected.expect("contextual Option type should be present");
+            let temp = self.new_typed_temp(expected.clone());
+            self.emit(Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::EnumVariant {
+                    enum_name: "Option".to_string(),
+                    variant_name: "None".to_string(),
+                    payloads: Vec::new(),
+                },
+            });
+            return Operand::Place(temp);
+        }
+        match &expr.kind {
+            ExprKind::Group(inner) => self.lower_expr_with_expected(inner, expected),
+            ExprKind::Call { callee, args } => self.lower_call(expr, callee, args, expected),
+            _ => self.lower_expr(expr),
+        }
+    }
+
+    fn is_contextual_none_expr(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Name(name) => name == "None",
+            ExprKind::Group(inner) => Self::is_contextual_none_expr(inner),
+            _ => false,
         }
     }
 
@@ -2735,8 +2775,17 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_call(&mut self, expr: &Expr, callee: &Expr, args: &[Argument]) -> Operand {
-        let temp = self.new_temp_for_expr(expr);
+    fn lower_call(
+        &mut self,
+        expr: &Expr,
+        callee: &Expr,
+        args: &[Argument],
+        expected: Option<&Type>,
+    ) -> Operand {
+        let temp = expected
+            .cloned()
+            .map(|ty| self.new_typed_temp(ty))
+            .unwrap_or_else(|| self.new_temp_for_expr(expr));
         let base_callee = match &callee.kind {
             ExprKind::Specialize { expr, .. } => &**expr,
             _ => callee,
@@ -2773,7 +2822,13 @@ impl<'a> Lowerer<'a> {
                         next_positional_field += 1;
                         field_name
                     };
-                    let value = self.lower_expr(&argument.value);
+                    let field_type = class
+                        .decl
+                        .fields
+                        .iter()
+                        .find(|field| field.name == field_name)
+                        .map(|field| lower_type_ref(&field.ty));
+                    let value = self.lower_expr_with_expected(&argument.value, field_type.as_ref());
                     if let Some(field_decl) = class
                         .decl
                         .fields
@@ -2796,7 +2851,9 @@ impl<'a> Lowerer<'a> {
                             })
                         } else {
                             field.default.as_ref().map(|default| {
-                                let value = self.lower_expr(default);
+                                let field_type = lower_type_ref(&field.ty);
+                                let value =
+                                    self.lower_expr_with_expected(default, Some(&field_type));
                                 self.retarget_operand_place(&value, &lower_type_ref(&field.ty));
                                 MirFieldInit {
                                     name: field.name.clone(),
@@ -2849,12 +2906,10 @@ impl<'a> Lowerer<'a> {
                         | "Ready"
                 ) =>
             {
-                let payloads = args
-                    .iter()
-                    .map(|argument| self.lower_expr(&argument.value))
-                    .collect::<Vec<_>>();
-                let enum_name = match self.infer_expr_type(expr) {
-                    Some(Type::Named(enum_name, _)) => enum_name,
+                let inferred_type = self.infer_expr_type(expr);
+                let enum_type = expected.or(inferred_type.as_ref());
+                let enum_name = match enum_type {
+                    Some(Type::Named(enum_name, _)) => enum_name.clone(),
                     _ => match name.as_str() {
                         "Some" | "None" => "Option".to_string(),
                         "Ok" | "Err" => "Result".to_string(),
@@ -2864,6 +2919,8 @@ impl<'a> Lowerer<'a> {
                         _ => unreachable!(),
                     },
                 };
+                let payloads =
+                    self.lower_enum_variant_payloads(expr, &enum_name, name, args, enum_type);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::EnumVariant {
@@ -2951,14 +3008,14 @@ impl<'a> Lowerer<'a> {
                             }
                         }
                         if let Some(enum_info) = namespace.enums.get(&item_name).cloned() {
-                            let payloads = args
-                                .iter()
-                                .map(|argument| self.lower_expr(&argument.value))
-                                .collect::<Vec<_>>();
+                            let enum_name = self.module_enum_type_name(&module_path, &enum_info);
+                            let payloads = self.lower_enum_variant_payloads(
+                                expr, &enum_name, field, args, expected,
+                            );
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
                                 value: Rvalue::EnumVariant {
-                                    enum_name: self.module_enum_type_name(&module_path, &enum_info),
+                                    enum_name,
                                     variant_name: field.clone(),
                                     payloads,
                                 },
@@ -3014,7 +3071,14 @@ impl<'a> Lowerer<'a> {
                                     next_positional_field += 1;
                                     field_name
                                 };
-                                let value = self.lower_expr(&argument.value);
+                                let field_type = class
+                                    .decl
+                                    .fields
+                                    .iter()
+                                    .find(|field_decl| field_decl.name == field_name)
+                                    .map(|field_decl| lower_type_ref(&field_decl.ty));
+                                let value = self
+                                    .lower_expr_with_expected(&argument.value, field_type.as_ref());
                                 if let Some(field_decl) = class
                                     .decl
                                     .fields
@@ -3040,7 +3104,11 @@ impl<'a> Lowerer<'a> {
                                         })
                                     } else {
                                         field_decl.default.as_ref().map(|default| {
-                                            let value = self.lower_expr(default);
+                                            let field_type = lower_type_ref(&field_decl.ty);
+                                            let value = self.lower_expr_with_expected(
+                                                default,
+                                                Some(&field_type),
+                                            );
                                             self.retarget_operand_place(
                                                 &value,
                                                 &lower_type_ref(&field_decl.ty),
@@ -3150,10 +3218,10 @@ impl<'a> Lowerer<'a> {
                     if is_known_enum_name(self.program, enum_name)
                         || self.resolve_enum_info(enum_name).is_some()
                     {
-                        let payloads = args
-                            .iter()
-                            .map(|argument| self.lower_expr(&argument.value))
-                            .collect::<Vec<_>>();
+                        let inferred_type = self.infer_expr_type(expr);
+                        let enum_type = expected.or(inferred_type.as_ref());
+                        let payloads = self
+                            .lower_enum_variant_payloads(expr, enum_name, field, args, enum_type);
                         self.emit(Instruction::Assign {
                             target: temp.clone(),
                             value: Rvalue::EnumVariant {
@@ -3234,6 +3302,28 @@ impl<'a> Lowerer<'a> {
         }
 
         Operand::Place(temp)
+    }
+
+    fn lower_enum_variant_payloads(
+        &mut self,
+        expr: &Expr,
+        enum_name: &str,
+        variant_name: &str,
+        args: &[Argument],
+        expected_enum_type: Option<&Type>,
+    ) -> Vec<Operand> {
+        let inferred_type = self.infer_expr_type(expr);
+        let enum_type = expected_enum_type.or(inferred_type.as_ref());
+        let payload_types = self.variant_payload_types(enum_type, enum_name, variant_name);
+        args.iter()
+            .enumerate()
+            .map(|(index, argument)| {
+                self.lower_expr_with_expected(
+                    &argument.value,
+                    payload_types.as_ref().and_then(|types| types.get(index)),
+                )
+            })
+            .collect()
     }
 
     fn lower_member_call_args(

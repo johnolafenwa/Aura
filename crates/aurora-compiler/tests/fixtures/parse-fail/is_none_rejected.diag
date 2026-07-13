@@ -1,0 +1,5 @@
+error: `is` is not supported; use `== None` or `match` for optional values
+ --> crates/aurora-compiler/tests/fixtures/parse-fail/is_none_rejected.au:2:18
+  |
+2 |     return value is None
+  |                  ^
