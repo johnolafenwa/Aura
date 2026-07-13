@@ -1,0 +1,4 @@
+def main() -> int32:
+    one: uint64 = 1
+    print(-one)
+    return 0

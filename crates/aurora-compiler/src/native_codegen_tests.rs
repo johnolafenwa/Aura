@@ -6,6 +6,7 @@ use cranelift_codegen::ir::types;
 use cranelift_codegen::ir::InstBuilder;
 use cranelift_codegen::Context;
 use cranelift_frontend::FunctionBuilderContext;
+use cranelift_object::object::{Object, ObjectSection, ObjectSymbol, RelocationTarget};
 
 use super::{
     box_thunk_value, builtin_opaque_member_return_type, cleanup_place_type,
@@ -31,6 +32,20 @@ use crate::{lower_path_to_mir, lower_source_to_mir};
 
 fn scalar_kind_for_tests(ty: &Type) -> Option<ScalarKind> {
     direct_type(ty, &HashMap::new()).and_then(|ty| ty.scalar_kind())
+}
+
+fn object_referenced_symbols(bytes: &[u8]) -> BTreeSet<String> {
+    let object = cranelift_object::object::File::parse(bytes)
+        .expect("direct backend output should be a readable host object");
+    object
+        .sections()
+        .flat_map(|section| section.relocations())
+        .filter_map(|(_, relocation)| match relocation.target() {
+            RelocationTarget::Symbol(index) => object.symbol_by_index(index).ok(),
+            _ => None,
+        })
+        .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+        .collect()
 }
 
 #[test]
@@ -74,6 +89,234 @@ fn direct_backend_emits_object_for_supported_scalar_program() {
     let object = emit_host_object(&mir).expect("direct backend should emit an object");
 
     assert!(!object.is_empty());
+}
+
+#[test]
+fn ticket9_direct_backend_emits_unboxed_int64_ten_million_loop() {
+    let source = r#"
+def count_to(limit: int64) -> int64:
+    mut current: int64 = 0
+    while current < limit:
+        current += 1
+    return current
+
+def main() -> int32:
+    print(count_to(10000000))
+    return 0
+"#;
+
+    let mir = lower_source_to_mir(source).expect("int64 loop should lower to MIR");
+    let object = emit_host_object(&mir)
+        .expect("the direct backend should promote loop literals into unboxed int64 values");
+    let referenced = object_referenced_symbols(&object);
+
+    assert!(!object.is_empty());
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_binary_value_at")),
+        "int64 loop arithmetic and comparison must not use boxed runtime dispatch: {referenced:?}"
+    );
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_cast_value_at")),
+        "int64 contextual literals must be promoted without a boxed runtime cast: {referenced:?}"
+    );
+}
+
+#[test]
+fn ticket9_wide_scalar_casts_avoid_boxed_runtime_dispatch() {
+    let source = r#"
+def main() -> int32:
+    signed: int64 = 42
+    unsigned: uint64 = signed as uint64
+    signed_again: int64 = unsigned as int64
+    floating: float64 = signed_again as float64
+    from_float: uint64 = floating as uint64
+    print(from_float)
+    return 0
+"#;
+
+    let mir = lower_source_to_mir(source).expect("wide scalar casts should lower to MIR");
+    let object = emit_host_object(&mir).expect("wide scalar casts should emit directly");
+    let referenced = object_referenced_symbols(&object);
+
+    for forbidden in ["aurora_direct_cast_value_at"] {
+        assert!(
+            !referenced.iter().any(|symbol| symbol.contains(forbidden)),
+            "wide scalar casts must not reference `{forbidden}`: {referenced:?}"
+        );
+    }
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_cast_integer_to_integer")),
+        "wide integer casts should use the unboxed checked helper"
+    );
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_cast_integer_to_float")),
+        "wide integer-to-float casts should use the unboxed exactness helper"
+    );
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_cast_float_to_integer")),
+        "float-to-wide-integer casts should use the unboxed checked helper"
+    );
+}
+
+#[test]
+fn ticket9_int64_opaque_results_use_the_checked_int64_unbox_helper() {
+    let source = r#"
+def main() -> int32:
+    minimum: int64 = -9223372036854775808
+    value: int64 = abs(minimum)
+    print(value)
+    return 0
+"#;
+
+    let mir = lower_source_to_mir(source).expect("int64 abs overflow source should lower");
+    let object = emit_host_object(&mir).expect("int64 abs overflow source should emit directly");
+    let referenced = object_referenced_symbols(&object);
+
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_unbox_int64")),
+        "opaque int64 results must use the target-aware checked helper: {referenced:?}"
+    );
+}
+
+#[test]
+fn ticket9_int64_task_thunks_use_the_checked_int64_unbox_helper() {
+    let source = r#"
+def echo(value: int64) -> int64:
+    return value
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(echo, -9223372036854775808)
+        match task.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case _:
+                return 1
+    return 0
+"#;
+
+    let mir = lower_source_to_mir(source).expect("int64 task thunk source should lower");
+    let object = emit_host_object(&mir).expect("int64 task thunk source should emit directly");
+    let referenced = object_referenced_symbols(&object);
+
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_unbox_int64")),
+        "int64 task thunks must use the target-aware checked helper: {referenced:?}"
+    );
+}
+
+#[test]
+fn ticket9_wide_boundary_literals_stay_unboxed() {
+    let source = r#"
+def main() -> int32:
+    minimum: int64 = -9223372036854775808
+    maximum: uint64 = 18446744073709551615
+    print(minimum)
+    print(maximum)
+    return 0
+"#;
+
+    let mir = lower_source_to_mir(source).expect("wide boundaries should lower to MIR");
+    let object = emit_host_object(&mir).expect("wide boundaries should emit directly");
+    let referenced = object_referenced_symbols(&object);
+
+    for forbidden in [
+        "aurora_direct_unary_value_at",
+        "aurora_direct_box_uint_literal",
+        "aurora_direct_unbox_i64",
+        "aurora_direct_unbox_u64",
+    ] {
+        assert!(
+            !referenced.iter().any(|symbol| symbol.contains(forbidden)),
+            "wide boundary literals must not reference `{forbidden}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn ticket9_expected_uint64_operands_avoid_generic_literal_boxing() {
+    let source = r#"
+class Holder:
+    value: uint64
+
+    def echo(borrow self, value: uint64) -> uint64:
+        return value
+
+def take(value: uint64) -> uint64:
+    return value
+
+def maximum() -> uint64:
+    return 18446744073709551615
+
+def main() -> int32:
+    holder = Holder(value=18446744073709551615)
+    direct = take(18446744073709551615)
+    method = holder.echo(18446744073709551615)
+    casted: uint64 = 18446744073709551615 as uint64
+    print(maximum())
+    print(direct)
+    print(method)
+    print(casted)
+    return 0
+"#;
+
+    let mir = lower_source_to_mir(source).expect("expected uint64 operands should lower");
+    let object = emit_host_object(&mir).expect("expected uint64 operands should emit directly");
+    let referenced = object_referenced_symbols(&object);
+
+    for forbidden in [
+        "aurora_direct_box_uint_literal",
+        "aurora_direct_unbox_u64",
+        "aurora_direct_cast_value_at",
+    ] {
+        assert!(
+            !referenced.iter().any(|symbol| symbol.contains(forbidden)),
+            "expected uint64 operands must not reference `{forbidden}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn ticket9_uint64_opaque_boundaries_use_typed_boxing_without_generic_detours() {
+    let source = r#"
+def main() -> int32:
+    values: Vec[uint64] = [18446744073709551615]
+    maybe: Option[uint64] = Option.Some(18446744073709551615)
+    print(values.len())
+    print(maybe != Option.None)
+    return 0
+"#;
+
+    let mir = lower_source_to_mir(source).expect("typed uint64 containers should lower");
+    let object = emit_host_object(&mir).expect("typed uint64 containers should emit directly");
+    let referenced = object_referenced_symbols(&object);
+
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_box_u64")),
+        "opaque uint64 boundaries should use the typed boxing helper"
+    );
+    for forbidden in ["aurora_direct_box_uint_literal", "aurora_direct_unbox_u64"] {
+        assert!(
+            !referenced.iter().any(|symbol| symbol.contains(forbidden)),
+            "typed opaque uint64 boundaries must not reference `{forbidden}`: {referenced:?}"
+        );
+    }
 }
 
 #[test]
@@ -5762,6 +6005,25 @@ fn native_codegen_thunk_helpers_cover_roundtrip_paths() {
     .expect("int thunk values should unbox");
     assert_eq!(unboxed_int.len(), 1);
 
+    for (label, kind) in [("int64", ScalarKind::Int64), ("uint64", ScalarKind::Uint64)] {
+        let boxed = box_thunk_value(
+            &mut codegen,
+            &mut builder,
+            &[int_raw],
+            &DirectType::Scalar(kind),
+        )
+        .unwrap_or_else(|error| panic!("{label} thunk values should box: {error}"));
+        let unboxed =
+            unbox_thunk_value(&mut codegen, &mut builder, boxed, &DirectType::Scalar(kind))
+                .unwrap_or_else(|error| panic!("{label} thunk values should unbox: {error}"));
+        assert_eq!(unboxed.len(), 1, "{label} should have one ABI value");
+        assert_eq!(
+            builder.func.dfg.value_type(unboxed[0]),
+            types::I64,
+            "{label} thunk round trips must use the I64 ABI"
+        );
+    }
+
     let boxed_float = box_thunk_value(
         &mut codegen,
         &mut builder,
@@ -6124,6 +6386,63 @@ fn direct_type_supports_plain_classes_and_scalars() {
     let counter = direct_type(&Type::named("Counter"), &classes).expect("Counter should be direct");
     assert_eq!(render_direct_type(&counter), "Counter");
     assert_eq!(counter.value_count(), 1);
+}
+
+#[test]
+fn ticket9_int64_and_uint64_are_unboxed_i64_direct_scalars() {
+    let classes = HashMap::new();
+
+    for (name, kind) in [("int64", ScalarKind::Int64), ("uint64", ScalarKind::Uint64)] {
+        let direct = direct_type(&Type::named(name), &classes)
+            .unwrap_or_else(|| panic!("{name} should have a direct type"));
+
+        assert_eq!(direct, DirectType::Scalar(kind));
+        assert_eq!(direct.scalar_kind(), Some(kind));
+        assert_eq!(kind.signature_type(), types::I64);
+        assert_eq!(direct.abi_types(), vec![types::I64]);
+        assert_eq!(render_direct_type(&direct), name);
+        assert_eq!(direct_type_to_type(&direct), Type::named(name));
+        assert!(!kind.is_float());
+    }
+
+    let source = r#"
+def wide_identity(signed: int64, unsigned: uint64) -> int64:
+    if unsigned > 0:
+        return signed
+    return 0
+
+def main() -> int32:
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("wide scalar signature should lower");
+    let function = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "wide_identity")
+        .expect("wide_identity should be present in MIR");
+    let signature = signature_for(
+        function,
+        &classes,
+        cranelift_codegen::isa::CallConv::SystemV,
+    )
+    .expect("int64 and uint64 should have direct signatures");
+
+    assert_eq!(
+        signature
+            .params
+            .iter()
+            .map(|parameter| parameter.value_type)
+            .collect::<Vec<_>>(),
+        vec![types::I64, types::I64]
+    );
+    assert_eq!(
+        signature
+            .returns
+            .iter()
+            .map(|result| result.value_type)
+            .collect::<Vec<_>>(),
+        vec![types::I64]
+    );
 }
 
 #[test]

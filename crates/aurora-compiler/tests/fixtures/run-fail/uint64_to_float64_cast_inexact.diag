@@ -1,0 +1,5 @@
+error: integer value `18446744073709551615` cannot be represented exactly as `float64`
+ --> crates/aurora-compiler/tests/fixtures/run-fail/uint64_to_float64_cast_inexact.au:3:22
+  |
+3 |     value: float64 = source as float64
+  |                      ^

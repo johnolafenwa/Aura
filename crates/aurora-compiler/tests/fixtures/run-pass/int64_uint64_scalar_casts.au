@@ -1,0 +1,36 @@
+def main() -> int32:
+    narrow_signed: int32 = -42
+    widened_signed: int64 = narrow_signed as int64
+    print(widened_signed)
+    narrowed_again: int32 = widened_signed as int32
+    print(narrowed_again)
+
+    signed_min: int64 = -9223372036854775808
+    signed_max: int64 = 9223372036854775807
+    signed_min_wide: int128 = signed_min as int128
+    signed_max_unsigned: uint64 = signed_max as uint64
+    print(signed_min_wide)
+    print(signed_max_unsigned)
+
+    narrow_unsigned: uint32 = 4294967295
+    widened_unsigned: uint64 = narrow_unsigned as uint64
+    unsigned_high: uint64 = 9223372036854775808
+    unsigned_max: uint64 = 18446744073709551615
+    unsigned_high_wide: uint128 = unsigned_high as uint128
+    unsigned_max_wide: uint128 = unsigned_max as uint128
+    unsigned_high_float: float64 = unsigned_high as float64
+    print(widened_unsigned)
+    print(unsigned_high_wide)
+    print(unsigned_max_wide)
+    print(unsigned_high_float)
+
+    unsigned_small: uint64 = 42
+    unsigned_to_signed: int64 = unsigned_small as int64
+    print(unsigned_to_signed)
+
+    float_source: float64 = 4294967296.0
+    float_to_signed: int64 = float_source as int64
+    float_to_unsigned: uint64 = float_source as uint64
+    print(float_to_signed)
+    print(float_to_unsigned)
+    return 0

@@ -36,6 +36,8 @@ pub fn emit_host_object_with_metadata(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScalarKind {
     Int32,
+    Int64,
+    Uint64,
     Float32,
     Float64,
     Bool,
@@ -45,16 +47,22 @@ enum ScalarKind {
 impl ScalarKind {
     fn signature_type(self) -> cranelift_codegen::ir::Type {
         match self {
-            ScalarKind::Int32 | ScalarKind::Bool | ScalarKind::Unit => types::I64,
+            ScalarKind::Int32
+            | ScalarKind::Int64
+            | ScalarKind::Uint64
+            | ScalarKind::Bool
+            | ScalarKind::Unit => types::I64,
             ScalarKind::Float32 | ScalarKind::Float64 => types::F64,
         }
     }
 
     fn zero_value(self, builder: &mut FunctionBuilder<'_>) -> Value {
         match self {
-            ScalarKind::Int32 | ScalarKind::Bool | ScalarKind::Unit => {
-                builder.ins().iconst(types::I64, 0)
-            }
+            ScalarKind::Int32
+            | ScalarKind::Int64
+            | ScalarKind::Uint64
+            | ScalarKind::Bool
+            | ScalarKind::Unit => builder.ins().iconst(types::I64, 0),
             ScalarKind::Float32 | ScalarKind::Float64 => {
                 builder.ins().f64const(Ieee64::with_float(0.0))
             }
@@ -63,6 +71,17 @@ impl ScalarKind {
 
     fn is_float(self) -> bool {
         matches!(self, ScalarKind::Float32 | ScalarKind::Float64)
+    }
+
+    fn is_integer(self) -> bool {
+        matches!(
+            self,
+            ScalarKind::Int32 | ScalarKind::Int64 | ScalarKind::Uint64
+        )
+    }
+
+    fn is_signed_integer(self) -> bool {
+        matches!(self, ScalarKind::Int32 | ScalarKind::Int64)
     }
 }
 
@@ -167,17 +186,20 @@ struct NativeCodegen<'a> {
     enter_call: FuncId,
     exit_call: FuncId,
     print_i64: FuncId,
+    print_u64: FuncId,
     print_f64: FuncId,
     print_bool: FuncId,
     print_value: FuncId,
     sqrt_f64: FuncId,
     fail_division_by_zero: FuncId,
     fail_int32_overflow: FuncId,
+    fail_integer_overflow: FuncId,
     register_cleanup: FuncId,
     unregister_cleanup: FuncId,
     refresh_cleanup: FuncId,
     close_value: FuncId,
     box_i64: FuncId,
+    box_u64: FuncId,
     box_uint_literal: FuncId,
     box_f64: FuncId,
     box_bool: FuncId,
@@ -251,12 +273,17 @@ struct NativeCodegen<'a> {
     release_value: FuncId,
     clone_value: FuncId,
     unbox_i64: FuncId,
+    unbox_int64: FuncId,
+    unbox_u64: FuncId,
     unbox_f64: FuncId,
     unbox_bool: FuncId,
     value_as_condition: FuncId,
     unary_value: FuncId,
     binary_value: FuncId,
     cast_value: FuncId,
+    cast_integer_to_integer: FuncId,
+    cast_integer_to_float: FuncId,
+    cast_float_to_integer: FuncId,
     value_type_matches: FuncId,
     enum_variant: FuncId,
     variant_matches: FuncId,
@@ -610,17 +637,20 @@ impl<'a> NativeCodegen<'a> {
             enter_call => ("aurora_direct_enter_call", [types::I64, types::I64, types::I64, types::I64], None),
             exit_call => ("aurora_direct_exit_call", [], None),
             print_i64 => ("aurora_direct_print_i64", [types::I64], None),
+            print_u64 => ("aurora_direct_print_u64", [types::I64], None),
             print_f64 => ("aurora_direct_print_f64", [types::F64], None),
             print_bool => ("aurora_direct_print_bool", [types::I64], None),
             print_value => ("aurora_direct_print_value", [types::I64], None),
             sqrt_f64 => ("aurora_direct_sqrt_f64", [types::F64], Some(types::F64)),
             fail_division_by_zero => ("aurora_direct_fail_division_by_zero", [types::I64, types::I64], None),
             fail_int32_overflow => ("aurora_direct_fail_int32_overflow", [types::I64, types::I64, types::I64], None),
+            fail_integer_overflow => ("aurora_direct_fail_integer_overflow", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
             register_cleanup => ("aurora_direct_register_cleanup", [types::I64, types::I64, types::I64], Some(types::I64)),
             unregister_cleanup => ("aurora_direct_unregister_cleanup", [types::I64], None),
             refresh_cleanup => ("aurora_direct_refresh_cleanup", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             close_value => ("aurora_direct_close_value", [types::I64, types::I64], Some(types::I64)),
             box_i64 => ("aurora_direct_box_i64", [types::I64], Some(types::I64)),
+            box_u64 => ("aurora_direct_box_u64", [types::I64], Some(types::I64)),
             box_uint_literal => ("aurora_direct_box_uint_literal", [types::I64, types::I64], Some(types::I64)),
             box_f64 => ("aurora_direct_box_f64", [types::F64], Some(types::I64)),
             box_bool => ("aurora_direct_box_bool", [types::I64], Some(types::I64)),
@@ -694,12 +724,17 @@ impl<'a> NativeCodegen<'a> {
             release_value => ("aurora_direct_release_value", [types::I64], None),
             clone_value => ("aurora_direct_clone_value", [types::I64], Some(types::I64)),
             unbox_i64 => ("aurora_direct_unbox_i64", [types::I64], Some(types::I64)),
+            unbox_int64 => ("aurora_direct_unbox_int64", [types::I64], Some(types::I64)),
+            unbox_u64 => ("aurora_direct_unbox_u64", [types::I64], Some(types::I64)),
             unbox_f64 => ("aurora_direct_unbox_f64", [types::I64], Some(types::F64)),
             unbox_bool => ("aurora_direct_unbox_bool", [types::I64], Some(types::I64)),
             value_as_condition => ("aurora_direct_value_as_condition", [types::I64], Some(types::I64)),
             unary_value => ("aurora_direct_unary_value_at", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             binary_value => ("aurora_direct_binary_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             cast_value => ("aurora_direct_cast_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            cast_integer_to_integer => ("aurora_direct_cast_integer_to_integer", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            cast_integer_to_float => ("aurora_direct_cast_integer_to_float", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::F64)),
+            cast_float_to_integer => ("aurora_direct_cast_float_to_integer", [types::F64, types::I64, types::I64, types::I64], Some(types::I64)),
             value_type_matches => ("aurora_direct_value_type_matches", [types::I64, types::I64, types::I64], Some(types::I64)),
             enum_variant => ("aurora_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             variant_matches => ("aurora_direct_variant_matches", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
@@ -968,17 +1003,20 @@ impl<'a> NativeCodegen<'a> {
             enter_call,
             exit_call,
             print_i64,
+            print_u64,
             print_f64,
             print_bool,
             print_value,
             sqrt_f64,
             fail_division_by_zero,
             fail_int32_overflow,
+            fail_integer_overflow,
             register_cleanup,
             unregister_cleanup,
             refresh_cleanup,
             close_value,
             box_i64,
+            box_u64,
             box_uint_literal,
             box_f64,
             box_bool,
@@ -1052,12 +1090,17 @@ impl<'a> NativeCodegen<'a> {
             release_value,
             clone_value,
             unbox_i64,
+            unbox_int64,
+            unbox_u64,
             unbox_f64,
             unbox_bool,
             value_as_condition,
             unary_value,
             binary_value,
             cast_value,
+            cast_integer_to_integer,
+            cast_integer_to_float,
+            cast_float_to_integer,
             value_type_matches,
             enum_variant,
             variant_matches,
@@ -1527,6 +1570,9 @@ impl<'a> NativeCodegen<'a> {
         let print_i64 = self
             .object
             .declare_func_in_func(self.print_i64, builder.func);
+        let print_u64 = self
+            .object
+            .declare_func_in_func(self.print_u64, builder.func);
         let print_f64 = self
             .object
             .declare_func_in_func(self.print_f64, builder.func);
@@ -1545,6 +1591,9 @@ impl<'a> NativeCodegen<'a> {
         let fail_int32_overflow = self
             .object
             .declare_func_in_func(self.fail_int32_overflow, builder.func);
+        let fail_integer_overflow = self
+            .object
+            .declare_func_in_func(self.fail_integer_overflow, builder.func);
         let register_cleanup = self
             .object
             .declare_func_in_func(self.register_cleanup, builder.func);
@@ -1555,6 +1604,7 @@ impl<'a> NativeCodegen<'a> {
             .object
             .declare_func_in_func(self.refresh_cleanup, builder.func);
         let box_i64 = self.object.declare_func_in_func(self.box_i64, builder.func);
+        let box_u64 = self.object.declare_func_in_func(self.box_u64, builder.func);
         let box_uint_literal = self
             .object
             .declare_func_in_func(self.box_uint_literal, builder.func);
@@ -1762,6 +1812,12 @@ impl<'a> NativeCodegen<'a> {
         let unbox_i64 = self
             .object
             .declare_func_in_func(self.unbox_i64, builder.func);
+        let unbox_int64 = self
+            .object
+            .declare_func_in_func(self.unbox_int64, builder.func);
+        let unbox_u64 = self
+            .object
+            .declare_func_in_func(self.unbox_u64, builder.func);
         let unbox_f64 = self
             .object
             .declare_func_in_func(self.unbox_f64, builder.func);
@@ -1780,6 +1836,15 @@ impl<'a> NativeCodegen<'a> {
         let cast_value = self
             .object
             .declare_func_in_func(self.cast_value, builder.func);
+        let cast_integer_to_integer = self
+            .object
+            .declare_func_in_func(self.cast_integer_to_integer, builder.func);
+        let cast_integer_to_float = self
+            .object
+            .declare_func_in_func(self.cast_integer_to_float, builder.func);
+        let cast_float_to_integer = self
+            .object
+            .declare_func_in_func(self.cast_float_to_integer, builder.func);
         let value_type_matches = self
             .object
             .declare_func_in_func(self.value_type_matches, builder.func);
@@ -2328,16 +2393,19 @@ impl<'a> NativeCodegen<'a> {
             cleanup_registration_vars,
             exit_call,
             print_i64,
+            print_u64,
             print_f64,
             print_bool,
             print_value,
             sqrt_f64,
             fail_division_by_zero,
             fail_int32_overflow,
+            fail_integer_overflow,
             register_cleanup,
             unregister_cleanup,
             refresh_cleanup,
             box_i64,
+            box_u64,
             box_uint_literal,
             box_f64,
             box_bool,
@@ -2411,12 +2479,17 @@ impl<'a> NativeCodegen<'a> {
             release_value,
             clone_value,
             unbox_i64,
+            unbox_int64,
+            unbox_u64,
             unbox_f64,
             unbox_bool,
             value_as_condition,
             unary_value,
             binary_value,
             cast_value,
+            cast_integer_to_integer,
+            cast_integer_to_float,
+            cast_float_to_integer,
             value_type_matches,
             enum_variant,
             variant_matches,
@@ -2645,6 +2718,12 @@ impl<'a> NativeCodegen<'a> {
         let unbox_i64 = self
             .object
             .declare_func_in_func(self.unbox_i64, builder.func);
+        let unbox_int64 = self
+            .object
+            .declare_func_in_func(self.unbox_int64, builder.func);
+        let unbox_u64 = self
+            .object
+            .declare_func_in_func(self.unbox_u64, builder.func);
         let unbox_f64 = self
             .object
             .declare_func_in_func(self.unbox_f64, builder.func);
@@ -2669,6 +2748,16 @@ impl<'a> NativeCodegen<'a> {
                 DirectType::Opaque(_) => lowered_args.push(raw),
                 DirectType::Scalar(ScalarKind::Int32) => {
                     let inst = builder.ins().call(unbox_i64, &[raw]);
+                    lowered_args.push(builder.inst_results(inst)[0]);
+                    let _ = builder.ins().call(release_value, &[raw]);
+                }
+                DirectType::Scalar(ScalarKind::Int64) => {
+                    let inst = builder.ins().call(unbox_int64, &[raw]);
+                    lowered_args.push(builder.inst_results(inst)[0]);
+                    let _ = builder.ins().call(release_value, &[raw]);
+                }
+                DirectType::Scalar(ScalarKind::Uint64) => {
+                    let inst = builder.ins().call(unbox_u64, &[raw]);
                     lowered_args.push(builder.inst_results(inst)[0]);
                     let _ = builder.ins().call(release_value, &[raw]);
                 }
@@ -2949,16 +3038,19 @@ struct FunctionCompiler<'a> {
     cleanup_registration_vars: HashMap<String, Variable>,
     exit_call: cranelift_codegen::ir::FuncRef,
     print_i64: cranelift_codegen::ir::FuncRef,
+    print_u64: cranelift_codegen::ir::FuncRef,
     print_f64: cranelift_codegen::ir::FuncRef,
     print_bool: cranelift_codegen::ir::FuncRef,
     print_value: cranelift_codegen::ir::FuncRef,
     sqrt_f64: cranelift_codegen::ir::FuncRef,
     fail_division_by_zero: cranelift_codegen::ir::FuncRef,
     fail_int32_overflow: cranelift_codegen::ir::FuncRef,
+    fail_integer_overflow: cranelift_codegen::ir::FuncRef,
     register_cleanup: cranelift_codegen::ir::FuncRef,
     unregister_cleanup: cranelift_codegen::ir::FuncRef,
     refresh_cleanup: cranelift_codegen::ir::FuncRef,
     box_i64: cranelift_codegen::ir::FuncRef,
+    box_u64: cranelift_codegen::ir::FuncRef,
     box_uint_literal: cranelift_codegen::ir::FuncRef,
     box_f64: cranelift_codegen::ir::FuncRef,
     box_bool: cranelift_codegen::ir::FuncRef,
@@ -3032,12 +3124,17 @@ struct FunctionCompiler<'a> {
     release_value: cranelift_codegen::ir::FuncRef,
     clone_value: cranelift_codegen::ir::FuncRef,
     unbox_i64: cranelift_codegen::ir::FuncRef,
+    unbox_int64: cranelift_codegen::ir::FuncRef,
+    unbox_u64: cranelift_codegen::ir::FuncRef,
     unbox_f64: cranelift_codegen::ir::FuncRef,
     unbox_bool: cranelift_codegen::ir::FuncRef,
     value_as_condition: cranelift_codegen::ir::FuncRef,
     unary_value: cranelift_codegen::ir::FuncRef,
     binary_value: cranelift_codegen::ir::FuncRef,
     cast_value: cranelift_codegen::ir::FuncRef,
+    cast_integer_to_integer: cranelift_codegen::ir::FuncRef,
+    cast_integer_to_float: cranelift_codegen::ir::FuncRef,
+    cast_float_to_integer: cranelift_codegen::ir::FuncRef,
     value_type_matches: cranelift_codegen::ir::FuncRef,
     enum_variant: cranelift_codegen::ir::FuncRef,
     variant_matches: cranelift_codegen::ir::FuncRef,
@@ -3391,7 +3488,7 @@ impl<'a> FunctionCompiler<'a> {
                             element_type,
                             Some(&target_ty),
                         )?,
-                        _ => self.compile_rvalue(value)?,
+                        _ => self.compile_rvalue_for_target(value, Some(&target_ty))?,
                     };
                     let assignment_span = match value {
                         Rvalue::Unary { span, .. }
@@ -3430,7 +3527,7 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<(), String> {
         match terminator {
             Terminator::Return(operand) => {
-                let value = self.load_operand(operand)?;
+                let value = self.load_operand_for_target(operand, return_ty)?;
                 let coerced = self.coerce_value(value, return_ty)?;
                 self.emit_pending_cleanups(true)?;
                 let return_values = self.build_return_values(coerced)?;
@@ -3518,17 +3615,39 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn compile_rvalue(&mut self, rvalue: &Rvalue) -> std::result::Result<ValueRef, String> {
+    fn compile_rvalue_for_target(
+        &mut self,
+        rvalue: &Rvalue,
+        target: Option<&DirectType>,
+    ) -> std::result::Result<ValueRef, String> {
         match rvalue {
-            Rvalue::Use(operand) => self.load_operand(operand),
+            Rvalue::Use(operand) => {
+                let integer_hint = target
+                    .and_then(DirectType::scalar_kind)
+                    .filter(|kind| kind.is_integer());
+                self.load_operand_with_integer_hint(operand, integer_hint)
+            }
             Rvalue::FormatString { parts } => self.compile_format_string(parts),
             Rvalue::Unary { op, value, span } => {
-                let value = self.load_operand(value)?;
+                let integer_hint = target
+                    .and_then(DirectType::scalar_kind)
+                    .filter(|kind| kind.is_integer());
+                if matches!(op, UnaryOp::Neg)
+                    && matches!(integer_hint, Some(ScalarKind::Int64))
+                    && matches!(value, Operand::Int(magnitude) if *magnitude == (i64::MAX as u128) + 1)
+                {
+                    return Ok(ValueRef {
+                        values: vec![self.builder.ins().iconst(types::I64, i64::MIN)],
+                        ty: DirectType::Scalar(ScalarKind::Int64),
+                    });
+                }
+                let value = self.load_operand_with_integer_hint(value, integer_hint)?;
                 self.compile_unary(*op, value, Some(*span))
             }
             Rvalue::Cast { value, ty, span } => {
-                let value = self.load_operand(value)?;
-                self.compile_cast(value, ty, Some(*span))
+                let cast_target = ensure_direct_type(ty, &self.classes, "cast target")?;
+                let value = self.load_operand_for_target(value, &cast_target)?;
+                self.compile_cast(value, ty, &cast_target, Some(*span))
             }
             Rvalue::Binary {
                 op,
@@ -3536,8 +3655,13 @@ impl<'a> FunctionCompiler<'a> {
                 right,
                 span,
             } => {
-                let left = self.load_operand(left)?;
-                let right = self.load_operand(right)?;
+                let integer_hint = target
+                    .and_then(DirectType::scalar_kind)
+                    .filter(|kind| kind.is_integer())
+                    .or_else(|| self.operand_integer_kind(left))
+                    .or_else(|| self.operand_integer_kind(right));
+                let left = self.load_operand_with_integer_hint(left, integer_hint)?;
+                let right = self.load_operand_with_integer_hint(right, integer_hint)?;
                 self.compile_binary(*op, left, right, Some(*span))
             }
             Rvalue::Call { callee, args } => self.compile_call(callee, args),
@@ -3710,6 +3834,26 @@ impl<'a> FunctionCompiler<'a> {
                 values: vec![self.builder.ins().ineg(value.values[0])],
                 ty: DirectType::Scalar(ScalarKind::Int32),
             }),
+            (UnaryOp::Neg, Some(kind @ (ScalarKind::Int64 | ScalarKind::Uint64))) => {
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let (result, overflow) = if kind.is_signed_integer() {
+                    self.builder.ins().ssub_overflow(zero, value.values[0])
+                } else {
+                    self.builder.ins().usub_overflow(zero, value.values[0])
+                };
+                self.emit_integer_overflow_failure_branch(
+                    overflow,
+                    kind,
+                    BinaryOp::Sub,
+                    zero,
+                    value.values[0],
+                    span,
+                )?;
+                Ok(ValueRef {
+                    values: vec![result],
+                    ty: DirectType::Scalar(kind),
+                })
+            }
             (UnaryOp::Neg, Some(kind)) if kind.is_float() => Ok(ValueRef {
                 values: vec![self.builder.ins().fneg(value.values[0])],
                 ty: DirectType::Scalar(kind),
@@ -3733,9 +3877,9 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         value: ValueRef,
         target: &Type,
+        target_ty: &DirectType,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
-        let target_ty = ensure_direct_type(target, &self.classes, "cast target")?;
         if matches!(value.ty, DirectType::Opaque(_)) || matches!(target_ty, DirectType::Opaque(_)) {
             let boxed = self.ensure_opaque(value)?;
             let (target_ptr, target_len) = self.string_constant(target.to_string().as_bytes())?;
@@ -3746,7 +3890,7 @@ impl<'a> FunctionCompiler<'a> {
             );
             let boxed =
                 self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), target.clone());
-            return self.coerce_value(boxed, &target_ty);
+            return self.coerce_value(boxed, target_ty);
         }
         let Some(target_kind) = target_ty.scalar_kind() else {
             return Err(format!(
@@ -3763,15 +3907,72 @@ impl<'a> FunctionCompiler<'a> {
 
         let source = value.values[0];
         let result = match (source_kind, target_kind) {
-            (ScalarKind::Int32, ScalarKind::Int32) => source,
-            (ScalarKind::Int32, kind) if kind.is_float() => self
-                .builder
-                .ins()
-                .fcvt_from_sint(target_kind.signature_type(), source),
-            (kind, ScalarKind::Int32) if kind.is_float() => {
-                let converted = self.builder.ins().fcvt_to_sint_sat(types::I64, source);
-                self.emit_int32_bounds_check(converted, span)?;
-                converted
+            (_, _) if source_kind == target_kind => source,
+            (source_kind, target_kind) if source_kind.is_integer() && target_kind.is_integer() => {
+                let source_code = self.builder.ins().iconst(
+                    types::I64,
+                    if matches!(source_kind, ScalarKind::Uint64) {
+                        1
+                    } else {
+                        0
+                    },
+                );
+                let target_code = self.builder.ins().iconst(
+                    types::I64,
+                    match target_kind {
+                        ScalarKind::Int32 => 0,
+                        ScalarKind::Int64 => 1,
+                        ScalarKind::Uint64 => 2,
+                        _ => unreachable!("integer cast target should be exhaustive"),
+                    },
+                );
+                let (line, column) = self.span_values(span);
+                let inst = self.builder.ins().call(
+                    self.cast_integer_to_integer,
+                    &[source, source_code, target_code, line, column],
+                );
+                self.builder.inst_results(inst)[0]
+            }
+            (source_kind, target_kind) if source_kind.is_integer() && target_kind.is_float() => {
+                let source_code = self.builder.ins().iconst(
+                    types::I64,
+                    if matches!(source_kind, ScalarKind::Uint64) {
+                        1
+                    } else {
+                        0
+                    },
+                );
+                let target_code = self.builder.ins().iconst(
+                    types::I64,
+                    if matches!(target_kind, ScalarKind::Float32) {
+                        0
+                    } else {
+                        1
+                    },
+                );
+                let (line, column) = self.span_values(span);
+                let inst = self.builder.ins().call(
+                    self.cast_integer_to_float,
+                    &[source, source_code, target_code, line, column],
+                );
+                self.builder.inst_results(inst)[0]
+            }
+            (source_kind, target_kind) if source_kind.is_float() && target_kind.is_integer() => {
+                let target_code = self.builder.ins().iconst(
+                    types::I64,
+                    match target_kind {
+                        ScalarKind::Int32 => 0,
+                        ScalarKind::Int64 => 1,
+                        ScalarKind::Uint64 => 2,
+                        _ => unreachable!("integer cast target should be exhaustive"),
+                    },
+                );
+                let (line, column) = self.span_values(span);
+                let inst = self.builder.ins().call(
+                    self.cast_float_to_integer,
+                    &[source, target_code, line, column],
+                );
+                self.builder.inst_results(inst)[0]
             }
             (lhs, rhs) if lhs.is_float() && rhs.is_float() => source,
             _ => {
@@ -3779,7 +3980,7 @@ impl<'a> FunctionCompiler<'a> {
                     "direct backend only supports numeric casts, found `{}` to `{}`",
                     render_direct_type(&value.ty),
                     target
-                ))
+                ));
             }
         };
 
@@ -3814,6 +4015,9 @@ impl<'a> FunctionCompiler<'a> {
         match (left.ty.scalar_kind(), right.ty.scalar_kind()) {
             (Some(ScalarKind::Int32), Some(ScalarKind::Int32)) => {
                 self.compile_int32_binary(op, left.values[0], right.values[0], span)
+            }
+            (Some(kind @ (ScalarKind::Int64 | ScalarKind::Uint64)), Some(rhs)) if kind == rhs => {
+                self.compile_wide_integer_binary(kind, op, left.values[0], right.values[0], span)
             }
             (Some(lhs), Some(rhs)) if lhs.is_float() && rhs.is_float() => {
                 self.compile_float_binary(op, left.values[0], right.values[0], lhs, span)
@@ -3887,6 +4091,129 @@ impl<'a> FunctionCompiler<'a> {
         if matches!(value.ty.scalar_kind(), Some(ScalarKind::Int32)) {
             self.emit_int32_bounds_check(value.values[0], span)?;
         }
+        Ok(value)
+    }
+
+    fn compile_wide_integer_binary(
+        &mut self,
+        kind: ScalarKind,
+        op: BinaryOp,
+        left: Value,
+        right: Value,
+        span: Option<Span>,
+    ) -> std::result::Result<ValueRef, String> {
+        let ty = DirectType::Scalar(kind);
+        let arithmetic = |value| ValueRef {
+            values: vec![value],
+            ty: ty.clone(),
+        };
+        let value = match op {
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
+                let (result, overflow) = match (kind.is_signed_integer(), op) {
+                    (true, BinaryOp::Add) => self.builder.ins().sadd_overflow(left, right),
+                    (true, BinaryOp::Sub) => self.builder.ins().ssub_overflow(left, right),
+                    (true, BinaryOp::Mul) => self.builder.ins().smul_overflow(left, right),
+                    (false, BinaryOp::Add) => self.builder.ins().uadd_overflow(left, right),
+                    (false, BinaryOp::Sub) => self.builder.ins().usub_overflow(left, right),
+                    (false, BinaryOp::Mul) => self.builder.ins().umul_overflow(left, right),
+                    _ => unreachable!("wide integer arithmetic opcode should be exhaustive"),
+                };
+                self.emit_integer_overflow_failure_branch(overflow, kind, op, left, right, span)?;
+                arithmetic(result)
+            }
+            BinaryOp::Div => {
+                self.emit_int_division_guard(right, span)?;
+                if kind.is_signed_integer() {
+                    let min = self.builder.ins().iconst(types::I64, i64::MIN);
+                    let negative_one = self.builder.ins().iconst(types::I64, -1);
+                    let is_min = self.builder.ins().icmp(IntCC::Equal, left, min);
+                    let is_negative_one =
+                        self.builder.ins().icmp(IntCC::Equal, right, negative_one);
+                    let overflow = self.builder.ins().band(is_min, is_negative_one);
+                    self.emit_integer_overflow_failure_branch(
+                        overflow, kind, op, left, right, span,
+                    )?;
+                    arithmetic(self.builder.ins().sdiv(left, right))
+                } else {
+                    arithmetic(self.builder.ins().udiv(left, right))
+                }
+            }
+            BinaryOp::Mod => {
+                self.emit_int_division_guard(right, span)?;
+                if kind.is_signed_integer() {
+                    let min = self.builder.ins().iconst(types::I64, i64::MIN);
+                    let negative_one = self.builder.ins().iconst(types::I64, -1);
+                    let is_min = self.builder.ins().icmp(IntCC::Equal, left, min);
+                    let is_negative_one =
+                        self.builder.ins().icmp(IntCC::Equal, right, negative_one);
+                    let exceptional = self.builder.ins().band(is_min, is_negative_one);
+                    let normal_block = self.builder.create_block();
+                    let continue_block = self.builder.create_block();
+                    self.builder.append_block_param(continue_block, types::I64);
+                    let zero_remainder = self.builder.ins().iconst(types::I64, 0);
+                    self.builder.ins().brif(
+                        exceptional,
+                        continue_block,
+                        &[zero_remainder],
+                        normal_block,
+                        &[],
+                    );
+                    self.builder.switch_to_block(normal_block);
+                    let remainder = self.builder.ins().srem(left, right);
+                    self.builder.ins().jump(continue_block, &[remainder]);
+                    self.builder.seal_block(normal_block);
+                    self.builder.switch_to_block(continue_block);
+                    self.builder.seal_block(continue_block);
+                    arithmetic(self.builder.block_params(continue_block)[0])
+                } else {
+                    arithmetic(self.builder.ins().urem(left, right))
+                }
+            }
+            BinaryOp::Eq => self.boolean_from_icmp(IntCC::Equal, left, right),
+            BinaryOp::NotEq => self.boolean_from_icmp(IntCC::NotEqual, left, right),
+            BinaryOp::Less => self.boolean_from_icmp(
+                if kind.is_signed_integer() {
+                    IntCC::SignedLessThan
+                } else {
+                    IntCC::UnsignedLessThan
+                },
+                left,
+                right,
+            ),
+            BinaryOp::LessEq => self.boolean_from_icmp(
+                if kind.is_signed_integer() {
+                    IntCC::SignedLessThanOrEqual
+                } else {
+                    IntCC::UnsignedLessThanOrEqual
+                },
+                left,
+                right,
+            ),
+            BinaryOp::Greater => self.boolean_from_icmp(
+                if kind.is_signed_integer() {
+                    IntCC::SignedGreaterThan
+                } else {
+                    IntCC::UnsignedGreaterThan
+                },
+                left,
+                right,
+            ),
+            BinaryOp::GreaterEq => self.boolean_from_icmp(
+                if kind.is_signed_integer() {
+                    IntCC::SignedGreaterThanOrEqual
+                } else {
+                    IntCC::UnsignedGreaterThanOrEqual
+                },
+                left,
+                right,
+            ),
+            other => {
+                return Err(format!(
+                    "direct backend does not support wide integer binary operation `{:?}`",
+                    other
+                ))
+            }
+        };
         Ok(value)
     }
 
@@ -4003,6 +4330,58 @@ impl<'a> FunctionCompiler<'a> {
         self.emit_division_failure_branch(is_zero, span)
     }
 
+    fn emit_integer_overflow_failure_branch(
+        &mut self,
+        overflow: Value,
+        kind: ScalarKind,
+        op: BinaryOp,
+        left: Value,
+        right: Value,
+        span: Option<Span>,
+    ) -> std::result::Result<(), String> {
+        let kind_code = match kind {
+            ScalarKind::Int64 => 0,
+            ScalarKind::Uint64 => 1,
+            _ => {
+                return Err(format!(
+                    "direct backend cannot report wide overflow for `{}`",
+                    render_direct_type(&DirectType::Scalar(kind))
+                ))
+            }
+        };
+        let op_code = match op {
+            BinaryOp::Add => 0,
+            BinaryOp::Sub => 1,
+            BinaryOp::Mul => 2,
+            BinaryOp::Div => 3,
+            _ => {
+                return Err(format!(
+                    "direct backend cannot report overflow for operation `{:?}`",
+                    op
+                ))
+            }
+        };
+        let fail_block = self.builder.create_block();
+        let continue_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(overflow, fail_block, &[], continue_block, &[]);
+        self.builder.switch_to_block(fail_block);
+        self.emit_pending_cleanups(true)?;
+        let kind_code = self.builder.ins().iconst(types::I64, kind_code);
+        let op_code = self.builder.ins().iconst(types::I64, op_code);
+        let (line, column) = self.span_values(span);
+        self.builder.ins().call(
+            self.fail_integer_overflow,
+            &[kind_code, op_code, left, right, line, column],
+        );
+        self.builder.ins().trap(TrapCode::INTEGER_OVERFLOW);
+        self.builder.seal_block(fail_block);
+        self.builder.switch_to_block(continue_block);
+        self.builder.seal_block(continue_block);
+        Ok(())
+    }
+
     fn emit_float_division_guard(
         &mut self,
         divisor: Value,
@@ -4058,10 +4437,15 @@ impl<'a> FunctionCompiler<'a> {
         };
         let argument = self.load_operand(&argument.value)?;
         match argument.ty.scalar_kind() {
-            Some(ScalarKind::Int32) => {
+            Some(ScalarKind::Int32) | Some(ScalarKind::Int64) => {
                 self.builder
                     .ins()
                     .call(self.print_i64, &[argument.values[0]]);
+            }
+            Some(ScalarKind::Uint64) => {
+                self.builder
+                    .ins()
+                    .call(self.print_u64, &[argument.values[0]]);
             }
             Some(ScalarKind::Float32) | Some(ScalarKind::Float64) => {
                 self.builder
@@ -4475,7 +4859,11 @@ impl<'a> FunctionCompiler<'a> {
             .unwrap_or_default();
         let mut writeback_places = Vec::new();
         for (index, argument) in args.iter().enumerate() {
-            let loaded = self.load_operand(&argument.value)?;
+            let loaded = if let Some(expected_ty) = expected.get(index) {
+                self.load_operand_for_target(&argument.value, expected_ty)?
+            } else {
+                self.load_operand(&argument.value)?
+            };
             let coerced = if let Some(expected_ty) = expected.get(index) {
                 self.coerce_value(loaded, expected_ty)?
             } else {
@@ -5156,7 +5544,7 @@ impl<'a> FunctionCompiler<'a> {
                         "direct backend construction for `{}` is missing field `{}`",
                         class_name, field.name
                     ))?;
-                    let value = self.load_operand(operand)?;
+                    let value = self.load_operand_for_target(operand, &field.ty)?;
                     let coerced = self.coerce_value(value, &field.ty)?;
                     values.extend(coerced.values);
                 }
@@ -5251,12 +5639,57 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
+    fn operand_integer_kind(&self, operand: &Operand) -> Option<ScalarKind> {
+        let kind = match operand {
+            Operand::Place(place) => self.type_of_place(place).ok()?.scalar_kind()?,
+            Operand::Int(_)
+            | Operand::Float(_)
+            | Operand::String(_)
+            | Operand::Duration(_)
+            | Operand::Bool(_)
+            | Operand::Unit => return None,
+        };
+        kind.is_integer().then_some(kind)
+    }
+
+    fn load_operand_with_integer_hint(
+        &mut self,
+        operand: &Operand,
+        hint: Option<ScalarKind>,
+    ) -> std::result::Result<ValueRef, String> {
+        if let (Operand::Int(value), Some(kind)) = (operand, hint) {
+            let raw = match kind {
+                ScalarKind::Int32 | ScalarKind::Int64 => i64::try_from(*value).ok(),
+                ScalarKind::Uint64 => u64::try_from(*value).ok().map(|value| value as i64),
+                ScalarKind::Float32 | ScalarKind::Float64 | ScalarKind::Bool | ScalarKind::Unit => {
+                    None
+                }
+            };
+            if let Some(raw) = raw {
+                return Ok(ValueRef {
+                    values: vec![self.builder.ins().iconst(types::I64, raw)],
+                    ty: DirectType::Scalar(kind),
+                });
+            }
+        }
+        self.load_operand(operand)
+    }
+
+    fn load_operand_for_target(
+        &mut self,
+        operand: &Operand,
+        target: &DirectType,
+    ) -> std::result::Result<ValueRef, String> {
+        let hint = target.scalar_kind().filter(|kind| kind.is_integer());
+        self.load_operand_with_integer_hint(operand, hint)
+    }
+
     fn load_operand_as_opaque_direct(
         &mut self,
         operand: &Operand,
         expected_ty: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
-        let loaded = self.load_operand(operand)?;
+        let loaded = self.load_operand_for_target(operand, expected_ty)?;
         let coerced = self.coerce_value(loaded, expected_ty)?;
         self.ensure_opaque(coerced)
     }
@@ -5385,6 +5818,23 @@ impl<'a> FunctionCompiler<'a> {
                         ty: target.clone(),
                     }
                 }
+                DirectType::Scalar(ScalarKind::Int64) => {
+                    let inst = self
+                        .builder
+                        .ins()
+                        .call(self.unbox_int64, &[value.values[0]]);
+                    ValueRef {
+                        values: self.builder.inst_results(inst).to_vec(),
+                        ty: target.clone(),
+                    }
+                }
+                DirectType::Scalar(ScalarKind::Uint64) => {
+                    let inst = self.builder.ins().call(self.unbox_u64, &[value.values[0]]);
+                    ValueRef {
+                        values: self.builder.inst_results(inst).to_vec(),
+                        ty: target.clone(),
+                    }
+                }
                 DirectType::Scalar(ScalarKind::Float32)
                 | DirectType::Scalar(ScalarKind::Float64) => {
                     let inst = self.builder.ins().call(self.unbox_f64, &[value.values[0]]);
@@ -5435,6 +5885,23 @@ impl<'a> FunctionCompiler<'a> {
                 values: value.values,
                 ty: target.clone(),
             }),
+            (Some(ScalarKind::Int32), Some(ScalarKind::Int64)) => Ok(ValueRef {
+                values: value.values,
+                ty: target.clone(),
+            }),
+            (Some(ScalarKind::Int32), Some(ScalarKind::Uint64)) => {
+                let source_code = self.builder.ins().iconst(types::I64, 0);
+                let target_code = self.builder.ins().iconst(types::I64, 2);
+                let (line, column) = self.span_values(span);
+                let inst = self.builder.ins().call(
+                    self.cast_integer_to_integer,
+                    &[value.values[0], source_code, target_code, line, column],
+                );
+                Ok(ValueRef {
+                    values: self.builder.inst_results(inst).to_vec(),
+                    ty: target.clone(),
+                })
+            }
             (Some(lhs), Some(rhs)) if lhs.is_float() && rhs.is_float() => self
                 .normalize_scalar_value(ValueRef {
                     values: value.values,
@@ -5650,11 +6117,24 @@ impl<'a> FunctionCompiler<'a> {
     fn ensure_opaque(&mut self, value: ValueRef) -> std::result::Result<ValueRef, String> {
         match value.ty {
             DirectType::Opaque(_) => Ok(value),
-            DirectType::Scalar(ScalarKind::Int32) => {
+            DirectType::Scalar(kind @ (ScalarKind::Int32 | ScalarKind::Int64)) => {
                 let inst = self.builder.ins().call(self.box_i64, &[value.values[0]]);
                 let boxed = ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
-                    ty: DirectType::Opaque(Type::named("int32")),
+                    ty: DirectType::Opaque(Type::named(match kind {
+                        ScalarKind::Int32 => "int32",
+                        ScalarKind::Int64 => "int64",
+                        _ => unreachable!("signed integer boxing kind should be exhaustive"),
+                    })),
+                };
+                self.mark_temporary_opaque_owned(&boxed);
+                Ok(boxed)
+            }
+            DirectType::Scalar(ScalarKind::Uint64) => {
+                let inst = self.builder.ins().call(self.box_u64, &[value.values[0]]);
+                let boxed = ValueRef {
+                    values: self.builder.inst_results(inst).to_vec(),
+                    ty: DirectType::Opaque(Type::named("uint64")),
                 };
                 self.mark_temporary_opaque_owned(&boxed);
                 Ok(boxed)
@@ -5760,7 +6240,14 @@ impl<'a> FunctionCompiler<'a> {
             let buffer_inst = self.builder.ins().call(self.arg_buffer_new, &[count]);
             let buffer = self.builder.inst_results(buffer_inst)[0];
             for (index, payload) in payloads.iter().enumerate() {
-                let loaded = self.load_operand(payload)?;
+                let loaded = if let Some(expected_ty) = expected_payload_types
+                    .as_ref()
+                    .and_then(|types| types.get(index))
+                {
+                    self.load_operand_for_target(payload, expected_ty)?
+                } else {
+                    self.load_operand(payload)?
+                };
                 let loaded = if let Some(expected_payload_types) = expected_payload_types.as_ref() {
                     if let Some(expected_ty) = expected_payload_types.get(index) {
                         self.coerce_value(loaded, expected_ty)?
@@ -6358,7 +6845,11 @@ impl<'a> FunctionCompiler<'a> {
             writeback_places.push(place.to_string());
         }
         for (index, argument) in args.iter().enumerate() {
-            let loaded = self.load_operand(&argument.value)?;
+            let loaded = if let Some(expected_ty) = expected.get(index + 1) {
+                self.load_operand_for_target(&argument.value, expected_ty)?
+            } else {
+                self.load_operand(&argument.value)?
+            };
             let coerced = if let Some(expected_ty) = expected.get(index + 1) {
                 self.coerce_value(loaded, expected_ty)?
             } else {
@@ -9872,7 +10363,6 @@ impl<'a> FunctionCompiler<'a> {
             Type::named(class_name),
         );
         for field in fields {
-            let loaded = self.load_operand(&field.value)?;
             let field_ty = class
                 .fields
                 .iter()
@@ -9889,6 +10379,7 @@ impl<'a> FunctionCompiler<'a> {
                 &self.classes,
                 &format!("field `{}` on class `{}`", field.name, class_name),
             )?;
+            let loaded = self.load_operand_for_target(&field.value, &field_ty)?;
             let loaded = self.coerce_value(loaded, &field_ty)?;
             let loaded = self.ensure_opaque(loaded)?;
             let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
@@ -9923,13 +10414,23 @@ impl<'a> FunctionCompiler<'a> {
             .ins()
             .call(self.arg_buffer_new, &[arg_count_value]);
         let buffer = self.builder.inst_results(buffer_call)[0];
+        let expected = self
+            .function_param_types
+            .get(function)
+            .cloned()
+            .unwrap_or_default();
         for (index, arg) in args.iter().enumerate() {
             if arg.writeback_place.is_some() {
                 return Err(
                     "direct backend does not yet support borrowed task-start arguments".to_string(),
                 );
             }
-            let value = self.load_operand(&arg.value)?;
+            let value = if let Some(expected_ty) = expected.get(index) {
+                let loaded = self.load_operand_for_target(&arg.value, expected_ty)?;
+                self.coerce_value(loaded, expected_ty)?
+            } else {
+                self.load_operand(&arg.value)?
+            };
             let value = self.ensure_opaque(value)?;
             let index_value = self.builder.ins().iconst(types::I64, index as i64);
             self.builder.ins().call(
@@ -10662,6 +11163,12 @@ fn direct_type_inner(
         Type::Named(name, args) if args.is_empty() && name == "int32" => {
             Some(DirectType::Scalar(ScalarKind::Int32))
         }
+        Type::Named(name, args) if args.is_empty() && name == "int64" => {
+            Some(DirectType::Scalar(ScalarKind::Int64))
+        }
+        Type::Named(name, args) if args.is_empty() && name == "uint64" => {
+            Some(DirectType::Scalar(ScalarKind::Uint64))
+        }
         Type::Named(name, args) if args.is_empty() && name == "bool" => {
             Some(DirectType::Scalar(ScalarKind::Bool))
         }
@@ -10768,8 +11275,8 @@ fn infer_rvalue_type(
         Rvalue::FormatString { .. } => Some(DirectType::Opaque(Type::named("String"))),
         Rvalue::Unary { op, value, .. } => {
             match (op, infer_operand_type(value, variable_types, classes)?) {
-                (UnaryOp::Neg, DirectType::Scalar(ScalarKind::Int32)) => {
-                    Some(DirectType::Scalar(ScalarKind::Int32))
+                (UnaryOp::Neg, DirectType::Scalar(kind)) if kind.is_integer() => {
+                    Some(DirectType::Scalar(kind))
                 }
                 (UnaryOp::Neg, DirectType::Scalar(kind)) if kind.is_float() => {
                     Some(DirectType::Scalar(kind))
@@ -12041,6 +12548,8 @@ fn infer_operand_type(
 fn render_direct_type(ty: &DirectType) -> String {
     match ty {
         DirectType::Scalar(ScalarKind::Int32) => "int32".to_string(),
+        DirectType::Scalar(ScalarKind::Int64) => "int64".to_string(),
+        DirectType::Scalar(ScalarKind::Uint64) => "uint64".to_string(),
         DirectType::Scalar(ScalarKind::Float32) => "float32".to_string(),
         DirectType::Scalar(ScalarKind::Float64) => "float64".to_string(),
         DirectType::Scalar(ScalarKind::Bool) => "bool".to_string(),
@@ -12091,11 +12600,18 @@ fn box_thunk_value(
                 render_direct_type(ty)
             )
         }),
-        DirectType::Scalar(ScalarKind::Int32) => {
+        DirectType::Scalar(ScalarKind::Int32) | DirectType::Scalar(ScalarKind::Int64) => {
             let box_i64 = codegen
                 .object
                 .declare_func_in_func(codegen.box_i64, builder.func);
             let inst = builder.ins().call(box_i64, &[values[0]]);
+            Ok(builder.inst_results(inst)[0])
+        }
+        DirectType::Scalar(ScalarKind::Uint64) => {
+            let box_u64 = codegen
+                .object
+                .declare_func_in_func(codegen.box_u64, builder.func);
+            let inst = builder.ins().call(box_u64, &[values[0]]);
             Ok(builder.inst_results(inst)[0])
         }
         DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
@@ -12162,6 +12678,20 @@ fn unbox_thunk_value(
                 .object
                 .declare_func_in_func(codegen.unbox_i64, builder.func);
             let inst = builder.ins().call(unbox_i64, &[raw]);
+            Ok(builder.inst_results(inst).to_vec())
+        }
+        DirectType::Scalar(ScalarKind::Int64) => {
+            let unbox_int64 = codegen
+                .object
+                .declare_func_in_func(codegen.unbox_int64, builder.func);
+            let inst = builder.ins().call(unbox_int64, &[raw]);
+            Ok(builder.inst_results(inst).to_vec())
+        }
+        DirectType::Scalar(ScalarKind::Uint64) => {
+            let unbox_u64 = codegen
+                .object
+                .declare_func_in_func(codegen.unbox_u64, builder.func);
+            let inst = builder.ins().call(unbox_u64, &[raw]);
             Ok(builder.inst_results(inst).to_vec())
         }
         DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
@@ -12343,6 +12873,8 @@ fn mangle_cleanup_thunk_symbol(function_name: &str, place: &str, index: usize) -
 fn direct_type_to_type(ty: &DirectType) -> Type {
     match ty {
         DirectType::Scalar(ScalarKind::Int32) => Type::named("int32"),
+        DirectType::Scalar(ScalarKind::Int64) => Type::named("int64"),
+        DirectType::Scalar(ScalarKind::Uint64) => Type::named("uint64"),
         DirectType::Scalar(ScalarKind::Float32) => Type::named("float32"),
         DirectType::Scalar(ScalarKind::Float64) => Type::named("float64"),
         DirectType::Scalar(ScalarKind::Bool) => Type::named("bool"),

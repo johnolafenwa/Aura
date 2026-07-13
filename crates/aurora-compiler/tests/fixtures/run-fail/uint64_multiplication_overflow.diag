@@ -1,0 +1,5 @@
+error: integer value `36893488147419103230` does not fit in `uint64`
+ --> crates/aurora-compiler/tests/fixtures/run-fail/uint64_multiplication_overflow.au:4:11
+  |
+4 |     print(maximum * two)
+  |           ^

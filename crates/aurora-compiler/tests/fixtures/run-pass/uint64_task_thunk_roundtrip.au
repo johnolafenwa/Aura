@@ -1,0 +1,12 @@
+def echo_maximum(value: uint64) -> uint64:
+    return value
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(echo_maximum, 18446744073709551615)
+        match task.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case _:
+                return 1
+    return 0

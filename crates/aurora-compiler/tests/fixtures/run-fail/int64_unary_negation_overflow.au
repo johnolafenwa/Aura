@@ -1,0 +1,4 @@
+def main() -> int32:
+    minimum: int64 = -9223372036854775808
+    print(-minimum)
+    return 0

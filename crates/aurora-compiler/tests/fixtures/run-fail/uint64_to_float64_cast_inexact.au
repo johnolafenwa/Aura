@@ -1,0 +1,5 @@
+def main() -> int32:
+    source: uint64 = 18446744073709551615
+    value: float64 = source as float64
+    print(value)
+    return 0

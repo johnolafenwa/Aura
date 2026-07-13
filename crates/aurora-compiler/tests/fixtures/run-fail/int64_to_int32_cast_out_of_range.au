@@ -1,0 +1,5 @@
+def main() -> int32:
+    source: int64 = 2147483648
+    value: int32 = source as int32
+    print(value)
+    return 0

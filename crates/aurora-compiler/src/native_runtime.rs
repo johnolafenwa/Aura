@@ -1336,6 +1336,13 @@ pub extern "C-unwind" fn aurora_direct_print_i64(value: i64) {
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_print_u64(value: u64) {
+    task_runtime_boundary(|| {
+        write_stdout(&format!("{}\n", value));
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_print_f64(value: f64) {
     task_runtime_boundary(|| {
         write_stdout(&render_float(value));
@@ -1354,6 +1361,11 @@ pub extern "C-unwind" fn aurora_direct_print_bool(value: i64) {
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_box_i64(value: i64) -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_value(Value::Int(IntegerValue::from_signed(value as i128))))
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_box_u64(value: u64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(Value::Int(IntegerValue::from_literal(u128::from(value)))))
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -2670,6 +2682,34 @@ pub extern "C-unwind" fn aurora_direct_unbox_i64(value: *mut OpaqueValue) -> i64
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_unbox_int64(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| match unsafe { value_ref(value) } {
+        Value::Int(value) => match value.as_i128().and_then(|value| i64::try_from(value).ok()) {
+            Some(value) => value,
+            None => runtime_error(format!("integer value `{value}` does not fit in `int64`")),
+        },
+        other => runtime_error(format!(
+            "direct backend expected `int64`, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_unbox_u64(value: *mut OpaqueValue) -> u64 {
+    task_runtime_boundary(|| match unsafe { value_ref(value) } {
+        Value::Int(value) => match value.as_i128().and_then(|value| u64::try_from(value).ok()) {
+            Some(value) => value,
+            None => runtime_error("direct backend expected an integer that fits in host u64"),
+        },
+        other => runtime_error(format!(
+            "direct backend expected `uint64`, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unbox_f64(value: *mut OpaqueValue) -> f64 {
     task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::Float(value) => value,
@@ -2837,6 +2877,110 @@ pub extern "C-unwind" fn aurora_direct_cast_value(
         match cast_numeric_value(unsafe { take_value(value) }, &target, None) {
             Ok(value) => boxed_value(value),
             Err(error) => runtime_error(error.message),
+        }
+    })
+}
+
+fn direct_integer_cast_source(value: u64, unsigned: i64) -> Value {
+    match unsigned {
+        0 => Value::Int(IntegerValue::from_signed((value as i64) as i128)),
+        1 => Value::Int(IntegerValue::from_literal(u128::from(value))),
+        other => runtime_error(format!("unknown direct integer source kind `{other}`")),
+    }
+}
+
+fn direct_integer_cast_target(kind: i64) -> Type {
+    Type::named(match kind {
+        0 => "int32",
+        1 => "int64",
+        2 => "uint64",
+        other => runtime_error(format!("unknown direct integer target kind `{other}`")),
+    })
+}
+
+fn direct_float_cast_target(kind: i64) -> Type {
+    Type::named(match kind {
+        0 => "float32",
+        1 => "float64",
+        other => runtime_error(format!("unknown direct float target kind `{other}`")),
+    })
+}
+
+fn direct_cast_failure(error: Diagnostic, line: i64, column: i64) -> ! {
+    match runtime_span(line, column) {
+        Some(span) => runtime_error_at(span, error.message),
+        None => runtime_error(error.message),
+    }
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_cast_integer_to_integer(
+    value: u64,
+    source_unsigned: i64,
+    target_kind: i64,
+    line: i64,
+    column: i64,
+) -> u64 {
+    task_runtime_boundary(|| {
+        let target = direct_integer_cast_target(target_kind);
+        match cast_numeric_value(
+            direct_integer_cast_source(value, source_unsigned),
+            &target,
+            None,
+        ) {
+            Ok(Value::Int(IntegerValue::Signed(value))) => (value as i64) as u64,
+            Ok(Value::Int(IntegerValue::Unsigned(value))) => value as u64,
+            Ok(other) => runtime_error(format!(
+                "direct integer cast unexpectedly produced `{}`",
+                value_type_name(&other)
+            )),
+            Err(error) => direct_cast_failure(error, line, column),
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_cast_integer_to_float(
+    value: u64,
+    source_unsigned: i64,
+    target_kind: i64,
+    line: i64,
+    column: i64,
+) -> f64 {
+    task_runtime_boundary(|| {
+        let target = direct_float_cast_target(target_kind);
+        match cast_numeric_value(
+            direct_integer_cast_source(value, source_unsigned),
+            &target,
+            None,
+        ) {
+            Ok(Value::Float(value)) => value,
+            Ok(other) => runtime_error(format!(
+                "direct float cast unexpectedly produced `{}`",
+                value_type_name(&other)
+            )),
+            Err(error) => direct_cast_failure(error, line, column),
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_cast_float_to_integer(
+    value: f64,
+    target_kind: i64,
+    line: i64,
+    column: i64,
+) -> u64 {
+    task_runtime_boundary(|| {
+        let target = direct_integer_cast_target(target_kind);
+        match cast_numeric_value(Value::Float(value), &target, None) {
+            Ok(Value::Int(IntegerValue::Signed(value))) => (value as i64) as u64,
+            Ok(Value::Int(IntegerValue::Unsigned(value))) => value as u64,
+            Ok(other) => runtime_error(format!(
+                "direct integer cast unexpectedly produced `{}`",
+                value_type_name(&other)
+            )),
+            Err(error) => direct_cast_failure(error, line, column),
         }
     })
 }
@@ -6824,6 +6968,56 @@ pub extern "C-unwind" fn aurora_direct_fail_int32_overflow(
 ) -> ! {
     task_runtime_boundary(|| {
         let message = int32_overflow_message(value);
+        match runtime_span(line, column) {
+            Some(span) => runtime_error_at(span, message),
+            None => runtime_error(message),
+        }
+    })
+}
+
+fn wide_integer_overflow_message(kind: i64, op: i64, left: u64, right: u64) -> String {
+    let (value, type_name) = match kind {
+        0 => {
+            let left = i128::from(left as i64);
+            let right = i128::from(right as i64);
+            let value = match op {
+                0 => left + right,
+                1 => left - right,
+                2 => left * right,
+                3 => left / right,
+                other => runtime_error(format!("unknown signed overflow opcode `{other}`")),
+            };
+            (value.to_string(), "int64")
+        }
+        1 => {
+            let left = u128::from(left);
+            let right = u128::from(right);
+            let value = match op {
+                0 => (left + right).to_string(),
+                1 if left >= right => (left - right).to_string(),
+                1 => format!("-{}", right - left),
+                2 => (left * right).to_string(),
+                3 => (left / right).to_string(),
+                other => runtime_error(format!("unknown unsigned overflow opcode `{other}`")),
+            };
+            (value, "uint64")
+        }
+        other => runtime_error(format!("unknown integer overflow kind `{other}`")),
+    };
+    format!("integer value `{value}` does not fit in `{type_name}`")
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_fail_integer_overflow(
+    kind: i64,
+    op: i64,
+    left: u64,
+    right: u64,
+    line: i64,
+    column: i64,
+) -> ! {
+    task_runtime_boundary(|| {
+        let message = wide_integer_overflow_message(kind, op, left, right);
         match runtime_span(line, column) {
             Some(span) => runtime_error_at(span, message),
             None => runtime_error(message),

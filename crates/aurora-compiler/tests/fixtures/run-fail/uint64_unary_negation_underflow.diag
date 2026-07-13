@@ -1,0 +1,5 @@
+error: integer value `-1` does not fit in `uint64`
+ --> crates/aurora-compiler/tests/fixtures/run-fail/uint64_unary_negation_underflow.au:3:11
+  |
+3 |     print(-one)
+  |           ^

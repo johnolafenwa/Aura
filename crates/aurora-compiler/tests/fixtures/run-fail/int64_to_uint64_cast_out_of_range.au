@@ -1,0 +1,5 @@
+def main() -> int32:
+    source: int64 = -1
+    value: uint64 = source as uint64
+    print(value)
+    return 0

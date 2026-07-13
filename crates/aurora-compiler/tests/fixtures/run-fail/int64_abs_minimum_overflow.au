@@ -1,0 +1,5 @@
+def main() -> int32:
+    minimum: int64 = -9223372036854775808
+    value: int64 = abs(minimum)
+    print(value)
+    return 0

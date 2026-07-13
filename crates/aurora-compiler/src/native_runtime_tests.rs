@@ -987,6 +987,142 @@ fn direct_print_helpers_are_callable() {
 }
 
 #[test]
+fn direct_print_u64_renders_the_full_unsigned_range() {
+    const HELPER_ENV: &str = "AURORA_DIRECT_RUNTIME_PRINT_U64_HELPER";
+    if std::env::var_os(HELPER_ENV).is_some() {
+        super::aurora_direct_print_u64(u64::MAX);
+        return;
+    }
+
+    let output = Command::new(std::env::current_exe().expect("test binary should exist"))
+        .arg("--exact")
+        .arg("native_runtime::tests::direct_print_u64_renders_the_full_unsigned_range")
+        .arg("--nocapture")
+        .env(HELPER_ENV, "1")
+        .output()
+        .expect("child test process should run");
+
+    assert!(
+        output.status.success(),
+        "uint64 print helper should succeed"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("18446744073709551615\n"),
+        "uint64 print helper should render u64::MAX as unsigned decimal"
+    );
+}
+
+#[test]
+fn direct_uint64_boxing_helpers_preserve_the_full_range() {
+    for value in [0, (i64::MAX as u64) + 1, u64::MAX] {
+        let boxed = super::aurora_direct_box_u64(value);
+        match unsafe { value_ref(boxed) } {
+            Value::Int(IntegerValue::Unsigned(actual)) => {
+                assert_eq!(actual, u128::from(value));
+            }
+            other => panic!("expected canonical unsigned integer, found {:?}", other),
+        }
+        assert_eq!(super::aurora_direct_unbox_u64(boxed), value);
+        unsafe {
+            release_value(boxed);
+        }
+    }
+}
+
+#[test]
+fn direct_int64_unbox_helper_preserves_the_full_signed_range() {
+    for value in [i64::MIN, -1, 0, i64::MAX] {
+        let boxed = super::aurora_direct_box_i64(value);
+        assert_eq!(super::aurora_direct_unbox_int64(boxed), value);
+        unsafe {
+            release_value(boxed);
+        }
+    }
+}
+
+#[test]
+fn direct_unboxed_wide_cast_helpers_preserve_checked_numeric_semantics() {
+    assert_eq!(
+        super::aurora_direct_cast_integer_to_integer((-42_i64) as u64, 0, 0, 0, 0),
+        (-42_i64) as u64
+    );
+    assert_eq!(
+        super::aurora_direct_cast_integer_to_integer(42, 0, 1, 0, 0),
+        42
+    );
+    assert_eq!(
+        super::aurora_direct_cast_integer_to_integer(u64::MAX, 1, 2, 0, 0),
+        u64::MAX
+    );
+    assert_eq!(
+        super::aurora_direct_cast_integer_to_float(1_u64 << 53, 0, 1, 0, 0),
+        (1_u64 << 53) as f64
+    );
+    assert_eq!(
+        super::aurora_direct_cast_integer_to_float(1_u64 << 63, 1, 1, 0, 0),
+        (1_u64 << 63) as f64
+    );
+    assert_eq!(
+        super::aurora_direct_cast_float_to_integer(4_294_967_296.75, 1, 0, 0),
+        4_294_967_296
+    );
+}
+
+#[test]
+fn wide_integer_overflow_messages_match_mir_diagnostics_exactly() {
+    for (kind, op, left, right, expected) in [
+        (
+            0,
+            0,
+            i64::MAX as u64,
+            1,
+            "integer value `9223372036854775808` does not fit in `int64`",
+        ),
+        (
+            0,
+            1,
+            i64::MIN as u64,
+            1,
+            "integer value `-9223372036854775809` does not fit in `int64`",
+        ),
+        (
+            0,
+            2,
+            i64::MAX as u64,
+            2,
+            "integer value `18446744073709551614` does not fit in `int64`",
+        ),
+        (
+            0,
+            3,
+            i64::MIN as u64,
+            (-1_i64) as u64,
+            "integer value `9223372036854775808` does not fit in `int64`",
+        ),
+        (
+            1,
+            0,
+            u64::MAX,
+            1,
+            "integer value `18446744073709551616` does not fit in `uint64`",
+        ),
+        (1, 1, 0, 1, "integer value `-1` does not fit in `uint64`"),
+        (
+            1,
+            2,
+            u64::MAX,
+            2,
+            "integer value `36893488147419103230` does not fit in `uint64`",
+        ),
+    ] {
+        assert_eq!(
+            super::wide_integer_overflow_message(kind, op, left, right),
+            expected
+        );
+    }
+}
+
+#[test]
 fn direct_stdout_result_helpers_accept_empty_writes_and_flushes() {
     super::write_stdout_result("").expect("empty direct stdout writes should succeed");
     super::flush_stdout_result().expect("direct stdout flushes should succeed");
@@ -5533,6 +5669,25 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "unbox-i64-type" => {
                 super::aurora_direct_unbox_i64(bool_value(true));
             }
+            "unbox-int64-overflow" => {
+                super::aurora_direct_unbox_int64(boxed_value(Value::Int(
+                    IntegerValue::from_literal((i64::MAX as u128) + 1),
+                )));
+            }
+            "unbox-int64-type" => {
+                super::aurora_direct_unbox_int64(bool_value(true));
+            }
+            "unbox-u64-negative" => {
+                super::aurora_direct_unbox_u64(int_value(-1));
+            }
+            "unbox-u64-overflow" => {
+                super::aurora_direct_unbox_u64(boxed_value(Value::Int(
+                    IntegerValue::from_literal((u64::MAX as u128) + 1),
+                )));
+            }
+            "unbox-u64-type" => {
+                super::aurora_direct_unbox_u64(bool_value(true));
+            }
             "unbox-f64-type" => {
                 super::aurora_direct_unbox_f64(int_value(1));
             }
@@ -6394,6 +6549,26 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "unbox-i64-type",
             "direct backend expected `int32`, found `bool`",
+        ),
+        (
+            "unbox-int64-overflow",
+            "integer value `9223372036854775808` does not fit in `int64`",
+        ),
+        (
+            "unbox-int64-type",
+            "direct backend expected `int64`, found `bool`",
+        ),
+        (
+            "unbox-u64-negative",
+            "direct backend expected an integer that fits in host u64",
+        ),
+        (
+            "unbox-u64-overflow",
+            "direct backend expected an integer that fits in host u64",
+        ),
+        (
+            "unbox-u64-type",
+            "direct backend expected `uint64`, found `bool`",
         ),
         (
             "unbox-f64-type",

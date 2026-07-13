@@ -1,0 +1,5 @@
+def main() -> int32:
+    maximum: uint64 = 18446744073709551615
+    one: uint64 = 1
+    print(maximum + one)
+    return 0

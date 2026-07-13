@@ -169,6 +169,27 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         let cast = aurora_direct_cast_value(int_value(5), cast_target.as_ptr(), cast_target.len());
         release(cast);
 
+        let wide_signed = aurora_direct_box_i64(i64::MIN);
+        assert_eq!(aurora_direct_unbox_int64(wide_signed), i64::MIN);
+        release(wide_signed);
+
+        let wide_unsigned = aurora_direct_box_u64(u64::MAX);
+        assert_eq!(aurora_direct_unbox_u64(wide_unsigned), u64::MAX);
+        release(wide_unsigned);
+
+        assert_eq!(
+            aurora_direct_cast_integer_to_integer(u64::MAX, 1, 2, 1, 1),
+            u64::MAX
+        );
+        assert_eq!(
+            aurora_direct_cast_integer_to_float(1_u64 << 63, 1, 1, 1, 1),
+            (1_u64 << 63) as f64
+        );
+        assert_eq!(
+            aurora_direct_cast_float_to_integer(4_294_967_296.75, 2, 1, 1),
+            4_294_967_296
+        );
+
         let truthy = int_value(9);
         assert_eq!(aurora_direct_value_as_condition(truthy), 1);
         release(truthy);
