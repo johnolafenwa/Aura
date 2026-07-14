@@ -4,15 +4,17 @@ Last updated: 2026-07-14
 
 ## Active Work Session
 
-- Started: 2026-07-13 13:58:22 BST.
-- Resumed after ratification: 2026-07-13 16:40:01 BST.
-- Paused for D3 gate escalation: 2026-07-13 18:10:47 BST.
-- Resumed after G1-G3 ratification: 2026-07-13 19:50:02 BST.
-- Current continuous elapsed: 10h 29m 11s as of 2026-07-14 06:19:13 BST; prior completed elapsed: 2h 49m 21s.
-- Target: Preserve accepted Phase 1 as logical commits, complete cleanup tickets V1-V5, implement ticket 9 int64/uint64 direct unboxing, then complete the Phase 1.5 D3 -> D2 -> D4 -> D5 -> D6 semantic migration with an independently revertable commit and full repository gate after each decision.
-- Stop rule: complete Phase 1.5 and report, encounter a ratified-rule gate failure or unforeseen ambiguity that requires escalation, or reach 12 continuous hours.
-- Resume authority: S1-S4 are now ratified; D3 -> D2 -> D4 -> D5 -> D6 resumes with one full-gated commit per decision. V6 is scheduled after Phase 1.5 and before or with Phase 4.
-- Resume authority: G1 permits behavior-focused tests to close coverage-only gaps without escalation, freezes compiler coverage floors at 96.01% lines / 96.71% functions / 93.94% regions through Phase 1.5, and requires one re-ratchet at sign-off. G2 rejects all explicit ownership modifiers on Queue iteration. G3 permits shared-borrow and `own` defaults but rejects `borrow mut` defaults. D3 is committed at `9b49e0d`; D2 is independently committed at `f82b6a3` with final coverage 96.013699% lines / 96.794872% functions / 93.994542% regions and no synthetic tests or exclusions; D4 is committed at `21365e6` with final coverage 96.050763% lines / 96.754625% functions / 94.027509% regions and no synthetic tests or exclusions; D5 is committed at `e250ef4` with final coverage 96.056538% lines / 96.757576% functions / 94.032752% regions and no synthetic tests or exclusions. D6's complete instrumented gate and fresh full CI pass at 96.050930% lines / 96.722790% functions / 94.067723% regions with no synthetic tests or exclusions; the independently gated D6 commit is next, followed by the single Phase 1.5 coverage re-ratchet.
+- None. The Phase 1.5 session completed at 2026-07-14 06:26:58 BST and its final evidence is recorded in `work/2026-07-13-phase1-5-semantic-redefaults.md`.
+
+## Latest Completed Session
+
+- Started: 2026-07-13 13:58:22 BST; resumed after S1-S4 ratification at 16:40:01; resumed after G1-G3 ratification at 19:50:02.
+- Completed: 2026-07-14 06:26:58 BST.
+- Elapsed: 10h 36m 56s in the final continuous session, plus 2h 49m 21s before the final ratification; 13h 26m 17s total active time across the paused segments.
+- Result: Phase 1.5 D3 -> D2 -> D4 -> D5 -> D6 is complete with one full-gated decision commit each. D6 is `683b0cf`; the one-time sign-off coverage ratchet is included in the sign-off commit.
+- Final compiler coverage: 51,977/54,114 lines (96.050930%), 3,217/3,326 functions (96.722790%), and 75,590/80,357 regions (94.067723%). Enforced floors are now 96.05% / 96.72% / 94.06% using the established two-decimal downward-truncation policy.
+- Quality result: no synthetic-coverage test or coverage exclusion was added. All behavior, backend parity, LSP, extension, instrumented, reference, docs, audit, Clippy, and hygiene gates pass.
+- Next: investigate V6's int32/int64 direct-loop inversion before or with Phase 4; Phase 2 has not started.
 
 ## Previous Session (stale record recovered 2026-07-10)
 
@@ -28,11 +30,11 @@ Last updated: 2026-07-14
 
 - Stabilize the frozen 0.1 technical-preview surface through compatibility fixes, parity regressions, and preview-user feedback rather than adding more language syntax.
 - Keep the categorized example library, manual, and `tutorials/` synchronized with the implemented language subset whenever behavior changes.
-- Preserve the compiler lines/functions/regions floor at `96.01/96.71/93.94` and the LSP at 100%; add behavior-focused regression tests without treating marginal compiler coverage growth as the product roadmap.
+- Preserve the post-Phase-1.5 compiler lines/functions/regions floor at `96.05/96.72/94.06` and the LSP at 100%; add behavior-focused regression tests without treating marginal compiler coverage growth as the product roadmap.
 
 ## Todo
 
-- After Phase 1.5 and before or with Phase 4, complete V6: diagnose why the direct int32 10M loop is roughly 2x slower than int64, fix or document the cause, and retain both measurements in the benchmark baseline.
+- Next, before or with Phase 4, complete V6: diagnose why the direct int32 10M loop is roughly 2x slower than int64, fix or document the cause, and retain both measurements in the benchmark baseline.
 - Publish signed 0.1 preview archives for every supported platform after the release workflow has passed on each target.
 - Use the host-array / tensor-lite layer as the next ML systems milestone, starting with a small dtype and shape surface before tensor or accelerator syntax.
 - Expand control-plane serialization and networking from the current honest baseline only when real agent-service examples require nested schemas, pooling, redirects, HTTP/2, or server-side TLS.
