@@ -145,6 +145,27 @@ print(items.contains(20))  # true
 popped = items.pop()       # removes and returns the last element
 ```
 
+Negative Vec indexes count from the end. The same normalization applies to
+direct reads and writes and to `get`, `set`, `remove`, `swap`, and `insert`:
+
+```python
+print(items[-1])                 # final element
+match items.get(-2):
+    case Option.Some(value):
+        print(value)
+    case Option.None:
+        pass
+
+items[-1] = 50
+items.insert(-1, 45)             # inserts before the final element
+items.insert(items.len(), 60)    # appends
+```
+
+Normalization is `len + index`, performed once. `get` returns `None` if the
+result is still out of range; direct access and the mutating methods raise a
+runtime error. Unlike Python, `insert` does not clamp an extremely negative
+index to zero, because silently inserting at the wrong position hides bugs.
+
 The full method surface includes `len`, `is_empty`, `clone`, `push`, `pop`, `get`, `insert`, `set`, `remove`, `swap`, `contains`, `extend`, `clear`, and `reverse`.
 
 Because `len()` returns `int32`, you can use it directly with `range(...)`:
@@ -200,7 +221,7 @@ print(counts["aurora"])
 Map lookups work inside larger expressions including f-strings:
 
 ```python
-print(f"value: {counts["aurora"]}")
+print(f"value: {counts['aurora']}")
 ```
 
 `items()` and `entries()` both return `Vec[MapEntry[K, V]]`, where each entry exposes `.key` and `.value`:

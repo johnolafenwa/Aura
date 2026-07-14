@@ -1938,23 +1938,23 @@ impl Parser {
             index += 1;
             let mut expr_end = None;
             let mut brace_depth = 0usize;
-            let mut in_string = false;
+            let mut string_quote = None;
             let mut escaped = false;
             while index < chars.len() {
                 let (candidate_offset, candidate) = chars[index];
-                if in_string {
+                if let Some(quote) = string_quote {
                     if escaped {
                         escaped = false;
                     } else if candidate == '\\' {
                         escaped = true;
-                    } else if candidate == '"' {
-                        in_string = false;
+                    } else if candidate == quote {
+                        string_quote = None;
                     }
                     index += 1;
                     continue;
                 }
                 match candidate {
-                    '"' => in_string = true,
+                    '"' | '\'' => string_quote = Some(candidate),
                     '{' => brace_depth += 1,
                     '}' if brace_depth == 0 => {
                         expr_end = Some(candidate_offset);

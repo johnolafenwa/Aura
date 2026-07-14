@@ -235,6 +235,11 @@ That makes chained parsing like `pkg.Box[int32](value).field` much easier.
 
 The lexer keeps the entire f-string as a literal token. The parser later splits it into `FormatPart::Literal` and `FormatPart::Expr`, and recursively parses the embedded expressions.
 
+The splitter tracks nested brace depth and the active ordinary-string
+delimiter. A brace inside either a single-quoted or double-quoted interpolation
+argument does not end that interpolation; after the boundary is found, the
+embedded text goes through the ordinary expression lexer and parser.
+
 ### 4. Explicit recursion limits
 
 Aurora still uses real Rust recursion for several nested constructs, so the parser tracks recursion depth and fails with a diagnostic before the host stack blows up.

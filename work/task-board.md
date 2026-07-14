@@ -8,11 +8,11 @@ Last updated: 2026-07-14
 - Resumed after ratification: 2026-07-13 16:40:01 BST.
 - Paused for D3 gate escalation: 2026-07-13 18:10:47 BST.
 - Resumed after G1-G3 ratification: 2026-07-13 19:50:02 BST.
-- Current continuous elapsed: 6h 54m 12s as of 2026-07-14 02:44:14 BST; prior completed elapsed: 2h 49m 21s.
+- Current continuous elapsed: 8h 01m 33s as of 2026-07-14 03:51:35 BST; prior completed elapsed: 2h 49m 21s.
 - Target: Preserve accepted Phase 1 as logical commits, complete cleanup tickets V1-V5, implement ticket 9 int64/uint64 direct unboxing, then complete the Phase 1.5 D3 -> D2 -> D4 -> D5 -> D6 semantic migration with an independently revertable commit and full repository gate after each decision.
 - Stop rule: complete Phase 1.5 and report, encounter a ratified-rule gate failure or unforeseen ambiguity that requires escalation, or reach 12 continuous hours.
 - Resume authority: S1-S4 are now ratified; D3 -> D2 -> D4 -> D5 -> D6 resumes with one full-gated commit per decision. V6 is scheduled after Phase 1.5 and before or with Phase 4.
-- Resume authority: G1 permits behavior-focused tests to close coverage-only gaps without escalation, freezes compiler coverage floors at 96.01% lines / 96.71% functions / 93.94% regions through Phase 1.5, and requires one re-ratchet at sign-off. G2 rejects all explicit ownership modifiers on Queue iteration. G3 permits shared-borrow and `own` defaults but rejects `borrow mut` defaults. D3 is committed at `9b49e0d`; D2's fresh full repository CI gate is green after behavior-focused coverage recovery, repair of the indexed-`//=` parity defect, and Clippy's canonical float-zero patterns. Final D2 decision coverage is 96.013699% lines / 96.794872% functions / 93.994542% regions; the independent D2 commit is next.
+- Resume authority: G1 permits behavior-focused tests to close coverage-only gaps without escalation, freezes compiler coverage floors at 96.01% lines / 96.71% functions / 93.94% regions through Phase 1.5, and requires one re-ratchet at sign-off. G2 rejects all explicit ownership modifiers on Queue iteration. G3 permits shared-borrow and `own` defaults but rejects `borrow mut` defaults. D3 is committed at `9b49e0d`; D2 is independently committed at `f82b6a3` with final coverage 96.013699% lines / 96.794872% functions / 93.994542% regions and no synthetic tests or exclusions. D4's full gate passes at 96.050763% lines / 96.754625% functions / 94.027509% regions with no synthetic tests or exclusions; D5 is next.
 
 ## Previous Session (stale record recovered 2026-07-10)
 

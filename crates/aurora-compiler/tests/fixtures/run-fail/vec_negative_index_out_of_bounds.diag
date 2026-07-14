@@ -1,0 +1,5 @@
+error: vector index `-4` is out of bounds for length `3`
+ --> crates/aurora-compiler/tests/fixtures/run-fail/vec_negative_index_out_of_bounds.au:3:18
+  |
+3 |     print(values[-4])
+  |                  ^

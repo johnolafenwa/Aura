@@ -258,6 +258,7 @@ fn compiler_member_completion_for_string_exposes_string_methods() {
         .collect::<Vec<_>>();
 
     assert!(names.contains(&"len".to_string()));
+    assert!(names.contains(&"byte_len".to_string()));
     assert!(names.contains(&"contains".to_string()));
     assert!(names.contains(&"starts_with".to_string()));
     assert!(names.contains(&"ends_with".to_string()));
@@ -3265,6 +3266,8 @@ fn analysis_builtin_member_types_cover_io_network_and_process_surfaces() {
         assert_eq!(member.ty, Some(expected), "{receiver}.{field}");
     };
 
+    assert_member_type("String", "len", Type::named("int32"));
+    assert_member_type("String", "byte_len", Type::named("int32"));
     assert_member_type("process.Child", "stdin", option(named("process.Pipe")));
     assert_member_type("process.Child", "stdout", option(named("process.Pipe")));
     assert_member_type("process.Child", "stderr", option(named("process.Pipe")));

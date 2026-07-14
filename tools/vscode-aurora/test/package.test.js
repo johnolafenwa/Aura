@@ -48,6 +48,45 @@ test("syntax grammar treats boolean operators as Aurora keywords", () => {
   assert.match(keywordRule.match, /pass/);
 });
 
+test("syntax grammar distinguishes ordinary quotes and nests strings in f-string interpolation", () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const grammarPath = path.join(extensionRoot, "syntaxes", "aurora.tmLanguage.json");
+  const grammar = JSON.parse(fs.readFileSync(grammarPath, "utf8"));
+  const stringRules = grammar.repository.strings.patterns;
+  const fStringRule = stringRules.find(
+    (pattern) => pattern.name === "string.interpolated.double.aurora"
+  );
+  const doubleRule = stringRules.find(
+    (pattern) => pattern.name === "string.quoted.double.aurora"
+  );
+  const singleRule = stringRules.find(
+    (pattern) => pattern.name === "string.quoted.single.aurora"
+  );
+
+  assert.ok(fStringRule);
+  assert.equal(fStringRule.begin, 'f"');
+  assert.ok(doubleRule);
+  assert.equal(doubleRule.begin, '"');
+  assert.ok(singleRule);
+  assert.equal(singleRule.begin, "'");
+
+  const interpolation = fStringRule.patterns.find(
+    (pattern) => pattern.name === "meta.interpolation.aurora"
+  );
+  assert.ok(interpolation);
+  assert.ok(
+    interpolation.patterns.some((pattern) => pattern.include === "#strings"),
+    "f-string interpolations should recognize nested ordinary strings"
+  );
+
+  const configurationPath = path.join(extensionRoot, "language-configuration.json");
+  const configuration = JSON.parse(fs.readFileSync(configurationPath, "utf8"));
+  assert.ok(configuration.autoClosingPairs.some(([open, close]) => open === "'" && close === "'"));
+  assert.ok(configuration.autoClosingPairs.some(([open, close]) => open === '"' && close === '"'));
+  assert.ok(configuration.surroundingPairs.some(([open, close]) => open === "'" && close === "'"));
+  assert.ok(configuration.surroundingPairs.some(([open, close]) => open === '"' && close === '"'));
+});
+
 test("syntax grammar treats floor-division operators as single tokens", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const grammarPath = path.join(extensionRoot, "syntaxes", "aurora.tmLanguage.json");

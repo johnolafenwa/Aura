@@ -16,6 +16,18 @@ fn type_ref(name: &str) -> TypeRef {
 }
 
 #[test]
+fn d4_string_indexing_remains_rejected() {
+    let error = crate::check_source(
+        "def index_text() -> String:\n    text = 'Aurora'\n    return text[0]\n\ndef main() -> int32:\n    return 0\n",
+    )
+    .expect_err("Aurora 0.1 does not define integer String indexing");
+    assert_eq!(
+        error.message,
+        "cannot index non-vector-or-map value `String`"
+    );
+}
+
+#[test]
 fn d3_int_alias_canonicalizes_across_signatures_generics_and_casts() {
     let source = r#"
 def identity[T](value: T) -> T:
@@ -3997,6 +4009,22 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
             }),
             Vec::new(),
             string_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("text".to_string()))),
+                field: "len".to_string(),
+            }),
+            Vec::new(),
+            int_ty.clone(),
+        ),
+        (
+            expr(ExprKind::Member {
+                object: Box::new(expr(ExprKind::Name("text".to_string()))),
+                field: "byte_len".to_string(),
+            }),
+            Vec::new(),
+            int_ty.clone(),
         ),
         (
             expr(ExprKind::Member {

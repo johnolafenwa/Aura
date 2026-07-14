@@ -9,9 +9,12 @@ Along the way we will meet bindings, functions, control flow, integer parsing, m
 Aurora files run top to bottom. A script can mix prints, bindings, and computation:
 
 ```python
-print("aurora")
+print('aurora')
 print(40 + 2)
 ```
+
+Ordinary strings may use matching single or double quotes, and both forms have
+the same escape rules. F-strings remain double-quoted as `f"..."`.
 
 Save that as `greeting.au` and run `aura run greeting.au`. Scripts are useful for quick tools and examples. When a program benefits from an explicit entry point — especially when it will be built as a native binary that should return an exit code — use `main`:
 

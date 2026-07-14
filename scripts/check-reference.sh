@@ -53,6 +53,17 @@ grep -Fq 'There is no `FloorDiv` operator trait.' docs/manual/generics-and-trait
 test -s examples/basics/numbers.au
 grep -Fq '`numbers.au`' examples/README.md
 grep -Fq '[examples/basics/numbers.au]' tutorials/07-strings-and-numbers.md
+grep -Fq 'Ordinary string literals use matching single or double quote delimiters' docs/manual/lexical-structure.md
+grep -Fq 'F-strings themselves' docs/manual/lexical-structure.md
+grep -Fq 'Counts Unicode scalar values in O(n)' docs/manual/api-index.md
+grep -Fq 'Returns the UTF-8 byte count in O(1)' docs/manual/api-index.md
+grep -Fq 'negative index `i` is' docs/manual/collections.md
+grep -Fq 'normalized once as `len + i`' docs/manual/collections.md
+grep -Fq 'does not clamp' docs/manual/collections.md
+grep -Fq "unicode = 'A🎉'" examples/strings/string_methods.au
+grep -Fq 'unicode.len()' examples/strings/string_methods.au
+grep -Fq 'unicode.byte_len()' examples/strings/string_methods.au
+grep -Fq 'values.insert(index=-1, value=2)' examples/collections/vec_polish.au
 
 if rg -n 'no (integer )?floor division|integer division truncates toward zero|Result\.Ok\([^)]* / [^)]*\)' \
   docs/manual \
@@ -68,6 +79,14 @@ if rg -ni 'defaults? to (`|<code>)?int32|default for most integer work|use (`|<c
   docs/aurora_language_proposal.md \
   docs/aurora_language_proposal.html; then
   echo "reference still describes the retired int32 default or rejects the int alias" >&2
+  exit 1
+fi
+
+if rg -n 'Strings use double quotes|Strings are double-quoted|`STRING` is a double-quoted|Single-quoted, triple-quoted' \
+  docs/manual \
+  tutorials \
+  docs/learn; then
+  echo "reference still describes ordinary strings as double-quoted only" >&2
   exit 1
 fi
 

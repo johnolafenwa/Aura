@@ -6,11 +6,32 @@
 
 ## Decision
 
-`String.len()` counts Unicode scalar values in O(n); `byte_len()` is O(1).
-Single-quoted and double-quoted strings share escape semantics. Aurora 0.1
-does not support integer String indexing. Negative indexing is the policy for
-`Vec` and future slices. `chars()`, `ord()`, `chr()`, and explicit-encoding
-String/bytes conversion land with the control-plane surface.
+`String.len()` returns the number of Unicode scalar values and therefore runs
+in O(n). `String.byte_len()` returns the number of bytes in the UTF-8 encoding
+and runs in O(1). Both return `int32`, consistent with the maintained collection
+length and byte-count surface.
+
+Ordinary string literals may use matching single or double quote delimiters.
+Both forms decode the same escape set, including `\"` and `\'`. F-strings
+remain double-quoted as `f"..."`; this decision does not add `f'...'`, character
+literals, triple-quoted strings, raw strings, or byte-string literals.
+
+Aurora 0.1 does not support integer indexing or slicing on `String`.
+`chars()`, `ord()`, `chr()`, and explicit-encoding String/bytes conversion land
+with the Phase 3 control-plane surface; slicing waits for the Phase 7 slice
+design.
+
+Negative indexing is the language-wide policy for `Vec` now and future slices.
+For direct `[]` reads and writes and for `get`, `set`, `remove`, `swap`, and
+`insert`, a negative index `i` is normalized once as `len + i`. The operation
+then applies its existing bounds contract: direct reads/writes and mutating
+methods trap when the normalized index is invalid, while `get` returns `None`.
+The valid insertion range remains `0..=len`, so `insert(-1, value)` inserts
+before the last element and `insert(len, value)` appends.
+
+Unlike Python, Aurora does not clamp an insertion index that remains out of
+range after normalization. Clamping can silently place a value at the wrong
+position; Aurora treats that as a broken invariant and reports a runtime error.
 
 ## Completion tests
 

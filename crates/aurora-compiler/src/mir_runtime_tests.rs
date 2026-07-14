@@ -7453,9 +7453,14 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     assert_eq!(set_index, option_some(Value::String("ready".to_string())));
 
     let string_len = runtime
-        .evaluate_string_method("Aurora".to_string(), "len", &[], &mut env)
+        .evaluate_string_method("é🎉e\u{301}".to_string(), "len", &[], &mut env)
         .expect("string len should succeed");
-    assert_eq!(string_len, Value::Int(IntegerValue::from_signed(6)));
+    assert_eq!(string_len, Value::Int(IntegerValue::from_signed(4)));
+
+    let string_byte_len = runtime
+        .evaluate_string_method("é🎉e\u{301}".to_string(), "byte_len", &[], &mut env)
+        .expect("string byte_len should succeed");
+    assert_eq!(string_byte_len, Value::Int(IntegerValue::from_signed(9)));
 
     let starts_with = runtime
         .evaluate_string_method(
@@ -8419,6 +8424,263 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     assert!(bad_target
         .message
         .contains("should lower to MIR `Spawn` directly"));
+}
+
+#[test]
+fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let vec_type = Type::Named("Vec".to_string(), vec![Type::named("int32")]);
+    env.define_typed(
+        "values",
+        vec_type,
+        Value::Vec(crate::runtime_value::VecValue {
+            element_type: Type::named("int32"),
+            elements: [10, 20, 30, 40]
+                .into_iter()
+                .map(|value| Value::Int(IntegerValue::from_signed(value)))
+                .collect(),
+        }),
+    );
+    for magnitude in 1..=5 {
+        env.define_typed(
+            format!("negative_{magnitude}"),
+            Type::named("int32"),
+            Value::Int(IntegerValue::from_signed(-i128::from(magnitude))),
+        );
+    }
+    let negative = |magnitude| Operand::Place(format!("negative_{magnitude}"));
+    let read_vec = |env: &Env| match env.read_place("values").expect("values should exist") {
+        Value::Vec(vector) => vector,
+        other => panic!("expected Vec, found {other:?}"),
+    };
+
+    let indexed = runtime
+        .evaluate_vec_method(
+            read_vec(&env),
+            "__index",
+            Some("values"),
+            &[
+                mir_arg(None, negative(1)),
+                mir_arg(None, Operand::Int(3)),
+                mir_arg(None, Operand::Int(9)),
+            ],
+            &mut env,
+        )
+        .expect("negative indexed read should normalize");
+    assert_eq!(indexed, Value::Int(IntegerValue::from_signed(40)));
+
+    runtime
+        .evaluate_vec_method(
+            read_vec(&env),
+            "__set_index",
+            Some("values"),
+            &[
+                mir_arg(None, negative(2)),
+                mir_arg(None, Operand::Int(35)),
+                mir_arg(None, Operand::Int(4)),
+                mir_arg(None, Operand::Int(5)),
+            ],
+            &mut env,
+        )
+        .expect("negative indexed write should normalize");
+
+    let gotten = runtime
+        .evaluate_vec_method(
+            read_vec(&env),
+            "get",
+            Some("values"),
+            &[mir_arg(Some("index"), negative(2))],
+            &mut env,
+        )
+        .expect("negative get should normalize");
+    assert_eq!(
+        gotten,
+        option_some(Value::Int(IntegerValue::from_signed(35)))
+    );
+    let missing = runtime
+        .evaluate_vec_method(
+            read_vec(&env),
+            "get",
+            Some("values"),
+            &[mir_arg(Some("index"), negative(5))],
+            &mut env,
+        )
+        .expect("too-negative get should preserve Option behavior");
+    assert_eq!(missing, option_none());
+
+    let replaced = runtime
+        .evaluate_vec_method(
+            read_vec(&env),
+            "set",
+            Some("values"),
+            &[
+                mir_arg(Some("index"), negative(4)),
+                mir_arg(Some("value"), Operand::Int(11)),
+            ],
+            &mut env,
+        )
+        .expect("negative set should normalize");
+    assert_eq!(
+        replaced,
+        option_some(Value::Int(IntegerValue::from_signed(10)))
+    );
+
+    let removed = runtime
+        .evaluate_vec_method(
+            read_vec(&env),
+            "remove",
+            Some("values"),
+            &[mir_arg(Some("index"), negative(2))],
+            &mut env,
+        )
+        .expect("negative remove should normalize");
+    assert_eq!(
+        removed,
+        option_some(Value::Int(IntegerValue::from_signed(35)))
+    );
+
+    let swapped = runtime
+        .evaluate_vec_method(
+            read_vec(&env),
+            "swap",
+            Some("values"),
+            &[
+                mir_arg(Some("first"), negative(1)),
+                mir_arg(Some("second"), negative(3)),
+            ],
+            &mut env,
+        )
+        .expect("negative swap indices should normalize");
+    assert_eq!(swapped, Value::Bool(true));
+
+    let inserted = runtime
+        .evaluate_vec_method(
+            read_vec(&env),
+            "insert",
+            Some("values"),
+            &[
+                mir_arg(Some("index"), negative(1)),
+                mir_arg(Some("value"), Operand::Int(99)),
+            ],
+            &mut env,
+        )
+        .expect("insert(-1, value) should insert before the final element");
+    assert_eq!(inserted, Value::Bool(true));
+
+    let final_values = read_vec(&env)
+        .elements
+        .into_iter()
+        .map(|value| match value {
+            Value::Int(value) => value.as_i128().expect("test integers should be signed"),
+            other => panic!("expected integer, found {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(final_values, vec![40, 20, 99, 11]);
+
+    for (field, args, expected) in [
+        (
+            "set",
+            vec![
+                mir_arg(Some("index"), negative(5)),
+                mir_arg(Some("value"), Operand::Int(1)),
+            ],
+            "vector set index `-5` is out of bounds for length `4`",
+        ),
+        (
+            "remove",
+            vec![mir_arg(Some("index"), negative(5))],
+            "vector remove index `-5` is out of bounds for length `4`",
+        ),
+        (
+            "swap",
+            vec![
+                mir_arg(Some("first"), negative(5)),
+                mir_arg(Some("second"), negative(1)),
+            ],
+            "vector swap indices `-5` and `-1` are out of bounds for length `4`",
+        ),
+        (
+            "insert",
+            vec![
+                mir_arg(Some("index"), negative(5)),
+                mir_arg(Some("value"), Operand::Int(1)),
+            ],
+            "vector insert index `-5` is out of bounds for length `4`",
+        ),
+    ] {
+        let error = runtime
+            .evaluate_vec_method(read_vec(&env), field, Some("values"), &args, &mut env)
+            .expect_err("too-negative trapping Vec operation should fail");
+        assert_eq!(error.message, expected);
+    }
+
+    let read_error = runtime
+        .evaluate_vec_method(
+            read_vec(&env),
+            "__index",
+            Some("values"),
+            &[
+                mir_arg(None, negative(5)),
+                mir_arg(None, Operand::Int(8)),
+                mir_arg(None, Operand::Int(6)),
+            ],
+            &mut env,
+        )
+        .expect_err("too-negative indexed read should trap");
+    assert_eq!(
+        read_error.message,
+        "vector index `-5` is out of bounds for length `4`"
+    );
+    assert_eq!(read_error.span, Some(crate::diag::Span::new(8, 6)));
+
+    let write_error = runtime
+        .evaluate_vec_method(
+            read_vec(&env),
+            "__set_index",
+            Some("values"),
+            &[
+                mir_arg(None, negative(5)),
+                mir_arg(None, Operand::Int(1)),
+                mir_arg(None, Operand::Int(9)),
+                mir_arg(None, Operand::Int(7)),
+            ],
+            &mut env,
+        )
+        .expect_err("too-negative indexed write should trap");
+    assert_eq!(
+        write_error.message,
+        "vector index `-5` is out of bounds for length `4`"
+    );
+    assert_eq!(write_error.span, Some(crate::diag::Span::new(9, 7)));
+
+    env.define_typed(
+        "empty",
+        Type::Named("Vec".to_string(), vec![Type::named("int32")]),
+        Value::Vec(crate::runtime_value::VecValue {
+            element_type: Type::named("int32"),
+            elements: Vec::new(),
+        }),
+    );
+    let empty_insert_error = runtime
+        .evaluate_vec_method(
+            match env.read_place("empty").expect("empty should exist") {
+                Value::Vec(vector) => vector,
+                other => panic!("expected Vec, found {other:?}"),
+            },
+            "insert",
+            Some("empty"),
+            &[
+                mir_arg(Some("index"), negative(1)),
+                mir_arg(Some("value"), Operand::Int(7)),
+            ],
+            &mut env,
+        )
+        .expect_err("insert(-1, value) on an empty Vec must not clamp to zero");
+    assert_eq!(
+        empty_insert_error.message,
+        "vector insert index `-1` is out of bounds for length `0`"
+    );
 }
 
 #[test]

@@ -6986,7 +6986,9 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                             let ordered_args = builtin_member.bind_args(args, span)?;
                             return match builtin_member {
-                                BuiltinMember::StringLen => Ok(Type::named("int32")),
+                                BuiltinMember::StringLen | BuiltinMember::StringByteLen => {
+                                    Ok(Type::named("int32"))
+                                }
                                 BuiltinMember::StringContains
                                 | BuiltinMember::StringStartsWith
                                 | BuiltinMember::StringEndsWith => {

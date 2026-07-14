@@ -17,7 +17,7 @@ The type system is designed to keep three facts visible:
 | `int8`, `int16`, `int32`, `int64`, `int128`, `intsize` | Signed integers. |
 | `uint8`, `uint16`, `uint32`, `uint64`, `uint128`, `uintsize` | Unsigned integers. |
 | `float32`, `float64` | Floating-point values. |
-| `String` | Owned UTF-8 string. |
+| `String` | Owned UTF-8 string; `len()` counts Unicode scalar values and `byte_len()` counts encoded bytes. |
 | `str` | Compatibility spelling that canonicalizes to `String` in Aurora 0.1; it is not a distinct runtime view type. |
 | `None` | Unit type and unit value. |
 | `Duration` | Runtime duration used by sleeps, timeouts, and scheduling APIs. |
@@ -51,6 +51,13 @@ The default does not widen explicitly typed APIs. Existing fixed `int32` contrac
 Numeric literals are checked against the target type. Integer literals must fit the annotated integer type. Integer-to-float casts reject silent precision loss. Separately, every integer type provides `.to_float() -> float64`, which intentionally permits IEEE-754 round-to-nearest, ties-to-even conversion when an application wants to enter the floating domain.
 
 Use `borrow String` for a shared string parameter. The spelling `str` is accepted for compatibility but currently lowers to the same canonical `String` type; code must not assume a separate slice layout or lifetime-bearing runtime representation.
+
+`String.len() -> int32` scans the text and counts Unicode scalar values in
+O(n). `String.byte_len() -> int32` reads the UTF-8 byte count in O(1). Aurora
+0.1 has no distinct character type, integer String indexing, slicing,
+`chars()`, `ord()`, or `chr()`. The iteration and conversion APIs are scheduled
+for the Phase 3 control-plane surface; String slicing remains part of the Phase
+7 slicing work.
 
 ## Copy And Move Categories
 

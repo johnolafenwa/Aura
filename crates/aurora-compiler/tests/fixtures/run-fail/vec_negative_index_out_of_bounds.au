@@ -1,0 +1,4 @@
+def main() -> int32:
+    values: Vec[int32] = [10, 20, 30]
+    print(values[-4])
+    return 0

@@ -347,6 +347,7 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         ("float64", "to_string", BuiltinMember::ScalarToString),
         ("bool", "to_string", BuiltinMember::ScalarToString),
         ("String", "len", BuiltinMember::StringLen),
+        ("String", "byte_len", BuiltinMember::StringByteLen),
         ("String", "contains", BuiltinMember::StringContains),
         ("String", "starts_with", BuiltinMember::StringStartsWith),
         ("String", "ends_with", BuiltinMember::StringEndsWith),
@@ -409,11 +410,24 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
         assert!(!member.docs().is_empty());
     }
     assert_eq!(BuiltinMember::resolve("Vec", "missing"), None);
+    assert_eq!(BuiltinMember::StringLen.detail(), "len() -> int32");
+    assert!(BuiltinMember::StringLen.docs().contains("Unicode scalar"));
+    assert!(BuiltinMember::StringLen.docs().contains("O(n)"));
+    assert_eq!(BuiltinMember::StringByteLen.detail(), "byte_len() -> int32");
+    assert!(BuiltinMember::StringByteLen.docs().contains("UTF-8 bytes"));
+    assert!(BuiltinMember::StringByteLen.docs().contains("O(1)"));
 
     let positional_only_error = BuiltinMember::VecReverse
         .bind_args(&[dummy_arg(None)], Span::new(1, 1))
         .unwrap_err();
     assert!(positional_only_error
+        .message
+        .contains("expects 0 arguments, found 1"));
+
+    let byte_len_error = BuiltinMember::StringByteLen
+        .bind_args(&[dummy_arg(None)], Span::new(1, 1))
+        .unwrap_err();
+    assert!(byte_len_error
         .message
         .contains("expects 0 arguments, found 1"));
 
@@ -449,6 +463,7 @@ fn builtin_member_metadata_resolution_and_binding_surface_are_stable() {
     for member in [
         BuiltinMember::FloatSqrt,
         BuiltinMember::StringLen,
+        BuiltinMember::StringByteLen,
         BuiltinMember::StringToLower,
         BuiltinMember::StringToUpper,
         BuiltinMember::StringTrim,

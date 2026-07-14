@@ -24,6 +24,23 @@ match names.get(1):
         print("missing")
 ```
 
+Negative indexes count from the end across the whole Vec surface:
+
+```python
+scores = [10, 20, 30]
+print(scores[-1])      # 30; direct reads work for copy elements
+match names.get(-2):
+    case Some(name):
+        print(name)    # Grace
+    case None:
+        print("missing")
+```
+
+The runtime normalizes a negative `index` once as `len + index`. Direct reads
+and writes, `get`, `set`, `remove`, both `swap` indexes, and `insert` all use
+that rule. `get` returns `None` when the normalized index is still invalid;
+the other operations report an out-of-bounds runtime error.
+
 Empty vectors need a type, either through an annotation or by calling the constructor:
 
 ```python
@@ -48,11 +65,18 @@ match values.pop():
 ```python
 values.set(0, 5)        # ok: replaces index 0
 values.insert(1, 15)    # ok: inserts before index 1
+values.insert(-1, 25)   # ok: inserts before the final element
 values.swap(0, 2)       # ok: swaps two indices
 # values.swap(0, 99)    # runtime error: index out of bounds
 ```
 
 The short practical rule: use `get` when absence is normal; use the mutating methods when an invalid index is a program bug you want to catch.
+
+`insert` accepts normalized indexes from `0` through `len`: `insert(len,
+value)` appends. Aurora deliberately does not copy Python's clamping behavior
+for an extremely negative insertion index. If one normalization still leaves
+the index below zero, Aurora reports the error instead of silently inserting
+at the start.
 
 ## Borrowed Iteration
 

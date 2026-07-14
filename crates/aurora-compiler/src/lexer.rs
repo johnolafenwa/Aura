@@ -108,6 +108,7 @@ fn decode_escape(
         'n' => Ok(('\n', escape_start + 1)),
         't' => Ok(('\t', escape_start + 1)),
         '"' => Ok(('"', escape_start + 1)),
+        '\'' => Ok(('\'', escape_start + 1)),
         '\\' => Ok(('\\', escape_start + 1)),
         '0' => Ok(('\0', escape_start + 1)),
         'x' => {
@@ -420,7 +421,7 @@ fn tokenize_line(
                 index += 2;
                 let mut value = String::new();
                 let mut interpolation_depth = 0usize;
-                let mut interpolation_in_string = false;
+                let mut interpolation_string_quote = None;
                 let mut interpolation_escape = false;
 
                 while index < chars.len() {
@@ -455,17 +456,17 @@ fn tokenize_line(
                     }
                     value.push(current);
                     if interpolation_depth > 0 {
-                        if interpolation_in_string {
+                        if let Some(quote) = interpolation_string_quote {
                             if interpolation_escape {
                                 interpolation_escape = false;
                             } else if current == '\\' {
                                 interpolation_escape = true;
-                            } else if current == '"' {
-                                interpolation_in_string = false;
+                            } else if current == quote {
+                                interpolation_string_quote = None;
                             }
                         } else {
                             match current {
-                                '"' => interpolation_in_string = true,
+                                '"' | '\'' => interpolation_string_quote = Some(current),
                                 '{' => {
                                     if interpolation_depth >= RECURSION_LIMIT {
                                         return Err(Diagnostic::at(
@@ -501,13 +502,13 @@ fn tokenize_line(
                     span: Span::new(line_no, column),
                 });
             }
-            '"' => {
+            quote @ ('"' | '\'') => {
                 index += 1;
                 let mut value = String::new();
 
                 while index < chars.len() {
                     let (_, current) = chars[index];
-                    if current == '"' {
+                    if current == quote {
                         break;
                     }
                     if current == '\\' {
@@ -521,7 +522,7 @@ fn tokenize_line(
                     index += 1;
                 }
 
-                if !matches!(chars.get(index), Some((_, '"'))) {
+                if !matches!(chars.get(index), Some((_, current)) if *current == quote) {
                     return Err(Diagnostic::at(
                         Span::new(line_no, column),
                         "unterminated string literal",

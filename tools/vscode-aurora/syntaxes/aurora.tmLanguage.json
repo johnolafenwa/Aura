@@ -47,8 +47,8 @@
     "strings": {
       "patterns": [
         {
-          "name": "string.quoted.double.aurora",
-          "begin": "f?\"",
+          "name": "string.interpolated.double.aurora",
+          "begin": "f\"",
           "beginCaptures": {
             "0": {
               "name": "punctuation.definition.string.begin.aurora"
@@ -81,6 +81,9 @@
               },
               "patterns": [
                 {
+                  "include": "#strings"
+                },
+                {
                   "include": "#keywords"
                 },
                 {
@@ -90,6 +93,27 @@
                   "include": "#numbers"
                 }
               ]
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.aurora",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.aurora"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aurora"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.aurora",
+              "match": "\\\\."
             }
           ]
         },

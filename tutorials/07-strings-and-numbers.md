@@ -179,15 +179,23 @@ See [examples/numbers/float32_values.au](../examples/numbers/float32_values.au).
 
 ## String Basics
 
-Strings use double quotes. Concatenation uses `+`:
+Ordinary strings use matching single or double quotes. Both forms produce the
+same `String`, support the same escapes, and concatenate with `+`:
 
 ```python
-greeting = "hello" + ", aurora"
+greeting = 'hello' + ", aurora"
+apostrophe = 'Aurora\'s strings'
+quotation = 'the compiler said "ready"'
 ```
+
+The supported escapes are `\n`, `\t`, `\"`, `\'`, `\\`, `\0`, `\xHH`, and
+`\u{H...}`. Triple-quoted, raw, and byte-string literals are not implemented,
+and a one-character literal is still a `String` rather than a character type.
 
 ## F-Strings
 
-Interpolated strings use the `f"..."` prefix and produce an owned `String`:
+Interpolated strings use the double-quoted `f"..."` form and produce an owned
+`String`; `f'...'` is not supported:
 
 ```python
 name: String = "Aurora"
@@ -198,7 +206,7 @@ print(f"Hello, {name} {answer}")
 Interpolations accept any expression, including indexed lookups:
 
 ```python
-print(f"value: {counts["key"]}")
+print(f"value: {counts['key']}")
 ```
 
 See [examples/strings/f_strings.au](../examples/strings/f_strings.au).
@@ -230,6 +238,20 @@ print(trimmed.replace("repo", "lang"))  # "aurora lang"
 print(trimmed.to_lower())           # "aurora repo"
 print(trimmed.to_upper())           # "AURORA REPO"
 ```
+
+`len()` counts Unicode scalar values, while `byte_len()` reports the number of
+bytes in the UTF-8 encoding:
+
+```python
+text = 'A🎉'
+print(text.len())       # 2; O(n)
+print(text.byte_len())  # 5; O(1)
+```
+
+Aurora 0.1 does not support integer indexing or slicing on `String`.
+Character iteration, `ord()`, `chr()`, and explicit-encoding String/bytes
+conversion arrive with the Phase 3 control-plane surface; slicing waits for
+Phase 7.
 
 `strip_prefix(...)` and `strip_suffix(...)` return `Option[String]`, so they compose with `match`:
 

@@ -1528,7 +1528,9 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::FloatSqrt | BuiltinMember::IntegerToFloat => {
                     Some(Type::named("float64"))
                 }
-                BuiltinMember::StringLen => Some(Type::named("int32")),
+                BuiltinMember::StringLen | BuiltinMember::StringByteLen => {
+                    Some(Type::named("int32"))
+                }
                 BuiltinMember::StringContains
                 | BuiltinMember::StringStartsWith
                 | BuiltinMember::StringEndsWith => Some(Type::named("bool")),
@@ -3304,6 +3306,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::FloatSqrt,
         BuiltinMember::IntegerToFloat,
         BuiltinMember::StringLen,
+        BuiltinMember::StringByteLen,
         BuiltinMember::StringContains,
         BuiltinMember::StringStartsWith,
         BuiltinMember::StringEndsWith,

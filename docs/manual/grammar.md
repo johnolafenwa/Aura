@@ -53,21 +53,33 @@ continue pass try with as true false
 
 ## Strings And F-Strings
 
-`STRING` is a double-quoted, single-line string. The following escapes are accepted:
+`STRING` is a single-line ordinary string delimited by a matching pair of
+single quotes or double quotes. Both forms produce the same token value and
+accept the same escapes:
 
 | Escape | Meaning |
 | --- | --- |
 | `\n` | line feed |
 | `\t` | tab character in the decoded value |
 | `\"` | double quote |
+| `\'` | single quote |
 | `\\` | backslash |
 | `\0` | NUL |
 | `\xHH` | byte-valued Unicode scalar from exactly two hexadecimal digits |
 | `\u{H...}` | Unicode scalar from one or more hexadecimal digits |
 
-An invalid scalar, unknown escape, missing digit, or missing closing quote is a lexical error. Single-quoted, triple-quoted, raw, and byte-string literals are not part of Aurora 0.1.
+An invalid scalar, unknown escape, missing digit, or missing or mismatched
+closing quote is a lexical error. Triple-quoted, raw, and byte-string literals
+are not part of Aurora 0.1. There is no separate character-literal token.
 
-`FSTRING` begins with `f"` and ends at the matching quote. `{ expression }` interpolates an ordinary Aurora expression. Two opening braces insert one literal opening brace, and two closing braces insert one literal closing brace. A lone closing brace outside an interpolation is also literal in Aurora 0.1. Interpolations may contain nested braces and double-quoted strings; empty or invalid interpolations are rejected. Conversion flags and format-specifier mini-languages are not supported.
+`FSTRING` begins with `f"` and ends at the matching double quote.
+`{ expression }` interpolates an ordinary Aurora expression. Two opening braces insert one
+literal opening brace, and two closing braces insert one literal closing brace.
+A lone closing brace outside an interpolation is also literal in Aurora 0.1.
+Interpolations may contain nested braces and ordinary single- or double-quoted
+strings; braces inside those strings do not change interpolation depth. Empty
+or invalid interpolations are rejected. Single-quoted f-strings, conversion
+flags, and format-specifier mini-languages are not supported.
 
 Although `\t` creates a tab in a decoded string, a literal physical tab character anywhere in a source line is rejected before tokenization, including inside a comment or string.
 

@@ -79,6 +79,52 @@ fn parse_expression_reports_trailing_tokens_and_primary_errors() {
 }
 
 #[test]
+fn d4_parser_accepts_single_quoted_expressions_patterns_and_fstring_arguments() {
+    let single_quoted_fstring =
+        parse_expression("f'aurora'").expect_err("single-quoted f-strings remain unsupported");
+    assert!(single_quoted_fstring
+        .message
+        .contains("unexpected trailing tokens after expression"));
+
+    let string_expr = parse_expression("'aurora'").expect("single-quoted string should parse");
+    assert!(matches!(
+        string_expr.kind,
+        ExprKind::String(ref value) if value == "aurora"
+    ));
+
+    let pattern = parse_pattern_from("'ready'").expect("single-quoted pattern should parse");
+    assert!(matches!(
+        pattern,
+        Pattern::Literal(LiteralPattern {
+            kind: LiteralPatternKind::String(ref value),
+            ..
+        }) if value == "ready"
+    ));
+
+    let formatted = parse_expression("f\"{echo('{left')}\"")
+        .expect("braces inside a single-quoted interpolation argument should stay literal");
+    let ExprKind::FString(parts) = formatted.kind else {
+        panic!("expected f-string expression");
+    };
+    let [FormatPart::Expr(interpolation)] = parts.as_slice() else {
+        panic!("expected one interpolation");
+    };
+    let ExprKind::Call { args, .. } = &interpolation.kind else {
+        panic!("expected interpolation call");
+    };
+    assert!(matches!(
+        args.as_slice(),
+        [Argument {
+            value: Expr {
+                kind: ExprKind::String(value),
+                ..
+            },
+            ..
+        }] if value == "{left"
+    ));
+}
+
+#[test]
 fn parse_item_rejects_public_impl_and_non_item_tokens() {
     let public_impl =
         parse_item_from("public impl Show for Point:\n    pass\n").expect_err("public impl");

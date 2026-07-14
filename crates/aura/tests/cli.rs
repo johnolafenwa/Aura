@@ -3166,6 +3166,62 @@ fn build_with_direct_backend_supports_string_map_and_numeric_builtins() {
 }
 
 #[test]
+fn string_lengths_and_negative_vec_indices_match_run_and_direct_backends() {
+    let source = r#"
+def print_int_option(value: Option[int32]):
+    match value:
+        case Some(inner):
+            print(inner)
+        case None:
+            print(-999)
+
+def main() -> int32:
+    text = "é🎉é"
+    print(text.len())
+    print(text.byte_len())
+
+    mut values: Vec[int32] = [10, 20, 30, 40]
+    print(values[-1])
+    values[-2] = 35
+    print(values[-2])
+    print_int_option(values.get(-4))
+    print_int_option(values.get(-5))
+    print_int_option(values.set(index=-4, value=11))
+    print_int_option(values.remove(-2))
+    print(values.swap(first=-1, second=-3))
+    print(values.insert(index=-1, value=99))
+    print(values.insert(index=values.len(), value=77))
+    for value in values:
+        print(value)
+    return 0
+"#;
+
+    assert_run_and_direct_source_stdout(
+        "aurora-string-lengths-negative-vec-indices",
+        source,
+        "4\n9\n40\n35\n10\n-999\n10\n35\ntrue\ntrue\ntrue\n40\n20\n99\n11\n77\n",
+    );
+}
+
+#[test]
+fn too_negative_vec_index_traps_on_run_and_direct_backends() {
+    let source = r#"
+def main() -> int32:
+    values: Vec[int32] = [10, 20, 30]
+    print(values[-4])
+    return 0
+"#;
+
+    assert_run_and_direct_source_failure_with_timeout(
+        "aurora-too-negative-vec-index",
+        source,
+        std::time::Duration::from_secs(20),
+        "",
+        "vector index `-4` is out of bounds for length `3`",
+    );
+}
+
+#[test]
 fn build_with_direct_backend_supports_queue_timeout_matches() {
     let (_, run) = build_and_run_direct_source(
         "aurora-build-direct-queue-timeout",

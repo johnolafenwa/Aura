@@ -88,6 +88,12 @@ Aurora treats `#` as the start of a comment when it appears outside strings. Com
 
 Aurora stores the raw inside of an f-string as `FStringLiteral(String)`. The parser later splits it into literal and expression segments.
 
+Ordinary strings use either matching single or double quote delimiters and
+produce the same `StringLiteral(String)` token. While the lexer is collecting
+an `f"..."` token, it tracks the active delimiter of any ordinary string inside
+an interpolation. Braces inside either `'...'` or `"..."` therefore remain
+string contents rather than changing interpolation depth.
+
 ## A tiny Aurora-like lexer in Rust
 
 The real Aurora lexer is much richer than this, but this example shows the core idea: tokenize one line and emit a `Newline`.

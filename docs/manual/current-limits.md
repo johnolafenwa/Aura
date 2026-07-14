@@ -13,6 +13,8 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Borrowed-return declarations use explicit sources and labels. Calls returning copy types materialize copies; calls producing non-copy borrowed results are rejected until Phase 6 live aliases.
 - Empty list, map, and set literals need an expected collection type.
 - `String(...)` is not a constructor; use string literals and string methods.
+- Ordinary strings may use single or double quotes, but triple-quoted, raw, and byte-string literals are not implemented. F-strings remain double-quoted.
+- `String` has scalar-count `len()` and UTF-8 `byte_len()`, but no integer indexing, slicing, `chars()`, `ord()`, or `chr()` in Aurora 0.1.
 - Newlines are not continuation inside `(...)`, `[...]`, or `{...}`. Keep calls and collection literals on one physical line today.
 - Backslash line continuation is not implemented.
 - Statement match arms cannot be inline. Expression match arms may use a same-line expression after `case pattern:` or an indented expression body.

@@ -181,6 +181,8 @@ The current compiler supports these expression forms:
 
 - names
 - integer, float, string, f-string, boolean, `None`, and duration literals
+  - ordinary strings accept matching single or double quotes with shared escapes
+  - f-strings remain double-quoted as `f"..."`, while interpolations may contain either ordinary quote form
 - arithmetic, comparison, and boolean operators
   - `//` is builtin floor division for matching integer or floating types
   - builtin integer `/` and `/=` are rejected; floating `/` and `/=` remain true division
@@ -202,7 +204,7 @@ The current compiler supports these expression forms:
 - `try expr`
 - parenthesized expressions
 
-Indexed expressions remain ordinary values after parsing. Copy-typed element reads like `values[idx]` still work directly, while non-copy vector elements such as `String` require `get(index)` for an explicit cloned read. Map indexing and interpolations such as `f"{counts["key"]}"` remain supported.
+Indexed expressions remain ordinary values after parsing. Copy-typed element reads like `values[idx]` still work directly, while non-copy vector elements such as `String` require `get(index)` for an explicit cloned read. Negative Vec indexes normalize as `len + index` for direct access and every maintained Vec index method. Map indexing and interpolations such as `f"{counts['key']}"` remain supported. Integer indexing and slicing are not supported on `String`.
 
 ## Methods
 
@@ -425,7 +427,8 @@ Current builtin member methods include:
 
 - `float64.sqrt()`
 - scalar and boolean `.to_string()`
-- `String.len()`
+- `String.len()` (Unicode scalar values, O(n))
+- `String.byte_len()` (UTF-8 bytes, O(1))
 - `String.contains(...)`
 - `String.starts_with(...)`
 - `String.ends_with(...)`
@@ -526,6 +529,9 @@ Current collection notes:
 - `for value in vec:`, `for value in borrow vec:`, and `for value in borrow mut vec:` are supported for `Vec[T]`
 - `for value in borrow mut vec:` requires the iterable place itself to be mutable
 - indexed reads from `Vec[T]` work directly only when `T` is copy; non-copy element reads use `get(index)` for an explicit cloned read
+- negative Vec indexes normalize once as `len + index` for direct reads/writes, `get`, `set`, `remove`, `swap`, and `insert`
+- `get` returns `None` when the normalized index is invalid; direct access and mutating methods trap
+- `insert(-1, value)` inserts before the last element, `insert(len, value)` appends, and out-of-range indexes are never clamped
 - `Vec[T]` supports equality and inequality when both sides have the same `Vec[T]` type
 - `Vec.insert(index, value)`, `Vec.set(index, value)`, `Vec.remove(index)`, and `Vec.swap(first, second)` now trap on out-of-bounds indices instead of silently ignoring the operation
 - empty map literals still need an expected `Map[K, V]` type, or you can use `Map[K, V]()` explicitly

@@ -103,6 +103,55 @@ fn lexes_strings_fstrings_numbers_and_durations() {
 }
 
 #[test]
+fn d4_lexer_accepts_single_quoted_strings_with_shared_escape_semantics() {
+    let tokens = lex(concat!(
+        r#"text = 'line\ntext\t\"double\"\'single\'\\\0\x41\u{1F600}'"#,
+        "\n",
+        r#"double = "it\'s valid""#,
+        "\n",
+        r#"literal = 'a "quote" and # text'"#,
+        "\n",
+    ))
+    .expect("both ordinary string delimiters should lex");
+
+    let expected = "line\ntext\t\"double\"'single'\\\0A😀".to_string();
+    let text = tokens
+        .iter()
+        .find(|token| token.kind == TokenKind::StringLiteral(expected.clone()))
+        .expect("single-quoted escape set should decode like the double-quoted form");
+    assert_eq!(text.span, Span::new(1, 8));
+    assert!(tokens
+        .iter()
+        .any(|token| token.kind == TokenKind::StringLiteral("it's valid".to_string())));
+    assert!(tokens.iter().any(|token| {
+        token.kind == TokenKind::StringLiteral("a \"quote\" and # text".to_string())
+    }));
+}
+
+#[test]
+fn d4_lexer_reports_single_quoted_string_diagnostics_at_the_literal_span() {
+    let single_escape = lex(r#"text = '\q'"#).expect_err("unknown escape should fail");
+    let double_escape = lex(r#"text = "\q""#).expect_err("unknown escape should fail");
+    assert_eq!(single_escape.message, double_escape.message);
+    assert_eq!(single_escape.span, Some(Span::new(1, 8)));
+
+    let single_hex = lex(r#"text = '\x4g'"#).expect_err("bad hex escape should fail");
+    let double_hex = lex(r#"text = "\x4g""#).expect_err("bad hex escape should fail");
+    assert_eq!(single_hex.message, double_hex.message);
+    assert_eq!(single_hex.span, Some(Span::new(1, 8)));
+
+    let unterminated = lex("text = 'abc\\").expect_err("dangling escape should fail");
+    assert_eq!(unterminated.span, Some(Span::new(1, 8)));
+    assert!(unterminated.message.contains("unterminated string literal"));
+}
+
+#[test]
+fn d4_lexer_tracks_single_quoted_strings_inside_fstring_interpolations() {
+    let tokens = kinds("message = f\"{echo('{left')}\"\n");
+    assert!(tokens.contains(&TokenKind::FStringLiteral("{echo('{left')}".to_string())));
+}
+
+#[test]
 fn lexes_indentation_and_skips_blank_or_comment_lines() {
     let tokens = kinds(
             "def main():\n    value = 1\n\n    # comment only\n    if true:\n        print(value)\n    print(value)\n",

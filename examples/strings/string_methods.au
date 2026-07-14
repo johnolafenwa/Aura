@@ -6,6 +6,10 @@ def print_string_option(value: Option[String]):
             print("none")
 
 def main() -> int32:
+    unicode = 'A🎉'
+    unicode.len()       # 2 Unicode scalar values; O(n)
+    unicode.byte_len()  # 5 UTF-8 bytes; O(1)
+
     text = "  aurora repo  "
     print(text.len())
     print(text.contains("repo"))

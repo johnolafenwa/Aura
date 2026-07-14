@@ -166,32 +166,49 @@ DURATION = INTEGER, ("ms" | "s" | "m") ;
 
 ## String Literals
 
-Strings are double-quoted and single-line. Aurora 0.1 supports these escapes:
+Ordinary string literals use matching single or double quote delimiters and are
+single-line:
+
+```python
+double = "Aurora"
+single = 'Aurora'
+apostrophe = 'Aurora\'s strings'
+quotation = 'the compiler said "ready"'
+```
+
+Both delimiters produce a `String` and support the same escapes:
 
 | Escape | Decoded value |
 | --- | --- |
 | `\n` | Line feed |
 | `\t` | Tab |
 | `\"` | Double quote |
+| `\'` | Single quote |
 | `\\` | Backslash |
 | `\0` | NUL |
 | `\xHH` | Scalar from exactly two hexadecimal digits |
 | `\u{H...}` | Unicode scalar from one or more hexadecimal digits |
 
-Unknown escapes, invalid Unicode scalars, missing hexadecimal digits, and missing closing quotes are lexical errors. Single-quoted, triple-quoted, raw, and byte-string literals are not part of Aurora 0.1.
+Unknown escapes, invalid Unicode scalars, missing hexadecimal digits, and
+missing or mismatched closing quotes are lexical errors. Triple-quoted, raw,
+and byte-string literals are not part of Aurora 0.1. A one-character literal
+such as `'x'` is a `String`, not a distinct character type.
 
 A string literal has type `String`. See [Types](/manual/types) for ownership and [Execution Model](/manual/execution-model#evaluation-order) for expression evaluation order.
 
 ## F-Strings
 
-An f-string begins with `f"` and is also double-quoted and single-line:
+An f-string begins with `f"` and is double-quoted and single-line:
 
 ```python
 name = "aurora"
 print(f"hello {name}")
 ```
 
-Text inside `{` and `}` is parsed as an ordinary Aurora expression. Interpolations may contain indexing, calls, nested braces used by expressions, and double-quoted strings. Empty or syntactically invalid interpolations are rejected.
+Text inside `{` and `}` is parsed as an ordinary Aurora expression.
+Interpolations may contain indexing, calls, nested braces used by expressions,
+and either form of ordinary string literal, including braces inside those
+strings. Empty or syntactically invalid interpolations are rejected.
 
 Use two consecutive opening braces for a literal opening brace. Two consecutive closing braces decode to one literal closing brace; Aurora 0.1 also treats a lone closing brace outside an interpolation as literal text:
 
@@ -199,7 +216,11 @@ Use two consecutive opening braces for a literal opening brace. Two consecutive 
 print(f"{{name}} = {name}")
 ```
 
-F-strings support the same escapes as ordinary strings. They do not support conversion flags such as `!r` or a format-specifier mini-language. Interpolations are evaluated from left to right and the result is an owned `String`.
+F-strings support the same escapes as ordinary strings. F-strings themselves
+remain double-quoted: `f'...'` is not Aurora 0.1 syntax. They do not support
+conversion flags such as `!r` or a format-specifier mini-language.
+Interpolations are evaluated from left to right and the result is an owned
+`String`.
 
 ## Complexity Limits
 

@@ -1,0 +1,15 @@
+def echo(value: String) -> String:
+    return value
+
+def main() -> int32:
+    text = 'it\'s "Aurora"'
+    print(text)
+    mut counts = {'key': 7}
+    print(counts['key'])
+    print(f"{echo('{left')}")
+    match text:
+        case 'it\'s "Aurora"':
+            print('matched')
+        case _:
+            print('missed')
+    return 0

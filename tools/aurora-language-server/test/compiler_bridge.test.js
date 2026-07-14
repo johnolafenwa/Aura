@@ -1167,7 +1167,7 @@ test("compiler bridge includes String and Map builtin members in completions", a
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
     const source =
-      "def main() -> int32:\n    text = \"  aurora repo  \"\n    mut counts = Map[String, int32]()\n    text.\n    counts.\n    return 0\n";
+      "def main() -> int32:\n    text = '  aurora repo  '\n    mut counts = Map[String, int32]()\n    text.\n    counts.\n    return 0\n";
 
     setWorkspaceRoots([repoRoot, tempRoot]);
     const analysis = await analyzeWithCompiler(mainUri, source);
@@ -1188,6 +1188,7 @@ test("compiler bridge includes String and Map builtin members in completions", a
     assert.ok(textCompletions);
     const textNames = new Set(textCompletions.map((item) => item.name));
     assert.ok(textNames.has("len"));
+    assert.ok(textNames.has("byte_len"));
     assert.ok(textNames.has("contains"));
     assert.ok(textNames.has("starts_with"));
     assert.ok(textNames.has("ends_with"));
@@ -1200,6 +1201,14 @@ test("compiler bridge includes String and Map builtin members in completions", a
     assert.ok(textNames.has("strip_suffix"));
     assert.ok(textNames.has("clone"));
     assert.ok(textNames.has("join"));
+    assert.equal(
+      textCompletions.find((item) => item.name === "len")?.detail,
+      "len() -> int32"
+    );
+    assert.equal(
+      textCompletions.find((item) => item.name === "byte_len")?.detail,
+      "byte_len() -> int32"
+    );
 
     const mapLineIndex = lines.findIndex((line) => line.includes("counts."));
     const mapCharacter = lines[mapLineIndex].indexOf(".") + 1;
@@ -1550,6 +1559,27 @@ test("compiler bridge analyzes indexed member chains and f-string indexed lookup
       "        case None:",
       "            return 1",
       "    print(f\"val: {counts[\"key\"]}\")",
+      "    return 0"
+    ].join("\n");
+
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const analysis = await analyzeWithCompiler(mainUri, source);
+    assert.ok(analysis);
+    assert.deepStrictEqual(analysis.diagnostics, []);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge analyzes single-quoted strings nested in f-string interpolations", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-single-strings-"));
+  try {
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const source = [
+      "def main() -> int32:",
+      "    print('single # quote')",
+      "    print(f\"{'{left} and }'}\")",
       "    return 0"
     ].join("\n");
 

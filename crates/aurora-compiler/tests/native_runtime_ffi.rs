@@ -206,6 +206,11 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         assert_eq!(aurora_direct_value_as_condition(truthy), 1);
         release(truthy);
 
+        let unicode = string_value("é🎉e\u{301}");
+        assert_eq!(aurora_direct_string_len(unicode), 4);
+        assert_eq!(aurora_direct_string_byte_len(unicode), 9);
+        release(unicode);
+
         let write_arg = string_value("");
         let write_result = aurora_direct_io_write(write_arg);
         release(write_arg);

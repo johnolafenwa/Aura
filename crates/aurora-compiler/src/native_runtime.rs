@@ -1711,9 +1711,23 @@ pub extern "C-unwind" fn aurora_direct_duration_literal(value: i64) -> *mut Opaq
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_string_len(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::String(text) => match i64::try_from(text.len()) {
+        Value::String(text) => match i64::try_from(text.chars().count()) {
             Ok(length) => length,
             Err(_) => runtime_error("string length does not fit in the direct runtime range"),
+        },
+        other => runtime_error(format!(
+            "expected `String`, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_string_byte_len(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| match unsafe { value_ref(value) } {
+        Value::String(text) => match i64::try_from(text.len()) {
+            Ok(length) => length,
+            Err(_) => runtime_error("string byte length does not fit in the direct runtime range"),
         },
         other => runtime_error(format!(
             "expected `String`, found `{}`",
@@ -2223,35 +2237,16 @@ fn with_set_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut SetValue) -> T
     }
 }
 
-fn checked_vec_index(index: i64) -> usize {
-    if index < 0 {
-        runtime_error(format!("vector index `{}` cannot be negative", index));
-    }
-    match usize::try_from(index) {
-        Ok(index) => index,
-        Err(_) => runtime_error("vector index does not fit in the runtime address space"),
-    }
-}
-
-fn checked_vec_index_at(index: i64, line: i64, column: i64) -> usize {
-    if index < 0 {
-        match runtime_span(line, column) {
-            Some(span) => {
-                runtime_error_at(span, format!("vector index `{}` cannot be negative", index))
-            }
-            None => runtime_error(format!("vector index `{}` cannot be negative", index)),
-        }
-    }
-    match usize::try_from(index) {
-        Ok(index) => index,
-        Err(_) => match runtime_span(line, column) {
-            Some(span) => runtime_error_at(
-                span,
-                "vector index does not fit in the runtime address space",
-            ),
-            None => runtime_error("vector index does not fit in the runtime address space"),
-        },
-    }
+fn normalize_vec_index(index: i64, len: usize) -> Option<usize> {
+    // Rust's supported pointer widths fit losslessly in i128, so this conversion
+    // has no runtime failure case to defend or cover.
+    let len = len as i128;
+    let normalized = if index < 0 {
+        len + i128::from(index)
+    } else {
+        i128::from(index)
+    };
+    usize::try_from(normalized).ok()
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -2314,8 +2309,11 @@ pub extern "C-unwind" fn aurora_direct_vec_get(
     index: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let index = checked_vec_index(index);
-        let value = with_vector(vec, |vector| vector.elements.get(index).cloned());
+        let value = with_vector(vec, |vector| {
+            normalize_vec_index(index, vector.elements.len())
+                .and_then(|index| vector.elements.get(index))
+                .cloned()
+        });
         boxed_value(value.map(option_some).unwrap_or_else(option_none))
     })
 }
@@ -2327,17 +2325,18 @@ pub extern "C-unwind" fn aurora_direct_vec_set_in_place(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let index = checked_vec_index(index);
         let value = unsafe { take_value(value) };
         let previous = with_vector_mut(vec, |vector| {
-            if index >= vector.elements.len() {
+            let Some(normalized) = normalize_vec_index(index, vector.elements.len())
+                .filter(|normalized| *normalized < vector.elements.len())
+            else {
                 runtime_error(format!(
                     "vector set index `{}` is out of bounds for length `{}`",
                     index,
                     vector.elements.len()
                 ));
-            }
-            std::mem::replace(&mut vector.elements[index], value)
+            };
+            std::mem::replace(&mut vector.elements[normalized], value)
         });
         boxed_value(option_some(previous))
     })
@@ -2349,16 +2348,17 @@ pub extern "C-unwind" fn aurora_direct_vec_remove_in_place(
     index: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let index = checked_vec_index(index);
         let previous = with_vector_mut(vec, |vector| {
-            if index >= vector.elements.len() {
+            let Some(normalized) = normalize_vec_index(index, vector.elements.len())
+                .filter(|normalized| *normalized < vector.elements.len())
+            else {
                 runtime_error(format!(
                     "vector remove index `{}` is out of bounds for length `{}`",
                     index,
                     vector.elements.len()
                 ));
-            }
-            vector.elements.remove(index)
+            };
+            vector.elements.remove(normalized)
         });
         boxed_value(option_some(previous))
     })
@@ -2371,18 +2371,21 @@ pub extern "C-unwind" fn aurora_direct_vec_swap_in_place(
     second: i64,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let first = checked_vec_index(first);
-        let second = checked_vec_index(second);
         with_vector_mut(vec, |vector| {
-            if first >= vector.elements.len() || second >= vector.elements.len() {
+            let normalized_first = normalize_vec_index(first, vector.elements.len());
+            let normalized_second = normalize_vec_index(second, vector.elements.len());
+            let (Some(normalized_first), Some(normalized_second)) = (
+                normalized_first.filter(|index| *index < vector.elements.len()),
+                normalized_second.filter(|index| *index < vector.elements.len()),
+            ) else {
                 runtime_error(format!(
                     "vector swap indices `{}` and `{}` are out of bounds for length `{}`",
                     first,
                     second,
                     vector.elements.len()
                 ));
-            }
-            vector.elements.swap(first, second);
+            };
+            vector.elements.swap(normalized_first, normalized_second);
         });
         1
     })
@@ -2406,17 +2409,18 @@ pub extern "C-unwind" fn aurora_direct_vec_insert_in_place(
     value: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let index = checked_vec_index(index);
         let value = unsafe { take_value(value) };
         with_vector_mut(vec, |vector| {
-            if index > vector.elements.len() {
+            let Some(normalized) = normalize_vec_index(index, vector.elements.len())
+                .filter(|normalized| *normalized <= vector.elements.len())
+            else {
                 runtime_error(format!(
                     "vector insert index `{}` is out of bounds for length `{}`",
                     index,
                     vector.elements.len()
                 ));
-            }
-            vector.elements.insert(index, value);
+            };
+            vector.elements.insert(normalized, value);
         });
         1
     })
@@ -2465,9 +2469,13 @@ pub extern "C-unwind" fn aurora_direct_vec_index(
     column: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let index = checked_vec_index_at(index, line, column);
         let (value, len) = with_vector(vec, |vector| {
-            (vector.elements.get(index).cloned(), vector.elements.len())
+            (
+                normalize_vec_index(index, vector.elements.len())
+                    .and_then(|normalized| vector.elements.get(normalized))
+                    .cloned(),
+                vector.elements.len(),
+            )
         });
         let Some(value) = value else {
             match runtime_span(line, column) {
@@ -2494,8 +2502,11 @@ pub extern "C-unwind" fn aurora_direct_vec_index_option(
     index: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let index = checked_vec_index(index);
-        let value = with_vector(vec, |vector| vector.elements.get(index).cloned());
+        let value = with_vector(vec, |vector| {
+            normalize_vec_index(index, vector.elements.len())
+                .and_then(|normalized| vector.elements.get(normalized))
+                .cloned()
+        });
         boxed_value(value.map(option_some).unwrap_or_else(option_none))
     })
 }
@@ -2509,15 +2520,16 @@ pub extern "C-unwind" fn aurora_direct_vec_set_index_in_place(
     column: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let index = checked_vec_index_at(index, line, column);
         let value = unsafe { take_value(value) };
         let result = with_vector_mut(vec, |vector| {
-            if index >= vector.elements.len() {
-                Err(vector.elements.len())
-            } else {
-                vector.elements[index] = value;
-                Ok(())
-            }
+            let normalized = match normalize_vec_index(index, vector.elements.len())
+                .filter(|normalized| *normalized < vector.elements.len())
+            {
+                Some(normalized) => normalized,
+                None => return Err(vector.elements.len()),
+            };
+            vector.elements[normalized] = value;
+            Ok(())
         });
         if let Err(len) = result {
             match runtime_span(line, column) {
@@ -2905,7 +2917,12 @@ pub extern "C-unwind" fn aurora_direct_set_index_option(
     index: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let index = checked_vec_index(index);
+        if index < 0 {
+            runtime_error(format!("vector index `{}` cannot be negative", index));
+        }
+        let index = usize::try_from(index).unwrap_or_else(|_| {
+            runtime_error("vector index does not fit in the runtime address space")
+        });
         let value = with_set(set, |set| set.elements.get(index).cloned());
         boxed_value(value.map(option_some).unwrap_or_else(option_none))
     })

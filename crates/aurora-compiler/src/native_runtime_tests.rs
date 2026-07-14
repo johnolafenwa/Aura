@@ -1,11 +1,10 @@
 #![cfg(test)]
 
 use super::{
-    boxed_value, checked_vec_index, checked_vec_index_at, compare_values, current_cancellation,
-    decode_bytes, eval_binary_value, eval_unary_value, extract_duration_millis,
-    inferred_collection_type, int32_overflow_message, render_bool, render_float,
-    render_runtime_diagnostic, runtime_span, value_mut, value_ref, value_type_name,
-    with_cancellation_scope, OpaqueValue,
+    boxed_value, compare_values, current_cancellation, decode_bytes, eval_binary_value,
+    eval_unary_value, extract_duration_millis, inferred_collection_type, int32_overflow_message,
+    normalize_vec_index, render_bool, render_float, render_runtime_diagnostic, runtime_span,
+    value_mut, value_ref, value_type_name, with_cancellation_scope, OpaqueValue,
 };
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
@@ -3378,8 +3377,12 @@ fn sqrt_helper_matches_standard_library() {
 #[test]
 fn direct_runtime_string_and_numeric_helpers_cover_builtin_surface() {
     assert_eq!(
-        super::aurora_direct_string_len(string_value("  Aurora Repo  ")),
-        15
+        super::aurora_direct_string_len(string_value("é🎉e\u{301}")),
+        4
+    );
+    assert_eq!(
+        super::aurora_direct_string_byte_len(string_value("é🎉e\u{301}")),
+        9
     );
     assert_eq!(
         super::aurora_direct_string_contains(string_value("  Aurora Repo  "), string_value("Repo"),),
@@ -3596,6 +3599,49 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
     assert_eq!(super::aurora_direct_vec_len(vec), 0);
     expect_option_none(super::aurora_direct_vec_pop_in_place(vec));
     expect_option_none(super::aurora_direct_vec_index_option(vec, 0));
+}
+
+#[test]
+fn direct_runtime_vec_helpers_normalize_negative_indices_uniformly() {
+    let vec = int_vec(&[10, 20, 30, 40]);
+
+    assert_eq!(
+        expect_int(super::aurora_direct_vec_index(vec, -1, 1, 1)),
+        40
+    );
+    expect_unit(super::aurora_direct_vec_set_index_in_place(
+        vec,
+        -2,
+        int_value(35),
+        1,
+        1,
+    ));
+    assert_eq!(
+        expect_option_some_int(super::aurora_direct_vec_get(vec, -2)),
+        35
+    );
+    expect_option_none(super::aurora_direct_vec_get(vec, -5));
+    assert_eq!(
+        expect_option_some_int(super::aurora_direct_vec_set_in_place(
+            vec,
+            -4,
+            int_value(11),
+        )),
+        10
+    );
+    assert_eq!(
+        expect_option_some_int(super::aurora_direct_vec_remove_in_place(vec, -2)),
+        35
+    );
+    assert_eq!(super::aurora_direct_vec_swap_in_place(vec, -1, -3), 1);
+    assert_eq!(
+        super::aurora_direct_vec_insert_in_place(vec, -1, int_value(99)),
+        1
+    );
+    assert_eq!(
+        expect_vec_ints(super::aurora_direct_clone_value(vec)),
+        vec![40, 20, 99, 11]
+    );
 }
 
 #[test]
@@ -6062,9 +6108,6 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "fail-int32-overflow-no-span" => {
                 super::aurora_direct_fail_int32_overflow(123, 0, 0);
             }
-            "vec-index-negative-at" => {
-                checked_vec_index_at(-1, 3, 4);
-            }
             "vec-index-oob-no-span" => {
                 super::aurora_direct_vec_index(int_vec(&[1]), 5, 0, 0);
             }
@@ -6073,6 +6116,30 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "vec-set-oob-span" => {
                 super::aurora_direct_vec_set_index_in_place(int_vec(&[1]), 5, int_value(9), 2, 7);
+            }
+            "vec-method-set-too-negative" => {
+                super::aurora_direct_vec_set_in_place(int_vec(&[1, 2, 3, 4]), -5, int_value(9));
+            }
+            "vec-method-remove-too-negative" => {
+                super::aurora_direct_vec_remove_in_place(int_vec(&[1, 2, 3, 4]), -5);
+            }
+            "vec-method-swap-too-negative" => {
+                super::aurora_direct_vec_swap_in_place(int_vec(&[1, 2, 3, 4]), -5, -1);
+            }
+            "vec-method-insert-too-negative" => {
+                super::aurora_direct_vec_insert_in_place(int_vec(&[1, 2, 3, 4]), -5, int_value(9));
+            }
+            "vec-method-insert-negative-empty" => {
+                super::aurora_direct_vec_insert_in_place(int_vec(&[]), -1, int_value(9));
+            }
+            "vec-indexed-write-too-negative" => {
+                super::aurora_direct_vec_set_index_in_place(
+                    int_vec(&[1, 2, 3, 4]),
+                    -5,
+                    int_value(9),
+                    3,
+                    7,
+                );
             }
             "unbox-i64-overflow" => {
                 super::aurora_direct_unbox_i64(boxed_value(Value::Int(
@@ -6943,10 +7010,6 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "integer value `123` does not fit in `int32`",
         ),
         (
-            "vec-index-negative-at",
-            "vector index `-1` cannot be negative",
-        ),
-        (
             "vec-index-oob-no-span",
             "vector index `5` is out of bounds for length `1`",
         ),
@@ -6957,6 +7020,30 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "vec-set-oob-span",
             "vector index `5` is out of bounds for length `1`",
+        ),
+        (
+            "vec-method-set-too-negative",
+            "vector set index `-5` is out of bounds for length `4`",
+        ),
+        (
+            "vec-method-remove-too-negative",
+            "vector remove index `-5` is out of bounds for length `4`",
+        ),
+        (
+            "vec-method-swap-too-negative",
+            "vector swap indices `-5` and `-1` are out of bounds for length `4`",
+        ),
+        (
+            "vec-method-insert-too-negative",
+            "vector insert index `-5` is out of bounds for length `4`",
+        ),
+        (
+            "vec-method-insert-negative-empty",
+            "vector insert index `-1` is out of bounds for length `0`",
+        ),
+        (
+            "vec-indexed-write-too-negative",
+            "vector index `-5` is out of bounds for length `4`",
         ),
         (
             "unbox-i64-overflow",
@@ -7052,16 +7139,9 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(runtime_span(3, 4), Some(crate::diag::Span::new(3, 4)));
     assert_eq!(runtime_span(0, 4), None);
-    assert_eq!(checked_vec_index(3), 3);
-    assert_eq!(checked_vec_index_at(4, 1, 1), 4);
-    let message = capture_runtime_error_message(|| {
-        checked_vec_index(-1);
-    });
-    assert!(message.contains("vector index `-1` cannot be negative"));
-    let message = capture_runtime_error_message(|| {
-        checked_vec_index_at(-1, 0, 0);
-    });
-    assert!(message.contains("vector index `-1` cannot be negative"));
+    assert_eq!(normalize_vec_index(3, 5), Some(3));
+    assert_eq!(normalize_vec_index(-1, 5), Some(4));
+    assert_eq!(normalize_vec_index(-6, 5), None);
 
     assert_eq!(value_type_name(&Value::Bool(true)), "bool");
     assert_eq!(value_type_name(&Value::Unit), "None");

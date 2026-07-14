@@ -64,6 +64,11 @@ for entry in counts.items():
 
 `Vec[T]` stores values in insertion order and indexes them with `int32`.
 
+Every Vec indexing surface follows one rule: a negative index `i` is
+normalized once as `len + i`. This applies to direct `[]` reads and writes,
+`get`, `set`, `remove`, both indexes passed to `swap`, and `insert`. After
+normalization, each operation keeps its normal bounds contract.
+
 | API | Signature | Contract |
 | --- | --- | --- |
 | constructor | `Vec[T]()` | Creates an empty vector. |
@@ -73,13 +78,13 @@ for entry in counts.items():
 | `clone` | `clone() -> Vec[T]` | Returns a new owned vector with cloned element values. |
 | `push` | `push(value: T) -> None` | Moves `value` to the end of the vector. |
 | `pop` | `pop() -> Option[T]` | Removes and returns the final element, or `None` when empty. |
-| `get` | `get(index: int32) -> Option[T]` | Returns a cloned element, or `None` when `index` is out of bounds. |
-| `set` | `set(index: int32, value: T) -> Option[T]` | Replaces the element at `index` and returns the previous element. Out-of-bounds indices raise a runtime error. |
-| `remove` | `remove(index: int32) -> Option[T]` | Removes and returns the element at `index`. Out-of-bounds indices raise a runtime error. |
-| `swap` | `swap(first: int32, second: int32) -> bool` | Swaps two elements and returns `true`. Out-of-bounds indices raise a runtime error. |
+| `get` | `get(index: int32) -> Option[T]` | Returns a cloned element after normalization, or `None` when the normalized index is out of bounds. |
+| `set` | `set(index: int32, value: T) -> Option[T]` | Replaces the normalized index and returns the previous element. Out-of-bounds indices raise a runtime error. |
+| `remove` | `remove(index: int32) -> Option[T]` | Removes and returns the normalized index. Out-of-bounds indices raise a runtime error. |
+| `swap` | `swap(first: int32, second: int32) -> bool` | Normalizes both indexes, swaps the elements, and returns `true`. Out-of-bounds indices raise a runtime error. |
 | `contains` | `contains(value: T) -> bool` | Returns `true` when an equal value is present. |
 | `extend` | `extend(other: Vec[T]) -> None` | Moves every element from `other` to the end of the receiver. |
-| `insert` | `insert(index: int32, value: T) -> bool` | Inserts `value` before `index` and returns `true`. Out-of-bounds indices raise a runtime error. |
+| `insert` | `insert(index: int32, value: T) -> bool` | Normalizes `index`, inserts `value` before it, and returns `true`. The valid normalized range is `0..=len`. |
 | `clear` | `clear() -> None` | Removes all elements. |
 | `reverse` | `reverse() -> None` | Reverses the vector in place. |
 
@@ -93,7 +98,25 @@ match values.get(index):
         print("missing")
 ```
 
+Negative indexes count from the end:
+
+```python
+mut values = [10, 20, 30]
+print(values[-1])             # 30
+print(values.get(-2))         # Option.Some(20)
+values[-1] = 31               # writes the final element
+values.insert(-1, 25)         # [10, 20, 25, 31]
+values.insert(values.len(), 40) # appends
+```
+
 `set`, `remove`, `swap`, and `insert` treat invalid indexes as runtime errors because they usually indicate a broken invariant. Use `get` before mutating when an out-of-range index is normal program data.
+
+Aurora deliberately differs from Python for insertion indexes. Python clamps
+an extremely negative `list.insert` index to the start; Aurora does not clamp
+an index that remains out of range after normalization. For example,
+`values.insert(-999, value)` raises a runtime error instead of silently placing
+`value` at the wrong position. `get(-999)` follows its existing optional
+contract and returns `None`.
 
 ## Map[K, V]
 

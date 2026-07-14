@@ -815,6 +815,18 @@ fn module_with_main_member_call_result_type(
 
 #[test]
 fn direct_backend_internal_collection_member_surface_compiles() {
+    let string_byte_len = module_with_main_member_call_result_type(
+        "text",
+        Type::named("String"),
+        Rvalue::Use(Operand::String("é🎉e\u{301}".to_string())),
+        Type::named("int32"),
+        "byte_len",
+        Vec::new(),
+    );
+    assert!(!emit_host_object(&string_byte_len)
+        .expect("String.byte_len() should compile directly")
+        .is_empty());
+
     let vec_index_option = module_with_main_member_call_result_type(
         "values",
         Type::Named("Vec".to_string(), vec![Type::named("int32")]),

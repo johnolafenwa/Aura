@@ -2796,10 +2796,10 @@ impl MirRuntime {
             "get" | "__index_option" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["index"], values)?;
-                let index = self.mir_index_from_value(bound[0].value.clone())?;
-                Ok(vector
-                    .elements
-                    .get(index)
+                let (_, index) =
+                    self.mir_vec_index_from_value(bound[0].value.clone(), vector.elements.len())?;
+                Ok(index
+                    .and_then(|index| vector.elements.get(index))
                     .cloned()
                     .map(option_some)
                     .unwrap_or_else(option_none))
@@ -2811,32 +2811,37 @@ impl MirRuntime {
                         "internal vector indexing requires index, line, and column operands",
                     ));
                 }
-                let index = self.mir_index_from_value(values[0].value.clone())?;
                 let line = self.mir_index_from_value(values[1].value.clone())?;
                 let column = self.mir_index_from_value(values[2].value.clone())?;
-                vector.elements.get(index).cloned().ok_or_else(|| {
-                    Diagnostic::at(
-                        crate::diag::Span::new(line, column),
-                        format!(
-                            "vector index `{}` is out of bounds for length `{}`",
-                            index,
-                            vector.elements.len()
-                        ),
-                    )
-                })
+                let (supplied_index, index) =
+                    self.mir_vec_index_from_value(values[0].value.clone(), vector.elements.len())?;
+                index
+                    .and_then(|index| vector.elements.get(index))
+                    .cloned()
+                    .ok_or_else(|| {
+                        Diagnostic::at(
+                            crate::diag::Span::new(line, column),
+                            format!(
+                                "vector index `{}` is out of bounds for length `{}`",
+                                supplied_index,
+                                vector.elements.len()
+                            ),
+                        )
+                    })
             }
             "set" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["index", "value"], values)?;
-                let index = self.mir_index_from_value(bound[0].value.clone())?;
                 let mut updated = vector;
-                if index >= updated.elements.len() {
+                let (supplied_index, index) =
+                    self.mir_vec_index_from_value(bound[0].value.clone(), updated.elements.len())?;
+                let Some(index) = index.filter(|index| *index < updated.elements.len()) else {
                     return Err(Diagnostic::new(format!(
                         "vector set index `{}` is out of bounds for length `{}`",
-                        index,
+                        supplied_index,
                         updated.elements.len()
                     )));
-                }
+                };
                 let previous =
                     std::mem::replace(&mut updated.elements[index], bound[1].value.clone());
                 let Some(place) = receiver_place else {
@@ -2852,20 +2857,21 @@ impl MirRuntime {
                         "internal indexed assignment requires index, value, line, and column operands",
                     ));
                 }
-                let index = self.mir_index_from_value(values[0].value.clone())?;
                 let line = self.mir_index_from_value(values[2].value.clone())?;
                 let column = self.mir_index_from_value(values[3].value.clone())?;
                 let mut updated = vector;
-                if index >= updated.elements.len() {
+                let (supplied_index, index) =
+                    self.mir_vec_index_from_value(values[0].value.clone(), updated.elements.len())?;
+                let Some(index) = index.filter(|index| *index < updated.elements.len()) else {
                     return Err(Diagnostic::at(
                         crate::diag::Span::new(line, column),
                         format!(
                             "vector index `{}` is out of bounds for length `{}`",
-                            index,
+                            supplied_index,
                             updated.elements.len()
                         ),
                     ));
-                }
+                };
                 updated.elements[index] = values[1].value.clone();
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new(
@@ -2878,15 +2884,16 @@ impl MirRuntime {
             "remove" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["index"], values)?;
-                let index = self.mir_index_from_value(bound[0].value.clone())?;
                 let mut updated = vector;
-                if index >= updated.elements.len() {
+                let (supplied_index, index) =
+                    self.mir_vec_index_from_value(bound[0].value.clone(), updated.elements.len())?;
+                let Some(index) = index.filter(|index| *index < updated.elements.len()) else {
                     return Err(Diagnostic::new(format!(
                         "vector remove index `{}` is out of bounds for length `{}`",
-                        index,
+                        supplied_index,
                         updated.elements.len()
                     )));
-                }
+                };
                 let previous = updated.elements.remove(index);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`remove` requires a mutable vector place"));
@@ -2897,17 +2904,22 @@ impl MirRuntime {
             "swap" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["first", "second"], values)?;
-                let first = self.mir_index_from_value(bound[0].value.clone())?;
-                let second = self.mir_index_from_value(bound[1].value.clone())?;
                 let mut updated = vector;
-                if first >= updated.elements.len() || second >= updated.elements.len() {
+                let (supplied_first, first) =
+                    self.mir_vec_index_from_value(bound[0].value.clone(), updated.elements.len())?;
+                let (supplied_second, second) =
+                    self.mir_vec_index_from_value(bound[1].value.clone(), updated.elements.len())?;
+                let (Some(first), Some(second)) = (
+                    first.filter(|index| *index < updated.elements.len()),
+                    second.filter(|index| *index < updated.elements.len()),
+                ) else {
                     return Err(Diagnostic::new(format!(
                         "vector swap indices `{}` and `{}` are out of bounds for length `{}`",
-                        first,
-                        second,
+                        supplied_first,
+                        supplied_second,
                         updated.elements.len()
                     )));
-                }
+                };
                 updated.elements.swap(first, second);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`swap` requires a mutable vector place"));
@@ -2928,15 +2940,16 @@ impl MirRuntime {
             "insert" => {
                 let values = evaluate_named_args(args, env)?;
                 let bound = bind_builtin_args(&["index", "value"], values)?;
-                let index = self.mir_index_from_value(bound[0].value.clone())?;
                 let mut updated = vector;
-                if index > updated.elements.len() {
+                let (supplied_index, index) =
+                    self.mir_vec_index_from_value(bound[0].value.clone(), updated.elements.len())?;
+                let Some(index) = index.filter(|index| *index <= updated.elements.len()) else {
                     return Err(Diagnostic::new(format!(
                         "vector insert index `{}` is out of bounds for length `{}`",
-                        index,
+                        supplied_index,
                         updated.elements.len()
                     )));
-                }
+                };
                 updated.elements.insert(index, bound[1].value.clone());
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`insert` requires a mutable vector place"));
@@ -3229,6 +3242,14 @@ impl MirRuntime {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`len` does not take arguments"));
                 }
+                Ok(Value::Int(IntegerValue::from_literal(
+                    text.chars().count() as u128
+                )))
+            }
+            "byte_len" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`byte_len` does not take arguments"));
+                }
                 Ok(Value::Int(IntegerValue::from_literal(text.len() as u128)))
             }
             "contains" => {
@@ -3473,6 +3494,26 @@ impl MirRuntime {
         }
         usize::try_from(index)
             .map_err(|_| Diagnostic::new("vector index does not fit in the MIR address space"))
+    }
+
+    fn mir_vec_index_from_value(&self, value: Value, len: usize) -> Result<(i128, Option<usize>)> {
+        let Value::Int(value) = value else {
+            return Err(Diagnostic::new("vector indices must be integers"));
+        };
+        let supplied = value
+            .as_i128()
+            .ok_or_else(|| Diagnostic::new("vector index is outside the supported signed range"))?;
+        // Rust's supported pointer widths fit losslessly in i128, so this conversion
+        // has no runtime failure case to defend or cover.
+        let len = len as i128;
+        let normalized = if supplied < 0 {
+            // `len` is non-negative and `supplied` is negative, so this sum
+            // cannot overflow either end of the i128 range.
+            len + supplied
+        } else {
+            supplied
+        };
+        Ok((supplied, usize::try_from(normalized).ok()))
     }
 
     fn evaluate_task_method(

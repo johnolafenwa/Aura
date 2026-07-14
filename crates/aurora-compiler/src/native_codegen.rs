@@ -238,6 +238,7 @@ struct NativeCodegen<'a> {
     box_unit: FuncId,
     string_literal: FuncId,
     string_len: FuncId,
+    string_byte_len: FuncId,
     string_contains: FuncId,
     string_starts_with: FuncId,
     string_ends_with: FuncId,
@@ -693,6 +694,7 @@ impl<'a> NativeCodegen<'a> {
             box_unit => ("aurora_direct_box_unit", [], Some(types::I64)),
             string_literal => ("aurora_direct_string_literal", [types::I64, types::I64], Some(types::I64)),
             string_len => ("aurora_direct_string_len", [types::I64], Some(types::I64)),
+            string_byte_len => ("aurora_direct_string_byte_len", [types::I64], Some(types::I64)),
             string_contains => ("aurora_direct_string_contains", [types::I64, types::I64], Some(types::I64)),
             string_starts_with => ("aurora_direct_string_starts_with", [types::I64, types::I64], Some(types::I64)),
             string_ends_with => ("aurora_direct_string_ends_with", [types::I64, types::I64], Some(types::I64)),
@@ -1063,6 +1065,7 @@ impl<'a> NativeCodegen<'a> {
             box_unit,
             string_literal,
             string_len,
+            string_byte_len,
             string_contains,
             string_starts_with,
             string_ends_with,
@@ -1667,6 +1670,9 @@ impl<'a> NativeCodegen<'a> {
         let string_len = self
             .object
             .declare_func_in_func(self.string_len, builder.func);
+        let string_byte_len = self
+            .object
+            .declare_func_in_func(self.string_byte_len, builder.func);
         let string_contains = self
             .object
             .declare_func_in_func(self.string_contains, builder.func);
@@ -2466,6 +2472,7 @@ impl<'a> NativeCodegen<'a> {
             box_unit,
             string_literal,
             string_len,
+            string_byte_len,
             string_contains,
             string_starts_with,
             string_ends_with,
@@ -3115,6 +3122,7 @@ struct FunctionCompiler<'a> {
     box_unit: cranelift_codegen::ir::FuncRef,
     string_literal: cranelift_codegen::ir::FuncRef,
     string_len: cranelift_codegen::ir::FuncRef,
+    string_byte_len: cranelift_codegen::ir::FuncRef,
     string_contains: cranelift_codegen::ir::FuncRef,
     string_starts_with: cranelift_codegen::ir::FuncRef,
     string_ends_with: cranelift_codegen::ir::FuncRef,
@@ -6160,15 +6168,21 @@ impl<'a> FunctionCompiler<'a> {
         index: Value,
         line: Value,
         column: Value,
-    ) -> std::result::Result<(), String> {
+    ) -> std::result::Result<Value, String> {
         let len_inst = self.builder.ins().call(self.vec_len, &[object]);
         let len = self.builder.inst_results(len_inst)[0];
         let zero = self.builder.ins().iconst(types::I64, 0);
-        let below = self.builder.ins().icmp(IntCC::SignedLessThan, index, zero);
+        let negative = self.builder.ins().icmp(IntCC::SignedLessThan, index, zero);
+        let from_end = self.builder.ins().iadd(len, index);
+        let normalized = self.builder.ins().select(negative, from_end, index);
+        let below = self
+            .builder
+            .ins()
+            .icmp(IntCC::SignedLessThan, normalized, zero);
         let above = self
             .builder
             .ins()
-            .icmp(IntCC::SignedGreaterThanOrEqual, index, len);
+            .icmp(IntCC::SignedGreaterThanOrEqual, normalized, len);
         let out_of_bounds = self.builder.ins().bor(below, above);
         let fail_block = self.builder.create_block();
         let continue_block = self.builder.create_block();
@@ -6184,7 +6198,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
         self.builder.seal_block(continue_block);
-        Ok(())
+        Ok(normalized)
     }
 
     fn as_bool_value(&mut self, value: ValueRef) -> std::result::Result<Value, String> {
@@ -7132,16 +7146,18 @@ impl<'a> FunctionCompiler<'a> {
             if name == "String" {
                 let object = self.ensure_opaque(object)?;
                 return match field {
-                    "len" => {
+                    "len" | "byte_len" => {
                         if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `len()` to take no arguments".to_string()
-                            );
+                            return Err(format!(
+                                "direct backend expected `{field}()` to take no arguments"
+                            ));
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.string_len, &[object.values[0]]);
+                        let function = match field {
+                            "len" => self.string_len,
+                            "byte_len" => self.string_byte_len,
+                            _ => unreachable!(),
+                        };
+                        let inst = self.builder.ins().call(function, &[object.values[0]]);
                         let len = self.builder.inst_results(inst)[0];
                         self.emit_int32_bounds_check(len, None)?;
                         Ok(ValueRef {
@@ -7465,7 +7481,7 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_column = self.load_operand(&column_arg.value)?;
                         let column = self
                             .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
-                        self.emit_vec_index_failure_guard(
+                        let normalized_index = self.emit_vec_index_failure_guard(
                             object.values[0],
                             index.values[0],
                             line.values[0],
@@ -7475,7 +7491,7 @@ impl<'a> FunctionCompiler<'a> {
                             self.vec_index,
                             &[
                                 object.values[0],
-                                index.values[0],
+                                normalized_index,
                                 line.values[0],
                                 column.values[0],
                             ],
@@ -7534,7 +7550,7 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_column = self.load_operand(&column_arg.value)?;
                         let column = self
                             .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
-                        self.emit_vec_index_failure_guard(
+                        let normalized_index = self.emit_vec_index_failure_guard(
                             object.values[0],
                             index.values[0],
                             line.values[0],
@@ -7544,7 +7560,7 @@ impl<'a> FunctionCompiler<'a> {
                             self.vec_set_index_in_place,
                             &[
                                 object.values[0],
-                                index.values[0],
+                                normalized_index,
                                 value.values[0],
                                 line.values[0],
                                 column.values[0],
@@ -12041,7 +12057,7 @@ fn builtin_opaque_member_return_type(
         return Some(DirectType::Opaque(Type::named("String")));
     }
     match (name.as_str(), field) {
-        ("String", "len") => direct_type(&Type::named("int32"), classes),
+        ("String", "len") | ("String", "byte_len") => direct_type(&Type::named("int32"), classes),
         ("String", "contains") | ("String", "starts_with") | ("String", "ends_with") => {
             Some(DirectType::Scalar(ScalarKind::Bool))
         }

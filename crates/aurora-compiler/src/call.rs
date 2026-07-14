@@ -466,6 +466,7 @@ pub enum BuiltinMember {
     FloatSqrt,
     IntegerToFloat,
     StringLen,
+    StringByteLen,
     StringContains,
     StringStartsWith,
     StringEndsWith,
@@ -687,6 +688,7 @@ impl BuiltinMember {
             ("Set", "insert") => Some(Self::SetInsert),
             ("Set", "remove") => Some(Self::SetRemove),
             ("String", "len") => Some(Self::StringLen),
+            ("String", "byte_len") => Some(Self::StringByteLen),
             ("String", "contains") => Some(Self::StringContains),
             ("String", "starts_with") => Some(Self::StringStartsWith),
             ("String", "ends_with") => Some(Self::StringEndsWith),
@@ -817,6 +819,7 @@ impl BuiltinMember {
             Self::IntegerToFloat => "to_float",
             Self::ScalarToString => "to_string",
             Self::StringLen => "len",
+            Self::StringByteLen => "byte_len",
             Self::StringContains => "contains",
             Self::StringStartsWith => "starts_with",
             Self::StringEndsWith => "ends_with",
@@ -977,6 +980,7 @@ impl BuiltinMember {
             Self::IntegerToFloat => "to_float() -> float64",
             Self::ScalarToString => "to_string() -> String",
             Self::StringLen => "len() -> int32",
+            Self::StringByteLen => "byte_len() -> int32",
             Self::StringContains => "contains(text: String) -> bool",
             Self::StringStartsWith => "starts_with(text: String) -> bool",
             Self::StringEndsWith => "ends_with(text: String) -> bool",
@@ -1156,7 +1160,12 @@ impl BuiltinMember {
                 "Converts an integer to the nearest `float64` value; large values may round."
             }
             Self::ScalarToString => "Returns a `String` rendering of a numeric or `bool` value.",
-            Self::StringLen => "Returns the number of bytes in the string.",
+            Self::StringLen => {
+                "Returns the number of Unicode scalar values in the string in O(n) time."
+            }
+            Self::StringByteLen => {
+                "Returns the number of UTF-8 bytes in the string in O(1) time."
+            }
             Self::StringContains => "Returns true when the string contains `text`.",
             Self::StringStartsWith => "Returns true when the string starts with `text`.",
             Self::StringEndsWith => "Returns true when the string ends with `text`.",
@@ -1379,6 +1388,7 @@ impl BuiltinMember {
             | Self::IntegerToFloat
             | Self::ScalarToString
             | Self::StringLen
+            | Self::StringByteLen
             | Self::StringToLower
             | Self::StringToUpper
             | Self::StringTrim

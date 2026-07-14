@@ -85,7 +85,7 @@ The examples are organized by topic so they can serve both as quick references a
     - `2`
     - `9`
 - `vec_polish.au`
-  - non-copy index reads, `borrow mut` iteration, `insert(...)`, `reverse()`, `extend(...)`, `clear()`, and the richer `Vec[T]` method surface with equality
+  - negative direct/method indexes, non-copy cloned reads, `borrow mut` iteration, `insert(...)`, `swap(...)`, `reverse()`, `extend(...)`, `clear()`, and Vec equality
   - prints:
     - `Ada`
     - `Grace`
@@ -579,7 +579,7 @@ Git dependencies are also supported in `Aurora.toml` with `git`, `rev`, `tag`, o
   - `String.clone()` on owned strings
   - prints `aurora`
 - `string_methods.au`
-  - the maintained `String` method surface: `len()`, `contains(...)`, `starts_with(...)`, `ends_with(...)`, `split(...)`, `replace(...)`, `to_lower()`, `to_upper()`, `strip_prefix(...)`, `strip_suffix(...)`, `trim()`, and `clone()`
+  - single-quoted strings plus the maintained `String` method surface: Unicode-scalar `len()`, UTF-8 `byte_len()`, `contains(...)`, `starts_with(...)`, `ends_with(...)`, `split(...)`, `replace(...)`, `to_lower()`, `to_upper()`, `strip_prefix(...)`, `strip_suffix(...)`, `trim()`, and `clone()`
   - prints:
     - `15`
     - `true`

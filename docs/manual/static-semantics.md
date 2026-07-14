@@ -30,7 +30,7 @@ Aurora uses local, contextual inference rather than global inference. Public fun
 - A negative integer literal is parsed as unary `-` applied to a non-negative literal and must fit the selected signed integer type.
 - A floating literal adopts an expected `float32` or `float64`; otherwise it defaults to `float64`.
 - `true` and `false` have type `bool`.
-- A string or f-string has type `String`.
+- A single-quoted or double-quoted ordinary string and an f-string each have type `String`; quote choice does not create a distinct type.
 - A duration literal has type `Duration`.
 - Bare `None` has type `None`, except in an expected `Option[T]` position where it denotes `Option.None` of that type.
 
@@ -108,7 +108,9 @@ Operator operands are not implicitly widened. A literal may be contextually type
 
 ### Indexing And Members
 
-Direct indexing supports `Vec[T]` with exactly an `int32` index and `Map[K, V]` with exactly `K`. A direct read produces `T` or `V` but moving a non-copy vector element by direct indexing is restricted by ownership rules; use `get()` when an explicit clone/optional result is required. The maintained `Vec.get`, `set`, `remove`, `swap`, and `insert` index parameters are likewise exactly `int32`; an already-bound `int64` value is not implicitly narrowed.
+Direct indexing supports `Vec[T]` with exactly an `int32` index and `Map[K, V]` with exactly `K`. For a vector, a negative index `i` is normalized once as `len + i` before the existing bounds check; this applies equally to direct reads and writes and to `get`, `set`, `remove`, both `swap` indexes, and `insert`. An index that remains invalid is not clamped. Direct access and mutating methods fail at runtime, while `get` returns `None`; `insert` accepts the post-normalization range `0..=len`. An already-bound `int64` index is not implicitly narrowed.
+
+A direct read produces `T` or `V`, but moving a non-copy vector element by direct indexing is restricted by ownership rules; use `get()` when an explicit clone/optional result is required. Integer indexing and slicing are not defined for `String` in Aurora 0.1.
 
 Member access must resolve to a visible field, method, enum variant, module item, or maintained builtin member. Calling a receiver method also validates whether the receiver is consumed, shared-borrowed, or mutable-borrowed.
 

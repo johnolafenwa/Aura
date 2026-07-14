@@ -27,7 +27,8 @@ This page indexes every maintained public builtin function, method, module type,
 | `float64.sqrt` | `sqrt() -> float64` | Square root of the receiver. |
 | integer `.to_float` | `to_float() -> float64` | Converts any integer type with IEEE-754 round-to-nearest, ties-to-even; may round. |
 | scalar `.to_string` | `to_string() -> String` | Supported on `bool`, integer types, `float32`, and `float64`. |
-| `String.len` | `len() -> int32` | Byte length. |
+| `String.len` | `len() -> int32` | Counts Unicode scalar values in O(n). |
+| `String.byte_len` | `byte_len() -> int32` | Returns the UTF-8 byte count in O(1). |
 | `String.contains` | `contains(text: String) -> bool` | `true` when the receiver contains `text`. |
 | `String.starts_with` | `starts_with(text: String) -> bool` | Prefix test. |
 | `String.ends_with` | `ends_with(text: String) -> bool` | Suffix test. |
@@ -55,13 +56,13 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | `Vec.clone` | `clone() -> Vec[T]` | Clones the vector and elements. |
 | `Vec.push` | `push(value: T) -> None` | Appends `value`. |
 | `Vec.pop` | `pop() -> Option[T]` | Removes the last element or returns `None`. |
-| `Vec.get` | `get(index: int32) -> Option[T]` | Cloned element or `None` when out of bounds. |
-| `Vec.set` | `set(index: int32, value: T) -> Option[T]` | Replaces and returns the old element; out of bounds is a runtime error. |
-| `Vec.remove` | `remove(index: int32) -> Option[T]` | Removes an element; out of bounds is a runtime error. |
-| `Vec.swap` | `swap(first: int32, second: int32) -> bool` | Swaps elements and returns `true`; out of bounds is a runtime error. |
+| `Vec.get` | `get(index: int32) -> Option[T]` | Cloned element after negative-index normalization, or `None` when out of bounds. |
+| `Vec.set` | `set(index: int32, value: T) -> Option[T]` | Replaces and returns the old element after negative-index normalization; out of bounds is a runtime error. |
+| `Vec.remove` | `remove(index: int32) -> Option[T]` | Removes an element after negative-index normalization; out of bounds is a runtime error. |
+| `Vec.swap` | `swap(first: int32, second: int32) -> bool` | Normalizes both indexes, swaps the elements, and returns `true`; out of bounds is a runtime error. |
 | `Vec.contains` | `contains(value: T) -> bool` | Equality lookup. |
 | `Vec.extend` | `extend(other: Vec[T]) -> None` | Moves elements from `other` into the receiver. |
-| `Vec.insert` | `insert(index: int32, value: T) -> bool` | Inserts before `index` and returns `true`; out of bounds is a runtime error. |
+| `Vec.insert` | `insert(index: int32, value: T) -> bool` | Normalizes a negative index, inserts before it, and returns `true`; valid range is `0..=len`, without clamping. |
 | `Vec.clear` | `clear() -> None` | Removes all elements. |
 | `Vec.reverse` | `reverse() -> None` | Reverses in place. |
 

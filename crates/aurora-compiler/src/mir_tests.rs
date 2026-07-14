@@ -1295,6 +1295,14 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(vec![Type::named("int32")])
     );
     assert_eq!(
+        lowerer.builtin_runtime_member_return_type(&Type::named("String"), "len"),
+        Some(Type::named("int32"))
+    );
+    assert_eq!(
+        lowerer.builtin_runtime_member_return_type(&Type::named("String"), "byte_len"),
+        Some(Type::named("int32"))
+    );
+    assert_eq!(
         lowerer.builtin_runtime_member_return_type(&Type::named("String"), "split"),
         Some(Type::Named("Vec".to_string(), vec![Type::named("String")]))
     );

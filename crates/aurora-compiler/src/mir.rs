@@ -4349,7 +4349,7 @@ impl<'a> Lowerer<'a> {
             return Some(Type::named("String"));
         }
         match (name.as_str(), field) {
-            ("String", "len") => Some(Type::named("int32")),
+            ("String", "len" | "byte_len") => Some(Type::named("int32")),
             ("String", "contains") | ("String", "starts_with") | ("String", "ends_with") => {
                 Some(Type::named("bool"))
             }
