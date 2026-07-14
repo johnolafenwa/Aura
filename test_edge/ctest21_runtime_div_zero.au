@@ -7,5 +7,5 @@ def main() -> int32:
     # Division by zero with computed zero - can the compiler detect this?
     a: int32 = 10
     b: int32 = get_zero()
-    print(a / b)
+    print(a // b)
     return 0

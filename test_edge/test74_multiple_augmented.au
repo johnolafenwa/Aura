@@ -3,6 +3,6 @@ def main():
     x += 10
     x -= 20
     x *= 3
-    x /= 9
+    x //= 9
     x %= 7
     print(x)

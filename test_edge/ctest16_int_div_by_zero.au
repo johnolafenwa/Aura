@@ -1,6 +1,6 @@
 def main() -> int32:
-    # Integer division by zero - should this crash or error?
+    # Integer floor division by zero traps with "division by zero".
     a: int32 = 10
     b: int32 = 0
-    print(a / b)
+    print(a // b)
     return 0

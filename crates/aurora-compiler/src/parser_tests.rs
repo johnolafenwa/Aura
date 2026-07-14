@@ -399,6 +399,7 @@ fn parse_statement_and_operator_variants_cover_remaining_forms() {
         ("value -= 1\n", Some(BinaryOp::Sub)),
         ("value *= 1\n", Some(BinaryOp::Mul)),
         ("value /= 1\n", Some(BinaryOp::Div)),
+        ("value //= 1\n", Some(BinaryOp::FloorDiv)),
         ("value %= 1\n", Some(BinaryOp::Mod)),
     ] {
         let stmt = parse_stmt_from(source).expect("compound assignment should parse");
@@ -407,6 +408,16 @@ fn parse_statement_and_operator_variants_cover_remaining_forms() {
         };
         assert_eq!(assign.op, expected);
     }
+
+    let floor_chain = parse_expression("8 // 3 * 2").expect("floor division should parse");
+    assert!(matches!(
+        floor_chain.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Mul,
+            left,
+            ..
+        } if matches!(left.kind, ExprKind::Binary { op: BinaryOp::FloorDiv, .. })
+    ));
 
     let tokens = lex("==\n").expect("tokens");
     let mut parser = Parser::new(tokens);

@@ -91,6 +91,8 @@ Current compiler workflow:
   - execute ordering traits through `<`, `<=`, `>`, and `>=`
 - `cargo run -p aura -- run examples/traits/specialized_trait_dispatch.au`
   - execute bounded dispatch across specialized generic trait impls
+- `cargo run -p aura -- run examples/basics/numbers.au`
+  - execute floor division, divisor-sign remainder, and rounded integer `.to_float()` conversion
 - `cargo run -p aura -- run examples/numbers/numeric_casts.au`
   - execute explicit numeric casts with `expr as Type`
 - `cargo run -p aura -- run examples/numbers/numeric_builtins.au`

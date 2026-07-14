@@ -1,0 +1,33 @@
+def true_ratio(numerator: int32, denominator: int32) -> float64:
+    return numerator.to_float() / denominator.to_float()
+
+def round_for_return(value: int64) -> float64:
+    return value.to_float()
+
+def receives_float(value: float64) -> bool:
+    return value == 9007199254740992.0
+
+def main() -> int32:
+    rounded: int64 = 9007199254740993
+    print(true_ratio(7, 2))
+    print(round_for_return(rounded) == 9007199254740992.0)
+    print(receives_float(value=rounded.to_float()))
+    small: int32 = 7
+    print(f"converted={small.to_float()}")
+
+    recovered: int64 = rounded.to_float() as int64
+    print(recovered)
+
+    exact: int64 = 9007199254740992
+    exact_cast: float64 = exact as float64
+    print(exact_cast == exact.to_float())
+
+    values: Vec[float64] = [rounded.to_float(), exact.to_float()]
+    print(values[0] == values[1])
+
+    signed_wide: int128 = -9007199254740993
+    unsigned_wide: uint128 = 9007199254740993
+    print(signed_wide.to_float() == -9007199254740992.0)
+    print(unsigned_wide.to_float() == 9007199254740992.0)
+
+    return 0

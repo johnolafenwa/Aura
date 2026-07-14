@@ -19,7 +19,7 @@ def main() -> int32:
     else:
         print("diff < 5: FAIL")
 
-    if b / a >= 2:
+    if b // a >= 2:
         print("div >= 2: pass")
     else:
         print("div >= 2: FAIL")

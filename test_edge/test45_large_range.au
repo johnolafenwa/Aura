@@ -4,7 +4,7 @@ def main() -> int32:
     mut sum: int32 = 0
     for i in range(1000):
         sum += i
-    # 999*1000/2 = 499500
+    # 999 * 1000 // 2 = 499500
     print(sum)
 
     # Count primes up to 100

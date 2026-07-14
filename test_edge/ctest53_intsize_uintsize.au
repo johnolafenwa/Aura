@@ -5,7 +5,7 @@ def main() -> int32:
     print(a + b)     # 52
     print(a - b)     # 32
     print(a * b)     # 420
-    print(a / b)     # 4
+    print(a // b)    # 4
     print(a % b)     # 2
 
     # uintsize basic ops
@@ -14,7 +14,7 @@ def main() -> int32:
     print(c + d)     # 107
     print(c - d)     # 93
     print(c * d)     # 700
-    print(c / d)     # 14
+    print(c // d)    # 14
     print(c % d)     # 2
 
     # intsize negative

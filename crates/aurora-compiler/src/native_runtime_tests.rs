@@ -640,6 +640,48 @@ fn native_runtime_operator_helpers_cover_comparison_binary_and_unary_error_edges
             .expect("float modulo should succeed"),
         Value::Float(1.0)
     );
+    assert_eq!(
+        super::eval_binary_value(
+            Value::Int(IntegerValue::from_signed(-7)),
+            Value::Int(IntegerValue::from_signed(3)),
+            BinaryOp::FloorDiv,
+        )
+        .expect("integer floor division should round toward negative infinity"),
+        Value::Int(IntegerValue::from_signed(-3))
+    );
+    assert_eq!(
+        super::eval_binary_value(Value::Float(7.5), Value::Float(-2.0), BinaryOp::FloorDiv,)
+            .expect("float floor division should round toward negative infinity"),
+        Value::Float(-4.0)
+    );
+    assert_eq!(
+        super::eval_binary_value(
+            Value::Int(IntegerValue::from_signed(1)),
+            Value::Int(IntegerValue::from_signed(0)),
+            BinaryOp::FloorDiv,
+        )
+        .expect_err("integer floor division by zero should fail")
+        .message,
+        "division by zero"
+    );
+    assert_eq!(
+        super::eval_binary_value(Value::Float(1.0), Value::Float(0.0), BinaryOp::FloorDiv)
+            .expect_err("float floor division by zero should fail")
+            .message,
+        "division by zero"
+    );
+    assert_eq!(
+        super::eval_binary_value(Value::Float(1.0), Value::Float(-0.0), BinaryOp::FloorDiv)
+            .expect_err("float floor division by negative zero should fail")
+            .message,
+        "division by zero"
+    );
+    assert_eq!(
+        super::eval_binary_value(Value::Float(1.0), Value::Float(-0.0), BinaryOp::Mod)
+            .expect_err("float remainder by negative zero should fail")
+            .message,
+        "division by zero"
+    );
     assert!(super::eval_binary_value(
         Value::Int(IntegerValue::from_literal(u128::MAX)),
         Value::Int(IntegerValue::from_signed(1)),
@@ -1292,6 +1334,24 @@ fn direct_int64_unbox_helper_preserves_the_full_signed_range() {
         unsafe {
             release_value(boxed);
         }
+    }
+}
+
+#[test]
+fn direct_integer_to_float_helper_rounds_without_consuming_the_integer() {
+    let boxed = boxed_value(Value::Int(IntegerValue::from_literal(
+        9_007_199_254_740_993,
+    )));
+    assert_eq!(
+        super::aurora_direct_integer_to_float(boxed),
+        9_007_199_254_740_992.0
+    );
+    assert_eq!(
+        super::aurora_direct_integer_to_float(boxed),
+        9_007_199_254_740_992.0
+    );
+    unsafe {
+        release_value(boxed);
     }
 }
 
@@ -4453,8 +4513,8 @@ fn division_by_zero_helper_exits_with_error() {
         super::aurora_direct_runtime_init(
             b"/virtual/test.au".as_ptr(),
             b"/virtual/test.au".len(),
-            b"def main() -> int32:\n    print(1 / 0)\n".as_ptr(),
-            b"def main() -> int32:\n    print(1 / 0)\n".len(),
+            b"def main() -> int32:\n    print(1 // 0)\n".as_ptr(),
+            b"def main() -> int32:\n    print(1 // 0)\n".len(),
         );
         super::aurora_direct_fail_division_by_zero(2, 11);
     }
@@ -6062,6 +6122,9 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "binary-invalid-op" => {
                 super::aurora_direct_binary_value(99, int_value(1), int_value(2));
             }
+            "binary-floor-zero-no-span" => {
+                super::aurora_direct_binary_value(13, int_value(1), int_value(0));
+            }
             "binary-at-no-span" => {
                 super::aurora_direct_binary_value_at(
                     0,
@@ -6945,6 +7008,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "unary `-` expects a numeric value, found `String`",
         ),
         ("binary-invalid-op", "unknown binary opcode `99`"),
+        ("binary-floor-zero-no-span", "division by zero"),
         (
             "binary-at-no-span",
             "unsupported `+` operands `String` and `bool`",

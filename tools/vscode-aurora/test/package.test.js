@@ -48,6 +48,21 @@ test("syntax grammar treats boolean operators as Aurora keywords", () => {
   assert.match(keywordRule.match, /pass/);
 });
 
+test("syntax grammar treats floor-division operators as single tokens", () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const grammarPath = path.join(extensionRoot, "syntaxes", "aurora.tmLanguage.json");
+  const grammar = JSON.parse(fs.readFileSync(grammarPath, "utf8"));
+  const operatorRule = grammar.repository.operators.patterns.find(
+    (pattern) => pattern.name === "keyword.operator.aurora"
+  );
+
+  assert.ok(operatorRule);
+  const operatorPattern = new RegExp(operatorRule.match);
+  assert.equal("//=".match(operatorPattern)?.[0], "//=", "//= should be one operator token");
+  assert.equal("//".match(operatorPattern)?.[0], "//", "// should be one operator token");
+  assert.equal("%=".match(operatorPattern)?.[0], "%=", "%= should be one operator token");
+});
+
 test("syntax grammar tracks maintained builtin types", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const grammarPath = path.join(extensionRoot, "syntaxes", "aurora.tmLanguage.json");

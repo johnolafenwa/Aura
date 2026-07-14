@@ -10,7 +10,7 @@ Use `Result[T, E]` when an operation can succeed with a value of type `T` or fai
 def divide(a: int32, b: int32) -> Result[int32, String]:
     if b == 0:
         return Result.Err("division by zero")
-    return Result.Ok(a / b)
+    return Result.Ok(a // b)
 ```
 
 Handle the result with `match`:

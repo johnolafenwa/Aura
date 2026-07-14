@@ -116,11 +116,11 @@ Aurora 0.1 recognizes:
 ```text
 ( ) [ ] { } : , . ?
 = == != < <= > >=
-+ += - -= * *= / /= % %=
++ += - -= * *= / /= // //= % %=
 ->
 ```
 
-There is no semicolon. Multiple statements cannot share one physical line. Aurora 0.1 also has no exponentiation, floor division, unary `+`, bitwise operators, assignment expressions, lambda arrow, tuple punctuation, or conditional-expression operator.
+There is no semicolon. Multiple statements cannot share one physical line. Aurora 0.1 also has no exponentiation, unary `+`, bitwise operators, assignment expressions, lambda arrow, tuple punctuation, or conditional-expression operator. The lexer chooses the longest operator spelling, so `//=` is one token rather than `//` followed by `=`.
 
 Comma-separated lists do not accept a trailing comma. This applies to arguments, parameters, imports, type arguments, generic parameters, enum payloads, patterns, collection elements, and trait lists.
 

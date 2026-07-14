@@ -164,8 +164,14 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         let sum = aurora_direct_binary_value(0, int_value(20), int_value(22));
         assert_eq!(expect_i64(sum), 42);
 
+        let floor = aurora_direct_binary_value(13, int_value(-7), int_value(3));
+        assert_eq!(expect_i64(floor), -3);
+
         let ordered = aurora_direct_binary_value_at(7, int_value(2), int_value(3), 1, 1);
         assert!(expect_bool(ordered));
+
+        let floor_at = aurora_direct_binary_value_at(13, int_value(7), int_value(-3), 1, 1);
+        assert_eq!(expect_i64(floor_at), -3);
 
         let cast_target = "float64";
         let cast = aurora_direct_cast_value(int_value(5), cast_target.as_ptr(), cast_target.len());
@@ -177,6 +183,10 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
 
         let wide_unsigned = aurora_direct_box_u64(u64::MAX);
         assert_eq!(aurora_direct_unbox_u64(wide_unsigned), u64::MAX);
+        assert_eq!(
+            aurora_direct_integer_to_float(wide_unsigned),
+            u64::MAX as f64
+        );
         release(wide_unsigned);
 
         assert_eq!(

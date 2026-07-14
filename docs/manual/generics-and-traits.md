@@ -233,6 +233,13 @@ When builtin numeric/string operator rules do not apply, these operator spelling
 | `not value` | `Not.not` |
 | `<`, `<=`, `>`, `>=` | `Ord.lt`, `Ord.le`, `Ord.gt`, `Ord.ge` |
 
+There is no `FloorDiv` operator trait. `//` and `//=` are builtin numeric
+floor-division spellings only. Equal integer operands with `/` are rejected
+with the integer-division teaching diagnostic rather than dispatched to
+`Div.div`; `/` can still request `Div.div` for an applicable non-numeric user
+type. The divisor-sign rule for `%` describes builtin numeric remainder;
+`Mod.mod` on a user type has the semantics of that implementation.
+
 The maintained generic shapes are illustrated by:
 
 ```python

@@ -1,25 +1,25 @@
 def main() -> int32:
-    # Integer division (truncation behavior)
+    # Integer floor division
     a: int32 = 7
     b: int32 = 2
-    print(a / b)       # 3 (truncated)
+    print(a // b)      # 3
 
     c: int32 = -7
     d: int32 = 2
-    print(c / d)       # -3 (truncated toward zero)
+    print(c // d)      # -4
 
     e: int32 = 7
     f: int32 = -2
-    print(e / f)       # -3 (truncated toward zero)
+    print(e // f)      # -4
 
     g: int32 = -7
     h: int32 = -2
-    print(g / h)       # 3
+    print(g // h)      # 3
 
-    # Integer modulo behavior
+    # Integer modulo follows the divisor's sign.
     print(7 % 3)       # 1
-    print(-7 % 3)      # -1 (sign follows dividend in most languages)
-    print(7 % -3)      # 1
+    print(-7 % 3)      # 2
+    print(7 % -3)      # -2
     print(-7 % -3)     # -1
 
     # Float division

@@ -43,6 +43,24 @@ grep -Fq '= "int" | "int8"' docs/manual/grammar.md
 grep -Fq 'Integer literals default to `int64`' tutorials/02-bindings-and-types.md
 grep -Fq '`int` is an alias for `int64`' docs/aurora_language_proposal.md
 grep -Fq '<code>int</code> is an alias for <code>int64</code>' docs/aurora_language_proposal.html
+grep -Fq '+ += - -= * *= / /= // //= % %=' docs/manual/lexical-structure.md
+grep -Fq 'assignment-operator = "=" | "+=" | "-=" | "*=" | "/=" | "//=" | "%=" ;' docs/manual/grammar.md
+grep -Fq '{ ("*" | "/" | "//" | "%"), prefix-expression } ;' docs/manual/grammar.md
+grep -Fq 'integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division' docs/manual/static-semantics.md
+grep -Fq 'CPython-compatible divmod correction' docs/manual/execution-model.md
+grep -Fq 'integer `.to_float()` converts to `float64`' docs/manual/execution-model.md
+grep -Fq 'There is no `FloorDiv` operator trait.' docs/manual/generics-and-traits.md
+test -s examples/basics/numbers.au
+grep -Fq '`numbers.au`' examples/README.md
+grep -Fq '[examples/basics/numbers.au]' tutorials/07-strings-and-numbers.md
+
+if rg -n 'no (integer )?floor division|integer division truncates toward zero|Result\.Ok\([^)]* / [^)]*\)' \
+  docs/manual \
+  tutorials \
+  docs/learn; then
+  echo "reference still describes retired integer division behavior" >&2
+  exit 1
+fi
 
 if rg -ni 'defaults? to (`|<code>)?int32|default for most integer work|use (`|<code>)?int32[^[:space:]]* and (`|<code>)?float64[^[:space:]]* by default|no (unsuffixed|bare) (`|<code>)?int' \
   docs/manual \

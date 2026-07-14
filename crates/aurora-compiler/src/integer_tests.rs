@@ -37,6 +37,43 @@ fn runtime_integer_kinds_report_every_language_integer_name() {
 }
 
 #[test]
+fn integer_floor_division_and_modulo_follow_the_divisor_sign() {
+    for (left, right, quotient, remainder) in [
+        (7, 3, 2, 1),
+        (-7, 3, -3, 2),
+        (7, -3, -3, -2),
+        (-7, -3, 2, -1),
+    ] {
+        let left = IntegerValue::from_signed(left);
+        let right = IntegerValue::from_signed(right);
+        assert_eq!(
+            left.checked_floor_div(right),
+            Some(IntegerValue::from_signed(quotient))
+        );
+        assert_eq!(
+            left.checked_floor_rem(right),
+            Some(IntegerValue::from_signed(remainder))
+        );
+    }
+
+    let zero = IntegerValue::zero();
+    let seven = IntegerValue::from_signed(7);
+    assert_eq!(seven.checked_floor_div(zero), None);
+    assert_eq!(seven.checked_floor_rem(zero), None);
+
+    let minimum = IntegerValue::from_i64(i64::MIN);
+    let negative_one = IntegerValue::from_i64(-1);
+    assert_eq!(
+        minimum.checked_floor_div(negative_one),
+        Some(IntegerValue::from_literal((i64::MAX as u128) + 1))
+    );
+    assert_eq!(
+        minimum.checked_floor_rem(negative_one),
+        Some(IntegerValue::from_i64(0))
+    );
+}
+
+#[test]
 fn typed_integer_constructors_enforce_each_declared_width() {
     let signed_cases = [
         (IntegerKind::Int8, i8::MIN as i128, i8::MAX as i128),

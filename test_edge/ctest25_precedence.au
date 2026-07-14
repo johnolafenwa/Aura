@@ -4,7 +4,7 @@ def main() -> int32:
     print(2 + 3 * 4)      # 14 (not 20)
 
     # Division before subtraction
-    print(10 - 6 / 2)     # 7 (not 2)
+    print(10 - 6 // 2)    # 7 (not 2)
 
     # Parentheses override
     print((2 + 3) * 4)    # 20
@@ -16,7 +16,7 @@ def main() -> int32:
     print(10 % 3 + 2)     # 1 + 2 = 3
 
     # Complex expression
-    print(1 + 2 * 3 - 4 / 2 + 5 % 3)  # 1 + 6 - 2 + 2 = 7
+    print(1 + 2 * 3 - 4 // 2 + 5 % 3)  # 1 + 6 - 2 + 2 = 7
 
     # Nested parentheses
     print(((1 + 2) * (3 + 4)))  # 3 * 7 = 21

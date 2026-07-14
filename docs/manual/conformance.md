@@ -24,6 +24,7 @@ Exact diagnostic prose is normative only where a fixture or this Manual explicit
 | UTF-8, indentation, tokens, literals, escapes | `crates/aurora-compiler/src/lexer_tests.rs` |
 | grammar and parser limits | `crates/aurora-compiler/src/parser_tests.rs`, `tests/fixtures/parse-pass`, `tests/fixtures/parse-fail` |
 | names, types, calls, traits, patterns, moves, and borrows | `crates/aurora-compiler/src/sema_tests.rs`, `tests/fixtures/check-pass`, `tests/fixtures/check-fail` |
+| integer `/` rejection, floor division/remainder, and `.to_float()` | lexer/parser/integer/runtime-value unit tests plus `integer_true_division_*`, `floor_division_and_modulo`, and `integer_to_float_rounding` fixtures |
 | module and package resolution | `crates/aurora-compiler/tests/modules.rs`, `tests/packages.rs`, `src/package_tests.rs` |
 | MIR semantics and runtime behavior | `src/mir_tests.rs`, `src/mir_runtime_tests.rs`, `tests/fixtures/run-pass`, `tests/fixtures/run-fail` |
 | native semantics and resource ABI | `src/native_codegen_tests.rs`, `src/native_runtime_tests.rs`, `tests/native_runtime_ffi.rs` |

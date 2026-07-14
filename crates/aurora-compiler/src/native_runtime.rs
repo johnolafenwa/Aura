@@ -18,8 +18,8 @@ use crate::runtime_value::{
     cancel_current_lightweight_task_boundary, cast_numeric_value,
     current_lightweight_task_cancellation, current_lightweight_task_id,
     decode_process_restart_policy, decode_process_stdio, embedded_nominal_runtime_type_name,
-    evaluate_host_builtin, fail_current_lightweight_task, io_error, io_read_line,
-    nominal_runtime_base_name, option_none, option_some, poll_cancellation,
+    evaluate_host_builtin, fail_current_lightweight_task, float_floor_divmod, io_error,
+    io_read_line, nominal_runtime_base_name, option_none, option_some, poll_cancellation,
     process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
     process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
     process_stdio_pipe, process_supervisor_wait_cancelled, process_supervisor_wait_event,
@@ -1328,6 +1328,14 @@ fn compare_values(
     }
 }
 
+fn unsupported_binary_operands(operator: &str, left: &Value, right: &Value) -> Diagnostic {
+    Diagnostic::new(format!(
+        "unsupported `{operator}` operands `{}` and `{}`",
+        value_type_name(left),
+        value_type_name(right)
+    ))
+}
+
 fn eval_binary_value(
     left: Value,
     right: Value,
@@ -1403,22 +1411,34 @@ fn eval_binary_value(
             )),
             (Value::Float(_), Value::Float(0.0)) => Err(Diagnostic::new("division by zero")),
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left / right)),
-            (left, right) => Err(Diagnostic::new(format!(
-                "unsupported `/` operands `{}` and `{}`",
-                value_type_name(&left),
-                value_type_name(&right)
-            ))),
+            (left, right) => Err(unsupported_binary_operands("/", &left, &right)),
+        },
+        BinaryOp::FloorDiv => match (left, right) {
+            (Value::Int(_), Value::Int(right)) if right.is_zero() => {
+                Err(Diagnostic::new("division by zero"))
+            }
+            (Value::Int(left), Value::Int(right)) => Ok(Value::Int(
+                left.checked_floor_div(right)
+                    .expect("non-zero matching integer floor division is total"),
+            )),
+            (Value::Float(_), Value::Float(0.0)) => Err(Diagnostic::new("division by zero")),
+            (Value::Float(left), Value::Float(right)) => {
+                Ok(Value::Float(float_floor_divmod(left, right).0))
+            }
+            (left, right) => Err(unsupported_binary_operands("//", &left, &right)),
         },
         BinaryOp::Mod => match (left, right) {
             (Value::Int(_), Value::Int(right)) if right.is_zero() => {
                 Err(Diagnostic::new("division by zero"))
             }
             (Value::Int(left), Value::Int(right)) => Ok(Value::Int(
-                left.checked_rem(right)
+                left.checked_floor_rem(right)
                     .expect("non-zero integer remainder is total"),
             )),
             (Value::Float(_), Value::Float(0.0)) => Err(Diagnostic::new("division by zero")),
-            (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left % right)),
+            (Value::Float(left), Value::Float(right)) => {
+                Ok(Value::Float(float_floor_divmod(left, right).1))
+            }
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `%` operands `{}` and `{}`",
                 value_type_name(&left),
@@ -2939,6 +2959,17 @@ pub extern "C-unwind" fn aurora_direct_unbox_int64(value: *mut OpaqueValue) -> i
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_integer_to_float(value: *mut OpaqueValue) -> f64 {
+    task_runtime_boundary(|| match unsafe { value_ref(value) } {
+        Value::Int(value) => value.to_f64(),
+        other => runtime_error(format!(
+            "direct backend expected an integer, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aurora_direct_unbox_u64(value: *mut OpaqueValue) -> u64 {
     task_runtime_boundary(|| match unsafe { value_ref(value) } {
         Value::Int(value) => match value.as_i128().and_then(|value| u64::try_from(value).ok()) {
@@ -3057,6 +3088,7 @@ pub extern "C-unwind" fn aurora_direct_binary_value(
             10 => BinaryOp::GreaterEq,
             11 => BinaryOp::And,
             12 => BinaryOp::Or,
+            13 => BinaryOp::FloorDiv,
             other => runtime_error(format!("unknown binary opcode `{}`", other)),
         };
         match eval_binary_value(
@@ -3093,6 +3125,7 @@ pub extern "C-unwind" fn aurora_direct_binary_value_at(
             10 => BinaryOp::GreaterEq,
             11 => BinaryOp::And,
             12 => BinaryOp::Or,
+            13 => BinaryOp::FloorDiv,
             other => runtime_error(format!("unknown binary opcode `{}`", other)),
         };
         match eval_binary_value(

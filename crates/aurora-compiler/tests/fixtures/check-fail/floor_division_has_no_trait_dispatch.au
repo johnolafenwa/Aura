@@ -1,0 +1,16 @@
+trait FloorDiv[Rhs, Out]:
+    def floor_div(borrow self, rhs: Rhs) -> Out
+
+class Counter:
+    value: int32
+
+impl FloorDiv[Counter, Counter] for Counter:
+    def floor_div(borrow self, rhs: Counter) -> Counter:
+        return Counter(value=self.value + rhs.value)
+
+def main() -> int32:
+    left = Counter(value=7)
+    right = Counter(value=3)
+    result = left // right
+    print(result.value)
+    return 0

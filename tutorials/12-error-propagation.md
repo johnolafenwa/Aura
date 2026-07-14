@@ -10,7 +10,7 @@ When functions return `Result[T, E]`, chaining multiple fallible operations with
 def divide(a: int32, b: int32) -> Result[int32, String]:
     if b == 0:
         return Result.Err("division by zero")
-    return Result.Ok(a / b)
+    return Result.Ok(a // b)
 
 def add_one_after_divide(a: int32, b: int32) -> Result[int32, String]:
     value = try divide(a, b)

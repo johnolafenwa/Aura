@@ -67,7 +67,7 @@ The first simple-name assignment introduces a binding. Its type is the annotatio
 
 `mut` makes the new binding assignable and a mutable place. Reassignment requires an existing mutable place and preserves the original type. Reassignment reinitializes a fully moved binding or field when the assigned value has the correct type.
 
-Compound assignments `+=`, `-=`, `*=`, `/=`, and `%=` read the current target, apply the corresponding binary operation, and write the result. The target must already exist, be mutable, not be moved, and have the operation's result type.
+Compound assignments `+=`, `-=`, `*=`, `/=`, `%=`, and `//=` read the current target, apply the corresponding binary operation, and write the result. The target must already exist, be mutable, not be moved, and have the operation's result type. Integer `/=` is rejected by the same rule and teaching diagnostic as integer `/`; floating `/=` remains valid.
 
 Field assignment requires a mutable base place and a declared field. Index assignment supports `Vec[T]` with exactly an `int32` index and `Map[K, V]` with a key of exactly `K`. An annotation and `mut` are not permitted on member or index assignment.
 
@@ -87,11 +87,18 @@ Built-in operator typing is:
 | --- | --- | --- |
 | `and`, `or` | both `bool` | `bool` |
 | `+` | equal integer types, equal float types, or two `String` values | operand type |
-| `-`, `*`, `/`, `%` | equal integer or equal float types | operand type |
+| `-`, `*`, `//`, `%` | equal integer or equal float types | operand type |
+| `/` | equal float types | operand type |
 | `==`, `!=` | equal operand types | `bool` |
 | `<`, `<=`, `>`, `>=` | equal integer or equal float types | `bool` |
 
-Arithmetic and ordering operators may instead resolve through the corresponding `Add`, `Sub`, `Mul`, `Div`, `Mod`, or `Ord` trait method. Builtin equality does not dispatch through an operator trait in Aurora 0.1.
+When both operands have the same integer type, `/` is rejected with this exact maintained diagnostic:
+
+```text
+integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division
+```
+
+Arithmetic and ordering operators may otherwise resolve through the corresponding `Add`, `Sub`, `Mul`, `Div`, `Mod`, or `Ord` trait method. `//` is builtin-only and has no `FloorDiv` trait. Builtin equality does not dispatch through an operator trait in Aurora 0.1.
 
 Operator operands are not implicitly widened. A literal may be contextually typed to match the other operand; non-literal values require an explicit numeric cast.
 

@@ -162,7 +162,7 @@ Mutable borrow arguments must be mutable places. Overlapping `borrow mut` argume
 
 The current compiler supports these statement forms:
 
-- assignment and compound assignment
+- assignment and compound assignment through `+=`, `-=`, `*=`, `/=`, `%=`, and `//=`
 - `return`
 - `if` / `elif` / `else`
 - `while`
@@ -182,10 +182,15 @@ The current compiler supports these expression forms:
 - names
 - integer, float, string, f-string, boolean, `None`, and duration literals
 - arithmetic, comparison, and boolean operators
+  - `//` is builtin floor division for matching integer or floating types
+  - builtin integer `/` and `/=` are rejected; floating `/` and `/=` remain true division
+  - builtin `%` follows the divisor's sign for matching integer or floating types
 - unary prefix operators `-` and `not`
 - operator-trait dispatch for `+`, binary `-`, `*`, `/`, `%`, unary `-`, and `not`
+  - `//` has no `FloorDiv` trait
 - explicit numeric casts with `expr as Type`
   - integer casts are range-checked and integer-to-float casts reject silent precision loss
+- integer `.to_float() -> float64`, which uses nearest-even conversion and may round
 - list literals such as `[1, 2, 3]`
 - map literals such as `{"aurora": 1}`
 - set literals such as `{1, 2, 3}`

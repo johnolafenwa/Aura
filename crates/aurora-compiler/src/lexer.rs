@@ -45,6 +45,8 @@ pub enum TokenKind {
     StarEqual,
     Slash,
     SlashEqual,
+    DoubleSlash,
+    DoubleSlashEqual,
     Percent,
     PercentEqual,
     Arrow,
@@ -377,7 +379,15 @@ fn tokenize_line(
                 }
             }
             '/' => {
-                if let Some((_, '=')) = chars.get(index + 1) {
+                if matches!(chars.get(index + 1), Some((_, '/')))
+                    && matches!(chars.get(index + 2), Some((_, '=')))
+                {
+                    tokens.push(simple(TokenKind::DoubleSlashEqual, line_no, column));
+                    index += 3;
+                } else if matches!(chars.get(index + 1), Some((_, '/'))) {
+                    tokens.push(simple(TokenKind::DoubleSlash, line_no, column));
+                    index += 2;
+                } else if let Some((_, '=')) = chars.get(index + 1) {
                     tokens.push(simple(TokenKind::SlashEqual, line_no, column));
                     index += 2;
                 } else {

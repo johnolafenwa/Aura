@@ -1,9 +1,10 @@
 use super::{
     cancel_current_lightweight_task_boundary, cast_numeric_value, create_dir_once,
-    decode_process_restart_policy, decode_process_stdio, finalize_task_execution, io_decode_utf8,
-    io_error, lock_mutex, non_unix_tls_listener_wait_timeout, option_none, option_some,
-    process_error_cancelled, process_error_no_command, process_error_other, process_error_spawn,
-    process_error_timed_out, process_supervisor_event_failed, process_supervisor_wait_cancelled,
+    decode_process_restart_policy, decode_process_stdio, finalize_task_execution,
+    float_floor_divmod, io_decode_utf8, io_error, lock_mutex, non_unix_tls_listener_wait_timeout,
+    option_none, option_some, process_error_cancelled, process_error_no_command,
+    process_error_other, process_error_spawn, process_error_timed_out,
+    process_supervisor_event_failed, process_supervisor_wait_cancelled,
     process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, recv_for_task_group_iteration,
@@ -681,6 +682,32 @@ fn render_float_formats_current_surface() {
 
     let float32_value = (3.14f32) as f64;
     assert_eq!(render_float(float32_value), "3.14");
+}
+
+#[test]
+fn float_floor_divmod_matches_python_sign_precision_and_zero_rules() {
+    for (left, right, quotient, remainder) in [
+        (7.5, 2.0, 3.0, 1.5),
+        (-7.5, 2.0, -4.0, 0.5),
+        (7.5, -2.0, -4.0, -0.5),
+        (-7.5, -2.0, 3.0, -1.5),
+        (1.0, 0.1, 9.0, 0.099_999_999_999_999_95),
+        (
+            5e-300,
+            1.300_000_000_000_000_1e-300,
+            3.0,
+            1.099_999_999_999_999_5e-300,
+        ),
+        (1e308, 3.0, 3.333_333_333_333_333e307, 2.0),
+    ] {
+        let (actual_quotient, actual_remainder) = float_floor_divmod(left, right);
+        assert_eq!(actual_quotient, quotient);
+        assert_eq!(actual_remainder, remainder);
+    }
+
+    let (negative_zero_quotient, negative_zero_remainder) = float_floor_divmod(0.0, -3.0);
+    assert_eq!(negative_zero_quotient.to_bits(), (-0.0_f64).to_bits());
+    assert_eq!(negative_zero_remainder.to_bits(), (-0.0_f64).to_bits());
 }
 
 #[test]

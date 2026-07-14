@@ -2343,6 +2343,112 @@ fn run_and_direct_backends_preserve_int64_defaulting_boundaries_aliases_and_cast
 }
 
 #[test]
+fn run_and_direct_backends_preserve_floor_division_and_modulo() {
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/floor_division_and_modulo.au");
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/floor_division_and_modulo.stdout"
+    );
+    assert_run_and_direct_source_stdout("aurora-floor-division-modulo", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_preserve_floor_division_across_integer_widths_and_places() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/floor_division_integer_widths_and_places.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/floor_division_integer_widths_and_places.stdout"
+    );
+    assert_run_and_direct_source_stdout("aurora-floor-division-widths-places", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_preserve_integer_to_float_rounding() {
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/integer_to_float_rounding.au");
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/integer_to_float_rounding.stdout"
+    );
+    assert_run_and_direct_source_stdout("aurora-integer-to-float-rounding", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_preserve_integer_to_float_expression_contexts() {
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-pass/integer_to_float_contexts.au");
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/integer_to_float_contexts.stdout"
+    );
+    assert_run_and_direct_source_stdout("aurora-integer-to-float-contexts", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_preserve_the_numbers_example() {
+    let source = include_str!("../../../examples/basics/numbers.au");
+    assert_run_and_direct_source_stdout(
+        "aurora-numbers-example",
+        source,
+        "2\n-3\n2\n-3\n-2\n3.5\n42.0\ntrue\n",
+    );
+}
+
+#[test]
+fn run_and_direct_backends_trap_float_floor_division_by_zero() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-fail/float_floor_division_by_zero.au"
+    );
+    assert_run_and_direct_source_failure_with_timeout(
+        "aurora-float-floor-division-zero",
+        source,
+        std::time::Duration::from_secs(15),
+        "",
+        "division by zero",
+    );
+}
+
+#[test]
+fn run_and_direct_backends_trap_signed_floor_division_overflow() {
+    let source =
+        include_str!("../../aurora-compiler/tests/fixtures/run-fail/int64_division_overflow.au");
+    assert_run_and_direct_source_failure_with_timeout(
+        "aurora-int64-floor-division-overflow",
+        source,
+        std::time::Duration::from_secs(15),
+        "",
+        "integer value `9223372036854775808` does not fit in `int64`",
+    );
+}
+
+#[test]
+fn run_and_direct_backends_trap_boxed_int128_floor_division_overflow() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-fail/int128_floor_division_overflow.au"
+    );
+    assert_run_and_direct_source_failure_with_timeout(
+        "aurora-int128-floor-division-overflow",
+        source,
+        std::time::Duration::from_secs(15),
+        "0\n",
+        "integer value `170141183460469231731687303715884105728` does not fit in `int128`",
+    );
+}
+
+#[test]
+fn run_and_direct_backends_distinguish_exact_cast_from_rounding_conversion() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-fail/int64_to_float64_cast_inexact_boundary.au"
+    );
+    assert_run_and_direct_source_failure_with_timeout(
+        "aurora-int64-exact-float-cast-boundary",
+        source,
+        std::time::Duration::from_secs(15),
+        "",
+        "integer value `9007199254740993` cannot be represented exactly as `float64`",
+    );
+}
+
+#[test]
 fn run_and_direct_backends_preserve_contextual_int32_literal_inference() {
     let source = include_str!(
         "../../aurora-compiler/tests/fixtures/run-pass/contextual_int32_literals_remain_int32.au"
@@ -3080,7 +3186,7 @@ fn built_direct_binaries_render_runtime_errors_with_source_context() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "def main() -> int32:\n    print(1 / 0)\n    return 0\n",
+        "def main() -> int32:\n    print(1 // 0)\n    return 0\n",
     )
     .expect("failed to write runtime-error source");
     let output_path = temp.path().join("out");
@@ -3394,7 +3500,7 @@ fn built_default_binaries_render_runtime_errors_with_source_context() {
     let source_path = temp.path().join("main.au");
     fs::write(
         &source_path,
-        "def main() -> int32:\n    print(1 / 0)\n    return 0\n",
+        "def main() -> int32:\n    print(1 // 0)\n    return 0\n",
     )
     .expect("failed to write runtime-error source");
     let output_path = temp.path().join("out");
@@ -5542,11 +5648,11 @@ class Resource:
 
     def close(borrow mut self):
         print("close " + self.name)
-        print(1 / 0)
+        print(1 // 0)
 
 def boom() -> int32:
     print("body")
-    return 1 / 0
+    return 1 // 0
 
 def main() -> int32:
     with resource = Resource(name="A"):
@@ -5562,12 +5668,12 @@ def main() -> int32:
     assert_eq!(String::from_utf8_lossy(&run.stdout), "body\nclose A\n");
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(
-        stderr.contains("return 1 / 0"),
+        stderr.contains("return 1 // 0"),
         "direct backend should report the primary body trap, stderr was:\n{}",
         stderr
     );
     assert!(
-        !stderr.contains("print(1 / 0)"),
+        !stderr.contains("print(1 // 0)"),
         "cleanup trap should not replace the primary body trap, stderr was:\n{}",
         stderr
     );

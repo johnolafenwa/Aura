@@ -1,0 +1,5 @@
+error: division by zero
+ --> crates/aurora-compiler/tests/fixtures/run-fail/float_floor_division_by_zero.au:2:22
+  |
+2 |     value: float64 = 1.0 // 0.0
+  |                      ^

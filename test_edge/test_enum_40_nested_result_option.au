@@ -1,7 +1,7 @@
 def maybe_divide(a: int32, b: int32) -> Result[Option[int32], String]:
     if b == 0:
         return Result.Err("div by zero")
-    val = a / b
+    val = a // b
     if val == 0:
         return Result.Ok(Option.None)
     return Result.Ok(Option.Some(val))

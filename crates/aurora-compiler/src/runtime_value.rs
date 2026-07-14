@@ -2167,6 +2167,32 @@ pub(crate) fn render_float(value: f64) -> String {
     rendered
 }
 
+pub(crate) fn float_floor_divmod(left: f64, right: f64) -> (f64, f64) {
+    let mut remainder = left % right;
+    let mut quotient = (left - remainder) / right;
+
+    if remainder != 0.0 {
+        if remainder.is_sign_negative() != right.is_sign_negative() {
+            remainder += right;
+            quotient -= 1.0;
+        }
+    } else {
+        remainder = 0.0_f64.copysign(right);
+    }
+
+    let quotient = if quotient != 0.0 {
+        let mut floored = quotient.floor();
+        if quotient - floored > 0.5 {
+            floored += 1.0;
+        }
+        floored
+    } else {
+        0.0_f64.copysign(left / right)
+    };
+
+    (quotient, remainder)
+}
+
 impl ChannelValue {
     fn has_pending_values(&self) -> bool {
         !lock_mutex(&self.inner.state).queue.is_empty()

@@ -1,5 +1,5 @@
 def main() -> int32:
     minimum: int64 = -9223372036854775808
     negative_one: int64 = -1
-    print(minimum / negative_one)
+    print(minimum // negative_one)
     return 0

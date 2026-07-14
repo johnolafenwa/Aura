@@ -293,7 +293,7 @@ fn mir_runtime_helper_values_and_streams_cover_option_result_and_diagnostics() {
     );
 
     let diagnostic = Diagnostic::at(Span::new(2, 3), "division by zero");
-    let rendered = render_runtime_error("/tmp/test.au", "def main():\n    1 / 0\n", &diagnostic);
+    let rendered = render_runtime_error("/tmp/test.au", "def main():\n    1 // 0\n", &diagnostic);
     assert!(rendered.contains("/tmp/test.au"));
     assert!(rendered.contains("division by zero"));
 
@@ -2651,7 +2651,7 @@ fn mir_runtime_stream_and_entrypoint_helpers_cover_success_and_error_paths() {
         .unwrap()
         .contains("failed to write to stdout"));
 
-    let error_source = "def main() -> int32:\n    print(\"before\")\n    return 1 / 0\n";
+    let error_source = "def main() -> int32:\n    print(\"before\")\n    return 1 // 0\n";
     let error_mir =
         crate::lower_source_to_mir(error_source).expect("error source should lower to MIR");
     let error_mir_json = serde_json::to_vec(&error_mir).expect("error MIR should serialize");
@@ -8975,6 +8975,62 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
         Value::Float(3.0)
     );
 
+    assert_eq!(
+        runtime
+            .eval_binary(
+                crate::ast::BinaryOp::FloorDiv,
+                Value::Int(IntegerValue::from_signed(-7)),
+                Value::Int(IntegerValue::from_signed(3)),
+                None,
+            )
+            .expect("integer floor division should round toward negative infinity"),
+        Value::Int(IntegerValue::from_signed(-3))
+    );
+    assert_eq!(
+        runtime
+            .eval_binary(
+                crate::ast::BinaryOp::FloorDiv,
+                Value::Float(7.5),
+                Value::Float(-2.0),
+                None,
+            )
+            .expect("float floor division should round toward negative infinity"),
+        Value::Float(-4.0)
+    );
+    let floor_div_zero_without_span = runtime
+        .eval_binary(
+            crate::ast::BinaryOp::FloorDiv,
+            Value::Int(IntegerValue::from_signed(7)),
+            Value::Int(IntegerValue::zero()),
+            None,
+        )
+        .expect_err("integer floor division by zero should fail without a source span");
+    assert!(floor_div_zero_without_span
+        .message
+        .contains("division by zero"));
+    let float_floor_div_zero_without_span = runtime
+        .eval_binary(
+            crate::ast::BinaryOp::FloorDiv,
+            Value::Float(7.5),
+            Value::Float(0.0),
+            None,
+        )
+        .expect_err("float floor division by zero should fail without a source span");
+    assert!(float_floor_div_zero_without_span
+        .message
+        .contains("division by zero"));
+    let float_floor_div_negative_zero = runtime
+        .eval_binary(
+            crate::ast::BinaryOp::FloorDiv,
+            Value::Float(7.5),
+            Value::Float(-0.0),
+            span,
+        )
+        .expect_err("float floor division by negative zero should fail");
+    assert!(float_floor_div_negative_zero
+        .message
+        .contains("division by zero"));
+
     let mod_zero_without_span = runtime
         .eval_binary(
             crate::ast::BinaryOp::Mod,
@@ -9036,6 +9092,15 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
     assert!(float_mod_zero_without_span
         .message
         .contains("division by zero"));
+    let float_mod_negative_zero = runtime
+        .eval_binary(
+            crate::ast::BinaryOp::Mod,
+            Value::Float(7.5),
+            Value::Float(-0.0),
+            span,
+        )
+        .expect_err("float remainder by negative zero should fail");
+    assert!(float_mod_negative_zero.message.contains("division by zero"));
 
     let task = TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Bool(true))));
     let env = Env::default();

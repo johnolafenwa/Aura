@@ -2,7 +2,7 @@
 def divide_or_code(a: int32, b: int32) -> Result[int32, int32]:
     if b == 0:
         return Result.Err(-1)
-    return Result.Ok(a / b)
+    return Result.Ok(a // b)
 
 def chain(a: int32, b: int32, c: int32) -> Result[int32, int32]:
     r1 = try divide_or_code(a, b)

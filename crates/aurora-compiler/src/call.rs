@@ -464,6 +464,7 @@ impl BuiltinFunction {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BuiltinMember {
     FloatSqrt,
+    IntegerToFloat,
     StringLen,
     StringContains,
     StringStartsWith,
@@ -625,6 +626,18 @@ impl BuiltinMember {
     pub fn resolve(receiver_base: &str, name: &str) -> Option<Self> {
         match (receiver_base, name) {
             ("float64", "sqrt") => Some(Self::FloatSqrt),
+            ("int8", "to_float")
+            | ("int16", "to_float")
+            | ("int32", "to_float")
+            | ("int64", "to_float")
+            | ("int128", "to_float")
+            | ("intsize", "to_float")
+            | ("uint8", "to_float")
+            | ("uint16", "to_float")
+            | ("uint32", "to_float")
+            | ("uint64", "to_float")
+            | ("uint128", "to_float")
+            | ("uintsize", "to_float") => Some(Self::IntegerToFloat),
             ("bool", "to_string") => Some(Self::ScalarToString),
             ("int8", "to_string")
             | ("int16", "to_string")
@@ -801,6 +814,7 @@ impl BuiltinMember {
     pub const fn name(self) -> &'static str {
         match self {
             Self::FloatSqrt => "sqrt",
+            Self::IntegerToFloat => "to_float",
             Self::ScalarToString => "to_string",
             Self::StringLen => "len",
             Self::StringContains => "contains",
@@ -960,6 +974,7 @@ impl BuiltinMember {
     pub const fn detail(self) -> &'static str {
         match self {
             Self::FloatSqrt => "sqrt() -> float64",
+            Self::IntegerToFloat => "to_float() -> float64",
             Self::ScalarToString => "to_string() -> String",
             Self::StringLen => "len() -> int32",
             Self::StringContains => "contains(text: String) -> bool",
@@ -1137,6 +1152,9 @@ impl BuiltinMember {
     pub const fn docs(self) -> &'static str {
         match self {
             Self::FloatSqrt => "Returns the square root of a `float64` value.",
+            Self::IntegerToFloat => {
+                "Converts an integer to the nearest `float64` value; large values may round."
+            }
             Self::ScalarToString => "Returns a `String` rendering of a numeric or `bool` value.",
             Self::StringLen => "Returns the number of bytes in the string.",
             Self::StringContains => "Returns true when the string contains `text`.",
@@ -1358,6 +1376,7 @@ impl BuiltinMember {
     pub fn bind_args(self, args: &[Argument], span: Span) -> Result<Vec<Option<&Argument>>> {
         match self {
             Self::FloatSqrt
+            | Self::IntegerToFloat
             | Self::ScalarToString
             | Self::StringLen
             | Self::StringToLower

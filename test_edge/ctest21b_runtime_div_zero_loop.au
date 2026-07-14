@@ -5,5 +5,5 @@ def main() -> int32:
         divisor -= 1
     # divisor is now 0
     mut a: int32 = 42
-    print(a / divisor)
+    print(a // divisor)
     return 0

@@ -82,14 +82,15 @@ Field assignment requires a mutable base place and a declared field. Vector inde
 
 ### Compound Assignment
 
-Aurora supports `+=`, `-=`, `*=`, `/=`, and `%=`:
+Aurora supports the complete arithmetic compound-assignment family `+=`, `-=`, `*=`, `/=`, `%=`, and `//=`:
 
 ```python
 count += 1
 total *= scale
+pages //= page_size
 ```
 
-A compound assignment requires an existing mutable, initialized target. It reads that target once, evaluates the right operand, applies the corresponding binary operator, and stores a same-typed result. Operator traits and runtime overflow/division behavior are the same as for the corresponding expression operator.
+A compound assignment requires an existing mutable, initialized target. It reads that target once, evaluates the right operand, applies the corresponding binary operator, and stores a same-typed result. Operator traits and runtime overflow/division behavior are the same as for the corresponding expression operator. Integer `/=` is rejected with the integer `/` teaching diagnostic; use integer `//=` for a floor quotient. Floating `/=` remains true division. `//=` is builtin-only because `//` has no operator trait.
 
 ### Assignment Evaluation
 

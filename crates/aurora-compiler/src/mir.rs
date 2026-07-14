@@ -55,7 +55,7 @@ fn is_builtin_binary_operator(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> 
             crate::sema::integer_type_bounds(left_ty).is_some()
                 || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64" || name == "String")
         }
-        BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
+        BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod => {
             crate::sema::integer_type_bounds(left_ty).is_some()
                 || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64")
         }
@@ -1375,8 +1375,11 @@ impl<'a> Lowerer<'a> {
                         ],
                     },
                 });
-                let result = self.new_temp_for_expr(&assign.value);
-                let lowered_value = self.lower_expr(&assign.value);
+                let indexed_value_type = self.local_types[&current].clone();
+                let result = self.new_typed_temp(indexed_value_type.clone());
+                let lowered_value =
+                    self.lower_expr_with_expected(&assign.value, Some(&indexed_value_type));
+                self.retarget_operand_place(&lowered_value, &indexed_value_type);
                 self.emit(Instruction::Assign {
                     target: result.clone(),
                     value: Rvalue::Binary {
@@ -4302,6 +4305,26 @@ impl<'a> Lowerer<'a> {
         };
         let bytes_ty = Type::Named("Vec".to_string(), vec![Type::named("uint8")]);
         let io_error_ty = Type::Named("io.Error".to_string(), Vec::new());
+        if args.is_empty()
+            && field == "to_float"
+            && matches!(
+                name.as_str(),
+                "int8"
+                    | "int16"
+                    | "int32"
+                    | "int64"
+                    | "int128"
+                    | "intsize"
+                    | "uint8"
+                    | "uint16"
+                    | "uint32"
+                    | "uint64"
+                    | "uint128"
+                    | "uintsize"
+            )
+        {
+            return Some(Type::named("float64"));
+        }
         if args.is_empty()
             && field == "to_string"
             && matches!(

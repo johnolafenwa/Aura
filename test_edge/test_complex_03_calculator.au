@@ -23,7 +23,7 @@ def eval_op(op: borrow Op, a: int32, b: int32) -> Result[int32, String]:
         case Op.Div:
             if b == 0:
                 return Result.Err("division by zero")
-            return Result.Ok(a / b)
+            return Result.Ok(a // b)
 
 def eval_expr(expr: borrow Expr) -> Result[int32, String]:
     return eval_op(expr.op, expr.left, expr.right)

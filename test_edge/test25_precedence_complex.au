@@ -5,8 +5,8 @@ def main():
     b: int32 = (10 - 2) * (3 + 1)
     print(b)
 
-    c: int32 = 100 / 5 / 4
+    c: int32 = 100 // 5 // 4
     print(c)
 
-    d: int32 = 100 / (5 / 4)
+    d: int32 = 100 // (5 // 4)
     print(d)

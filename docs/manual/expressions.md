@@ -59,7 +59,7 @@ The following table runs from lowest to highest precedence:
 | 4 | `==`, `!=` | left |
 | 5 | `<`, `<=`, `>`, `>=` | left |
 | 6 | `+`, `-` | left |
-| 7 | `*`, `/`, `%` | left |
+| 7 | `*`, `/`, `//`, `%` | left |
 | 8 | prefix `match`, `try`, unary `-` | prefix/right |
 | 9 | specialization, indexing, member access, call, numeric cast | left-to-right postfix chain |
 | 10 | primary expression | — |
@@ -101,14 +101,26 @@ Built-in arithmetic supports equal integer types or equal floating-point types. 
 | Operators | Builtin result |
 | --- | --- |
 | `+` | Same numeric type, or `String` for string concatenation |
-| `-`, `*`, `/`, `%` | Same numeric type |
+| `-`, `*`, `//`, `%` | Same numeric type |
+| `/` | Same floating-point type |
 | unary `-` | Same numeric type |
 | `==`, `!=` | `bool` for equal operand types |
 | `<`, `<=`, `>`, `>=` | `bool` for equal numeric types |
 
-Arithmetic and ordering may resolve through the corresponding operator trait. Builtin equality does not use an equality operator trait in Aurora 0.1.
+Arithmetic and ordering may resolve through the corresponding operator trait. For non-numeric user types, `/` requests `Div.div`; `//` has no operator trait and is builtin-only. Builtin equality does not use an equality operator trait in Aurora 0.1.
 
-Integer arithmetic, division, remainder, negation, and casts are checked for overflow. Integer division truncates toward zero. Integer or floating division/remainder by zero is a runtime failure. See [Execution Model](/manual/execution-model#operators) for the complete runtime contract.
+Builtin integer `/` is a static error, as is integer `/=`. The diagnostic directs callers to `//` for a floor quotient or to `.to_float()` on both operands for floating true division. Integer `//` rounds the mathematical quotient toward negative infinity, and integer `%` is its paired remainder. Floating `//` and `%` use the corresponding CPython-compatible divmod correction. In both numeric domains, a nonzero remainder has the divisor's sign. Integer and floating `//` or `%` by zero, and floating `/` by zero, are runtime failures. See [Execution Model](/manual/execution-model#operators) for the complete runtime contract.
+
+Every integer type provides `.to_float() -> float64`. This conversion uses IEEE-754 round-to-nearest, ties-to-even and may lose integer precision:
+
+```python
+left: int64 = 9007199254740993
+right: int64 = 2
+ratio = left.to_float() / right.to_float()
+rounded = left.to_float() # 9007199254740992.0
+```
+
+Use this method when rounding into the floating domain is intentional. An explicit integer `as float32` or `as float64` cast has the stricter exactness contract below.
 
 ## Numeric Casts
 

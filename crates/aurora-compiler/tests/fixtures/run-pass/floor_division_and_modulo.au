@@ -1,0 +1,30 @@
+def main() -> int32:
+    print(7 // 3)
+    print(-7 // 3)
+    print(7 // -3)
+    print(-7 // -3)
+    print(7 % 3)
+    print(-7 % 3)
+    print(7 % -3)
+    print(-7 % -3)
+    print(1.0 // 0.1)
+    print(1.0 % 0.1)
+    print(-7.5 // 2.0)
+    print(-7.5 % 2.0)
+    print(7.5 // -2.0)
+    print(7.5 % -2.0)
+    mut integer_floor: int64 = -7
+    integer_floor //= 3
+    print(integer_floor)
+    mut integer_remainder: int64 = 7
+    integer_remainder %= -3
+    print(integer_remainder)
+    mut float_floor: float64 = 7.5
+    float_floor //= -2.0
+    print(float_floor)
+    minimum: int64 = -9223372036854775808
+    maximum: int64 = 9223372036854775807
+    print(minimum // 1)
+    print(maximum // -1)
+    print(minimum % -1)
+    return 0

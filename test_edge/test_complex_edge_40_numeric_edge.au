@@ -11,12 +11,12 @@ def main() -> int32:
     neg_mod: int32 = -7 % 3
     print(neg_mod)
 
-    # Integer division truncation
-    trunc: int32 = 7 / 2
-    print(trunc)
+    # Integer floor division
+    floored: int32 = 7 // 2
+    print(floored)
 
-    neg_trunc: int32 = -7 / 2
-    print(neg_trunc)
+    neg_floor: int32 = -7 // 2
+    print(neg_floor)
 
     # Float to int casting
     f: float64 = 3.7

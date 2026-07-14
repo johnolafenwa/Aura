@@ -52,14 +52,18 @@ A recursive Aurora call consumes one logical call-depth unit. The maintained run
 
 Arithmetic is checked under the selected concrete numeric type.
 
-- integer addition, subtraction, multiplication, division, remainder, negation, and casts reject overflow
-- integer division truncates toward zero for signed values
-- division and remainder by zero are runtime failures
-- floating division and remainder by zero are runtime failures under Aurora 0.1 rather than IEEE infinity/NaN results
+- integer addition, subtraction, multiplication, floor division, remainder, negation, and casts reject overflow
+- builtin integer `/` and `/=` do not reach execution because static checking rejects them
+- for integers with nonzero divisor `b`, `q = a // b` is the mathematical quotient rounded toward negative infinity and `r = a % b` satisfies `a == q * b + r`; a nonzero `r` has `b`'s sign
+- integer `//` or `%` by zero is a runtime failure; an unrepresentable floor quotient, including the signed minimum divided by `-1`, is integer overflow
+- floating `/` is ordinary true division, except that a zero divisor is an explicit runtime failure rather than IEEE infinity or NaN
+- floating `//` and `%` use the CPython-compatible divmod correction: start from the host remainder and `(a - remainder) / b`; when a nonzero remainder's sign differs from `b`, add `b` to the remainder and subtract one from the provisional quotient; give a zero remainder `b`'s sign; for a nonzero quotient, take its floor and add one when the provisional quotient minus that floor is greater than `0.5`; preserve the quotient's division-result signed zero when it is zero
+- floating `//` and `%` by either signed zero are runtime failures
 - ordinary floating operations otherwise use host IEEE-754 `float32`/`float64` behavior, including possible runtime NaN results from operations such as square root of a negative value
+- integer `.to_float()` converts to `float64` with IEEE-754 round-to-nearest, ties-to-even and may round; integer `as float32` or `as float64` retains its exactness check and fails instead of rounding
 - string `+` creates a new concatenated `String`
 
-Trait-backed operators invoke the selected trait implementation method with ordinary receiver, argument, move, borrow, and runtime-error behavior.
+Trait-backed operators invoke the selected trait implementation method with ordinary receiver, argument, move, borrow, and runtime-error behavior. `/` may invoke `Div.div` for an applicable non-numeric user type. `//` and `//=` are builtin-only and never dispatch through a `FloorDiv` trait.
 
 `==` and `!=` perform structural equality for maintained plain values and collections. Resource/handle identity is not a portable substitute for an application identifier; programs should use documented resource data rather than depend on equality of runtime handles.
 

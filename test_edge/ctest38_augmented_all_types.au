@@ -29,9 +29,9 @@ def main() -> int32:
     e += 50
     e -= 25
     e *= 2
-    e /= 5
+    e //= 5
     e %= 7
-    print(e)    # ((100+50-25)*2)/5 = 50, 50%7 = 1
+    print(e)    # ((100+50-25)*2)//5 = 50, 50%7 = 1
 
     # Augmented modulo
     mut f: int32 = 100

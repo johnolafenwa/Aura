@@ -4,10 +4,10 @@ copy class Color:
     b: int32
 
     def brightness(borrow self) -> int32:
-        return (self.r + self.g + self.b) / 3
+        return (self.r + self.g + self.b) // 3
 
     def mix(borrow self, other: borrow Color) -> Color:
-        return Color(r=(self.r + other.r) / 2, g=(self.g + other.g) / 2, b=(self.b + other.b) / 2)
+        return Color(r=(self.r + other.r) // 2, g=(self.g + other.g) // 2, b=(self.b + other.b) // 2)
 
     def red() -> Color:
         return Color(r=255, g=0, b=0)

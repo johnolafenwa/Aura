@@ -13,7 +13,7 @@ def main() -> int32:
     print(c + d)     # -50
     print(c - d)     # -150
     print(c * d)     # -5000
-    print(c / d)     # -2
+    print(c // d)    # -2
     print(c % d)     # 0
 
     return 0

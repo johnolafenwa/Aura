@@ -13,7 +13,7 @@ impl Shape for Circle:
         return "circle"
 
     def area(borrow self) -> int32:
-        return self.radius * self.radius * 314 / 100
+        return self.radius * self.radius * 314 // 100
 
 def describe[T: Shape](s: T):
     print(s.name())

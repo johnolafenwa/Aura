@@ -7531,6 +7531,7 @@ fn operator_trait_helpers_map_supported_operators() {
     assert_eq!(binary_operator_trait(BinaryOp::Sub), Some(("Sub", "sub")));
     assert_eq!(binary_operator_trait(BinaryOp::Mul), Some(("Mul", "mul")));
     assert_eq!(binary_operator_trait(BinaryOp::Div), Some(("Div", "div")));
+    assert_eq!(binary_operator_trait(BinaryOp::FloorDiv), None);
     assert_eq!(binary_operator_trait(BinaryOp::Mod), Some(("Mod", "mod")));
     assert_eq!(binary_operator_trait(BinaryOp::Less), Some(("Ord", "lt")));
     assert_eq!(binary_operator_trait(BinaryOp::LessEq), Some(("Ord", "le")));

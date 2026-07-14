@@ -203,6 +203,11 @@ Aurora supports operator overloading through traits. When you implement the righ
 | `-a` | `Neg[Out]` | `neg(borrow self) -> Out` |
 | `not a` | `Not[Out]` | `not(borrow self) -> Out` |
 
+`//` is deliberately absent. Floor division and `//=` are builtin numeric
+operations; Aurora has no `FloorDiv` trait. Equal integer operands with `/`
+are rejected rather than sent to `Div`, while `/` on an applicable non-numeric
+user type still resolves through `Div.div`.
+
 Example:
 
 ```python

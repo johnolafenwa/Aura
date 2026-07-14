@@ -10,7 +10,7 @@ def main() -> int32:
     # uint128 division
     d: uint128 = 100
     e: uint128 = 7
-    print(d / e)    # 14
+    print(d // e)   # 14
     print(d % e)    # 2
 
     return 0

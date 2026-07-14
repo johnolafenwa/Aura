@@ -1,0 +1,28 @@
+def main() -> int32:
+    signed8: int8 = -8
+    signed16: int16 = 16
+    signed32: int32 = -32
+    signed64: int64 = 9007199254740993
+    signed128: int128 = -9007199254740993
+    signed_size: intsize = 64
+    unsigned8: uint8 = 8
+    unsigned16: uint16 = 16
+    unsigned32: uint32 = 32
+    unsigned64: uint64 = 18446744073709551615
+    unsigned128: uint128 = 128
+    unsigned_size: uintsize = 64
+    defaulted = 9007199254740993
+    print(signed8.to_float() == -8.0)
+    print(signed16.to_float() == 16.0)
+    print(signed32.to_float() == -32.0)
+    print(signed64.to_float() == 9007199254740992.0)
+    print(signed128.to_float() == -9007199254740992.0)
+    print(signed_size.to_float() == 64.0)
+    print(unsigned8.to_float() == 8.0)
+    print(unsigned16.to_float() == 16.0)
+    print(unsigned32.to_float() == 32.0)
+    print(unsigned64.to_float() == 18446744073709551616.0)
+    print(unsigned128.to_float() == 128.0)
+    print(unsigned_size.to_float() == 64.0)
+    print(defaulted.to_float() == 9007199254740992.0)
+    return 0

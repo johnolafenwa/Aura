@@ -20,6 +20,11 @@ use crate::mir::{
 };
 use crate::sema::{substitute_type, Type};
 
+const DIRECT_TO_FLOAT_ARITY_ERROR: &str =
+    "direct backend expected `to_float()` to take no arguments";
+const WIDE_INTEGER_BINARY_ERROR: &str =
+    "direct backend does not support wide integer binary operation";
+
 pub fn emit_host_object(module: &MirModule) -> std::result::Result<Vec<u8>, String> {
     emit_host_object_with_metadata(module, "<aurora>", "")
 }
@@ -301,6 +306,7 @@ struct NativeCodegen<'a> {
     clone_value: FuncId,
     unbox_i64: FuncId,
     unbox_int64: FuncId,
+    integer_to_float: FuncId,
     unbox_u64: FuncId,
     unbox_f64: FuncId,
     unbox_bool: FuncId,
@@ -755,6 +761,7 @@ impl<'a> NativeCodegen<'a> {
             clone_value => ("aurora_direct_clone_value", [types::I64], Some(types::I64)),
             unbox_i64 => ("aurora_direct_unbox_i64", [types::I64], Some(types::I64)),
             unbox_int64 => ("aurora_direct_unbox_int64", [types::I64], Some(types::I64)),
+            integer_to_float => ("aurora_direct_integer_to_float", [types::I64], Some(types::F64)),
             unbox_u64 => ("aurora_direct_unbox_u64", [types::I64], Some(types::I64)),
             unbox_f64 => ("aurora_direct_unbox_f64", [types::I64], Some(types::F64)),
             unbox_bool => ("aurora_direct_unbox_bool", [types::I64], Some(types::I64)),
@@ -1124,6 +1131,7 @@ impl<'a> NativeCodegen<'a> {
             clone_value,
             unbox_i64,
             unbox_int64,
+            integer_to_float,
             unbox_u64,
             unbox_f64,
             unbox_bool,
@@ -1853,6 +1861,9 @@ impl<'a> NativeCodegen<'a> {
         let unbox_int64 = self
             .object
             .declare_func_in_func(self.unbox_int64, builder.func);
+        let integer_to_float = self
+            .object
+            .declare_func_in_func(self.integer_to_float, builder.func);
         let unbox_u64 = self
             .object
             .declare_func_in_func(self.unbox_u64, builder.func);
@@ -2523,6 +2534,7 @@ impl<'a> NativeCodegen<'a> {
             clone_value,
             unbox_i64,
             unbox_int64,
+            integer_to_float,
             unbox_u64,
             unbox_f64,
             unbox_bool,
@@ -3171,6 +3183,7 @@ struct FunctionCompiler<'a> {
     clone_value: cranelift_codegen::ir::FuncRef,
     unbox_i64: cranelift_codegen::ir::FuncRef,
     unbox_int64: cranelift_codegen::ir::FuncRef,
+    integer_to_float: cranelift_codegen::ir::FuncRef,
     unbox_u64: cranelift_codegen::ir::FuncRef,
     unbox_f64: cranelift_codegen::ir::FuncRef,
     unbox_bool: cranelift_codegen::ir::FuncRef,
@@ -4102,17 +4115,17 @@ impl<'a> FunctionCompiler<'a> {
                 values: vec![self.builder.ins().imul(left, right)],
                 ty,
             },
-            BinaryOp::Div => {
+            BinaryOp::FloorDiv => {
                 self.emit_int_division_guard(right, span)?;
                 ValueRef {
-                    values: vec![self.builder.ins().sdiv(left, right)],
+                    values: vec![self.compile_signed_floor_divmod(left, right, true)],
                     ty,
                 }
             }
             BinaryOp::Mod => {
                 self.emit_int_division_guard(right, span)?;
                 ValueRef {
-                    values: vec![self.builder.ins().srem(left, right)],
+                    values: vec![self.compile_signed_floor_divmod(left, right, false)],
                     ty,
                 }
             }
@@ -4136,6 +4149,33 @@ impl<'a> FunctionCompiler<'a> {
             self.emit_int32_bounds_check(value.values[0], span)?;
         }
         Ok(value)
+    }
+
+    fn compile_signed_floor_divmod(&mut self, left: Value, right: Value, quotient: bool) -> Value {
+        let truncating_quotient = self.builder.ins().sdiv(left, right);
+        let truncating_remainder = self.builder.ins().srem(left, right);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let remainder_nonzero =
+            self.builder
+                .ins()
+                .icmp(IntCC::NotEqual, truncating_remainder, zero);
+        let left_negative = self.builder.ins().icmp(IntCC::SignedLessThan, left, zero);
+        let right_negative = self.builder.ins().icmp(IntCC::SignedLessThan, right, zero);
+        let signs_differ = self.builder.ins().bxor(left_negative, right_negative);
+        let adjust = self.builder.ins().band(remainder_nonzero, signs_differ);
+
+        if quotient {
+            let one = self.builder.ins().iconst(types::I64, 1);
+            let adjusted = self.builder.ins().isub(truncating_quotient, one);
+            self.builder
+                .ins()
+                .select(adjust, adjusted, truncating_quotient)
+        } else {
+            let adjusted = self.builder.ins().iadd(truncating_remainder, right);
+            self.builder
+                .ins()
+                .select(adjust, adjusted, truncating_remainder)
+        }
     }
 
     fn compile_wide_integer_binary(
@@ -4200,7 +4240,7 @@ impl<'a> FunctionCompiler<'a> {
                 )?;
                 arithmetic(result)
             }
-            BinaryOp::Div => {
+            BinaryOp::FloorDiv => {
                 self.emit_int_division_guard(right, span)?;
                 if kind.is_signed() {
                     let min = self.builder.ins().iconst(types::I64, i64::MIN);
@@ -4217,7 +4257,7 @@ impl<'a> FunctionCompiler<'a> {
                         right,
                         span,
                     )?;
-                    arithmetic(self.builder.ins().sdiv(left, right))
+                    arithmetic(self.compile_signed_floor_divmod(left, right, true))
                 } else {
                     arithmetic(self.builder.ins().udiv(left, right))
                 }
@@ -4243,7 +4283,7 @@ impl<'a> FunctionCompiler<'a> {
                         &[],
                     );
                     self.builder.switch_to_block(normal_block);
-                    let remainder = self.builder.ins().srem(left, right);
+                    let remainder = self.compile_signed_floor_divmod(left, right, false);
                     self.builder.ins().jump(continue_block, &[remainder]);
                     self.builder.seal_block(normal_block);
                     self.builder.switch_to_block(continue_block);
@@ -4291,12 +4331,7 @@ impl<'a> FunctionCompiler<'a> {
                 left,
                 right,
             ),
-            other => {
-                return Err(format!(
-                    "direct backend does not support wide integer binary operation `{:?}`",
-                    other
-                ))
-            }
+            other => return Err(format!("{WIDE_INTEGER_BINARY_ERROR} `{other:?}`")),
         };
         Ok(value)
     }
@@ -4330,8 +4365,8 @@ impl<'a> FunctionCompiler<'a> {
                     ty,
                 })
             }
-            BinaryOp::Mod => {
-                let opcode_value = self.binary_opcode(BinaryOp::Mod);
+            BinaryOp::FloorDiv | BinaryOp::Mod => {
+                let opcode_value = self.binary_opcode(op);
                 let left_box = self.builder.ins().call(self.box_f64, &[left]);
                 let right_box = self.builder.ins().call(self.box_f64, &[right]);
                 let left_boxed = self.builder.inst_results(left_box)[0];
@@ -4344,8 +4379,10 @@ impl<'a> FunctionCompiler<'a> {
                 );
                 let result_boxed = self.builder.inst_results(result)[0];
                 let unboxed = self.builder.ins().call(self.unbox_f64, &[result_boxed]);
+                let value = self.builder.inst_results(unboxed)[0];
+                self.builder.ins().call(self.release_value, &[result_boxed]);
                 Ok(ValueRef {
-                    values: self.builder.inst_results(unboxed).to_vec(),
+                    values: vec![value],
                     ty,
                 })
             }
@@ -5586,6 +5623,26 @@ impl<'a> FunctionCompiler<'a> {
                 self.compile_opaque_member_call(&ty, object, field, receiver_place, args)
             }
             DirectType::Scalar(_) => {
+                if field == "to_float"
+                    && matches!(object.ty.scalar_kind(), Some(kind) if kind.is_integer())
+                {
+                    if !args.is_empty() {
+                        return Err(DIRECT_TO_FLOAT_ARITY_ERROR.to_string());
+                    }
+                    let value = if matches!(object.ty.scalar_kind(), Some(ScalarKind::Uint64)) {
+                        self.builder
+                            .ins()
+                            .fcvt_from_uint(types::F64, object.values[0])
+                    } else {
+                        self.builder
+                            .ins()
+                            .fcvt_from_sint(types::F64, object.values[0])
+                    };
+                    return Ok(ValueRef {
+                        values: vec![value],
+                        ty: DirectType::Scalar(ScalarKind::Float64),
+                    });
+                }
                 if field == "to_string" {
                     if !args.is_empty() {
                         return Err("direct backend expected `to_string()` to take no arguments"
@@ -6348,6 +6405,7 @@ impl<'a> FunctionCompiler<'a> {
             BinaryOp::GreaterEq => 10,
             BinaryOp::And => 11,
             BinaryOp::Or => 12,
+            BinaryOp::FloorDiv => 13,
         }
     }
 
@@ -7008,6 +7066,40 @@ impl<'a> FunctionCompiler<'a> {
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
+        if field == "to_float"
+            && matches!(
+                object_ty,
+                Type::Named(name, args)
+                    if args.is_empty()
+                        && matches!(
+                            name.as_str(),
+                            "int8"
+                                | "int16"
+                                | "int32"
+                                | "int64"
+                                | "int128"
+                                | "intsize"
+                                | "uint8"
+                                | "uint16"
+                                | "uint32"
+                                | "uint64"
+                                | "uint128"
+                                | "uintsize"
+                        )
+            )
+        {
+            if !args.is_empty() {
+                return Err(DIRECT_TO_FLOAT_ARITY_ERROR.to_string());
+            }
+            let inst = self
+                .builder
+                .ins()
+                .call(self.integer_to_float, &[object.values[0]]);
+            return Ok(ValueRef {
+                values: self.builder.inst_results(inst).to_vec(),
+                ty: DirectType::Scalar(ScalarKind::Float64),
+            });
+        }
         if field == "to_string" {
             if !args.is_empty() {
                 return Err(
@@ -11462,9 +11554,12 @@ fn infer_rvalue_type(
             | BinaryOp::GreaterEq
             | BinaryOp::And
             | BinaryOp::Or => Some(DirectType::Scalar(ScalarKind::Bool)),
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
-                infer_operand_type(left, variable_types, classes)
-            }
+            BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::FloorDiv
+            | BinaryOp::Mod => infer_operand_type(left, variable_types, classes),
         },
         Rvalue::Call { callee, args } => match callee {
             CallTarget::Name(name) if name == "print" => Some(DirectType::Scalar(ScalarKind::Unit)),
@@ -11781,6 +11876,11 @@ fn infer_rvalue_type(
                 if object_ty.scalar_kind().is_some() && field == "to_string" {
                     return Some(DirectType::Opaque(Type::named("String")));
                 }
+                if matches!(object_ty.scalar_kind(), Some(kind) if kind.is_integer())
+                    && field == "to_float"
+                {
+                    return Some(DirectType::Scalar(ScalarKind::Float64));
+                }
                 match object_ty {
                     DirectType::PlainClass(class_ty) => {
                         let method = find_method(classes.get(&class_ty.class_name), field)?;
@@ -11897,6 +11997,26 @@ fn builtin_opaque_member_return_type(
     let Type::Named(name, args) = object_ty else {
         return None;
     };
+    if args.is_empty()
+        && field == "to_float"
+        && matches!(
+            name.as_str(),
+            "int8"
+                | "int16"
+                | "int32"
+                | "int64"
+                | "int128"
+                | "intsize"
+                | "uint8"
+                | "uint16"
+                | "uint32"
+                | "uint64"
+                | "uint128"
+                | "uintsize"
+        )
+    {
+        return Some(DirectType::Scalar(ScalarKind::Float64));
+    }
     if args.is_empty()
         && field == "to_string"
         && matches!(

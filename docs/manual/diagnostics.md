@@ -50,6 +50,12 @@ Examples of required rejection include:
 
 The exact wording is stable where it is captured by a diagnostic fixture. Otherwise the semantic category, source attribution, and actionable meaning are the contract; diagnostic text is not assigned a permanent numeric code in Aurora 0.1.
 
+Integer `/` and `/=` are the deliberate exception whose teaching text is part of the maintained language contract:
+
+```text
+integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division
+```
+
 ## Runtime Diagnostics
 
 Runtime diagnostics use the source path and span embedded by MIR or native lowering whenever possible. Both maintained execution backends MUST preserve the same primary Aurora failure when cleanup also encounters an error.
@@ -58,8 +64,8 @@ Output produced before a runtime failure is not retroactively discarded. `aura r
 
 Runtime failures are reserved for operations whose contracts trap rather than return a typed outcome. Current examples include:
 
-- checked integer overflow and division or remainder by zero
-- floating-point division or remainder by zero under Aurora's current non-IEEE failure rule
+- checked integer overflow and integer floor division or remainder by zero
+- floating-point true division, floor division, or remainder by zero under Aurora's current non-IEEE failure rule
 - invalid direct indexing or out-of-bounds collection mutation where the method contract specifies a runtime error
 - recursion beyond the maintained Aurora call-depth limit
 - invalid runtime type or resource state that should have been impossible in a checked program

@@ -1290,6 +1290,8 @@ impl Parser {
                 Some(BinaryOp::Mul)
             } else if self.eat_simple(&TokenKind::Slash).is_some() {
                 Some(BinaryOp::Div)
+            } else if self.eat_simple(&TokenKind::DoubleSlash).is_some() {
+                Some(BinaryOp::FloorDiv)
             } else if self.eat_simple(&TokenKind::Percent).is_some() {
                 Some(BinaryOp::Mod)
             } else {
@@ -1772,6 +1774,7 @@ impl Parser {
             TokenKind::MinusEqual => Ok(Some(BinaryOp::Sub)),
             TokenKind::StarEqual => Ok(Some(BinaryOp::Mul)),
             TokenKind::SlashEqual => Ok(Some(BinaryOp::Div)),
+            TokenKind::DoubleSlashEqual => Ok(Some(BinaryOp::FloorDiv)),
             TokenKind::PercentEqual => Ok(Some(BinaryOp::Mod)),
             other => Err(Diagnostic::at(
                 token.span,
@@ -1789,6 +1792,7 @@ impl Parser {
                     | TokenKind::MinusEqual
                     | TokenKind::StarEqual
                     | TokenKind::SlashEqual
+                    | TokenKind::DoubleSlashEqual
                     | TokenKind::PercentEqual
             )
         )

@@ -38,7 +38,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - High-level HTTP clients support HTTP/1.1 over `http://` and validated `https://`, including content-length, chunked, and close-delimited responses; redirects, pooling, HTTP/2, proxy configuration, decompression, and high-level custom CA arguments are not implemented.
 - JSON and TOML codecs currently support the typed `Map[String, String]` boundary, not nested dynamic trees or derived class/enum schemas.
 - Metrics are process-global counters within one running program; log and trace APIs emit structured stderr records and do not yet include exporters or scoped spans.
-- Floating-point division by zero traps at runtime instead of producing IEEE 754 infinity.
+- Floating-point `/`, `//`, or `%` by zero traps at runtime instead of producing IEEE 754 infinity or NaN.
 - `float32` literals that overflow may currently become infinity; prefer `float64` when large literal validation matters.
 - Unix domain sockets require a Unix host.
 - TLS APIs require PEM certificate/key assets.

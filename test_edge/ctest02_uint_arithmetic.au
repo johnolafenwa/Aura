@@ -5,7 +5,7 @@ def main() -> int32:
     print(a8 + b8)     # 19
     print(a8 - b8)     # 11
     print(a8 * b8)     # 60
-    print(a8 / b8)     # 3
+    print(a8 // b8)    # 3
     print(a8 % b8)     # 3
 
     # uint16 arithmetic (safe multiply values)
@@ -14,7 +14,7 @@ def main() -> int32:
     print(a16 + b16)   # 125
     print(a16 - b16)   # 75
     print(a16 * b16)   # 2500
-    print(a16 / b16)   # 4
+    print(a16 // b16)  # 4
     print(a16 % b16)   # 0
 
     # uint32 arithmetic
@@ -23,7 +23,7 @@ def main() -> int32:
     print(a32 + b32)   # 10333
     print(a32 - b32)   # 9667
     print(a32 * b32)   # 3330000
-    print(a32 / b32)   # 30
+    print(a32 // b32)  # 30
     print(a32 % b32)   # 10
 
     # uint64 arithmetic
@@ -32,7 +32,7 @@ def main() -> int32:
     print(a64 + b64)   # 1333333333
     print(a64 - b64)   # 666666667
     print(a64 * b64)   # 333333333000000000
-    print(a64 / b64)   # 3
+    print(a64 // b64)  # 3
     print(a64 % b64)   # 1
 
     # uint128 arithmetic
@@ -40,7 +40,7 @@ def main() -> int32:
     b128: uint128 = 33333333333333
     print(a128 + b128)  # 133333333333332
     print(a128 - b128)  # 66666666666666
-    print(a128 / b128)  # 3
+    print(a128 // b128) # 3
     print(a128 % b128)  # 0
 
     # uintsize arithmetic
@@ -49,7 +49,7 @@ def main() -> int32:
     print(ais + bis)    # 62345
     print(ais - bis)    # 37655
     print(ais * bis)    # 617250000
-    print(ais / bis)    # 4
+    print(ais // bis)   # 4
     print(ais % bis)    # 620
 
     return 0

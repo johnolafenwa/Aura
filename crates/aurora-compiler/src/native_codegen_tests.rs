@@ -6487,6 +6487,88 @@ def main() -> int32:
 }
 
 #[test]
+fn d2_numeric_member_and_floor_division_inference_preserve_backend_result_types() {
+    let variable_types = HashMap::from([
+        (
+            "signed32".to_string(),
+            DirectType::Scalar(ScalarKind::Int32),
+        ),
+        (
+            "signed64".to_string(),
+            DirectType::Scalar(ScalarKind::Int64),
+        ),
+        (
+            "unsigned64".to_string(),
+            DirectType::Scalar(ScalarKind::Uint64),
+        ),
+        (
+            "floating".to_string(),
+            DirectType::Scalar(ScalarKind::Float64),
+        ),
+        (
+            "signed128".to_string(),
+            DirectType::Opaque(Type::named("int128")),
+        ),
+    ]);
+    let function_return_types = HashMap::new();
+    let classes = HashMap::new();
+
+    for (place, expected) in [
+        ("signed32", DirectType::Scalar(ScalarKind::Int32)),
+        ("signed64", DirectType::Scalar(ScalarKind::Int64)),
+        ("unsigned64", DirectType::Scalar(ScalarKind::Uint64)),
+        ("floating", DirectType::Scalar(ScalarKind::Float64)),
+        ("signed128", DirectType::Opaque(Type::named("int128"))),
+    ] {
+        assert_eq!(
+            infer_rvalue_type(
+                &Rvalue::Binary {
+                    op: BinaryOp::FloorDiv,
+                    left: Operand::Place(place.to_string()),
+                    right: Operand::Place(place.to_string()),
+                    span: Span::new(1, 1),
+                },
+                &variable_types,
+                &function_return_types,
+                &classes,
+            ),
+            Some(expected),
+            "floor division should preserve the numeric type of `{place}`",
+        );
+    }
+
+    for place in ["signed32", "signed64", "unsigned64", "signed128"] {
+        assert_eq!(
+            infer_rvalue_type(
+                &Rvalue::Call {
+                    callee: CallTarget::Member {
+                        object: Operand::Place(place.to_string()),
+                        field: "to_float".to_string(),
+                        receiver_place: None,
+                    },
+                    args: Vec::new(),
+                },
+                &variable_types,
+                &function_return_types,
+                &classes,
+            ),
+            Some(DirectType::Scalar(ScalarKind::Float64)),
+            "integer `{place}` should infer `to_float()` as float64",
+        );
+    }
+
+    for integer_type in [
+        "int8", "int16", "int128", "intsize", "uint8", "uint16", "uint32", "uint128", "uintsize",
+    ] {
+        assert_eq!(
+            builtin_opaque_member_return_type(&Type::named(integer_type), "to_float", &classes),
+            Some(DirectType::Scalar(ScalarKind::Float64)),
+            "boxed integer `{integer_type}` should expose `to_float() -> float64`",
+        );
+    }
+}
+
+#[test]
 fn infer_operand_and_rvalue_types_track_plain_classes() {
     let mut variable_types = HashMap::new();
     variable_types.insert("flag".to_string(), DirectType::Scalar(ScalarKind::Bool));

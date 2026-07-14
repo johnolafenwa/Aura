@@ -95,11 +95,11 @@ Parentheses, brackets, and braces do not generally suppress `NEWLINE` or indenta
 ```text
 ( ) [ ] { } : , . ?
 = == != < <= > >=
-+ += - -= * *= / /= % %=
++ += - -= * *= / /= // //= % %=
 ->
 ```
 
-There is no semicolon, tuple punctuation, assignment expression, exponentiation, floor division, unary plus, bitwise operator, lambda arrow, or conditional-expression operator.
+There is no semicolon, tuple punctuation, assignment expression, exponentiation, unary plus, bitwise operator, lambda arrow, or conditional-expression operator.
 
 ## Modules And Imports
 
@@ -310,7 +310,7 @@ assignment-target
     = identifier,
       { ".", identifier | "[", expression, "]" } ;
 
-assignment-operator = "=" | "+=" | "-=" | "*=" | "/=" | "%=" ;
+assignment-operator = "=" | "+=" | "-=" | "*=" | "/=" | "//=" | "%=" ;
 
 return-statement     = "return", [ expression ], statement-end ;
 pass-statement       = "pass", NEWLINE ;
@@ -433,7 +433,7 @@ additive-expression
 
 multiplicative-expression
     = prefix-expression,
-      { ("*" | "/" | "%"), prefix-expression } ;
+      { ("*" | "/" | "//" | "%"), prefix-expression } ;
 
 prefix-expression
     = match-expression

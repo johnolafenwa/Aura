@@ -56,7 +56,7 @@ The current tutorial set covers:
 - `with` using `close(borrow mut self)` and `with TaskGroup() as group:`
 - builtin `io`, `fs`, `net`, and `process` modules with scheduler-aware file I/O, maintained networking resource types, and shell-free subprocess helpers
 - `Queue[T]()`, `Task[T].result()`, `TaskGroup()`, `TaskGroup.start(...)`, `TaskGroup.start_soon(...)`, `wait_any(...)`, `wait_all(...)`, send-result errors, and cooperative cancellation
-- arithmetic, strings, string parsing/formatting, booleans, comparisons, and duration literals
+- arithmetic including explicit floor division and integer-to-float conversion, strings, string parsing/formatting, booleans, comparisons, and duration literals
 - `if`, `elif`, `else`, `for`, `while`, `match`, `break`, and `continue`
 - `print`
 - CLI inspection commands such as `check`, `ast`, `ast-json`, `analyze`, `complete`, and `mir`

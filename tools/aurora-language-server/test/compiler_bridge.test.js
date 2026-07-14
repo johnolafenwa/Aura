@@ -623,6 +623,106 @@ test("compiler bridge returns member completions from the compiler", async () =>
   assert.deepEqual(names, ["x", "y"]);
 });
 
+test("compiler bridge preserves the integer true-division teaching diagnostic", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-int-division-"));
+  const message =
+    "integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division";
+  const cases = [
+    {
+      name: "binary division",
+      source: [
+        "def main() -> int32:",
+        "    left: int32 = 7",
+        "    right: int32 = 2",
+        "    result = left / right",
+        "    print(result)",
+        "    return 0",
+        ""
+      ].join("\n")
+    },
+    {
+      name: "augmented division",
+      source: [
+        "def main() -> int32:",
+        "    mut value: int32 = 7",
+        "    value /= 2",
+        "    return value",
+        ""
+      ].join("\n")
+    }
+  ];
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    for (const entry of cases) {
+      const mainPath = path.join(tempRoot, `${entry.name.replaceAll(" ", "-")}.au`);
+      const analysis = await analyzeWithCompiler(`file://${mainPath}`, entry.source);
+
+      assert.ok(analysis, `${entry.name} should return compiler analysis`);
+      assert.equal(analysis.diagnostics.length, 1, entry.name);
+      assert.equal(analysis.diagnostics[0].message, message, entry.name);
+      assert.equal(
+        compilerDiagnosticsToLsp(analysis)[0].message,
+        message,
+        `${entry.name} LSP conversion`
+      );
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge completes to_float for every integer type", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-int-to-float-"));
+  const integerTypes = [
+    "int",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "int128",
+    "intsize",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
+    "uint128",
+    "uintsize"
+  ];
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    for (const type of integerTypes) {
+      const mainPath = path.join(tempRoot, `${type}.au`);
+      const mainUri = `file://${mainPath}`;
+      const source = [
+        "def main() -> int32:",
+        `    value: ${type} = 1`,
+        "    value.",
+        "    return 0",
+        ""
+      ].join("\n");
+      const line = 2;
+      const character = source.split("\n")[line].indexOf(".") + 1;
+      const completions = await completeWithCompiler(
+        mainUri,
+        source,
+        line,
+        character,
+        "."
+      );
+
+      assert.ok(completions, `${type} should return compiler completions`);
+      const toFloat = completions.find((item) => item.name === "to_float");
+      assert.ok(toFloat, `${type} should complete to_float`);
+      assert.equal(toFloat.kind, "method", type);
+      assert.equal(toFloat.detail, "to_float() -> float64", type);
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge understands trait symbols and trait method completions", async () => {
   setWorkspaceRoots([repoRoot]);
   const analysis = await analyzeWithCompiler(traitUri, traitSource);

@@ -20,6 +20,17 @@ The examples are organized by topic so they can serve both as quick references a
 - `mutable_bindings.au`
   - `mut`, reassignment, and compound assignment
   - prints `5`
+- `numbers.au`
+  - signed integer floor division, divisor-sign remainder, floating true division through integer `.to_float()`, exact `as float64`, and the rounded `2^53 + 1` conversion boundary
+  - prints:
+    - `2`
+    - `-3`
+    - `2`
+    - `-3`
+    - `-2`
+    - `3.5`
+    - `42.0`
+    - `true`
 - `named_arguments.au`
   - named arguments on functions, instance methods, and associated methods
   - prints:
@@ -626,6 +637,7 @@ cargo run -p aura -- run examples/basics/named_arguments.au
 cargo run -p aura -- run examples/basics/named_builtin_arguments.au
 cargo run -p aura -- run examples/basics/default_arguments.au
 cargo run -p aura -- run examples/basics/borrow_parameters.au
+cargo run -p aura -- run examples/basics/numbers.au
 cargo run -p aura -- run examples/basics/pass_keyword.au
 cargo run -p aura -- run examples/collections/vec_basics.au
 cargo run -p aura -- run examples/collections/vec_iteration.au

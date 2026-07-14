@@ -25,6 +25,7 @@ This page indexes every maintained public builtin function, method, module type,
 | API | Signature | Contract |
 | --- | --- | --- |
 | `float64.sqrt` | `sqrt() -> float64` | Square root of the receiver. |
+| integer `.to_float` | `to_float() -> float64` | Converts any integer type with IEEE-754 round-to-nearest, ties-to-even; may round. |
 | scalar `.to_string` | `to_string() -> String` | Supported on `bool`, integer types, `float32`, and `float64`. |
 | `String.len` | `len() -> int32` | Byte length. |
 | `String.contains` | `contains(text: String) -> bool` | `true` when the receiver contains `text`. |

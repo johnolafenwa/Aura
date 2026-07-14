@@ -445,6 +445,51 @@ impl IntegerValue {
             .with_optional_runtime_kind(runtime_kind)
     }
 
+    pub fn checked_floor_div(self, rhs: Self) -> Option<Self> {
+        if rhs.is_zero() {
+            return None;
+        }
+        let runtime_kind = self.common_runtime_kind(rhs);
+        let (left_sign, left_mag) = self.sign_magnitude();
+        let (right_sign, right_mag) = rhs.sign_magnitude();
+        let remainder = left_mag % right_mag;
+        let signs_differ = left_sign != IntegerSign::Zero && left_sign != right_sign;
+        let magnitude = if remainder != 0 && signs_differ {
+            (left_mag / right_mag).checked_add(1)?
+        } else {
+            left_mag / right_mag
+        };
+        let sign = if magnitude == 0 {
+            IntegerSign::Zero
+        } else if signs_differ {
+            IntegerSign::Negative
+        } else {
+            IntegerSign::Positive
+        };
+        Self::from_sign_and_magnitude(sign, magnitude)?.with_optional_runtime_kind(runtime_kind)
+    }
+
+    pub fn checked_floor_rem(self, rhs: Self) -> Option<Self> {
+        if rhs.is_zero() {
+            return None;
+        }
+        let runtime_kind = self.common_runtime_kind(rhs);
+        let (left_sign, left_mag) = self.sign_magnitude();
+        let (right_sign, right_mag) = rhs.sign_magnitude();
+        let truncating_remainder = left_mag % right_mag;
+        if truncating_remainder == 0 {
+            return Self::zero().with_optional_runtime_kind(runtime_kind);
+        }
+        let signs_differ = left_sign != IntegerSign::Zero && left_sign != right_sign;
+        let magnitude = if signs_differ {
+            right_mag - truncating_remainder
+        } else {
+            truncating_remainder
+        };
+        Self::from_sign_and_magnitude(right_sign, magnitude)?
+            .with_optional_runtime_kind(runtime_kind)
+    }
+
     fn combine_signed_magnitudes(
         left_sign: IntegerSign,
         left_mag: u128,

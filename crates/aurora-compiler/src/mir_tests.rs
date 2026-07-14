@@ -1814,6 +1814,82 @@ def main() -> int32:
 }
 
 #[test]
+fn indexed_compound_assignment_results_keep_the_collection_element_type() {
+    let source = r#"
+def main() -> int32:
+    mut values: Vec[int32] = [-7]
+    values[0] //= 3
+    values[0] %= -3
+    mut counts: Map[String, int32] = {"left": -7}
+    counts["left"] //= 3
+    counts["left"] %= -3
+    return 0
+"#;
+
+    let module = crate::lower_source_to_mir(source).expect("source should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should be present in MIR");
+    let local_types = main
+        .local_types
+        .iter()
+        .map(|local| (local.name.as_str(), &local.ty))
+        .collect::<BTreeMap<_, _>>();
+    let result_types = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::Binary {
+                        op: BinaryOp::FloorDiv | BinaryOp::Mod,
+                        ..
+                    },
+            } => local_types.get(target.as_str()).copied(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        result_types,
+        vec![
+            &Type::named("int32"),
+            &Type::named("int32"),
+            &Type::named("int32"),
+            &Type::named("int32"),
+        ],
+        "Vec and Map compound results must retain their indexed int32 element type",
+    );
+
+    let negative_rhs_types = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Binary {
+                        op: BinaryOp::Mod,
+                        right: Operand::Place(place),
+                        ..
+                    },
+                ..
+            } => local_types.get(place.as_str()).copied(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        negative_rhs_types,
+        vec![&Type::named("int32"), &Type::named("int32")],
+        "contextual negative RHS values must retain the indexed int32 element type",
+    );
+}
+
+#[test]
 fn lowerer_constructor_inference_and_for_fallback_cover_unchecked_edges() {
     let program = Box::leak(Box::new(checked_program(
         "\

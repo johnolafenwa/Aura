@@ -5,10 +5,10 @@ def main() -> int32:
     print(signed_left + signed_right)
     print(signed_left - signed_right)
     print(signed_left * signed_right)
-    print(signed_left / signed_right)
+    print(signed_left // signed_right)
     print(signed_left % signed_right)
     print(-signed_left)
-    print(signed_negative / signed_right)
+    print(signed_negative // signed_right)
     print(signed_negative % signed_right)
     signed_minimum: int64 = -9223372036854775808
     signed_negative_one: int64 = -1
@@ -25,7 +25,7 @@ def main() -> int32:
     print(unsigned_high + unsigned_two)
     print(unsigned_max - unsigned_two)
     print(unsigned_quarter * unsigned_two)
-    print(unsigned_max / unsigned_two)
+    print(unsigned_max // unsigned_two)
     print(unsigned_max % unsigned_two)
     print(unsigned_high > unsigned_mid)
     print(unsigned_max > unsigned_high)

@@ -12,8 +12,8 @@ def main() -> int32:
     a *= 4
     print(a)    # 48
 
-    # /= on int32
-    a /= 6
+    # //= on int32
+    a //= 6
     print(a)    # 8
 
     # %= on int32
@@ -42,8 +42,8 @@ def main() -> int32:
     c += 50
     c -= 25
     c *= 2
-    c /= 5
-    print(c)    # ((100+50-25)*2)/5 = 250/5 = 50
+    c //= 5
+    print(c)    # ((100+50-25)*2)//5 = 250//5 = 50
 
     # Augmented assignment with int64
     mut d: int64 = 1000000000

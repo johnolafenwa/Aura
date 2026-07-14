@@ -1,0 +1,90 @@
+copy class Totals:
+    small: int32
+    wide: int64
+    ratio: float64
+
+    def apply_floor_rules(borrow mut self):
+        self.small //= 3
+        self.wide %= -3
+        self.ratio //= -2.0
+
+def main() -> int32:
+    signed8_left: int8 = -7
+    signed8_right: int8 = 3
+    print(signed8_left // signed8_right)
+    print(signed8_left % signed8_right)
+
+    signed16_left: int16 = -7
+    signed16_right: int16 = 3
+    print(signed16_left // signed16_right)
+    print(signed16_left % signed16_right)
+
+    signed32_left: int32 = -7
+    signed32_right: int32 = 3
+    print(signed32_left // signed32_right)
+    print(signed32_left % signed32_right)
+
+    signed64_left: int64 = -7
+    signed64_right: int64 = 3
+    print(signed64_left // signed64_right)
+    print(signed64_left % signed64_right)
+
+    signed128_left: int128 = -7
+    signed128_right: int128 = 3
+    print(signed128_left // signed128_right)
+    print(signed128_left % signed128_right)
+
+    signed_size_left: intsize = -7
+    signed_size_right: intsize = 3
+    print(signed_size_left // signed_size_right)
+    print(signed_size_left % signed_size_right)
+
+    unsigned8_left: uint8 = 7
+    unsigned8_right: uint8 = 3
+    print(unsigned8_left // unsigned8_right)
+    print(unsigned8_left % unsigned8_right)
+
+    unsigned16_left: uint16 = 7
+    unsigned16_right: uint16 = 3
+    print(unsigned16_left // unsigned16_right)
+    print(unsigned16_left % unsigned16_right)
+
+    unsigned32_left: uint32 = 7
+    unsigned32_right: uint32 = 3
+    print(unsigned32_left // unsigned32_right)
+    print(unsigned32_left % unsigned32_right)
+
+    unsigned64_left: uint64 = 7
+    unsigned64_right: uint64 = 3
+    print(unsigned64_left // unsigned64_right)
+    print(unsigned64_left % unsigned64_right)
+
+    unsigned128_left: uint128 = 7
+    unsigned128_right: uint128 = 3
+    print(unsigned128_left // unsigned128_right)
+    print(unsigned128_left % unsigned128_right)
+
+    unsigned_size_left: uintsize = 7
+    unsigned_size_right: uintsize = 3
+    print(unsigned_size_left // unsigned_size_right)
+    print(unsigned_size_left % unsigned_size_right)
+
+    mut totals = Totals(small=-7, wide=7, ratio=7.5)
+    totals.apply_floor_rules()
+    print(totals.small)
+    print(totals.wide)
+    print(totals.ratio)
+
+    mut values: Vec[int32] = [-7, 7]
+    values[0] //= 3
+    values[1] %= -3
+    print(values[0])
+    print(values[1])
+
+    mut counts: Map[String, int32] = {"left": -7, "right": 7}
+    counts["left"] //= 3
+    counts["right"] %= -3
+    print(counts["left"])
+    print(counts["right"])
+
+    return 0

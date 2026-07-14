@@ -1,0 +1,4 @@
+def main() -> int32:
+    value: int64 = 7 / 3
+    print(value)
+    return 0

@@ -10,7 +10,7 @@ def main():
     x *= 2
     print(x)
 
-    x /= 4
+    x //= 4
     print(x)
 
     x %= 3

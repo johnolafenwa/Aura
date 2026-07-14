@@ -1,5 +1,5 @@
 def main() -> int32:
-    # Integer modulo by zero - should this crash or error?
+    # Integer modulo by zero traps with "division by zero".
     a: int32 = 10
     b: int32 = 0
     print(a % b)

@@ -40,6 +40,7 @@ After the release build completes, run the binary directly:
 ./target/release/aura run examples/traits/operator_traits.au
 ./target/release/aura run examples/traits/ordering_traits.au
 ./target/release/aura run examples/traits/specialized_trait_dispatch.au
+./target/release/aura run examples/basics/numbers.au
 ./target/release/aura run examples/numbers/numeric_casts.au
 ./target/release/aura run examples/numbers/numeric_builtins.au
 ./target/release/aura run examples/strings/string_methods.au
@@ -76,6 +77,7 @@ You can do the same with the other current examples:
 ./target/release/aura run examples/collections/set_basics.au
 ./target/release/aura run examples/generics/box_and_wrapper.au
 ./target/release/aura run examples/traits/greeter.au
+./target/release/aura run examples/basics/numbers.au
 ./target/release/aura run examples/numbers/numeric_casts.au
 ./target/release/aura run examples/numbers/numeric_builtins.au
 ./target/release/aura run examples/strings/string_methods.au
@@ -131,7 +133,7 @@ aura deps update util
 - `aura run <file.au>`
   - run a program through the MIR runtime
   - this now includes the maintained `pass` statement and `sleep(duration)` builtin
-  - the maintained user-facing surface now also includes the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, `Set[T]`, bounded `Queue[T]`, scheduler-aware text/binary file I/O plus the maintained socket/networking and shell-free process/supervisor surface through `io`, `fs`, `net`, and `process`, specialized generic trait bounds, and the current operator-trait subset
+  - the maintained user-facing surface now also includes explicit floor division, divisor-sign remainder, integer `.to_float()`, the expanded `String` utility and parsing surface, numeric helper builtins, `Vec[T]`, `Map[K, V]`, `Set[T]`, bounded `Queue[T]`, scheduler-aware text/binary file I/O plus the maintained socket/networking and shell-free process/supervisor surface through `io`, `fs`, `net`, and `process`, specialized generic trait bounds, and the current operator-trait subset
   - local file imports and `public` module boundaries now work for file-backed programs
   - manifest-rooted packages now also resolve sibling path dependencies, git dependencies, and workspace members when the entry file lives under a package `src/`
   - append `-- <program-args>...` to expose arguments through `sys.args()`

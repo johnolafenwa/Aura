@@ -65,7 +65,7 @@ fn runtime_error_surface_covers_public_run_and_explicit_mir_failures() {
     assert_runtime_error_contains(
         r#"
 def main() -> int32:
-    return 1 / 0
+    return 1 // 0
 "#,
         "division by zero",
     );
@@ -103,7 +103,7 @@ class Resource:
 def main() -> int32:
     with Resource(name="r1") as resource:
         print("inside")
-        return 1 / 0
+        return 1 // 0
 "#;
 
     let error = run_source(source).expect_err("division by zero should fail at runtime");

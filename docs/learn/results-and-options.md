@@ -33,7 +33,7 @@ The short-form patterns `Some(name)` and `None` also work when the compiler alre
 def divide(left: int32, right: int32) -> Result[int32, String]:
     if right == 0:
         return Result.Err("division by zero")
-    return Result.Ok(left / right)
+    return Result.Ok(left // right)
 
 match divide(10, 2):
     case Result.Ok(value):

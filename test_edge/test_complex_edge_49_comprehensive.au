@@ -9,7 +9,7 @@ copy class Temperature:
 
 impl Processable for Temperature:
     def process(borrow self) -> int32:
-        return self.celsius * 9 / 5 + 32
+        return self.celsius * 9 // 5 + 32
 
 copy class Distance:
     meters: int32

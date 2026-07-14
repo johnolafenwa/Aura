@@ -16,10 +16,10 @@ use crate::mir::{
 };
 use crate::runtime_value::{
     cast_numeric_value, decode_process_restart_policy, decode_process_stdio,
-    evaluate_host_builtin_with_program_args, host_process_args, io_error, io_read_line,
-    option_none, option_some, poll_cancellation, process_error_cancelled, process_error_io,
-    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
-    process_stdio_inherit, process_stdio_null, process_stdio_pipe,
+    evaluate_host_builtin_with_program_args, float_floor_divmod, host_process_args, io_error,
+    io_read_line, option_none, option_some, poll_cancellation, process_error_cancelled,
+    process_error_io, process_error_no_command, process_error_spawn, process_error_timed_out,
+    process_exit_status, process_stdio_inherit, process_stdio_null, process_stdio_pipe,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
@@ -41,6 +41,9 @@ use crate::runtime_value::{
     VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{substitute_type, Type};
+
+const MIR_FLOOR_DIVISION_OPERANDS_ERROR: &str =
+    "MIR floor division requires matching numeric operands";
 
 pub type StdoutSink = Arc<dyn Fn(&str) + Send + Sync + 'static>;
 
@@ -2233,6 +2236,12 @@ impl MirRuntime {
                             return Err(Diagnostic::new("`to_string` does not take arguments"));
                         }
                         Ok(Value::String(value.to_string()))
+                    }
+                    Value::Int(value) if field == "to_float" => {
+                        if !args.is_empty() {
+                            return Err(Diagnostic::new("`to_float` does not take arguments"));
+                        }
+                        Ok(Value::Float(value.to_f64()))
                     }
                     Value::Float(value) if field == "to_string" => {
                         if !args.is_empty() {
@@ -5464,20 +5473,40 @@ impl MirRuntime {
                     "MIR binary division requires matching numeric operands",
                 )),
             },
+            BinaryOp::FloorDiv => match (left, right) {
+                (Value::Int(_), Value::Int(right)) if right.is_zero() => Err(match span {
+                    Some(span) => Diagnostic::at(span, "division by zero"),
+                    None => Diagnostic::new("division by zero"),
+                }),
+                (Value::Int(left), Value::Int(right)) => Ok(Value::Int(
+                    left.checked_floor_div(right)
+                        .expect("non-zero matching integer floor division is total"),
+                )),
+                (Value::Float(_), Value::Float(0.0)) => Err(match span {
+                    Some(span) => Diagnostic::at(span, "division by zero"),
+                    None => Diagnostic::new("division by zero"),
+                }),
+                (Value::Float(left), Value::Float(right)) => {
+                    Ok(Value::Float(float_floor_divmod(left, right).0))
+                }
+                _ => Err(Diagnostic::new(MIR_FLOOR_DIVISION_OPERANDS_ERROR)),
+            },
             BinaryOp::Mod => match (left, right) {
                 (Value::Int(_left), Value::Int(right)) if right.is_zero() => Err(match span {
                     Some(span) => Diagnostic::at(span, "division by zero"),
                     None => Diagnostic::new("division by zero"),
                 }),
                 (Value::Int(left), Value::Int(right)) => Ok(Value::Int(
-                    left.checked_rem(right)
+                    left.checked_floor_rem(right)
                         .expect("non-zero integer remainder is total"),
                 )),
                 (Value::Float(_left), Value::Float(0.0)) => Err(match span {
                     Some(span) => Diagnostic::at(span, "division by zero"),
                     None => Diagnostic::new("division by zero"),
                 }),
-                (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left % right)),
+                (Value::Float(left), Value::Float(right)) => {
+                    Ok(Value::Float(float_floor_divmod(left, right).1))
+                }
                 _ => Err(Diagnostic::new(
                     "MIR binary remainder requires matching numeric operands",
                 )),

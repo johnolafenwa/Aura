@@ -12,9 +12,62 @@ b: int32 = 10
 print(a + b)    # 16
 print(a - b)    # -4
 print(a * b)    # 60
-print(b / a)    # 1 (integer division)
+print(b // a)   # 1 (floor division)
 print(b % a)    # 4
+print(-b // a)  # -2
+print(-b % a)   # 2
 ```
+
+Integer `/` is intentionally rejected: it is too easy to misread as either
+truncating integer division or floating true division. Use `//` for a floor
+quotient. Both `//` and `%` follow the divisor-sign rule, including when either
+operand is negative:
+
+```python
+print(7 // -3)  # -3
+print(7 % -3)   # -2
+print(-7 // 3)  # -3
+print(-7 % 3)   # 2
+```
+
+The identity `a == (a // b) * b + (a % b)` holds for nonzero integer `b`.
+Integer `//` and `%` by zero fail at runtime. Floating-point `/` remains true
+division:
+
+```python
+print(7.0 / 2.0) # 3.5
+```
+
+When the inputs are integers and true division is intended, convert both with
+`.to_float()`:
+
+```python
+numerator: int64 = 7
+denominator: int64 = 2
+print(numerator.to_float() / denominator.to_float()) # 3.5
+```
+
+Every integer type has `.to_float() -> float64`. It rounds to the nearest
+representable IEEE-754 value using ties-to-even, so large integers may change:
+
+```python
+large: int64 = 9007199254740993
+print(large.to_float()) # 9007199254740992.0
+```
+
+Floating values also support `//` and `%`. They use the CPython-compatible
+floor/divmod correction, so the remainder follows the divisor's sign even
+where a naive host remainder would not. Floating `/`, `//`, and `%` by zero
+fail at runtime.
+
+```python
+print(-10.5 // 3.0) # -4.0
+print(-10.5 % 3.0)  # 1.5
+```
+
+The matching compound assignments are `+=`, `-=`, `*=`, `/=`, `%=`, and
+`//=`. Integer `/=` is rejected for the same reason as integer `/`; floating
+`/=` remains true division. There is no `FloorDiv` operator trait for `//`.
 
 Unary minus works on integers and floats:
 
@@ -81,7 +134,14 @@ Integer casts are range-checked at runtime -- `300 as int8` fails cleanly instea
 
 Integer-to-float casts are also exactness-checked at runtime -- Aurora rejects casts that would silently lose integer precision instead of rounding them away.
 
+That strict cast is intentionally different from `.to_float()`. For the
+`9007199254740993` value above, `large.to_float()` returns the rounded
+`9007199254740992.0`, while `large as float64` fails because the conversion is
+not exact.
+
 See [examples/numbers/numeric_casts.au](../examples/numbers/numeric_casts.au).
+The combined arithmetic example is
+[examples/basics/numbers.au](../examples/basics/numbers.au).
 
 ## The Full Numeric Type System
 

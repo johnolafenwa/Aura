@@ -4,7 +4,7 @@ def collatz_steps(n: int32) -> int32:
     mut steps: int32 = 0
     while current != 1:
         if current % 2 == 0:
-            current = current / 2
+            current = current // 2
         else:
             current = current * 3 + 1
         steps += 1

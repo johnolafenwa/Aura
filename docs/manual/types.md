@@ -40,7 +40,7 @@ Integer bounds are exact:
 | `intsize` | host-pointer-width signed range |
 | `uintsize` | host-pointer-width unsigned range |
 
-`float32` and `float64` use IEEE-754 binary32 and binary64 representations. Literal lexing first requires a finite binary64 value; contextual `float32` conversion may round or overflow as recorded in [Current Limits](/manual/current-limits). Runtime operations may produce NaN, but Aurora 0.1 makes division and remainder by zero explicit runtime failures rather than producing infinity or NaN through those operators.
+`float32` and `float64` use IEEE-754 binary32 and binary64 representations. Literal lexing first requires a finite binary64 value; contextual `float32` conversion may round or overflow as recorded in [Current Limits](/manual/current-limits). Runtime operations may produce NaN, but Aurora 0.1 makes `/`, `//`, or `%` by a floating zero explicit runtime failures rather than producing infinity or NaN through those operators.
 
 `int` is an alias for `int64`, so the two spellings have identical bounds, type identity, layout, and runtime behavior. An unsuffixed integer literal uses an expected integer type when one is available and otherwise defaults to `int64`.
 
@@ -48,7 +48,7 @@ The default does not widen explicitly typed APIs. Existing fixed `int32` contrac
 
 `Duration` stores a non-negative integral count of milliseconds representable by signed 128-bit storage. Literal units are normalized to milliseconds. `Range` contains `int32` start/end values and iterates from the start inclusive to the end exclusive.
 
-Numeric literals are checked against the target type. Integer literals must fit the annotated integer type. Integer-to-float casts reject silent precision loss.
+Numeric literals are checked against the target type. Integer literals must fit the annotated integer type. Integer-to-float casts reject silent precision loss. Separately, every integer type provides `.to_float() -> float64`, which intentionally permits IEEE-754 round-to-nearest, ties-to-even conversion when an application wants to enter the floating domain.
 
 Use `borrow String` for a shared string parameter. The spelling `str` is accepted for compatibility but currently lowers to the same canonical `String` type; code must not assume a separate slice layout or lifetime-bearing runtime representation.
 
@@ -214,7 +214,7 @@ class Node:
 Numeric casts use `value as NumericType`. Non-numeric casts are not implemented.
 
 - integer-to-integer casts require the value to fit the target bounds
-- integer-to-float casts require exact representability and reject silent precision loss
+- integer-to-float casts require exact representability and reject silent precision loss; use integer `.to_float()` when a possibly rounded `float64` result is intended
 - float-to-integer casts require a finite in-range value and truncate toward zero
 - `float64` to `float32` rounds through the host `float32` representation
 - `float32` to `float64` preserves the represented value

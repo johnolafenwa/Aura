@@ -165,6 +165,7 @@ pub(crate) fn binary_operator_trait(op: BinaryOp) -> Option<(&'static str, &'sta
         BinaryOp::Sub => Some(("Sub", "sub")),
         BinaryOp::Mul => Some(("Mul", "mul")),
         BinaryOp::Div => Some(("Div", "div")),
+        BinaryOp::FloorDiv => None,
         BinaryOp::Mod => Some(("Mod", "mod")),
         BinaryOp::Less => Some(("Ord", "lt")),
         BinaryOp::LessEq => Some(("Ord", "le")),
@@ -5203,6 +5204,12 @@ impl<'a> FunctionChecker<'a> {
         left_ty: Type,
         right_ty: Type,
     ) -> Result<Type> {
+        if op == BinaryOp::Div && left_ty == right_ty && is_integer_type(&left_ty) {
+            return Err(Diagnostic::at(
+                span,
+                "integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division",
+            ));
+        }
         match (op, &left_ty, &right_ty) {
             (BinaryOp::And | BinaryOp::Or, Type::Named(name, args), _)
                 if args.is_empty() && name == "bool" && left_ty == right_ty =>
@@ -5218,10 +5225,11 @@ impl<'a> FunctionChecker<'a> {
             {
                 Ok(left_ty)
             }
-            (BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod, _, _)
-                if left_ty == right_ty
-                    && (is_integer_type(&left_ty) || is_float_type(&left_ty)) =>
-            {
+            (
+                BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod,
+                _,
+                _,
+            ) if left_ty == right_ty && (is_integer_type(&left_ty) || is_float_type(&left_ty)) => {
                 Ok(left_ty)
             }
             (BinaryOp::Eq | BinaryOp::NotEq, _, _) if left_ty == right_ty => {
@@ -9113,6 +9121,12 @@ impl<'a> FunctionChecker<'a> {
                     );
                 }
                 match (&receiver_ty, field.as_str()) {
+                    (Type::Named(_name, type_args), "to_float")
+                        if type_args.is_empty() && is_integer_type(&receiver_ty) =>
+                    {
+                        BuiltinMember::IntegerToFloat.bind_args(args, span)?;
+                        Ok(Type::named("float64"))
+                    }
                     (Type::Named(name, type_args), "to_string")
                         if type_args.is_empty()
                             && (is_numeric_type(&receiver_ty) || name == "bool") =>

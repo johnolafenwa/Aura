@@ -1525,7 +1525,9 @@ impl<'a> AnalysisBuilder<'a> {
 
         if let Some(builtin_member) = BuiltinMember::resolve(base_name, field) {
             let ty = match builtin_member {
-                BuiltinMember::FloatSqrt => Some(Type::named("float64")),
+                BuiltinMember::FloatSqrt | BuiltinMember::IntegerToFloat => {
+                    Some(Type::named("float64"))
+                }
                 BuiltinMember::StringLen => Some(Type::named("int32")),
                 BuiltinMember::StringContains
                 | BuiltinMember::StringStartsWith
@@ -3300,6 +3302,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::ProcessCompletedStderrBytes,
         BuiltinMember::ProcessCompletedCheck,
         BuiltinMember::FloatSqrt,
+        BuiltinMember::IntegerToFloat,
         BuiltinMember::StringLen,
         BuiltinMember::StringContains,
         BuiltinMember::StringStartsWith,
