@@ -1,4 +1,4 @@
-error: default argument for parameter `factor` may not reference parameter `value`
+error[AU2004]: default argument for parameter `factor` may not reference parameter `value`
  --> crates/aurora-compiler/tests/fixtures/check-fail/default_argument_references_parameter.au:1:41
   |
 1 | def scale(value: int32, factor: int32 = value) -> int32:

@@ -1,4 +1,4 @@
-error: integer value `2147483648` does not fit in `int32`
+error[AU4002]: integer value `2147483648` does not fit in `int32`
  --> crates/aurora-compiler/tests/fixtures/run-fail/int64_to_int32_cast_out_of_range.au:3:20
   |
 3 |     value: int32 = source as int32

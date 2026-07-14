@@ -1,4 +1,4 @@
-error: integer literal `9223372036854775808` does not fit in `int64`
+error[AU2999]: integer literal `9223372036854775808` does not fit in `int64`
  --> crates/aurora-compiler/tests/fixtures/check-fail/fstring_literal_overflow_reports_inner_span.au:2:16
   |
 2 |     value = f"{9223372036854775808}"

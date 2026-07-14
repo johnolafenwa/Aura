@@ -1,0 +1,4 @@
+def main() -> int32:
+    narrow: float32 = 1.0
+    print(narrow + 16777217)
+    return 0

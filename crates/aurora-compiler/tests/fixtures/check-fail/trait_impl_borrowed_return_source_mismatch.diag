@@ -1,4 +1,4 @@
-error: method `choose` in impl of `Choose` does not match the trait signature
+error[AU2999]: method `choose` in impl of `Choose` does not match the trait signature
  --> crates/aurora-compiler/tests/fixtures/check-fail/trait_impl_borrowed_return_source_mismatch.au:8:5
   |
 8 |     def choose(borrow self, left: borrow[left] String, right: borrow[right] String) -> borrow[right] String:

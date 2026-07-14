@@ -127,6 +127,64 @@ fn run_native_entry(
 }
 
 #[test]
+fn contextual_none_rhs_equality_preserves_the_left_option_snapshot() {
+    let source = r#"
+def main() -> int32:
+    value: Option[int32] = Option.None
+    print(value == None)
+    print(value != None)
+    return 0
+"#;
+    let module = crate::lower_source_to_mir(source).expect("contextual None source should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should be lowered");
+    let comparison_lefts = main
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.iter())
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Binary {
+                        op: crate::ast::BinaryOp::Eq | crate::ast::BinaryOp::NotEq,
+                        left: Operand::Place(left),
+                        ..
+                    },
+                ..
+            } => Some(left),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(comparison_lefts.len(), 2);
+    for left in comparison_lefts {
+        assert_eq!(
+            main.local_types
+                .iter()
+                .find(|local| local.name == *left)
+                .map(|local| &local.ty),
+            Some(&Type::Named(
+                "Option".to_string(),
+                vec![Type::named("int32")]
+            )),
+            "the sequenced left operand `{left}` should retain its inferred Option type"
+        );
+    }
+    let stdout = Arc::new(Mutex::new(String::new()));
+    let mut runtime = MirRuntime::new(module, stdout.clone(), CancellationContext::default());
+
+    assert_eq!(
+        runtime
+            .run_main()
+            .expect("contextual None equality should execute"),
+        Value::Int(IntegerValue::zero())
+    );
+    assert_eq!(stdout.lock().unwrap().as_str(), "true\nfalse\n");
+}
+
+#[test]
 fn env_place_helpers_cover_nested_reads_and_writes() {
     let mut env = Env::default();
     env.define_typed(
@@ -3179,6 +3237,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
                 task_group: Operand::Unit,
                 function: "worker".to_string(),
                 args: Vec::new(),
+                span: crate::diag::Span::new(1, 1),
             },
         }],
     );

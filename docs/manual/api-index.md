@@ -78,8 +78,8 @@ See [Collections](/manual/collections) for ownership and iteration details.
 | `Map.set` | `set(key: own K, value: own V) -> Option[V]` | Inserts or replaces, returning the previous value. |
 | `Map.remove` | `remove(key: K) -> Option[V]` | Removes an entry and returns the previous value. |
 | `Map.contains_key` | `contains_key(key: K) -> bool` | Key lookup. |
-| `Map.keys` | `keys() -> Vec[K]` | Cloned keys. |
-| `Map.values` | `values() -> Vec[V]` | Cloned values. |
+| `Map.keys` | `keys() -> Vec[K]` | Cloned keys in insertion order. |
+| `Map.values` | `values() -> Vec[V]` | Cloned values in insertion order. |
 | `Map.items` | `items() -> Vec[MapEntry[K, V]]` | Entries in insertion order. |
 | `Map.entries` | `entries() -> Vec[MapEntry[K, V]]` | Same as `items()`. |
 | `Map.clear` | `clear() -> None` | Removes all entries. |

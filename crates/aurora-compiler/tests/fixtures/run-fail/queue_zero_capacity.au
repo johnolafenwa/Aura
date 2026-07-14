@@ -1,0 +1,2 @@
+def main():
+    queue = Queue[int32](capacity=0)

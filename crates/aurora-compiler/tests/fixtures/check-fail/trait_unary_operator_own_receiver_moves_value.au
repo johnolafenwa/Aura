@@ -1,0 +1,15 @@
+trait Neg[Out]:
+    def neg(own self) -> Out
+
+class Token:
+    value: String
+
+impl Neg[Token] for Token:
+    def neg(own self) -> Token:
+        return Token(value=self.value)
+
+def main():
+    value = Token(value="value")
+    negated = -value
+    print(negated.value)
+    print(value.value)

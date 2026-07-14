@@ -53,6 +53,10 @@ These commands are for debugging and understanding your code:
 - **`analyze`** -- print machine-readable compiler analysis (diagnostics, symbols, hover, definition)
 - **`complete`** -- print completion items for a position in the file
 
+`check`, `run`, and `build` accept `--format human|json` for diagnostics. The
+JSON form is schema-versioned and preserves the compiler's stable `AU####`
+code, primary and related spans, notes, help, and machine-applicable edits.
+
 ```bash
 cargo run -p aura -- ast examples/classes/point_distance.au
 cargo run -p aura -- mir examples/control_flow/while_break_continue.au

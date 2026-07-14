@@ -1,0 +1,7 @@
+def set(first: borrow mut int32, second: int32):
+    first += second
+
+def main():
+    mut value: int32 = 1
+    set(second=value, first=value)
+    print(value)

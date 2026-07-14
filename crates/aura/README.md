@@ -124,6 +124,7 @@ aura deps update util
   - print the current CLI version and exit successfully
 - `aura check <file.au>`
   - parse and type check a program
+  - add `--format json` for the schema-versioned structured diagnostic document; human diagnostics remain the default
   - nested package modules can now be checked directly, with the CLI inferring the nearest package root that satisfies their imports
   - package entrypoints under `src/` now also resolve `Aurora.toml`, local path dependencies, git dependencies, workspaces, and `Aurora.lock`
 - `aura deps update [package]`
@@ -137,6 +138,7 @@ aura deps update util
   - local file imports and `public` module boundaries now work for file-backed programs
   - manifest-rooted packages now also resolve sibling path dependencies, git dependencies, and workspace members when the entry file lives under a package `src/`
   - append `-- <program-args>...` to expose arguments through `sys.args()`
+  - add `--format json` to select structured output when checking or execution fails
 - `aura new <project-path>`
   - create `Aurora.toml` and `src/main.au`; existing paths are never overwritten
 - `aura fmt [--check] [path ...]`
@@ -148,6 +150,7 @@ aura deps update util
 - `aura build -o <output> <file.au>`
   - compile a standalone native binary for a program
   - this accepts `--backend auto|direct`
+  - this also accepts `--format human|json` for compile and build diagnostics
   - `auto` is the default; it first tries the direct native backend and may fall back to a standalone embedded-MIR launcher when direct emission is unavailable
   - `direct` forces the new low-level native backend for the full currently implemented Aurora language surface
   - source-checkout builds can refresh the runtime through Cargo; packaged release builds use the bundled runtime and require only a host C compiler
@@ -192,12 +195,18 @@ cat examples/modules/simple_import.au | ./target/release/aura run --stdin "$(pwd
 
 ## Diagnostics
 
-When `aura check`, `aura run`, `aura ast`, or `aura mir` fails, the CLI now prints:
+When a compiler-facing command fails, the default human renderer prints:
 
-- the error message
+- the stable `AU####` diagnostic code and error message
 - file, line, and column
 - the relevant source line
 - a caret under the failure location
+- labeled related spans, notes, help, and machine-applicable fixes when present
+
+`aura check --format json` emits `{"schema_version":1,"diagnostics":[...]}`.
+`run` and `build` use the same structure for failures. Each diagnostic carries
+its code, severity, message, primary and secondary spans, notes, help, and
+edits; editor tooling consumes the same compiler-owned fields.
 
 ## Current Limitation
 

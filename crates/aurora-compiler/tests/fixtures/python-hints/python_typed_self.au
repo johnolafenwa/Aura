@@ -1,0 +1,5 @@
+class Box:
+    value: int32
+
+    def read(self: Box) -> int32:
+        return self.value

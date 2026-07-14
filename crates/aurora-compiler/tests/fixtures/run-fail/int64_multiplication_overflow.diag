@@ -1,4 +1,4 @@
-error: integer value `18446744073709551614` does not fit in `int64`
+error[AU4002]: integer value `18446744073709551614` does not fit in `int64`
  --> crates/aurora-compiler/tests/fixtures/run-fail/int64_multiplication_overflow.au:4:11
   |
 4 |     print(maximum * two)

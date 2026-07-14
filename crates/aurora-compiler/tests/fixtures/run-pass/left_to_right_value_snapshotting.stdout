@@ -1,0 +1,17 @@
+binary
+3
+vector
+1
+2
+f-string
+12
+non-copy f-string
+[1]0
+[1, 2]
+compound assignment
+11
+11
+member call
+receiver
+argument
+7

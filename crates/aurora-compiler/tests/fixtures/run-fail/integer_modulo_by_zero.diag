@@ -1,4 +1,4 @@
-error: division by zero
+error[AU4004]: division by zero
  --> crates/aurora-compiler/tests/fixtures/run-fail/integer_modulo_by_zero.au:2:20
   |
 2 |     value: int32 = 10 % 0

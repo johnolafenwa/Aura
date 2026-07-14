@@ -225,9 +225,11 @@ fn lexes_single_token_and_trailing_comment_cases() {
 fn reports_lex_errors_for_tabs_bad_indentation_and_invalid_sequences() {
     let tab_error = lex("def main():\n\tprint(1)\n").unwrap_err();
     assert!(tab_error.message.contains("tabs are not supported"));
+    assert_eq!(tab_error.code, "AU1001");
 
     let indent_error = lex("def main():\n    print(1)\n  print(2)\n").unwrap_err();
     assert!(indent_error.message.contains("inconsistent indentation"));
+    assert_eq!(indent_error.code, "AU1001");
 
     let bang_error = lex("def main():\n    value = !true\n").unwrap_err();
     assert!(bang_error.message.contains("unexpected character `!`"));
@@ -236,11 +238,13 @@ fn reports_lex_errors_for_tabs_bad_indentation_and_invalid_sequences() {
     assert!(string_escape_error
         .message
         .contains("unsupported escape sequence `\\q`"));
+    assert_eq!(string_escape_error.code, "AU1001");
 
     let fstring_escape_error = lex("def main():\n    text = f\"\\q\"\n").unwrap_err();
     assert!(fstring_escape_error
         .message
         .contains("unsupported escape sequence `\\q`"));
+    assert_eq!(fstring_escape_error.code, "AU1001");
 
     let unterminated_string = lex("def main():\n    text = \"unterminated\n").unwrap_err();
     assert!(unterminated_string

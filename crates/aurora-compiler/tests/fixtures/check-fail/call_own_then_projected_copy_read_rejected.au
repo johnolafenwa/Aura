@@ -1,0 +1,10 @@
+class Box:
+    value: int32
+
+def take(item: own Box, detail: int32):
+    print(item.value)
+    print(detail)
+
+def main():
+    box = Box(value=1)
+    take(box, box.value)

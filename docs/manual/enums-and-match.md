@@ -63,6 +63,11 @@ builtin variants such as `Option.Some(own T)`, `Result.Ok(own T)`, and
 
 Do not mix positional and named construction styles in one variant call. User-defined named variants should use their declared names for clarity; multi-payload positional variants cannot be constructed with arbitrary named arguments.
 
+Named payload expressions evaluate in the order written at the call site.
+Their captured results then bind by payload name to declaration-order payload
+slots; declaration order does not reorder expression evaluation. Pattern
+payload positions continue to correspond to that declaration order.
+
 ## Generic Construction And Inference
 
 Explicit specialization fixes generic arguments:
@@ -249,3 +254,97 @@ Module-qualified builtin enums are specified by their API chapters:
 | `process.Error`, `process.SupervisorEvent`, `process.SupervisorWait` | [Process Module](/manual/process) |
 
 Treat every documented timeout, cancellation, closure, and error variant as semantically distinct. Use `_` only when all remaining outcomes genuinely share one policy.
+
+## Grammar
+
+The normative enum declaration, generic parameter, variant payload,
+construction, statement-match, expression-match, pattern, and `match borrow`
+productions are in [Grammar](/manual/grammar#enums),
+[Grammar](/manual/grammar#patterns-and-statement-matches), and
+[Grammar](/manual/grammar#match-expressions). Payload-free variants omit
+parentheses. Variant declarations use either positional or named payloads and
+cannot mix the two forms in one variant.
+
+## Typing Rules
+
+Enums are nominal, substitutions are invariant, and every payload has one
+exact declared type after generic substitution. A constructor must identify
+one existing variant and bind its complete payload shape. Generic arguments
+come from explicit specialization, payloads, or expected type; every parameter
+must resolve and satisfy its bounds. A match pattern must agree with the
+scrutinee type and payload arity. Enum and Boolean matches are exhaustive;
+open scalar literal domains require a final wildcard. Match-expression arms
+produce one compatible exact result type.
+
+## Runtime Semantics
+
+An enum value stores one variant and its payloads. Constructor payload
+expressions evaluate in source order. For named construction, captured results
+then bind by payload name to declaration-order slots. Equality compares nominal
+enum identity, variant, and payload values. A match evaluates its scrutinee exactly once,
+tests arms in source order, and executes only the first matching arm. A match
+expression evaluates only its selected result expression. `match borrow mut`
+reconstructs and writes the selected enum value back to its mutable place on
+normal arm exit.
+
+## Ownership And Evaluation Order
+
+Every variant payload is an owned destination. By-value matching consumes a
+non-copy scrutinee and gives owned non-copy payload bindings. `match borrow`
+retains the scrutinee and exposes shared payload borrows; `match borrow mut`
+requires one exclusive mutable place and exposes mutable payload borrows.
+Copy payloads copy normally. Pattern bindings are arm-local, and reassigning a
+matched place or ancestor invalidates dependent mutable bindings while a
+proven-disjoint sibling write does not. Aurora performs no hidden payload clone.
+
+## Diagnostics
+
+`AU1101` reports malformed enum, variant, match, arm, or pattern syntax.
+`AU2001` reports unknown enum types, variants, and payload types. `AU2002`
+covers generic inference or bounds, constructor/payload type mismatch,
+literal-pattern type mismatch, and incompatible match-expression results.
+`AU2004` reports invalid variant-constructor argument binding. `AU2999` covers
+duplicate variants, invalid payload shapes, missing or unreachable arms,
+non-exhaustive matches, unsupported pattern forms, and remaining enum/match
+rejections. `AU3001` reports use after a by-value match or payload move.
+`AU3002` reports moving through a borrowed match, overlapping mutable matches,
+requiring a mutable match place, or invalid borrowed-result materialization.
+`AU3003` reports mutation or reassignment through an immutable enum/payload
+place.
+
+Operations in the selected arm retain their runtime code: `AU4001` for a
+general trap, `AU4002` for arithmetic overflow or underflow, `AU4003` for a
+bounds or lookup violation, `AU4004` for a zero divisor, and `AU4005` for a
+resource or I/O failure.
+
+## Backend Support
+
+User and builtin generic enums, structural enum equality, construction and
+inference, statement and expression matches, exhaustiveness, nested patterns,
+short variants, scalar literal patterns, by-value matching, and shared/mutable
+borrowed matching are implemented for MIR execution and direct native
+generation. Both backends receive the same checked arm decision tree and are
+forced to agree on selected arms, payload values, writeback, and primary
+diagnostics.
+
+## Limits And Implementation-Defined Behavior
+
+Aurora 0.1 has no match guards, or-patterns, range/rest patterns, named-payload
+patterns, class/collection destructuring, top-level catch-all binding pattern,
+arbitrary predicate pattern, Duration/f-string pattern, or inline suite for
+statement matches. Expression arms contain exactly one expression.
+Non-copy borrowed results remain contained even when produced inside a match.
+`TaskResult`, `WaitAny`, and `WaitAll` remain move outcome types regardless of
+copy payloads. Scrutinee and arm order, exhaustiveness, payload order, and
+borrowed-match writeback are language-defined rather than
+implementation-defined.
+
+## Status
+
+Nominal and generic enums, positional and named payloads, qualified and
+contextual builtin construction, structural copy/move classification,
+statement and expression matches, exhaustiveness, nested enum patterns, scalar
+literal patterns, wildcards, short variants, and borrowed matching are
+implemented for the post-Phase 1.5 surface. Live non-copy borrowed match
+results are reserved for the Phase 6 alias work. Guards, or-patterns, general
+destructuring, and arbitrary predicate patterns are unavailable.

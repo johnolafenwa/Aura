@@ -1,4 +1,4 @@
-error: parameters with default arguments must come after required parameters
+error[AU2004]: parameters with default arguments must come after required parameters
  --> crates/aurora-compiler/tests/fixtures/check-fail/default_argument_before_required.au:1:29
   |
 1 | def scale(value: int32 = 2, factor: int32) -> int32:

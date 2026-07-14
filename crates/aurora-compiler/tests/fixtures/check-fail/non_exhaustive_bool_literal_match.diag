@@ -1,4 +1,4 @@
-error: non-exhaustive match over `bool`: missing `false`
+error[AU2999]: non-exhaustive match over `bool`: missing `false`
  --> crates/aurora-compiler/tests/fixtures/check-fail/non_exhaustive_bool_literal_match.au:2:5
   |
 2 |     match flag:

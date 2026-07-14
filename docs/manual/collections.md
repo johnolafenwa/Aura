@@ -34,6 +34,10 @@ empty: Set[int32] = {}
 other = Set[int32]()
 ```
 
+`Set{a, b, c}` is the explicit set-literal form. In particular, `Set{}`
+parses unambiguously as a set, although an empty explicit set still needs an
+expected `Set[T]` type because it has no element from which to infer `T`.
+
 Empty collection literals always need an expected type.
 
 ## Iteration
@@ -65,6 +69,12 @@ for entry in counts.items():
 
 `for value in borrow mut set:` is not supported. Mutate sets with `insert` and `remove`.
 
+Bare or explicit shared Vec/Set iteration freezes the selected collection for
+the loop. `own` iteration instead moves the collection once into a loop-private
+source. Reinitializing the consumed source binding in the body cannot switch or
+truncate the active iteration. ADR-0017 records this one-time source-selection
+rule provisionally without changing ADR-0006's loop ownership modes.
+
 ## Vec[T]
 
 `Vec[T]` stores values in insertion order and indexes them with `int32`.
@@ -94,6 +104,9 @@ normalization, each operation keeps its normal bounds contract.
 | `reverse` | `reverse() -> None` | Reverses the vector in place. |
 
 `get` is the safe lookup primitive. Use it when absence is a normal condition.
+Direct indexed reads and compound indexed assignment require copy `T`; simple
+indexed assignment may store any `T`. For a non-copy read-modify-write, use an
+explicit `get` or `remove` followed by a simple write.
 
 ```python
 match values.get(index):
@@ -111,7 +124,8 @@ print(values[-1])             # 30
 print(values.get(-2))         # Option.Some(20)
 values[-1] = 31               # writes the final element
 values.insert(-1, 25)         # [10, 20, 25, 31]
-values.insert(values.len(), 40) # appends
+end_index = values.len()
+values.insert(end_index, 40)  # appends
 ```
 
 `set`, `remove`, `swap`, and `insert` treat invalid indexes as runtime errors because they usually indicate a broken invariant. Use `get` before mutating when an out-of-range index is normal program data.
@@ -130,7 +144,10 @@ contract and returns `None`.
 | API | Signature | Contract |
 | --- | --- | --- |
 | constructor | `Map[K, V]()` | Creates an empty map. |
-| literal | `{key: value}` | Creates a map from literal pairs. |
+| literal | `{key: value}` | Creates a map in source order; a later equal key replaces the earlier value while retaining the key's first insertion slot. |
+| indexed read | `map[key] -> V` for copy `V` | Returns the stored copy value; a missing key traps with `AU4003`. Non-copy `V` is rejected. |
+| indexed assignment | `map[key] = value` for any `V` | Owns the key and value, consuming either when non-copy, then inserts or replaces without an absence trap. |
+| compound indexed assignment | `map[key] op= rhs` for copy `V` | Copies the stored value, applies `op` with `rhs`, and stores the result. A missing key traps with `AU4003`; non-copy `V` is rejected. |
 | `len` | `len() -> int32` | Returns the number of entries. |
 | `is_empty` | `is_empty() -> bool` | Returns `true` when there are no entries. |
 | `clone` | `clone() -> Map[K, V]` | Returns a new owned map with cloned keys and values. |
@@ -138,8 +155,8 @@ contract and returns `None`.
 | `set` | `set(key: own K, value: own V) -> Option[V]` | Inserts or replaces `key`, returning the previous value when present. |
 | `remove` | `remove(key: K) -> Option[V]` | Removes `key`, returning the previous value when present. |
 | `contains_key` | `contains_key(key: K) -> bool` | Returns `true` when `key` exists. |
-| `keys` | `keys() -> Vec[K]` | Returns the current keys as cloned owned values. |
-| `values` | `values() -> Vec[V]` | Returns the current values as cloned owned values. |
+| `keys` | `keys() -> Vec[K]` | Returns cloned owned keys in insertion order. |
+| `values` | `values() -> Vec[V]` | Returns cloned owned values in their keys' insertion order. |
 | `items` | `items() -> Vec[MapEntry[K, V]]` | Returns key/value entries in insertion order. |
 | `entries` | `entries() -> Vec[MapEntry[K, V]]` | Same contract as `items()`. |
 | `clear` | `clear() -> None` | Removes all entries. |
@@ -152,8 +169,9 @@ contract and returns `None`.
 | `key` | `K` |
 | `value` | `V` |
 
-`get`, `remove`, and `contains_key` borrow their keys, while `set` owns and
-stores its key and value. No clone is needed for lookup followed by insertion:
+`get`, `remove`, and `contains_key` retain their keys: copy keys are copied and
+non-copy keys are shared-borrowed. `set` owns and stores its key and value. No
+clone is needed for lookup followed by insertion:
 
 ```python
 def bump(counts: borrow mut Map[String, int32], key: own String):
@@ -163,6 +181,33 @@ def bump(counts: borrow mut Map[String, int32], key: own String):
         case Option.None:
             counts.set(key, 1)
 ```
+
+Map literal entries evaluate from left to right, each key before its value. If
+a later key equals an earlier key, the later value replaces the earlier value
+without moving that key's first insertion slot. The later key and value are
+still evaluated and pass through their owned literal positions.
+
+Direct `map[key]` is available only when `V` is copyable. Its lookup key uses
+the same retained mode: copy `K` is copied and non-copy `K` is shared-borrowed.
+The read returns the stored copy value; an absent key is a runtime `AU4003`
+trap. For non-copy values, use `get(key)` for an explicit cloned optional read
+or `remove(key)` to transfer the stored value out. Simple indexed assignment is
+the storing counterpart and accepts every `V`: its key and value are owned
+positions matching `set(key: own K, value: own V)`, so either is consumed when
+non-copy. The key evaluates and is captured before the right-hand value is
+evaluated; value-side effects cannot change the key already selected for
+storage. Assignment inserts an absent key or replaces an equal key's value and
+does not trap merely because the key was absent. `set`, indexed assignment,
+literal duplicate replacement, and `extend` preserve an equal existing key's
+insertion slot.
+
+Compound Map indexed assignment is narrower. `map[key] op= rhs` is permitted
+only for copy `V`, because it must first read the stored value and later write
+the operator result. A missing key traps with `AU4003` at that read. For
+non-copy `V`, Aurora neither inserts an implicit clone nor destructively removes
+the stored value before an operation that may fail.
+Use `get(key)` for an explicit cloned optional read, or `remove(key)` to take
+ownership and perform an explicit simple assignment.
 
 ## Set[T]
 
@@ -196,7 +241,11 @@ ids.insert(42)
 
 Collection equality compares contents. Vectors compare element order. Maps and sets compare their stored entries by key/value equality.
 
-Methods that return values from a collection return owned values. For move element types, that means the returned value is cloned and the collection keeps its element. Methods that remove values, such as `pop` and `remove`, transfer the stored value out of the collection.
+Collection methods return owned values. Non-removing reads such as `get`,
+`keys`, `values`, `items`, and `entries` explicitly clone move values so the
+collection retains its contents. `pop` and `remove` transfer the removed stored
+value, and `set` transfers the displaced previous value while storing its new
+owned replacement.
 
 ## Choosing The Right Collection
 
@@ -205,3 +254,119 @@ Use `Vec[T]` when order or duplicates matter.
 Use `Map[K, V]` when you need to find or update a value by key.
 
 Use `Set[T]` when the question is "have I seen this before?"
+
+## Grammar
+
+The normative productions for list, map, set, and empty collection literals;
+generic collection types; indexing; indexed assignment; method calls; and
+loop ownership modifiers are in [Grammar](/manual/grammar). The first colon in
+a nonempty brace literal selects map syntax. `{}` is grammatically a map but
+may type as an empty `Set[T]` under an expected set type. `Set{...}` is the
+explicit set-literal form, and `Set[T]()` is the typed constructor form.
+
+## Typing Rules
+
+Every collection is homogeneous under one exact invariant specialization.
+Literal elements, keys, and values must agree after contextual literal typing,
+and empty literals require an expected collection type. Vec indexes have exact
+type `int32`; Map indexes and lookup keys have exact type `K`. Mutating and
+retaining APIs use the owned positions shown in the tables above, and every
+mutating method or indexed assignment requires a mutable collection place.
+Bare or explicit shared Vec/Set iteration borrows the collection, `own`
+consumes it, and `borrow mut` is supported only for a mutable Vec place. A
+direct Map read requires copy `V`; non-copy reads use `get` or `remove`. Simple
+indexed assignment accepts any Vec element or Map value type and owns the
+assigned value; a Map also owns its key. Compound indexed assignment requires
+copy `T` for Vec and copy `V` for Map.
+
+## Runtime Semantics
+
+Vec preserves element order. Literal elements evaluate in source order; a map
+evaluates each key before its value and entries in source order. Set collapses
+equal duplicates and compares by contents. Map and Set equality ignores
+insertion order, while Vec equality includes order. Map `items()` and
+`entries()` explicitly return insertion order; `keys()` and `values()` return
+the corresponding insertion-ordered projections. Every Vec index is
+normalized once with `len + i` when negative and then checked under that
+operation's documented range. Vec `get` returns `None` for absence; the
+mutating Vec index methods trap on an invalid normalized index. A later equal
+Map-literal key replaces the earlier value and preserves the first slot. A
+missing direct Map index traps with `AU4003`; simple indexed assignment inserts
+or replaces for any `V`; compound indexed assignment requires a copy Vec
+element or Map value and traps with `AU4003` when a Map key is absent.
+
+## Ownership And Evaluation Order
+
+Collection literals, storing methods, and simple Map indexed assignment own
+every stored non-copy element, key, and value. In simple Map indexed assignment
+the key is fully evaluated and captured, then consumed when non-copy, before the
+assigned value is evaluated or consumed. Methods documented as cloned reads,
+including `get`, create an explicit new owned structural value; `pop` and
+`remove` transfer stored values out. A direct Map read returns only a copy
+`V`, so it never hides a clone. Bare/borrow iteration freezes the iterated
+place, own iteration moves once into a loop-private source, and mutable Vec
+iteration writes through its exclusive borrow. Reinitializing an own-iteration
+source binding does not change the active loop. Non-copy Vec/Map elements are
+rejected as direct compound targets rather than implicitly cloned or moved.
+Collection and argument expressions retain the language-wide left-to-right
+order.
+
+## Diagnostics
+
+`AU1101` reports malformed literal, index, method-call, or loop syntax.
+`AU2001` reports unknown collection types and members. `AU2002` covers literal
+element/key/value mismatch, missing empty-literal context, generic arity,
+index/key type mismatch, and method argument type mismatch. `AU2004` reports
+invalid constructor or method argument binding. `AU2005` supplies the focused
+Python-migration guidance for `len(...)`, `.append(...)`, `in`, and
+comprehensions. `AU2999` covers unsupported collection methods, non-indexable
+values, forbidden non-copy direct reads, non-copy Vec/Map indexed compound
+assignment, and remaining static collection rejections. `AU3001` reports use after moving a
+stored value, indexed-assignment key, or consuming collection. `AU3002`
+reports mutation/move while a collection or element is borrowed and invalid
+mutable iteration. `AU3003` reports mutation through an immutable collection
+place. `AU4003` (`bounds or lookup violation`) reports an out-of-range Vec
+index or a missing direct Map key.
+Optional absence from `get` and Boolean absence from Set/Map membership or
+removal are typed values, not diagnostics.
+
+## Backend Support
+
+Vec, Map, and Set literals, equality, cloning, iteration, indexing, mutation,
+and the complete method tables above are implemented for MIR execution and
+direct native generation. Both backends use the same static collection types
+and are parity-tested for duplicate-key replacement, key-before-value effects,
+indexed reads and writes, missing-key traps, and maintained observable
+behavior. Compiler analysis and the LSP consume those same builtin signatures.
+
+## Limits And Implementation-Defined Behavior
+
+Mutable Set iteration and direct Map iteration are unavailable; iterate the
+owned Vec snapshots returned by Map methods. Arbitrary user-defined iterables,
+comprehensions, trailing commas, and general multiline literals are
+unavailable. The slice surface is reserved for Phase 7 and is not accepted in
+Aurora 0.1. Set iteration and rendering currently follow an insertion-oriented
+representation, but Set order is not a promised API contract; algorithms MUST
+NOT depend on it. Allocation success is limited by available host resources.
+Map duplicate-key position, read ownership, simple-assignment ownership/order,
+and missing-key behavior are language rules under ADR-0014. Copy-only Vec/Map
+indexed compound assignment is a language rule under ADR-0016. Neither is
+implementation-defined permission for backend divergence.
+
+## Status
+
+Vec, Map, and Set typing, literals, constructors, equality, cloning, Vec/Set
+iteration modes, negative Vec indexing, and the documented method surfaces are
+implemented for the post-Phase 1.5 surface. The duplicate-key, direct-read,
+simple-assignment, and compound-assignment Map rules are implemented under
+`architecture_docs/decisions/0014-map-literals-and-indexing.md`, whose status is
+**Provisional — Batch 1 checkpoint review**. They are pinned by
+`crates/aurora-compiler/tests/fixtures/run-pass/map_literal_duplicate_keys.au`,
+`crates/aurora-compiler/tests/fixtures/check-fail/map_index_non_copy_requires_explicit_clone.au`,
+`crates/aurora-compiler/tests/fixtures/check-fail/map_index_assignment_consumes_noncopy_key.au`,
+`crates/aurora-compiler/tests/fixtures/check-fail/map_compound_assignment_noncopy_value_rejected.au`,
+and
+`crates/aurora-compiler/tests/fixtures/run-fail/map_index_missing_key.au`.
+Mutable Set iteration, direct Map iteration, general iterable protocols,
+and comprehensions are unavailable. Collection slicing is reserved for the
+Phase 7 slice work.

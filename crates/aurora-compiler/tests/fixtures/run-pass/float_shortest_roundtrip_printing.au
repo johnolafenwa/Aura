@@ -1,0 +1,17 @@
+def main() -> int32:
+    exact: int64 = 9007199254740992
+    below: int64 = 9007199254740991
+    above: int64 = 9007199254740993
+
+    print(9007199254740992.0)
+    print(exact.to_float())
+    print(below.to_float())
+    print(above.to_float())
+    print(1e300)
+    print(1e-300)
+    print(-0.0)
+    print(0.1 + 0.2)
+
+    narrow: float32 = 834.6
+    print(narrow)
+    return 0

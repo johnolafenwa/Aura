@@ -291,6 +291,12 @@ fn machine_readable_analysis_reports_diagnostics() {
     let analysis = analyze_source(source);
 
     assert_eq!(analysis.diagnostics.len(), 1);
+    assert_eq!(analysis.diagnostics[0].code, "AU2001");
+    assert_eq!(analysis.diagnostics[0].severity, 1);
+    assert!(analysis.diagnostics[0].secondary_spans.is_empty());
+    assert!(analysis.diagnostics[0].notes.is_empty());
+    assert!(analysis.diagnostics[0].help.is_empty());
+    assert!(analysis.diagnostics[0].edits.is_empty());
     assert!(analysis.diagnostics[0]
         .message
         .contains("unknown name `total`"));
@@ -2294,6 +2300,91 @@ fn compiler_analysis_handles_named_wait_any_timeout() {
     assert!(analysis.occurrences.iter().any(|occurrence| occurrence
         .hover
         .contains("wait_any(tasks: Vec[Task[T]], timeout: Duration = ...) -> WaitAny[T]")));
+}
+
+#[test]
+fn compiler_analysis_preserves_real_ownership_diagnostic_metadata() {
+    let source = "def take(value: String) -> String:\n    return value\n";
+    let analysis = analyze_source(source);
+
+    assert_eq!(analysis.diagnostics.len(), 1);
+    let diagnostic = &analysis.diagnostics[0];
+    assert_eq!(diagnostic.code, "AU3002");
+    assert_eq!((diagnostic.line, diagnostic.start_character), (1, 11));
+    assert_eq!(diagnostic.secondary_spans.len(), 1);
+    assert_eq!(
+        (
+            diagnostic.secondary_spans[0].line,
+            diagnostic.secondary_spans[0].start_character,
+            diagnostic.secondary_spans[0].label.as_str(),
+        ),
+        (0, 9, "parameter `value` is borrowed here")
+    );
+    assert_eq!(
+        diagnostic.help,
+        ["declare the parameter as `own String` when the function should consume it, or call `.clone()` to consume an independent copy"]
+    );
+    assert_eq!(diagnostic.edits.len(), 1);
+    assert_eq!(
+        (
+            diagnostic.edits[0].line,
+            diagnostic.edits[0].start_character,
+            diagnostic.edits[0].end_character,
+            diagnostic.edits[0].replacement.as_str(),
+            diagnostic.edits[0].applicability.as_str(),
+        ),
+        (1, 16, 16, ".clone()", "machine-applicable")
+    );
+    assert!(
+        crate::check_source("def take(value: String) -> String:\n    return value.clone()\n")
+            .is_ok()
+    );
+}
+
+#[test]
+fn compiler_analysis_reports_provenance_for_representative_ownership_paths() {
+    let cases = [
+        (
+            "def consume(value: own String):\n    pass\n\ndef main() -> int32:\n    value = \"x\"\n    consume(value)\n    print(value)\n    return 0\n",
+            "AU3001",
+            "use of moved value",
+            true,
+        ),
+        (
+            "def main() -> int32:\n    mut values = [1]\n    for value in borrow values:\n        values.clear()\n    return 0\n",
+            "AU3002",
+            "borrowed for iteration",
+            false,
+        ),
+        (
+            "class Counter:\n    value: int32\n\n    def bump(self):\n        self.value += 1\n",
+            "AU3003",
+            "shared receiver `self`",
+            false,
+        ),
+        (
+            "class Data:\n    value: int32\n\ndef use(r: borrow Data, w: borrow mut Data):\n    pass\n\ndef main() -> int32:\n    mut data = Data(value=1)\n    use(data, data)\n    return 0\n",
+            "AU3002",
+            "overlaps borrow",
+            false,
+        ),
+    ];
+
+    for (source, code, message_fragment, has_safe_edit) in cases {
+        let analysis = analyze_source(source);
+        assert_eq!(analysis.diagnostics.len(), 1, "{message_fragment}");
+        let diagnostic = &analysis.diagnostics[0];
+        assert_eq!(diagnostic.code, code, "{message_fragment}");
+        assert!(
+            diagnostic.message.contains(message_fragment),
+            "{}",
+            diagnostic.message
+        );
+        assert_eq!(diagnostic.secondary_spans.len(), 1, "{message_fragment}");
+        assert!(!diagnostic.secondary_spans[0].label.is_empty());
+        assert!(!diagnostic.help.is_empty(), "{message_fragment}");
+        assert_eq!(!diagnostic.edits.is_empty(), has_safe_edit);
+    }
 }
 
 #[test]

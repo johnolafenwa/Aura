@@ -227,3 +227,51 @@ Child, pipe, and supervisor values are resources. Prefer `with` for supervisors 
 For child processes, `close()` terminates a still-running child. With `group=true`, cleanup targets the process group on maintained Unix hosts.
 
 When `process.run` times out or its Aurora task is cancelled, the runtime terminates the child and waits for cleanup; with `group=true` it applies that policy to the process group on maintained Unix hosts. As with all host I/O, cancellation cannot retroactively undo side effects already performed by the child.
+
+## Grammar
+
+The process module adds no source-language grammar. Commands are ordinary `Vec[String]` expressions passed to ordinary calls; Aurora does not parse shell syntax, split one command string, expand variables, interpret redirections, or construct pipelines. Named arguments, `Duration` literals, `Result`, `Option`, `try`, `match`, and `with` use their general grammar.
+
+An omitted parameter displayed with `= ...` selects the documented builtin default. The ellipsis is reference notation, not a source expression. Process and standard-I/O variants use ordinary qualified enum construction and pattern syntax.
+
+## Typing Rules
+
+The function and method signatures above are normative. Commands are `Vec[String]`, environment overlays are `Map[String, String]`, working directories are `Option[String]`, and timeout parameters are `Duration`. Fallible start/run/pipe/control operations use `process.Error`; wait APIs deliberately distinguish enum, `Option`, and `Result` outcomes as shown in their tables.
+
+`process.Child`, `process.Pipe`, and `process.Supervisor` are non-copy resources. Kill, terminate, pipe write/flush/close, and supervisor start/stop/close operations require mutable receiver places. `Supervisor.start` consumes every configuration argument marked `own`, because the supervisor retains that configuration for possible restart. `Completed.stdout()` and `stderr()` are trapping text accessors; the byte accessors are total over captured bytes.
+
+## Runtime Semantics
+
+`run` and `start` invoke exactly the executable and argument vector supplied, inherit the host environment, then apply `env` entries as replacements or additions. `run` waits and captures only streams configured as pipes. `start` returns immediately with a live child and any configured pipe endpoints. Repeated child pipe accessors return handles to the same underlying endpoint, so cursor state and close state are shared.
+
+`Child.wait` reports exit, timeout, cancellation, or failure without automatically terminating a still-live child. By contrast, timeout or cancellation of `process.run` terminates the child and waits for cleanup. `Completed.check` converts a non-success status into `process.Error`; invalid captured UTF-8 in `stdout()` or `stderr()` is a runtime diagnostic, while the byte accessors return the original bytes. Supervisor restarts, counts, events, defaults, and minimum backoff follow the tables above.
+
+## Ownership And Evaluation Order
+
+Arguments are evaluated left to right before process creation. `run` and `start` share their Aurora arguments for the call and copy the required command, environment, and path data into host process state; they do not retain Aurora borrows after returning. A supervisor takes ownership of retained configuration. Child, pipe, completed-output, status, error, and event values returned from an operation are owned by the caller.
+
+Moving a resource invalidates the source binding. `with` closes a supervisor on every scope exit; explicit child and pipe `close()` operations close shared handle state, and child close terminates a process still running. Cleanup is ordered after body evaluation but cannot undo child filesystem, network, or other external side effects already performed.
+
+## Diagnostics
+
+Unknown process members use `AU2001`, type mismatches use `AU2002`, invalid argument binding uses `AU2004`, and remaining static rejections use `AU2999`. Use after moving a process resource uses `AU3001`, borrow conflicts use `AU3002`, and calling a mutating method through an immutable place uses `AU3003`.
+
+Empty commands, spawn failures, timeouts, cancellation, invalid byte counts, closed pipes, non-zero status checked through `check`, and ordinary host I/O failures are typed `process.Error` values. Decoding invalid captured bytes through `Completed.stdout()` or `stderr()` is deliberately a runtime trap with code `AU4005`; use `stdout_bytes()` or `stderr_bytes()` when output encoding is not guaranteed.
+
+## Backend Support
+
+Process creation, capture, pipes, waiting, supervisor behavior, typed errors, and cleanup are implemented in the MIR runtime and direct native backend. Command-vector handling, environment overlay, capture bytes, timeout outcomes, and ownership are backend-parity requirements.
+
+Process-group creation and signaling are maintained on Unix hosts. On unsupported hosts, requesting group behavior returns a typed process error rather than silently weakening cleanup. Executable lookup, signals, and exit-status details otherwise follow host process facilities.
+
+## Limits And Implementation-Defined Behavior
+
+Each `process.run` captured stream and each whole-pipe read is capped at 64 MiB; bounded pipe byte reads accept `1..=67108864`. Text access is strict UTF-8. Supervisor restart backoff must be at least 10 ms when restart is enabled; omitted or `-1` maximum restarts means unlimited. There is no shell, command-string parser, pipeline builder, pseudo-terminal API, daemon manager, sandbox, resource-limit API, or portable signal-number abstraction.
+
+Executable discovery, path syntax, inherited environment, signal availability, numeric exit behavior, graceful-termination meaning, scheduling, and side effects are host-dependent. Timeouts and cancellation bound Aurora's wait but cannot retract child actions that already occurred. Group cleanup of descendants is a maintained Unix contract, not a portable guarantee for every host process tree.
+
+## Status
+
+One-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restart/event behavior, typed failures, and Unix process-group cleanup are implemented and maintained in Aurora 0.1. No process semantics on this page are provisional.
+
+Shell evaluation, pipelines, pseudo-terminals, Windows process groups, portable signal control, sandboxing, and operating-system service management are unavailable. They are future, non-normative facilities rather than implicit behavior of the current API.

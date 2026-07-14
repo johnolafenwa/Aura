@@ -1,0 +1,16 @@
+class Pair:
+    left: String
+    right: String
+
+def keep(value: own String) -> String:
+    return value
+
+def use(left: borrow String, right: own String):
+    print(left)
+    print(right)
+
+def main() -> int32:
+    pair = Pair(left="left", right="right")
+    use(pair.left, keep(pair.right))
+    print(pair.left)
+    return 0

@@ -3,8 +3,8 @@
 use super::{
     boxed_value, compare_values, current_cancellation, decode_bytes, eval_binary_value,
     eval_unary_value, extract_duration_millis, inferred_collection_type, int32_overflow_message,
-    normalize_vec_index, render_bool, render_float, render_runtime_diagnostic, runtime_span,
-    value_mut, value_ref, value_type_name, with_cancellation_scope, OpaqueValue,
+    normalize_vec_index, render_bool, render_float, render_float32, render_runtime_diagnostic,
+    runtime_span, value_mut, value_ref, value_type_name, with_cancellation_scope, OpaqueValue,
 };
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::{Diagnostic, Span};
@@ -515,9 +515,14 @@ fn render_float_preserves_whole_number_fraction() {
 }
 
 #[test]
-fn render_float_hides_float32_roundtrip_noise() {
-    let float32_value = (834.5999755859375_f64 as f32) as f64;
-    assert_eq!(render_float(float32_value), "834.6");
+fn render_float_uses_each_source_types_shortest_roundtrip_spelling() {
+    assert_eq!(render_float(9_007_199_254_740_992.0), "9007199254740992.0");
+    assert_eq!(render_float(1e300), "1e300");
+    assert_eq!(render_float(1e-300), "1e-300");
+    assert_eq!(render_float(-0.0), "-0.0");
+
+    let float32_value = 834.6_f32;
+    assert_eq!(render_float32(float32_value), "834.6");
 }
 
 #[test]
@@ -1027,6 +1032,7 @@ fn with_sigpipe_blocked_restores_the_previous_signal_mask_after_broken_pipe() {
 #[test]
 fn direct_print_helpers_are_callable() {
     super::aurora_direct_print_i64(7);
+    super::aurora_direct_print_f32(7.0);
     super::aurora_direct_print_f64(7.0);
     super::aurora_direct_print_bool(0);
     super::aurora_direct_print_bool(1);
@@ -1828,6 +1834,52 @@ fn native_runtime_direct_process_wrappers_cover_child_pipe_and_completed_paths()
     )));
     expect_unit(super::aurora_direct_process_child_close(child_ptr));
     unsafe { release_value(child_ptr) };
+}
+
+#[test]
+fn direct_completed_text_accessors_report_non_utf8_bytes_as_au4005() {
+    let completed = ProcessCompletedValue::new(
+        Value::EnumVariant(EnumVariantValue {
+            enum_name: "process.ExitStatus".to_string(),
+            variant_name: "Exited".to_string(),
+            payloads: vec![Value::Int(IntegerValue::from_signed(0))],
+        }),
+        vec![0xff],
+        vec![0xfe],
+    );
+    let completed_ptr = boxed_value(Value::ProcessCompleted(completed));
+
+    let stdout_ptr = completed_ptr as usize;
+    let stdout_error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_process_completed_stdout(stdout_ptr as *mut OpaqueValue);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("invalid stdout text should fail the active task");
+    assert_eq!(stdout_error.code, "AU4005");
+    assert!(
+        stdout_error.message.contains("received non-UTF-8 data"),
+        "stdout text decoding should explain why byte access is required: {}",
+        stdout_error.message
+    );
+
+    let stderr_ptr = completed_ptr as usize;
+    let stderr_error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aurora_direct_process_completed_stderr(stderr_ptr as *mut OpaqueValue);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("invalid stderr text should fail the active task");
+    assert_eq!(stderr_error.code, "AU4005");
+    assert!(
+        stderr_error.message.contains("received non-UTF-8 data"),
+        "stderr text decoding should explain why byte access is required: {}",
+        stderr_error.message
+    );
+
+    unsafe { release_value(completed_ptr) };
 }
 
 #[test]
@@ -4687,7 +4739,7 @@ fn wide_integer_overflow_and_cast_helpers_report_precise_diagnostics() {
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.starts_with(&format!("error: {expected_message}\n")),
+            stderr.starts_with(&format!("error[AU4002]: {expected_message}\n")),
             "unexpected diagnostic for {helper}:\n{stderr}"
         );
         match expected_location {
@@ -4697,7 +4749,7 @@ fn wide_integer_overflow_and_cast_helpers_report_precise_diagnostics() {
             ),
             None => assert_eq!(
                 stderr,
-                format!("error: {expected_message}\n"),
+                format!("error[AU4002]: {expected_message}\n"),
                 "spanless diagnostic for {helper} should not invent a source location"
             ),
         }
@@ -4814,7 +4866,7 @@ fn native_runtime_entrypoint_guards_invalid_inputs() {
 
     assert_eq!(
         render_runtime_diagnostic(crate::diag::Diagnostic::new("oops")),
-        "error: oops"
+        "error[AU2999]: oops"
     );
 }
 
@@ -6341,7 +6393,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "queue-capacity-zero",
-            "`queue(capacity=...)` expects a positive `int32`",
+            "`Queue(capacity=...)` expects a positive `int32`",
         ),
         ("queue-send-type", "expected `Queue`, found `bool`"),
         (
@@ -8284,10 +8336,10 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     );
 
     let plain = render_runtime_diagnostic(Diagnostic::new("plain failure"));
-    assert!(plain.contains("error: plain failure"));
+    assert!(plain.contains("error[AU2999]: plain failure"));
 
     let rendered = render_runtime_diagnostic(Diagnostic::at(Span::new(1, 1), "annotated"));
-    assert!(rendered.contains("error: annotated"));
+    assert!(rendered.contains("error[AU2999]: annotated"));
 }
 
 #[test]

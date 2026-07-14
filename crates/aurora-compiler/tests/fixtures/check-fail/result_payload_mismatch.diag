@@ -1,4 +1,4 @@
-error: variant `Ok` of enum `Result` expects `int32`, found `String`
+error[AU2999]: variant `Ok` of enum `Result` expects `int32`, found `String`
  --> crates/aurora-compiler/tests/fixtures/check-fail/result_payload_mismatch.au:2:22
   |
 2 |     return Result.Ok("oops")

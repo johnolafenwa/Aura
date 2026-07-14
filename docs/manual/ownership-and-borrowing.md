@@ -57,7 +57,8 @@ A non-copy value is consumed when used in an owned position, including:
 - assignment into a new owned binding
 - an `own` function parameter or an `own self` method receiver
 - a by-value return
-- a class or enum payload, collection literal, or mutating collection method that stores the value
+- a class or enum payload, collection literal, mutating collection method, or
+  simple Map indexed assignment that stores the value
 - by-value enum matching
 - `own` iteration over `Vec[T]` or `Set[T]`
 - the resource expression of `with`
@@ -86,6 +87,8 @@ An expression is evaluated before its move is recorded at that boundary. Aurora 
 | `-> borrow[source] T` | Shared borrowed result from one declared source. |
 | `-> borrow mut[source] T` | Mutable borrowed result from one mutable source. |
 
+The spelling asymmetry is intentional: parameter ownership occupies the type position as `value: own T`, parallel to `value: borrow T`, while loop ownership prefixes the iterable as `for value in own values` because loops have no type position.
+
 Call sites never prefix arguments with `borrow` or `own`. The parameter or receiver declaration selects the mode:
 
 ```python
@@ -98,6 +101,13 @@ print(name)
 ```
 
 A shared borrow permits reading but cannot be moved and cannot be used as a mutable place. A mutable borrow is exclusive and may mutate its source through the borrowed binding.
+
+Shared-borrow and `own` parameters may have defaults. An omitted shared default
+creates a fresh temporary that lives through the call; an omitted owned default
+creates a fresh value that the call consumes. A `borrow mut` parameter cannot
+have a default, even for a copy type: its caller-invisible temporary would make
+every mutation a silent lost write. Require the caller to pass a mutable value,
+or take `own T` and return the result.
 
 ```python
 def add_name(names: borrow mut Vec[String], name: own String):
@@ -205,16 +215,24 @@ Payload bindings are arm-local and cannot shadow a visible binding. Match typing
 ## Borrowed Iteration
 
 Bare `Vec` and `Set` iteration retains the collection and yields shared-borrowed
-non-copy elements. `for value in own collection` consumes it and yields owned
-elements. `for value in borrow collection` is the explicit shared form.
+non-copy elements. `for value in own collection` moves the collection once into
+a loop-private source and yields owned elements. Reinitializing the consumed
+source binding in the body cannot switch or truncate that active iteration.
+That one-time source selection is provisional under ADR-0017; ADR-0006's
+accepted loop ownership modes are unchanged.
+`for value in borrow collection` is the explicit shared form.
 `for value in borrow mut vec` requires a mutable vector place and yields
 mutable-borrowed elements.
 
-The iterated place is frozen against overlapping mutation for the loop body.
+The place selected by bare or explicit borrowed iteration is frozen against
+overlapping mutation for the loop body.
 Mutable-borrow set iteration is not supported; mutate a set through `insert`
 and `remove` outside borrowed iteration. Queue iteration receives values; it is
-a scheduler operation, not a place traversal. The bare form yields owned
-items, while all three explicit ownership modifiers are rejected. See
+a scheduler operation, not a place traversal. The bare form copies the Queue
+handle once at loop entry and yields owned items without freezing the source
+binding; rebinding that source does not switch later receives. All three
+explicit ownership modifiers are rejected. The one-time handle selection is
+also provisional under ADR-0017. See
 [Concurrency](/manual/concurrency).
 
 ## Clone
@@ -270,3 +288,122 @@ def show_file() -> Result[None, io.Error]:
 `with` consumes the resource expression and creates a fresh mutable managed binding. A managed resource or its non-copy fields cannot be moved out in a way that would prevent cleanup. The registered `close` runs on normal fallthrough, `return`, escaping loop control, `try` propagation, and maintained runtime failure; nested cleanups run in reverse order.
 
 Builtin resource behavior is defined by its module chapter. A user class must be non-generic and define `close(borrow mut self) -> None` with no ordinary parameters. Full cleanup ordering and failure precedence are specified in [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup).
+
+## Grammar
+
+The normative ownership spellings are parameter and return type-position
+`own`, `borrow`, `borrow mut`, `borrow[source]`, and
+`borrow mut[source]`; the four receiver forms; loop-prefix `own`, `borrow`,
+and `borrow mut`; `match borrow` and
+`match borrow mut`; mutable bindings; and `with`. Their productions are in
+[Grammar](/manual/grammar). Call arguments themselves never carry an ownership
+prefix.
+
+## Typing Rules
+
+Every expression has one static copy/move category and every parameter has one
+declaration-stable passing mode. Bare copy parameters pass by value; bare
+non-copy and unresolved generic parameters share-borrow; explicit `own`
+consumes; `borrow mut` requires one exclusive mutable place. Shared and owned
+defaults are legal, with shared temporaries lasting through the call;
+`borrow mut` defaults are rejected. Place-prefix overlap, partial moves,
+control-flow joins, loop repetition, borrowed-return provenance, borrowed
+matches, borrowed iteration, task capture, and managed-resource containment are
+checked before lowering.
+
+## Runtime Semantics
+
+A copy use duplicates a value and a move transfers it. Shared and mutable
+borrows are statically enforced access contracts rather than first-class
+runtime reference values in Aurora 0.1. Mutable borrowed calls and Vec
+iteration write through the original place; `match borrow mut` reconstructs
+and writes back on normal arm exit. Simple Map indexed assignment accepts and
+owns any value type; direct compound indexed assignment requires a copy `Vec`
+element or `Map` value.
+Task start first transfers captures into child-owned storage. `with` owns one cleanup registration and runs it exactly
+once on every maintained scope exit under the documented failure-precedence
+rules.
+
+## Ownership And Evaluation Order
+
+Subexpressions evaluate in the order defined by [Execution
+Model](/manual/execution-model#evaluation-order), then a copy, move, or borrow
+is applied at its typed boundary. All receiver and argument accesses for one
+call are checked together, so source order cannot legalize overlapping shared,
+mutable, and owned uses. A partial move preserves proven-disjoint fields;
+reinitializing the exact moved place restores it. Control-flow merging never
+silently restores ownership, and Aurora never inserts a clone or coercion to
+repair an invalid use.
+
+Capturing a copy place duplicates its value. A non-copy place selected as a
+binary left operand, index base, method receiver, or indexed-assignment target
+remains borrowed until that operation consumes all of its inputs. A later
+shared borrow is permitted. An overlapping mutable borrow or consumption is
+rejected with `AU3002`, with the retained selection identified as the borrow
+origin. Name roots and projected member places follow the same rule, and no
+backend inserts a hidden deep clone. Operations that require a point-in-time
+representation produce it immediately; each f-string interpolation renders to
+`String` before the next interpolation begins.
+
+Compound assignment uses the corresponding binary operator dispatch, including
+applicable user-defined operator traits for root and projected targets. A copy
+target is captured before the right operand. A non-copy root or projected
+target remains borrowed across that operand, so overlapping mutable borrow or
+consumption is `AU3002`. A non-copy `Vec` element or `Map` value cannot be a
+direct compound target until live aliases exist; Aurora rejects the operation
+instead of cloning or destructively moving the stored value.
+
+## Diagnostics
+
+`AU1101` reports malformed ownership, receiver, loop, match-borrow, or return
+syntax. `AU2002` covers type and provenance-source type mismatch, while
+`AU2004` reports argument binding that cannot satisfy a required mutable place.
+`AU2999` covers unsupported move/control-flow/resource cases without a narrower
+category, including non-copy Vec/Map indexed compound assignment. `AU3001`
+reports use of a moved or partially moved place. `AU3002`
+reports overlapping or invalid borrows, moving through a borrow, borrowed-
+return provenance/materialization failure, invalid mutable-borrow defaults or
+task targets, stale borrowed-pattern bindings, and later mutable or consuming
+access that overlaps a retained non-copy binary operand, index base, method
+receiver, or indexed-assignment target. In a retained-expression conflict, the
+diagnostic points to both the later access and the retained-borrow origin.
+`AU3003` reports assignment or mutation through an immutable place, including
+shared `self`. `AU3004`
+reports invalid parameter, receiver, loop, or Queue-iteration ownership modes.
+Ownership failures are static. A runtime operation reached through an owned or
+borrowed value keeps its own code: `AU4001` for a general trap, `AU4002` for
+arithmetic overflow or underflow, `AU4003` for a bounds or lookup violation,
+`AU4004` for a zero divisor, and `AU4005` for a resource or I/O failure.
+
+## Backend Support
+
+The compiler performs one ownership/borrow analysis before backend selection.
+MIR execution and direct native generation receive the same resolved parameter
+ABI, moves, copies, capture modes, borrowed-match/iteration operations, and
+cleanup registrations. Analysis and LSP signatures expose those same modes.
+The parity matrix pins observable move, mutation, capture, writeback, cleanup,
+and primary-diagnostic behavior.
+
+## Limits And Implementation-Defined Behavior
+
+Place analysis tracks local roots and field-prefix paths; it proves disjoint
+sibling fields but is not a general alias theorem. Non-copy borrowed-return
+declarations are provenance-checked but calls are contained until live alias
+storage lands. Mutable Set iteration, explicit Queue ownership modifiers,
+mutable-borrow task targets, moving out of a managed resource, and arbitrary
+reference values are unavailable. Loop move analysis intentionally uses only
+the limited Boolean reasoning described above. Ownership mode and evaluation
+order are language-defined, not backend- or host-defined.
+
+## Status
+
+Copy/move classification, declaration-stable parameter defaults, explicit
+owned/shared/mutable passing, all receiver modes, call-boundary exclusivity,
+partial moves and reinitialization, flow-sensitive checks, borrowed-return
+containment, borrowed matching and Vec/Set iteration, task capture, cloning,
+and lexical resource ownership are implemented for the post-Phase 1.5
+surface; the one-time Vec/Set/Queue iteration-source rule remains provisional
+under ADR-0017 at the Batch 1 checkpoint. Live non-copy borrowed aliases and their runtime storage are reserved
+for Phase 6. General reference values outside that reserved contract, mutable
+Set iteration, Queue ownership modifiers, and mutable-borrow task capture are
+unavailable.

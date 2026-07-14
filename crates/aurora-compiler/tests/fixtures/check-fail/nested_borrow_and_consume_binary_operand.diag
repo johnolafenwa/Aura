@@ -1,4 +1,4 @@
-error: cannot mix a move of `c` with a borrow of `c.name` in the same expression
+error[AU3002]: cannot mix a move of `c` with a borrow of `c.name` in the same expression
  --> crates/aurora-compiler/tests/fixtures/check-fail/nested_borrow_and_consume_binary_operand.au:12:12
    |
 12 |     return len_of(c.name) + consume_c(c)

@@ -1,0 +1,7 @@
+error[AU3002]: cannot mutably borrow `value` while `value` remains shared-borrowed by the parameter `first`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/generic_borrow_specialization_retains_copy_argument.au:11:22
+   |
+11 |     show(value, bump(value))
+   |                      ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/generic_borrow_specialization_retains_copy_argument.au:11:10: shared borrow for the parameter `first` begins here
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first

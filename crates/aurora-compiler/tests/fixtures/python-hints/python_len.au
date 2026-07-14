@@ -1,0 +1,3 @@
+def main():
+    values = Vec[int32]()
+    print(len(values))

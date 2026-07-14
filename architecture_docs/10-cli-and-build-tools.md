@@ -60,10 +60,15 @@ This matters because tools like the LSP often need to analyze the current buffer
 
 1. read source
 2. call `check_path` or `check_path_with_source`
-3. print `ok` on success
-4. render an annotated diagnostic on failure
+3. print `ok` on success, or the empty schema-versioned report in JSON mode
+4. render either the annotated human diagnostic or the compiler-owned
+   structured JSON diagnostic on failure
 
-The important architectural point is that diagnostics come from the compiler library, not from ad-hoc CLI-specific parsing code.
+The important architectural point is that diagnostics come from the compiler
+library, not from ad-hoc CLI-specific parsing code. `check`, `run`, and `build`
+select the renderer with `--format human|json`; both forms retain the stable
+`AU####` code, and the structured form also retains related spans, notes, help,
+and edits for downstream tools.
 
 ## How `run` works
 

@@ -1,0 +1,20 @@
+trait Add[Rhs, Out]:
+    def add(own self, rhs: own Rhs) -> Out
+
+copy class Counter:
+    value: int32
+
+impl Add[Counter, Counter] for Counter:
+    def add(own self, rhs: own Counter) -> Counter:
+        return Counter(value=self.value + rhs.value)
+
+def mutate(value: borrow mut Counter) -> Counter:
+    value.value = 2
+    return Counter(value=10)
+
+def main() -> int32:
+    mut counter = Counter(value=1)
+    result = counter + mutate(counter)
+    print(result.value)
+    print(counter.value)
+    return 0

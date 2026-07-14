@@ -1,4 +1,4 @@
-error: integer value `-1` does not fit in `uint64`
+error[AU4002]: integer value `-1` does not fit in `uint64`
  --> crates/aurora-compiler/tests/fixtures/run-fail/int64_to_uint64_cast_out_of_range.au:3:21
   |
 3 |     value: uint64 = source as uint64

@@ -15,7 +15,7 @@ A **conforming Aurora implementation**:
 - provides the maintained public API surface
 - does not expose proposal-only constructs as accepted 0.1 language features
 
-Exact diagnostic prose is normative only where a fixture or this Manual explicitly requires it. A conforming implementation otherwise needs a clear diagnostic with an accurate source location and the same semantic category.
+Exact diagnostic prose is normative only where a fixture or this Manual explicitly requires it. A conforming implementation otherwise needs a clear diagnostic with an accurate source location and the same stable `AU####` code; message wording may differ without changing that code's documented meaning.
 
 ## Executable Reference Map
 
@@ -24,7 +24,15 @@ Exact diagnostic prose is normative only where a fixture or this Manual explicit
 | UTF-8, indentation, tokens, literals, escapes | `crates/aurora-compiler/src/lexer_tests.rs` |
 | grammar and parser limits | `crates/aurora-compiler/src/parser_tests.rs`, `tests/fixtures/parse-pass`, `tests/fixtures/parse-fail` |
 | names, types, calls, traits, patterns, moves, and borrows | `crates/aurora-compiler/src/sema_tests.rs`, `tests/fixtures/check-pass`, `tests/fixtures/check-fail` |
-| integer `/` rejection, floor division/remainder, and `.to_float()` | lexer/parser/integer/runtime-value unit tests plus `integer_true_division_*`, `floor_division_and_modulo`, and `integer_to_float_rounding` fixtures |
+| integer `/` rejection, floor division/remainder, exact float-context integer literals, `.to_float()`, and shortest-roundtrip float printing | lexer/parser/integer/runtime-value unit tests plus `integer_true_division_*`, `floor_division_and_modulo`, `float_context_integer_literals`, `integer_to_float_rounding`, and `float_shortest_roundtrip_printing` fixtures |
+| Map duplicate-key replacement, key-before-value effects, indexed-read/simple-write ownership, and missing-key traps | `map_literal_duplicate_keys`, `map_index_non_copy_requires_explicit_clone`, `map_index_assignment_consumes_noncopy_key`, and `map_index_missing_key` fixtures plus the MIR/native parity matrix |
+| Supplied/default order and named enum-argument source order with declaration-slot binding | `explicit_and_default_argument_order` plus the MIR/native parity matrix |
+| Copy-value capture, immediate f-string rendering, and receiver-before-argument effects | `left_to_right_value_snapshotting` plus the MIR/native parity matrix |
+| Compound binary dispatch for root/projected targets, copy-target capture, retained non-copy `AU3002`, and copy-only Vec/Map indexed targets | `operator_traits`, `left_to_right_value_snapshotting`, `compound_noncopy_target_rejects_rhs_mutation`, `vec_compound_assignment_noncopy_element_rejected`, and `map_compound_assignment_noncopy_value_rejected` fixtures plus the MIR/native parity matrix |
+| Retained non-copy binary/index/method-receiver/indexed-assignment borrows, `AU3002` overlap rejection, and no hidden deep clone | `binary_left_borrow_rejects_later_mutation`, `projected_binary_left_borrow_rejects_later_mutation`, `index_base_borrow_rejects_index_mutation`, `indexed_assignment_target_rejects_index_mutation`, and `method_receiver_borrow_rejects_nested_argument_mutation` fixtures |
+| Declaration-stable call/operator passing, directional exclusive-access checks, and the distinct task-capture boundary | `generic_borrow_specialization_retains_copy_argument`, `call_borrow_mut_then_copy_read_rejected`, `call_own_then_projected_copy_read_rejected`, `trait_operator_borrow_mut_receiver_requires_mutable`, `trait_operator_copy_left_retains_borrow`, `trait_operator_own_receiver_moves_value`, `trait_operator_own_receiver_rejects_rhs_read`, `trait_operator_own_rhs_moves_value`, `trait_unary_operator_own_receiver_moves_value`, `operator_trait_value_receiver_snapshot`, `task_capture_snapshots_copy_arguments`, and `task_group_receiver_rejects_owned_variadic_capture` fixtures plus the MIR/native parity matrix |
+| Provisional ADR-0017 one-time Vec/Set own-iteration selection and Queue handle capture without source-binding retargeting | `own_iteration_captures_collection`, `queue_iteration_captures_handle`, and the MIR/native parity matrix |
+| Queue receive-item ownership and rejected explicit iteration modifiers | `queue_bare_iteration_ownership`, `queue_own_iteration_rejected`, `queue_borrow_iteration_rejected`, and `queue_borrow_mut_iteration_rejected` fixtures |
 | module and package resolution | `crates/aurora-compiler/tests/modules.rs`, `tests/packages.rs`, `src/package_tests.rs` |
 | MIR semantics and runtime behavior | `src/mir_tests.rs`, `src/mir_runtime_tests.rs`, `tests/fixtures/run-pass`, `tests/fixtures/run-fail` |
 | native semantics and resource ABI | `src/native_codegen_tests.rs`, `src/native_runtime_tests.rs`, `tests/native_runtime_ffi.rs` |
@@ -69,9 +77,65 @@ The parity matrix executes every eligible runtime fixture through both paths. A 
 
 ## Documentation Conformance
 
-Reference changes are checked by `npm run check:reference`. The gate requires the normative specification pages, navigation entries, complete grammar anchors, execution-order statement, conformance mapping, and removal of claims that the deleted legacy evaluator remains supported.
+Reference changes are checked by `npm run check:reference`. The gate retains
+the normative-page, navigation, grammar-anchor, execution-order,
+migration-wording, and deleted-evaluator guards. It inventories every fenced
+block in `docs/manual`. Fences labeled `aurora` or the historically used
+`python` label are Aurora source; Bash, EBNF, JSON, text, TOML, and any future
+fence language still require an explicit contract.
 
-The documentation build checks links and rendering. It does not by itself prove that every code block compiles. Language-facing changes therefore also require compiler fixtures or executable examples as directed by `AGENTS.md`.
+Every fenced block has a source-hash-pinned contract in
+`scripts/reference-integrity.json`:
+
+| Contract | Gate behavior |
+| --- | --- |
+| `check` | extract the exact block and require `aura check` to succeed with the pinned output |
+| `run` | extract the exact block and require `aura run` to produce the exact pinned standard output and standard error |
+| `check-fail` | require rejection with the pinned exit status and diagnostic fragment |
+| `package-check` | place the exact Aurora block in a metadata-pinned local package layout and require `aura check` to succeed without network access |
+| `command` | parse one exact Bash command without a shell and execute only the gate's allowlisted side-effect-free `aura check`/`aura run` form for a maintained `examples/*.au` path, with pinned output |
+| `illustrative` | do not execute the block; require a specific reason explaining why it is notation, output, a dependent fragment, an unsafe command, or otherwise not a standalone executable unit |
+
+The command contract never invokes a shell, follows pipes or continuations, or
+runs build, network, dependency-update, server, or recursive repository-gate
+commands. A documented `cargo run -p aura -- ...` prefix is normalized to the
+already-built `aura` binary before the allowlisted subcommand runs. The proof is
+therefore about the displayed Aurora CLI behavior, not Cargo itself. Unsafe or
+orchestration-only command blocks remain illustrative with their boundary
+stated explicitly.
+
+The source hash makes changes fail closed: editing, replacing, or reordering
+fenced blocks requires an explicit review of their contracts. Adding a Manual
+page also requires classifying it as a feature page or as a structural page
+with a reason. Structural pages organize cross-cutting contracts. Every
+feature page MUST contain these non-empty level-two sections:
+
+- `Grammar`
+- `Typing Rules`
+- `Runtime Semantics`
+- `Ownership And Evaluation Order`
+- `Diagnostics`
+- `Backend Support`
+- `Limits And Implementation-Defined Behavior`
+- `Status`
+
+The `Diagnostics` section MUST name each applicable stable `AU` code. If a feature introduces no feature-specific diagnostic, it states exactly `No feature-specific diagnostics.` instead. This is an explicit audited claim, not permission to omit general diagnostics that apply to examples on the page.
+
+Every feature page MUST also contain at least one verified fenced example in a
+non-illustrative mode. A page cannot satisfy that rule with a stale source hash
+or with an explanation-only fragment. This ensures that all nineteen current
+feature chapters have a live compiler, package, or safe CLI proof rather than
+relying only on prose.
+
+The gate reports the total page and all-language fence inventory,
+verified-versus-illustrative counts, per-page example counts, every missing
+normative section, and every feature page without a verified example before
+failing. Its focused Python tests pin all-language fence extraction,
+stale-metadata rejection, illustrative-reason enforcement, the feature-section
+and executable-example contracts, safe command/package preparation, and
+compiler outcome matching.
+
+The documentation build separately checks links and rendering. Language-facing changes still require compiler fixtures or maintained examples as directed by `AGENTS.md`; a checked Manual block proves the documented example's stated outcome, not every edge of the underlying rule.
 
 ## Adding Or Changing A Rule
 

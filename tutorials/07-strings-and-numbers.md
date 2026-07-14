@@ -87,7 +87,10 @@ Integer literals default to `int64`, whose shorter alias is `int`. Floating-poin
 ```python
 count: int32 = 12
 ratio: float32 = 3.25
+whole: float64 = 2
 ```
+
+An integer literal adopts a `float32` or `float64` context only when its value is exactly representable in that type. This also makes mixed-literal arithmetic read naturally: `7.5 // 2` is floating floor division and `-7.5 % 2` is floating remainder. A bound integer variable is never widened this way. For an inexact value, use an explicit floating spelling when literal rounding is intentional, or call `.to_float()` when converting an integer value intentionally.
 
 Aurora provides builtin numeric helpers:
 
@@ -105,7 +108,7 @@ value: float64 = 81.0
 print(value.sqrt())   # 9.0
 ```
 
-Whole-number floats keep a trailing `.0` when printed, so `5.0` stays visually distinct from `5`.
+Printed `float32` and `float64` values use the shortest decimal spelling that round-trips to the same source type. Whole-number floats keep a trailing `.0`, signed zero stays `-0.0`, and large or tiny values use concise scientific notation. For example, `9007199254740992.0`, `1e300`, and `1e-300` print without being routed through lower `float32` precision.
 
 See [examples/numbers/numeric_builtins.au](../examples/numbers/numeric_builtins.au) and [examples/numbers/float_sqrt.au](../examples/numbers/float_sqrt.au).
 

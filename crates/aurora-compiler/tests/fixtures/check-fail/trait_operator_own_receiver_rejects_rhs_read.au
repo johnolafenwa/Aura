@@ -1,0 +1,14 @@
+trait Add[Rhs, Out]:
+    def add(own self, rhs: own Rhs) -> Out
+
+class Box:
+    value: int32
+
+impl Add[int32, Box] for Box:
+    def add(own self, rhs: own int32) -> Box:
+        return Box(value=self.value + rhs)
+
+def main():
+    box = Box(value=1)
+    result = box + box.value
+    print(result.value)

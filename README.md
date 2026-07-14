@@ -153,6 +153,8 @@ Current compiler workflow:
   - print the lowered MIR for the checked program
 - `cargo run -p aura -- analyze examples/classes/point_distance.au`
   - print machine-readable compiler analysis for diagnostics, symbols, hover, and definition
+- `cargo run -p aura -- check --format json examples/classes/point_distance.au`
+  - emit the stable, schema-versioned compiler diagnostic document used by CLI tooling; `run` and `build` accept the same diagnostic format
 - `cargo run -p aura -- help`
   - print CLI usage and exit successfully
 - `cargo run -p aura -- --version`
@@ -242,7 +244,7 @@ Development install:
 6. Press `F5` to launch an Extension Development Host.
 7. Open an `.au` file such as `examples/classes/point_distance.au` in the Extension Development Host.
 
-The language server keeps one persistent `aura lsp` compiler service for diagnostics, document symbols, hover, go-to-definition, and completions. That compiler path understands local modules and cross-file definitions and recovers common incomplete buffers. If the compiler process itself is unavailable, a small lexical JavaScript layer recovers declarations and top-level names without duplicating Aurora semantics.
+The language server keeps one persistent `aura lsp` compiler service for diagnostics, document symbols, hover, go-to-definition, and completions. Compiler diagnostics retain their stable `AU####` code, related spans, notes, help, and edits through the LSP bridge instead of being reimplemented in JavaScript. That compiler path understands local modules and cross-file definitions and recovers common incomplete buffers. If the compiler process itself is unavailable, a small lexical JavaScript layer recovers declarations and top-level names without duplicating Aurora semantics.
 
 Packaged install:
 

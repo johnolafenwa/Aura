@@ -1,0 +1,5 @@
+class Counter:
+    value: int32
+
+    def bump(self):
+        self.value += 1

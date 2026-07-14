@@ -78,7 +78,12 @@ A type annotation is allowed only on a simple-name target. `mut` also belongs on
 # mut point.x = 4.0
 ```
 
-Field assignment requires a mutable base place and a declared field. Vector index assignment requires exactly `int32`. Map index assignment requires exactly the map's key type.
+Field assignment requires a mutable base place and a declared field. Vector
+index assignment requires exactly `int32`. Simple Map index assignment requires
+exactly the map's key type and either replaces an equal key or inserts a new
+entry; an absent key is not a simple-assignment error. It accepts any value
+type. The key and value are owned storage positions, so each is consumed when
+non-copy, matching `set(key: own K, value: own V)`.
 
 ### Compound Assignment
 
@@ -90,11 +95,41 @@ total *= scale
 pages //= page_size
 ```
 
-A compound assignment requires an existing mutable, initialized target. It reads that target once, evaluates the right operand, applies the corresponding binary operator, and stores a same-typed result. Operator traits and runtime overflow/division behavior are the same as for the corresponding expression operator. Integer `/=` is rejected with the integer `/` teaching diagnostic; use integer `//=` for a floor quotient. Floating `/=` remains true division. `//=` is builtin-only because `//` has no operator trait.
+A compound assignment requires an existing mutable, initialized target. It
+selects that target place once and uses exactly the corresponding binary
+operator dispatch. This includes an applicable user-defined operator trait for
+a root or projected target. For a copy target, it captures the current copied
+value before evaluating the right operand and stores a same-typed result into
+the originally selected place. Right-operand side effects therefore cannot
+change the captured left operand or retarget the store. A non-copy root or
+projected target remains borrowed across right-operand evaluation; an
+overlapping mutable borrow or consumption is rejected with `AU3002`.
+
+Direct indexed compound assignment requires a copy `Vec` element or `Map`
+value. A non-copy indexed element is rejected because reading it for
+read-modify-write would require either a hidden clone or a destructive move
+before an operation that may fail. Use an explicit safe read or ownership
+transfer followed by a simple write; for a Map, use `get(key)` or `remove(key)`
+and explicit simple assignment. Runtime overflow/division behavior is the same
+as for the corresponding expression operator. Integer `/=` is rejected with
+the integer `/` teaching diagnostic; use integer `//=` for a floor quotient.
+Floating `/=` remains true division. `//=` is builtin-only because `//` has no
+operator trait.
 
 ### Assignment Evaluation
 
-A simple assignment evaluates its right side before creating or updating the target. Reassigning an exact moved binding or field reinitializes that place when the new value has the required type. Failed checked mutation produces the documented runtime failure or typed result and does not create a different language-level partial assignment contract.
+A simple-name or field assignment evaluates its right side before creating or
+updating the target. Indexed assignment evaluates the collection place and then
+the index or key before its right side. Its non-copy collection base remains
+borrowed through those later inputs; an overlapping mutable borrow or
+consumption is rejected with `AU3002`, and no hidden deep clone is inserted. A
+simple Map assignment captures and, when non-copy, consumes that key before
+evaluating and consuming its value, so later value-side effects cannot change
+the selected key. Reassigning an exact
+moved binding or field reinitializes that place when the new value has the
+required type. Failed checked mutation produces the
+documented runtime failure or typed result and does not create a different
+language-level partial assignment contract.
 
 See [Ownership And Borrowing](/manual/ownership-and-borrowing) for moves, partial field moves, and mutable-place rules.
 
@@ -171,7 +206,9 @@ for value in values:
 ```
 
 Use `for value in own values:` when the loop deliberately consumes a `Vec` or
-`Set` and needs owned element bindings.
+`Set` and needs owned element bindings. The collection moves once into a
+loop-private source at entry. Reinitializing the consumed `values` binding in
+the body does not switch or truncate that active iteration.
 
 The target is one identifier; tuple/destructuring loop targets are not implemented. The loop binding is local to the body, does not escape, and cannot shadow a name already visible in the same scope.
 
@@ -193,9 +230,11 @@ Maintained iterable forms include:
 `for value in borrow mut set:` is not supported in Aurora 0.1. Queue iteration
 receives values rather than traversing places: each item arrives owned and the
 queue handle is a copy value. Consequently `own`, `borrow`, and `borrow mut`
-are all rejected for Queue iteration; use the bare form. Queue iteration ends
-according to close, cancellation, producer-completion, and task-failure rules
-defined in [Concurrency](/manual/concurrency).
+are all rejected for Queue iteration; use the bare form. That form evaluates
+and copies the Queue handle once at loop entry without freezing the source
+binding. Rebinding the source in the body does not switch later receives.
+Queue iteration ends according to close, cancellation, producer-completion,
+and task-failure rules defined in [Concurrency](/manual/concurrency).
 
 The parser also accepts ownership modifiers before a `range(...)` expression.
 In Aurora 0.1 they do not change Range iteration: every form yields the same
@@ -314,3 +353,94 @@ Parsing a statement shape does not make it legal in every context:
 - an entry module cannot mix executable top-level statements with local `main`.
 
 The complete checker rules are normative in [Static Semantics](/manual/static-semantics), and ownership effects are normative in [Ownership And Borrowing](/manual/ownership-and-borrowing).
+
+## Grammar
+
+The simple and compound statement productions, suite indentation, binding and
+assignment targets, loop modifiers, match arms, and `with` forms are normative
+in [Grammar](/manual/grammar). Statements end at a physical `NEWLINE`; Aurora
+has no semicolon-separated or inline compound statements.
+
+## Typing Rules
+
+Bindings infer or check one type, and reassignment preserves it. Conditions are
+exactly `bool`; return values match the enclosing signature; iterables determine
+their loop binding contract; match patterns are compatible, reachable, and
+exhaustive where required; and `with` accepts only the maintained cleanup
+contract. Contextual legality is checked after parsing.
+
+## Runtime Semantics
+
+Statements execute in source order within the selected suite. Simple-name and
+field assignment evaluate the right side before writing the target; indexed
+assignment evaluates its collection and index/key before the right side, with a
+simple Map assignment capturing its owned key before any value-side effects;
+compound assignment uses the corresponding binary dispatch and stores into its
+once-selected target; a copy target is captured before the right side, while a
+non-copy root or projected target remains borrowed across it; direct indexed
+compound assignment reads only a copy element and traps with `AU4003` when a
+Map key is absent; conditionals select at most one branch; loops test or
+receive before each body;
+a match evaluates its
+scrutinee once; and `with` registers cleanup only after resource construction
+succeeds. Control transfer runs every exited cleanup in reverse registration
+order.
+
+## Ownership And Evaluation Order
+
+Bindings own, copy, or borrow their initializer according to type and context.
+`own` Vec/Set iteration consumes once into a loop-private source, bare or
+`borrow` collection iteration retains and freezes its selected place, and Queue
+iteration captures a copy handle once while receiving already-owned items.
+The one-time iterable selection is the provisional ADR-0017 rule; the ownership
+modes themselves remain those accepted in ADR-0006.
+Simple Map indexed assignment consumes non-copy keys and values into owned
+storage; direct Vec/Map indexed compound assignment is restricted to copy
+elements. Assignment to a place
+invalidates conflicting borrows and reinitializes the written place. Branch and
+loop analysis conservatively preserves any move that may reach a continuing
+path; no control-flow join restores ownership implicitly.
+
+## Diagnostics
+
+`AU1101` means malformed statement or suite syntax. `AU2001` means an
+unresolved name or target. `AU2002` means an expected-type, condition,
+iteration, match, return, or assignment mismatch. `AU2003` means an unsupported
+compound-assignment operator. `AU2004` means call or target argument binding
+failed. `AU2005` means focused migration guidance for a Python-shaped
+statement. `AU2999` means an exhaustiveness, contextual-legality, unsupported
+statement, or non-copy Vec/Map indexed compound-assignment rejection without a
+narrower code. `AU3001` means use of a moved
+place; `AU3002` means a borrow conflict, including later access that mutably
+borrows or consumes an overlapping retained non-copy compound or indexed-
+assignment target; `AU3003` means an immutable target was used mutably; and
+`AU3004` means an
+invalid loop, parameter, or ownership mode.
+During execution, `AU4001` means a general statement trap, `AU4002` means
+numeric range, overflow, or underflow failure, `AU4003` means a bounds or lookup
+violation, `AU4004` means a zero divisor, and `AU4005` means a trapping resource
+or I/O failure, including cleanup failure when no earlier body failure remains
+primary.
+
+## Backend Support
+
+Every implemented statement form shares the checker and MIR lowering used by
+MIR execution and direct native generation. Cleanup, loop, match, task, and
+runtime-trap behavior is forced through the backend-parity suite; unsupported
+direct lowering is contained rather than silently given different semantics.
+
+## Limits And Implementation-Defined Behavior
+
+Suites require a real statement, loop targets are one identifier, loop `else`
+is unavailable, statement match arms cannot be inline, general multiline
+continuation is unavailable, and items cannot nest in suites. Range ownership
+modifiers are accepted but have no effect on copy `int32` iteration as recorded
+above. No statement evaluation order is implementation-defined.
+
+## Status
+
+Bindings, assignments, expression and return statements, conditionals, loops,
+match, scoped cleanup, `pass`, imports, and entry-module top-level execution are
+implemented as described. Destructuring assignment or loop targets, loop
+`else`, `assert`, exception statements, `yield`, `raise`, `async`, and nested
+declarations are unavailable; `try` remains an expression over `Result`.

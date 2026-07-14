@@ -1,0 +1,14 @@
+def worker(first: borrow int32, second: int32):
+    print(first)
+    print(second)
+
+def bump(value: borrow mut int32) -> int32:
+    value += 1
+    return value
+
+def main() -> int32:
+    mut value: int32 = 1
+    with TaskGroup() as group:
+        group.start_soon(worker, value, bump(value))
+    print(value)
+    return 0

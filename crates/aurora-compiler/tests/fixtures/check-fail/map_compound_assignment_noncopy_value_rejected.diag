@@ -1,0 +1,5 @@
+error[AU2999]: cannot implicitly copy `Box` out of a map index for compound assignment; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership and assign the result explicitly
+ --> crates/aurora-compiler/tests/fixtures/check-fail/map_compound_assignment_noncopy_value_rejected.au:14:5
+   |
+14 |     boxes["one"] += delta
+   |     ^

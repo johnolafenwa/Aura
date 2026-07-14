@@ -40,13 +40,25 @@ Except for short-circuit boolean operators and control-flow expressions, evaluat
 - a postfix expression evaluates its base before its suffix inputs
 - an index evaluates its base before its index
 - a receiver is evaluated before call arguments
-- explicit call and constructor arguments are evaluated in source order
+- explicit call and constructor arguments are evaluated in source order, with
+  copy or move results captured before later argument side effects
 - collection elements are evaluated in source order
 - each map key is evaluated before its value, and entries are evaluated in source order
 - f-string interpolations are evaluated from left to right
 - a match scrutinee is evaluated once, before arm selection
 
-Evaluation order matters when an expression moves a value, mutates through a call, performs I/O, or can produce a runtime failure. Static borrow analysis checks all accesses at one call boundary together even though runtime evaluation remains ordered.
+Evaluation order matters when an expression moves a value, mutates through a
+call, performs I/O, or can produce a runtime failure. A copy place contributes
+the copied value captured at its evaluation point. A non-copy place selected as
+a binary left operand, index base, method receiver, or indexed-assignment target
+remains borrowed through the operation's later inputs. Another shared borrow is
+permitted, but an overlapping mutable borrow or consumption is rejected with
+`AU3002`, which identifies both the conflict and the retained-borrow origin.
+Name roots and projected member places follow the same rule, and Aurora never
+deep-clones the selected place implicitly. Each f-string interpolation renders
+to `String` at its own position before evaluation moves to the next
+interpolation. Static borrow analysis checks all accesses at one call boundary
+together even though runtime evaluation remains ordered.
 
 ## Precedence And Associativity
 
@@ -57,25 +69,28 @@ The following table runs from lowest to highest precedence:
 | 1 | `or` | left |
 | 2 | `and` | left |
 | 3 | prefix `not` | right |
-| 4 | `==`, `!=` | left |
-| 5 | `<`, `<=`, `>`, `>=` | left |
-| 6 | `+`, `-` | left |
-| 7 | `*`, `/`, `//`, `%` | left |
-| 8 | prefix `match`, `try`, unary `-` | prefix/right |
-| 9 | specialization, indexing, member access, call, numeric cast | left-to-right postfix chain |
-| 10 | primary expression | — |
+| 4 | `==`, `!=`, `<`, `<=`, `>`, `>=` | non-associative in 0.1 |
+| 5 | `+`, `-` | left |
+| 6 | `*`, `/`, `//`, `%` | left |
+| 7 | prefix `match`, `try`, unary `-` | prefix/right |
+| 8 | specialization, indexing, member access, call, numeric cast | left-to-right postfix chain |
+| 9 | primary expression | — |
 
-All binary chains are left-folded. For example:
+Arithmetic and boolean chains are left-folded. For example:
 
 ```text
 a - b - c       means (a - b) - c
-a == b == c     means (a == b) == c
-a < b < c       means (a < b) < c
 not a == b      means not (a == b)
 a + b * c       means a + (b * c)
 ```
 
-Aurora does not implement Python-style chained comparisons. Because comparison results are `bool`, a chained form such as `a < b < c` will normally fail static type checking rather than perform a mathematical range test. Write `a < b and b < c`.
+Aurora 0.1 accepts at most one unparenthesized equality or ordering operator in
+one comparison expression. Ordering chains, equality chains, and mixtures such
+as `a < b < c`, `a == b == c`, and `a < b == c` are parse errors, not left
+folds and not Python-style chained comparisons. Spell the repeated comparison
+explicitly with `and`, such as `a < b and b < c`. Parentheses make nested
+Boolean comparisons explicit, so `(a == b) == c` is a distinct permitted form
+when its operand types are `bool`.
 
 Parentheses override precedence:
 
@@ -108,9 +123,19 @@ Built-in arithmetic supports equal integer types or equal floating-point types. 
 | `==`, `!=` | `bool` for equal operand types |
 | `<`, `<=`, `>`, `>=` | `bool` for equal numeric types |
 
+Equality and inequality have one contextual `Option` rule: when either operand
+has static type `Option[T]`, a bare `None` on the other side denotes
+`Option.None` of that same specialization. The rule is symmetric. Unit
+`None == None` is `true` and unit `None != None` is `false`; a qualified
+`Option.None` with no context for its type argument is rejected. Aurora rejects
+Python identity tests such as `value is None`; use `value == None`,
+`value != None`, or `match`.
+
 Arithmetic and ordering may resolve through the corresponding operator trait. For non-numeric user types, `/` requests `Div.div`; `//` has no operator trait and is builtin-only. Builtin equality does not use an equality operator trait in Aurora 0.1.
 
 Builtin integer `/` is a static error, as is integer `/=`. The diagnostic directs callers to `//` for a floor quotient or to `.to_float()` on both operands for floating true division. Integer `//` rounds the mathematical quotient toward negative infinity, and integer `%` is its paired remainder. Floating `//` and `%` use the corresponding CPython-compatible divmod correction. In both numeric domains, a nonzero remainder has the divisor's sign. Integer and floating `//` or `%` by zero, and floating `/` by zero, are runtime failures. See [Execution Model](/manual/execution-model#operators) for the complete runtime contract.
+
+An unsuffixed integer literal may take the type of a `float32` or `float64` operand when the integer value is exactly representable in that floating type. Thus `7.5 // 2` is floating floor division and `-7.5 % 2` is floating remainder. This rule never converts a bound integer variable. An inexact literal is rejected; use an explicit floating spelling when rounding at the literal is intentional, or `.to_float()` for an intentional integer-to-`float64` conversion.
 
 Every integer type provides `.to_float() -> float64`. This conversion uses IEEE-754 round-to-nearest, ties-to-even and may lose integer precision:
 
@@ -177,7 +202,15 @@ Positional arguments come before named arguments. Static binding proceeds as fol
 5. Every omitted parameter must have a default.
 6. Each argument must have the substituted parameter type.
 
-Arguments do not accept a trailing comma and ordinary calls remain on one physical line. Explicit arguments are evaluated in source order. A default expression is evaluated afresh each time its parameter is omitted; mutable defaults are not shared process-global singletons.
+Arguments do not accept a trailing comma and ordinary calls remain on one
+physical line. Every supplied argument is evaluated first in call-site source
+order before the next expression begins. A copy or move result is captured in
+its parameter slot; a borrow-mode selection is established without cloning and
+remains subject to the retained-borrow overlap rule. Later side effects cannot
+change an earlier captured argument. Defaults for omitted parameters are then
+evaluated afresh in declaration order. Binding a named value to its parameter
+slot never reorders evaluation, and no default runs for a supplied parameter.
+Mutable defaults are not shared process-global singletons.
 
 Call sites pass a value directly to default-mode, `own`, `borrow`, and `borrow
 mut` parameters. Prefix argument forms such as `own value` or `borrow value`
@@ -190,7 +223,10 @@ Borrowing](/manual/ownership-and-borrowing).
 Calling a class name constructs the class. Calling an enum variant constructs
 that variant. Every class field and enum payload is an owned position.
 Constructor arguments follow the same positional-then-named rule and must
-supply every required field or payload exactly once.
+supply every required field or payload exactly once. Named enum-variant
+arguments evaluate in their written source order; their captured results then
+bind by payload name to declaration-order slots. Slot binding never reorders
+the argument expressions.
 
 ## Explicit Generic Specialization
 
@@ -241,9 +277,16 @@ the last element. The same rule applies to indexed assignment and the public
 Vec index methods. An index that remains outside the operation's valid range
 after normalization is not clamped. A contextually typed integer literal may
 adopt `int32`, but an already-bound `int64` value is not implicitly narrowed.
-A map index must have exactly the map's key type.
+A map index must have exactly the map's key type. Direct reads are permitted
+only when the map value type is copyable. For a non-copy value, use `get(key)`
+for an explicit cloned optional read or `remove(key)` to transfer the stored
+value. A missing key in a direct read is a runtime `AU4003` lookup violation.
 
-A direct vector read of a copy element returns the value. Moving a non-copy vector element by direct indexing is restricted; use `get(index)` when the intended operation is an explicit cloned/optional read. Index assignment is a statement target and is covered by [Statements](/manual/statements#bindings-and-assignment).
+A direct vector read of a copy element returns the value. Moving a non-copy
+vector element by direct indexing is restricted; use `get(index)` when the
+intended operation is an explicit cloned/optional read. Index assignment is a
+statement target and is covered by
+[Statements](/manual/statements#bindings-and-assignment).
 
 Aurora 0.1 does not define integer indexing or slicing for `String`. Use the
 maintained string methods for whole-string operations; scalar iteration and
@@ -273,11 +316,17 @@ explicit_seen: Set[int32] = Set{}
 
 `{}` is grammatically an empty map but is accepted as an empty set when its expected type is `Set[T]`. `Set{}` is the unambiguous empty-set form.
 
-Collection literals do not accept trailing commas and remain on one physical line. Lists and sets evaluate elements in source order. Maps evaluate each key before its value and entries in source order.
+Collection literals do not accept trailing commas and remain on one physical
+line. Lists and sets evaluate elements in source order. Maps evaluate each key
+before its value and entries in source order. If two evaluated map keys are
+equal, the later value replaces the earlier value while the key retains its
+first insertion position.
 
 ## F-Strings
 
-An f-string produces an owned `String` and evaluates interpolations from left to right:
+An f-string produces an owned `String` and evaluates interpolations from left
+to right. Each interpolation is rendered to `String` immediately, before the
+next interpolation begins:
 
 ```python
 name = "aurora"
@@ -349,3 +398,86 @@ Bare builtin variants such as `Ok`, `Err`, `Some`, or `None` are accepted only w
 ## Forms Not Implemented
 
 Aurora 0.1 expressions do not include tuples, comprehensions, lambdas, conditional expressions, assignment expressions, call-site borrow annotations, non-numeric casts, general multiline delimiters, or trailing commas. If a form is absent from [Grammar](/manual/grammar), it is not part of the implemented expression language.
+
+## Grammar
+
+Primary, postfix, unary, multiplicative, additive, comparison, Boolean,
+`match`, `try`, collection, constructor, and f-string expression productions
+are normative in [Grammar](/manual/grammar). The precedence and associativity
+table above resolves every accepted operator sequence. A spelling absent from
+those productions is not accepted as an implicit extension.
+
+## Typing Rules
+
+Each expression receives exactly one static type. Calls, constructors,
+operators, indexing, member access, collections, matches, casts, and `try` must
+satisfy the specific rules above after generic substitution. Context may type a
+literal, including an exactly representable integer literal in a floating
+context, but never converts a bound variable. Branching expressions require a
+single result type on every arm.
+
+## Runtime Semantics
+
+Operands and call arguments evaluate left to right, with each copy or move
+argument result captured before the next argument's side effects. Named enum
+arguments evaluate in source order and then bind to declaration-order payload
+slots. `and` and `or` short circuit. A member receiver is evaluated before
+arguments; an index base is evaluated before its index; collection entries
+preserve source order; a match scrutinee evaluates once; and each f-string
+interpolation renders immediately before the next begins.
+`try` either yields an `Ok` payload or returns the `Err` from the enclosing
+function after required cleanup.
+
+## Ownership And Evaluation Order
+
+Evaluation copies copy values and moves non-copy values only when the static
+context consumes them. Default-mode non-copy parameters borrow; `own`
+parameters and consuming receivers move; explicit borrows retain the owner.
+Non-copy indexed reads require the safe method surface instead of an implicit
+copy. Binary left operands, index bases, method receivers, and indexed-assignment
+targets retain their non-copy borrow through later inputs. An overlapping
+mutable borrow or consumption is rejected with `AU3002`, and no hidden clone
+repairs the invalid expression.
+
+## Diagnostics
+
+`AU1101` means invalid expression syntax. `AU2001` means an unresolved name or
+member. `AU2002` means a type, constructor-payload, match-result, or index-type
+mismatch. `AU2003` means an unsupported unary, binary, compound, or cast
+operator. `AU2004` means call or constructor argument binding failed. `AU2005`
+means focused migration guidance for a Python-shaped expression. `AU2999`
+means an expression rejection without a narrower compile-time code. `AU3001`
+means use of a moved value; `AU3002` means a borrow conflict, including a later
+mutable borrow or consumption overlapping a retained non-copy binary operand,
+index base, method receiver, or indexed-assignment target; `AU3003` means an
+immutable place was used mutably; and `AU3004` means an invalid ownership mode.
+At runtime, `AU4001` means a general expression trap, `AU4002` means arithmetic
+overflow, underflow, range, or conversion-exactness failure, `AU4003` means a
+bounds or lookup violation, `AU4004` means a zero divisor, and `AU4005` means a
+trapping resource or I/O failure propagated by a call expression.
+
+## Backend Support
+
+All expression forms marked implemented lower to MIR and are supported by the
+direct native backend. The forced backend-parity matrix verifies their
+observable results and primary traps. Compiler analysis and LSP diagnostics
+are produced before backend selection.
+
+## Limits And Implementation-Defined Behavior
+
+The parser caps expression nesting and operator chains at 128, delimiters do
+not generally continue a logical line, and trailing commas are unavailable.
+Collection and string resource caps are documented by their feature pages.
+Floating values follow the specified Aurora operations and shortest-round-trip
+printing; no backend may substitute a different expression result as an
+implementation-defined choice.
+
+## Status
+
+The expression forms defined positively in this chapter are implemented.
+Tuples, lambdas, comprehensions, conditional and assignment expressions,
+general callables, nonnumeric casts, and call-site ownership modifiers are
+unavailable. `in` is reserved as a loop keyword but is unavailable as an
+expression operator. Chained comparisons are deliberately rejected rather
+than given Python semantics. Parser migration hints for any of these spellings
+do not make them language features.

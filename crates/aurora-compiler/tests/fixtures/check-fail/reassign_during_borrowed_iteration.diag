@@ -1,5 +1,7 @@
-error: cannot mutate `values` while `values` is borrowed for iteration
+error[AU3002]: cannot mutate `values` while `values` is borrowed for iteration
  --> crates/aurora-compiler/tests/fixtures/check-fail/reassign_during_borrowed_iteration.au:6:13
   |
 6 |             values = ["x"]
   |             ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/reassign_during_borrowed_iteration.au:4:25: `values` is borrowed for this loop here
+  = help: perform owner mutation after the loop; use `for item in borrow mut values:` when mutating elements through the loop binding

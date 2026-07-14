@@ -270,7 +270,7 @@ function validateDocument(document) {
       return;
     }
     const diagnostics = state.compilerAnalysis
-      ? compilerDiagnosticsToLsp(state.compilerAnalysis)
+      ? compilerDiagnosticsToLsp(state.compilerAnalysis, document.uri)
       : diagnosticsForDocument(document.getText()).map((diagnostic) => ({
           severity: mapSeverity(diagnostic.severity),
           range: {

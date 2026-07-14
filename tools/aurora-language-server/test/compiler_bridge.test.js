@@ -45,17 +45,32 @@ const namespaceTypesSource = fs.readFileSync(namespaceTypesPath, "utf8");
 test("compiler bridge helper conversions cover diagnostics, symbols, and definition ranges", () => {
   assert.deepEqual(compilerDiagnosticsToLsp({}), []);
 
-  const diagnostics = compilerDiagnosticsToLsp({
-    diagnostics: [
-      {
-        severity: 1,
-        line: 2,
-        start_character: 4,
-        end_character: 9,
-        message: "unknown name"
-      }
-    ]
-  });
+  const diagnostics = compilerDiagnosticsToLsp(
+    {
+      diagnostics: [
+        {
+          code: "AU2001",
+          severity: 1,
+          line: 2,
+          start_character: 4,
+          end_character: 9,
+          message: "unknown name",
+          secondary_spans: [
+            {
+              line: 0,
+              start_character: 4,
+              end_character: 9,
+              label: "declared here"
+            }
+          ],
+          notes: ["names are lexically scoped"],
+          help: ["declare the name before using it"],
+          edits: []
+        }
+      ]
+    },
+    "file:///workspace/main.au"
+  );
   assert.deepEqual(diagnostics, [
     {
       severity: 1,
@@ -64,7 +79,25 @@ test("compiler bridge helper conversions cover diagnostics, symbols, and definit
         end: { line: 2, character: 9 }
       },
       message: "unknown name",
-      source: "aurora-compiler"
+      source: "aurora-compiler",
+      code: "AU2001",
+      relatedInformation: [
+        {
+          location: {
+            uri: "file:///workspace/main.au",
+            range: {
+              start: { line: 0, character: 4 },
+              end: { line: 0, character: 9 }
+            }
+          },
+          message: "declared here"
+        }
+      ],
+      data: {
+        notes: ["names are lexically scoped"],
+        help: ["declare the name before using it"],
+        edits: []
+      }
     }
   ]);
 
@@ -261,6 +294,36 @@ test("compiler bridge helper conversions cover diagnostics, symbols, and definit
     null
   );
   assert.equal(compilerDefinitionAtPosition("file:///workspace/main.au", { occurrences: [] }, 9, 9), null);
+});
+
+test("compiler bridge keeps diagnostic metadata optional across compiler schema versions", () => {
+  const diagnostic = {
+    code: "AU3001",
+    severity: 1,
+    line: 1,
+    start_character: 4,
+    end_character: 5,
+    message: "use of moved value"
+  };
+  const convert = (metadata) =>
+    compilerDiagnosticsToLsp({ diagnostics: [{ ...diagnostic, ...metadata }] })[0];
+
+  assert.equal(convert({}).data, undefined);
+  assert.deepEqual(convert({ notes: ["one owner"] }).data, {
+    notes: ["one owner"],
+    help: [],
+    edits: []
+  });
+  assert.deepEqual(convert({ help: ["borrow or clone"] }).data, {
+    notes: [],
+    help: ["borrow or clone"],
+    edits: []
+  });
+  assert.deepEqual(convert({ edits: [{ replacement: ".clone()" }] }).data, {
+    notes: [],
+    help: [],
+    edits: [{ replacement: ".clone()" }]
+  });
 });
 
 test("compiler bridge resolves compiler commands across env, cargo, binaries, and fallback", () => {
@@ -610,6 +673,53 @@ test("compiler bridge returns machine-readable analysis for a real example", asy
   assert.ok(analysis.symbols.some((symbol) => symbol.name === "Point"));
 });
 
+test("compiler bridge preserves real ownership provenance, help, and safe edits", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-ownership-diag-"));
+  const source = "def take(value: String) -> String:\n    return value\n";
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const mainUri = `file://${mainPath}`;
+    const analysis = await analyzeWithCompiler(mainUri, source);
+
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 1);
+    const diagnostics = compilerDiagnosticsToLsp(analysis, mainUri);
+    assert.equal(diagnostics[0].code, "AU3002");
+    assert.deepEqual(diagnostics[0].range, {
+      start: { line: 1, character: 11 },
+      end: { line: 1, character: 12 }
+    });
+    assert.deepEqual(diagnostics[0].relatedInformation, [
+      {
+        location: {
+          uri: mainUri,
+          range: {
+            start: { line: 0, character: 9 },
+            end: { line: 0, character: 10 }
+          }
+        },
+        message: "parameter `value` is borrowed here"
+      }
+    ]);
+    assert.deepEqual(diagnostics[0].data.help, [
+      "declare the parameter as `own String` when the function should consume it, or call `.clone()` to consume an independent copy"
+    ]);
+    assert.deepEqual(diagnostics[0].data.edits, [
+      {
+        line: 1,
+        start_character: 16,
+        end_character: 16,
+        replacement: ".clone()",
+        applicability: "machine-applicable"
+      }
+    ]);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge returns member completions from the compiler", async () => {
   setWorkspaceRoots([repoRoot]);
   const lineIndex = pointSource.split("\n").findIndex((line) => line.includes("a.x"));
@@ -667,6 +777,38 @@ test("compiler bridge preserves the integer true-division teaching diagnostic", 
         `${entry.name} LSP conversion`
       );
     }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge preserves the chained-comparison code, guidance, and operator span", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-chained-comparison-"));
+  const source = [
+    "def main():",
+    "    if 1 < 2 < 3:",
+    "        pass",
+    ""
+  ].join("\n");
+  const message =
+    "chained comparisons are not available yet; write the comparisons with `and` today; chained comparisons arrive in a later Aurora release";
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const mainPath = path.join(tempRoot, "main.au");
+    const analysis = await analyzeWithCompiler(`file://${mainPath}`, source);
+
+    assert.ok(analysis);
+    assert.equal(analysis.diagnostics.length, 1);
+    assert.equal(analysis.diagnostics[0].code, "AU2005");
+    assert.equal(analysis.diagnostics[0].message, message);
+    const diagnostic = compilerDiagnosticsToLsp(analysis)[0];
+    assert.equal(diagnostic.code, "AU2005");
+    assert.equal(diagnostic.message, message);
+    assert.deepEqual(diagnostic.range, {
+      start: { line: 1, character: 13 },
+      end: { line: 1, character: 14 }
+    });
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

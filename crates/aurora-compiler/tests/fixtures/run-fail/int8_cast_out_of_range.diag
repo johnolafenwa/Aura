@@ -1,4 +1,4 @@
-error: integer value `300` does not fit in `int8`
+error[AU4002]: integer value `300` does not fit in `int8`
  --> crates/aurora-compiler/tests/fixtures/run-fail/int8_cast_out_of_range.au:3:13
   |
 3 |     value = source as int8

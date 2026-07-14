@@ -1,0 +1,17 @@
+trait Add[Rhs, Out]:
+    def add(borrow self, rhs: own Rhs) -> Out
+
+copy class Counter:
+    value: int32
+
+impl Add[Counter, Counter] for Counter:
+    def add(borrow self, rhs: own Counter) -> Counter:
+        return Counter(value=self.value + rhs.value)
+
+def bump(counter: borrow mut Counter) -> Counter:
+    counter.value += 1
+    return counter
+
+def main():
+    mut counter = Counter(value=1)
+    print(counter + bump(counter))

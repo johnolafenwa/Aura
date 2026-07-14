@@ -75,7 +75,7 @@ bounded = Queue[String](capacity=8)
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| constructor | `Queue[T](capacity: int32 = ...)` | Creates an unbounded queue when `capacity` is omitted, or a bounded queue when supplied. |
+| constructor | `Queue[T](capacity: int32 = ...)` | Creates an unbounded queue when omitted or a bounded queue for a positive capacity; zero or negative capacity traps with `AU4001`. |
 | `put` | `put(value: own T, timeout: Duration = ...) -> Result[None, SendError[T]]` | Sends `value`, waiting for capacity when needed. Returns the unsent value in the error variant. |
 | `try_put` | `try_put(value: own T) -> Result[None, SendError[T]]` | Attempts to send without waiting. Returns `Full(value)` when a bounded queue is full. |
 | `get` | `get(timeout: Duration = ...) -> QueueReceive[T]` | Receives one structured queue outcome. |
@@ -112,6 +112,11 @@ Queue iteration receives values: every `Item(value)` arrives already owned by
 the loop binding. The Queue handle is a copy value, so ownership modifiers
 have nothing to modify. `for value in own jobs`, `for value in borrow jobs`,
 and `for value in borrow mut jobs` are all rejected; use the bare form above.
+The bare form evaluates and copies the Queue handle once at loop entry. It does
+not freeze the source binding: rebinding `jobs` in the body is permitted, but
+later receives continue through the captured handle rather than switching to
+the newly bound Queue. This source-selection timing is recorded provisionally
+in ADR-0017; ADR-0006's receive ownership and modifier carve-out are unchanged.
 The receive loop ends when the queue closes, cancellation interrupts it, or
 the relevant producers in the active task group complete. Closing queues
 explicitly is still the clearest program shape.
@@ -170,3 +175,107 @@ Aurora 0.1 task scheduling is cooperative and single-threaded. CPU code that nev
 Aurora does not currently expose a `spawn detached` language form. Keep lightweight task work under `TaskGroup` so scope exit has a clear join and cleanup boundary.
 
 For operating-system child processes, use the `process` module and decide explicitly whether the child should be supervised, waited on, or closed.
+
+## Grammar
+
+Concurrency introduces no `async`, `await`, or detached-spawn grammar.
+`TaskGroup`, `Task`, `Queue`, `sleep`, `cancelled`, `wait_any`, and `wait_all`
+use ordinary construction and call syntax; structured groups use the ordinary
+`with` statement. Queue iteration uses only `for item in queue:`. Duration
+literal spelling is defined in [Lexical Structure](/manual/lexical-structure)
+and the relevant statement and call productions are in
+[Grammar](/manual/grammar).
+
+## Typing Rules
+
+`Queue[T]` and `Task[T]` are copy handles; `TaskGroup` is a managed move
+resource. Queue sends, fallback values, task captures, and returned outcome
+payloads use the exact owned positions shown in the API tables above. Task
+targets are named functions or associated methods without `self`; generic
+targets must infer all type arguments. Default/shared and `own` target
+parameters are supported, while `borrow mut` targets are rejected. Queue
+iteration yields `T` by ownership transfer and rejects all explicit ownership
+modifiers. Timeout and capacity expressions must have the documented exact
+types. A supplied Queue capacity must be greater than zero.
+
+## Runtime Semantics
+
+Aurora tasks run on one cooperative scheduler thread. Starting a child stores
+its captures in task-owned storage. Group exit observes or joins children,
+cancels an indefinitely blocked group-owned wait when required for cleanup,
+and propagates an unread child failure. Queue send and receive transfer one
+value by copy or move according to `T`; bounded queues suspend senders when
+full, close wakes waiters, and bare
+iteration repeatedly receives until its documented terminal condition.
+Timeout, cancellation, closure, and task failure are distinct enum outcomes.
+A nonpositive Queue capacity traps before a queue is constructed. Scheduling
+order among simultaneously ready tasks is not specified.
+
+## Ownership And Evaluation Order
+
+Call arguments are evaluated before a task can use its captured values; every
+non-copy capture moves into child-owned storage and a copy capture is copied.
+The child then borrows or consumes that storage according to the target's
+declaration-stable parameter mode. `put` owns its offered value and returns it
+inside `SendError` when no send occurs. Queue iteration captures the copyable
+handle once at loop entry, produces already-owned items, and never freezes or
+borrows the source binding. Task result observation
+clones the stored runtime value; the single-observer resource limitation below
+is therefore significant.
+
+## Diagnostics
+
+`AU1101` reports malformed concurrency syntax, including unavailable spawn
+forms. `AU2001` reports unknown concurrency types, functions, or members,
+including removed `Channel` names. `AU2002` covers generic, duration, capacity,
+task-vector, argument, and outcome type mismatch. `AU2004` reports invalid
+constructor or method argument binding. `AU2999` covers unsupported targets,
+removed method aliases, method-reference misuse, and remaining static
+concurrency rejections. `AU3001` reports use after a value moves into task or
+queue storage. `AU3002` reports invalid borrowed capture/storage use and the
+rejected `borrow mut` task-target boundary. `AU3003` reports a mutating call
+through an immutable place, and `AU3004` reports each forbidden Queue-iteration
+ownership modifier. Timeout, cancellation, closure, fullness, and an observed
+task error are typed values, not diagnostics. An unread child trap retains its
+original code. `AU4001` reports a general runtime trap, including zero or
+negative Queue capacity. `AU4002` reports arithmetic overflow or underflow,
+`AU4003` a bounds or lookup violation, `AU4004` a zero divisor, and `AU4005` a
+resource or I/O failure.
+
+## Backend Support
+
+Structured groups, task targets and captures, Queue operations and iteration,
+wait helpers, sleep, cancellation, and user-trait dispatch on `Queue[T]` and
+`Task[T]` are maintained on both MIR execution and direct native generation.
+The scheduler/runtime surface and primary diagnostics are parity-pinned.
+MIR traps include Aurora call-chain and task-ancestry notes; direct native
+traps may omit only those supplemental notes until the deferred frame work.
+
+## Limits And Implementation-Defined Behavior
+
+Task execution is cooperative, single-threaded, and non-preemptive; CPU code
+without a scheduler boundary can starve siblings. Scheduling order among
+simultaneously ready tasks is deliberately unspecified. Each lightweight task
+reserves a fixed 1 MiB coroutine stack, and the MIR/direct entry thread
+reserves 64 MiB. Readiness work is linear in waiting tasks/descriptors, and
+nested Aurora calls stop at 256 frames. The process-wide blocking pool uses 2
+through 8 host threads selected from host parallelism; it has no 0.1
+configuration or queue backpressure, so slow or stuck jobs can delay unrelated
+work behind them. A result holding an exclusive runtime resource is
+single-observer-only, but the checker does not yet enforce that rule.
+Cancelling a blocking-worker wait cannot retract an OS side effect already in
+progress. Duration arithmetic and detached lightweight tasks are unavailable.
+
+## Status
+
+Scheduler-backed lightweight tasks, structured `TaskGroup`, generic task
+handles and outcomes, bounded and unbounded queues, bare receive iteration,
+sleep, cooperative cancellation, task-result observation, and multi-task waits
+are implemented for the post-Phase 1.5 surface. Multicore Aurora task execution
+is reserved for the Batch 3 runtime work. Preemptive scheduling,
+mutable-borrow task targets, statically enforced single-observer resource
+results, and detached task syntax are unavailable. The capacity boundary is
+pinned by
+`crates/aurora-compiler/tests/fixtures/run-fail/queue_zero_capacity.au` and
+`crates/aurora-compiler/tests/fixtures/run-fail/queue_negative_capacity.au` on
+both backends.

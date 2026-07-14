@@ -1,0 +1,5 @@
+error[AU2002]: integer literal `-9007199254740993` cannot be represented exactly as `float64`; write an explicit float spelling such as `-9007199254740993.0` or use `.to_float()` when rounding is intended
+ --> crates/aurora-compiler/tests/fixtures/check-fail/float64_context_negative_integer_literal_inexact.au:2:22
+  |
+2 |     value: float64 = -9007199254740993
+  |                      ^

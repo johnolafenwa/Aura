@@ -61,6 +61,29 @@ fn check_fail_fixtures_match_expected_diagnostics() {
 }
 
 #[test]
+fn python_migration_hint_fixtures_match_expected_messages_and_codes() {
+    for fixture in fixture_files("python-hints") {
+        let source = read(&fixture);
+        let error = match check_source(&source) {
+            Ok(_) => panic!("{} should produce a migration hint", fixture.display()),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.message,
+            read_expected(&fixture, "diag").trim_end(),
+            "unexpected migration hint for {}",
+            fixture.display()
+        );
+        assert_eq!(
+            error.code,
+            read_expected(&fixture, "code").trim_end(),
+            "unexpected diagnostic code for {}",
+            fixture.display()
+        );
+    }
+}
+
+#[test]
 fn run_pass_fixtures_match_expected_stdout() {
     for fixture in fixture_files("run-pass") {
         let source = read(&fixture);
@@ -91,8 +114,8 @@ fn run_fail_fixtures_match_expected_diagnostics() {
         let expected = read_expected(&fixture, "diag");
         let rendered = error.render_with_source(&display_path(&fixture), &source);
         assert_eq!(
-            normalize_newlines(&rendered),
-            normalize_newlines(&expected),
+            normalize_primary_runtime_diagnostic(&rendered),
+            normalize_primary_runtime_diagnostic(&expected),
             "unexpected runtime diagnostic for {}",
             fixture.display()
         );
@@ -140,6 +163,25 @@ fn workspace_root() -> PathBuf {
 
 fn normalize_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").trim_end().to_string()
+}
+
+fn normalize_primary_runtime_diagnostic(text: &str) -> String {
+    // Full MIR backtraces are pinned in `mir_backtraces.rs`. Legacy runtime
+    // fixture oracles continue to pin the primary trap while the native
+    // backend waits for Batch 3 frame capture.
+    normalize_newlines(text)
+        .lines()
+        .filter(|line| !is_supplemental_mir_backtrace_note(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn is_supplemental_mir_backtrace_note(line: &str) -> bool {
+    let line = line.trim_start();
+    let line = line.strip_prefix("= ").unwrap_or(line);
+    line.starts_with("note: Aurora call chain")
+        || line.starts_with("note: Aurora task entry")
+        || line.starts_with("note: Aurora task ancestry")
 }
 
 fn run_source_on_large_stack(

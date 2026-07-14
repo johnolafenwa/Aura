@@ -49,21 +49,25 @@ fn parse_expression_reports_trailing_tokens_and_primary_errors() {
     let lex_error =
         parse_expression("\"unterminated").expect_err("expected expression lexing failure");
     assert!(lex_error.message.contains("unterminated string literal"));
+    assert_eq!(lex_error.code, "AU1001");
 
     let trailing = parse_expression("1 2").expect_err("expected trailing-token parse failure");
     assert!(trailing
         .message
         .contains("unexpected trailing tokens after expression"));
+    assert_eq!(trailing.code, "AU1101");
 
     let unexpected = parse_expression(")").expect_err("expected unexpected-token failure");
     assert!(unexpected
         .message
         .contains("unexpected token in expression"));
+    assert_eq!(unexpected.code, "AU1101");
 
     let borrowed = parse_expression("borrow value").expect_err("expected borrow-prefix failure");
     assert!(borrowed
         .message
         .contains("call arguments cannot start with `borrow`"));
+    assert_eq!(borrowed.code, "AU1101");
 
     let identity = parse_expression("value is None").expect_err("`is` should be rejected");
     assert_eq!(
@@ -82,9 +86,11 @@ fn parse_expression_reports_trailing_tokens_and_primary_errors() {
 fn d4_parser_accepts_single_quoted_expressions_patterns_and_fstring_arguments() {
     let single_quoted_fstring =
         parse_expression("f'aurora'").expect_err("single-quoted f-strings remain unsupported");
-    assert!(single_quoted_fstring
-        .message
-        .contains("unexpected trailing tokens after expression"));
+    assert_eq!(
+        single_quoted_fstring.message,
+        "f-strings must be double-quoted; use `f\"...\"`"
+    );
+    assert_eq!(single_quoted_fstring.code, "AU1002");
 
     let string_expr = parse_expression("'aurora'").expect("single-quoted string should parse");
     assert!(matches!(
@@ -122,6 +128,29 @@ fn d4_parser_accepts_single_quoted_expressions_patterns_and_fstring_arguments() 
             ..
         }] if value == "{left"
     ));
+}
+
+#[test]
+fn chained_comparison_diagnostics_point_at_the_second_operator() {
+    for (source, expected_column) in [
+        ("1 < 2 < 3", 7),
+        ("1 == 1 == 1", 8),
+        ("1 < 2 == 2", 7),
+        ("1 == 1 < 2", 8),
+    ] {
+        let diagnostic = parse_expression(source).expect_err("comparison chain should be rejected");
+        assert_eq!(diagnostic.code, "AU2005", "{source}");
+        assert_eq!(
+            diagnostic.span,
+            Some(Span::new(1, expected_column)),
+            "{source}"
+        );
+        assert_eq!(
+            diagnostic.message,
+            "chained comparisons are not available yet; write the comparisons with `and` today; chained comparisons arrive in a later Aurora release",
+            "{source}"
+        );
+    }
 }
 
 #[test]

@@ -132,7 +132,12 @@ An integer literal is one or more decimal digits:
 INTEGER = digit, { digit } ;
 ```
 
-Examples are `0`, `42`, and `170000`. The lexical value must fit an unsigned 128-bit integer. Static checking then selects an expected integer type when available and verifies that the value fits; otherwise the literal defaults to `int64`. The source spelling `int` is an alias for `int64`.
+Examples are `0`, `42`, and `170000`. The lexical value must fit an unsigned
+128-bit integer. Static checking selects an expected integer type when
+available and verifies that the value fits. It may instead select an expected
+`float32` or `float64` when the integer's value is exactly representable in
+that type; otherwise the literal defaults to `int64`. The source spelling
+`int` is an alias for `int64`.
 
 `-7` is not one signed token. It is unary `-` applied to the positive integer literal `7`. Aurora has no hexadecimal, octal, binary, or underscore-separated integer syntax.
 
@@ -225,3 +230,66 @@ Interpolations are evaluated from left to right and the result is an owned
 ## Complexity Limits
 
 The maintained parser rejects excessive nesting and expression chains instead of risking host stack exhaustion. The current 128-level limits for expressions, types, patterns, statements, f-string braces, and chained operators are defined in [Grammar](/manual/grammar#syntactic-complexity-limits) and summarized in [Current Limits](/manual/current-limits).
+
+## Grammar
+
+The token productions, reserved words, indentation protocol, delimiters,
+operators, and literal forms in this chapter are normative. Their composition
+into declarations, statements, patterns, types, and expressions is defined by
+the complete [Grammar](/manual/grammar). A source spelling not accepted by
+those productions is not an extension point.
+
+## Typing Rules
+
+Lexing does not assign expression types, but it preserves the literal kind and
+mathematical or decoded value used by static checking. Integer literals may
+later adopt an exact expected integer or floating type; floating literals may
+adopt `float32` or `float64`; duration, Boolean, ordinary-string, and f-string
+tokens enter checking as `Duration`, `bool`, `String`, and an interpolated
+`String` expression respectively. No lexical spelling performs a runtime
+coercion.
+
+## Runtime Semantics
+
+Tokenization has no runtime side effects. Decoded string scalars, literal
+numbers, duration milliseconds, and f-string text segments become constants or
+MIR inputs only after the complete module has parsed and checked. A lexical
+failure prevents execution.
+
+## Ownership And Evaluation Order
+
+Tokens do not own or borrow runtime values. Ordinary and f-string literals
+produce owned values when evaluated; f-string interpolation expressions run
+left to right as specified by [Expressions](/manual/expressions). Indentation,
+comments, and physical-line markers have no runtime evaluation.
+
+## Diagnostics
+
+`AU1001` reports invalid lexical input, including physical tabs, invalid
+escapes, malformed or unterminated literals, invalid characters, and invalid
+indentation. `AU1002` reports the focused single-quoted f-string spelling and
+directs the author to `f"..."`. Once tokenization succeeds, syntax failures
+belong to parser code `AU1101` rather than this page.
+
+## Backend Support
+
+The compiler tokenizes source once before MIR lowering or native code
+generation. The MIR runtime and direct native backend therefore accept exactly
+the same lexical language; there is no backend-specific lexer.
+
+## Limits And Implementation-Defined Behavior
+
+Identifiers are ASCII, source is UTF-8, physical tabs are rejected, general
+delimiter-based line continuation is unavailable, lists reject trailing
+commas, and literal magnitude and parser-complexity caps are fixed by this
+chapter and [Current Limits](/manual/current-limits). No lexical behavior is
+implementation-defined in Aurora 0.1 beyond the host path used to identify the
+source in diagnostics.
+
+## Status
+
+The forms described as accepted above are implemented. Reserved token words
+remain unavailable as ordinary identifiers except for the contextual cases
+listed here. Raw, byte, triple-quoted, and single-quoted f-strings; alternate
+integer bases; digit separators; block comments; semicolons; and general line
+continuation are unavailable, not partially implemented.

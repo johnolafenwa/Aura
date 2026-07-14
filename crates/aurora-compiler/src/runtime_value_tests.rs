@@ -8,7 +8,7 @@ use super::{
     process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, recv_for_task_group_iteration,
-    remove_file_checked, render_float, result_err, result_ok, run_blocking_io,
+    remove_file_checked, render_float, render_float32, result_err, result_ok, run_blocking_io,
     run_lightweight_root_task, send_error_cancelled, send_error_closed, send_error_full,
     send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
     spawn_lightweight_task_with_cancellation,
@@ -679,9 +679,14 @@ fn render_float_formats_current_surface() {
     assert_eq!(render_float(42.0), "42.0");
     assert_eq!(render_float(3.5), "3.5");
     assert_eq!(render_float(f64::INFINITY), "inf");
+    assert_eq!(render_float(9_007_199_254_740_992.0), "9007199254740992.0");
+    assert_eq!(render_float(1e300), "1e300");
+    assert_eq!(render_float(1e-300), "1e-300");
+    assert_eq!(render_float(-0.0), "-0.0");
+    assert_eq!(render_float(0.1 + 0.2), "0.30000000000000004");
 
-    let float32_value = (3.14f32) as f64;
-    assert_eq!(render_float(float32_value), "3.14");
+    assert_eq!(render_float32(3.14), "3.14");
+    assert_eq!(render_float32(-0.0), "-0.0");
 }
 
 #[test]

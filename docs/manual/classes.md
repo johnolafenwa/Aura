@@ -63,6 +63,14 @@ Construction follows these rules:
 7. every field argument is `own`; constructing with a move value consumes it,
    while copy values are duplicated
 
+Every supplied field expression is evaluated first, in call-site source order.
+Its copy or move result is captured into the owned field slot before the next
+supplied expression begins, so later side effects cannot change an earlier
+captured field value. Aurora then evaluates the defaults for omitted fields in field
+declaration order. Binding positional or named arguments to field slots never
+reorders evaluation, and supplying a field suppresses that field's default
+completely.
+
 Generic arguments may be explicit:
 
 ```python
@@ -221,3 +229,105 @@ with resource = Resource(name="db"):
 ```
 
 `with` consumes the resource expression into a fresh mutable managed binding. That binding cannot be moved out while cleanup is active. Cleanup runs exactly once for the registration on normal and maintained abnormal exits, in reverse nesting order. See [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup).
+
+## Grammar
+
+The normative productions for `class`, `copy class`, visibility, type
+parameters, fields, field defaults, `indirect`, methods, receivers, and
+associated methods are in [Grammar](/manual/grammar#classes). A class suite
+contains fields, methods, and/or `pass`; Aurora has no separate constructor,
+property, inheritance, or destructor declaration grammar.
+
+## Typing Rules
+
+Classes are nominal and generic arguments are invariant. Every field has one
+declared type; defaults and constructor arguments must have that exact type
+after substitution. Constructor binding follows field declaration order,
+requires every non-defaulted accessible field, and rejects duplicate, unknown,
+inaccessible private, or excess arguments. Receiver mode controls legal field
+access. A `copy class` requires every field to be statically copyable, and
+every direct recursive layout cycle requires `indirect`. Cross-module
+visibility and the exact user-resource `close(borrow mut self) -> None` shape
+are checked before lowering.
+
+## Runtime Semantics
+
+Construction creates one fresh nominal value. Every supplied field expression
+is evaluated first in call-site source order and its copy or move result is
+captured into the owned field slot before later field-expression side effects,
+followed by every
+omitted field default in field declaration order. Each default is evaluated
+afresh; binding the resulting values to field slots does not reorder evaluation,
+and a supplied field's default is not evaluated.
+
+Instance calls invoke the statically selected inherent or trait method;
+associated methods receive no implicit instance. Class equality compares the
+nominal class identity and represented field values. A managed user-resource
+class is closed exactly once by its active `with` registration under the
+cleanup rules in [Execution Model](/manual/execution-model).
+
+## Ownership And Evaluation Order
+
+Every constructor field is an owned destination: copy arguments are copied and
+non-copy arguments move into the new value. Ordinary classes move; valid
+`copy class` values copy. Shared receivers read, `own self` consumes, and
+`borrow mut self` requires an exclusive mutable place. Moving an owned
+non-copy field partially moves its class until that field is reinitialized;
+moving through a borrowed receiver is rejected. Aurora inserts no hidden clone
+at a constructor, field, receiver, or return boundary. Constructor side effects
+follow the supplied-then-default order above even when named arguments bind
+fields in a different declaration order.
+
+## Diagnostics
+
+`AU1101` reports malformed class, field, method, and receiver syntax. `AU2001`
+reports unresolved classes, field types, methods, and members. `AU2002` covers
+field/default/constructor type mismatch, generic arity or bound failure, and an
+invalid non-copy field in a `copy class`. `AU2004` reports constructor or method
+argument-binding failures. `AU2999` covers duplicate declarations, invalid
+visibility or recursive layout, unsupported member use, and other class
+rejections without a narrower category. `AU3001` reports use of a moved class
+or field. `AU3002` reports overlapping receiver/argument borrows, moving a
+field through a borrow, invalid borrowed-return materialization, or an invalid
+user-resource borrow contract. `AU3003` reports mutation through an immutable
+class place, including a shared `self` receiver, and `AU3004` reports an
+invalid ownership or receiver mode. A field default, method, or cleanup body
+retains the diagnostic for the operation that traps: `AU4001` for a general
+runtime trap, `AU4002` for arithmetic overflow or underflow, `AU4003` for a
+bounds or lookup violation, `AU4004` for a zero divisor, and `AU4005` for a
+resource or I/O failure.
+
+## Backend Support
+
+Nominal classes, generic specialization, fields and defaults, all maintained
+receiver modes, partial moves, structural equality, `copy class`, `indirect`,
+visibility, and user-resource cleanup are implemented by both MIR execution
+and direct native generation. Both receive the same checked class and method
+metadata; compiler analysis and the LSP use that same metadata for member
+resolution and signatures.
+
+## Limits And Implementation-Defined Behavior
+
+Aurora 0.1 has no class inheritance, overloads, property syntax, custom
+constructor hook, or general destructor hook. Generic user classes cannot be
+managed directly by `with`. Calls producing non-copy borrowed field results
+are contained until live alias storage exists. `indirect` is only a recursive
+field-layout marker; its storage representation and the physical order or
+padding of fields are not observable language contracts. Construction and
+method evaluation order are language-defined rather than
+implementation-defined.
+
+## Status
+
+Ordinary and copy classes, generic classes, construction, defaults,
+visibility, inherent and associated methods, all maintained receiver modes,
+partial-field moves, recursive `indirect` fields, and non-generic user-resource
+classes are implemented for the post-Phase 1.5 surface. Live non-copy borrowed
+field aliases are reserved for the Phase 6 alias work. Inheritance, properties,
+custom constructor/destructor hooks, and generic `with` resources are
+unavailable and MUST NOT be inferred from accepted class syntax. The
+constructor evaluation rule is implemented under
+`architecture_docs/decisions/0015-explicit-and-default-argument-order.md`,
+whose status is **Provisional — Batch 1 checkpoint review**, and is pinned by
+`crates/aurora-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au`
+on both backends.

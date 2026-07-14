@@ -416,13 +416,12 @@ From lowest to highest precedence:
 | 1 | `or` | left |
 | 2 | `and` | left |
 | 3 | prefix `not` | right |
-| 4 | `==`, `!=` | left |
-| 5 | `<`, `<=`, `>`, `>=` | left |
-| 6 | `+`, `-` | left |
-| 7 | `*`, `/`, `%` | left |
-| 8 | prefix `match`, `try`, unary `-` | right/prefix |
-| 9 | specialization, indexing, member access, call, numeric cast | left-to-right postfix chain |
-| 10 | primary | — |
+| 4 | `==`, `!=`, `<`, `<=`, `>`, `>=` | non-associative in 0.1 |
+| 5 | `+`, `-` | left |
+| 6 | `*`, `/`, `//`, `%` | left |
+| 7 | prefix `match`, `try`, unary `-` | right/prefix |
+| 8 | specialization, indexing, member access, call, numeric cast | left-to-right postfix chain |
+| 9 | primary | — |
 
 ```ebnf
 expression = or-expression ;
@@ -434,15 +433,14 @@ and-expression
     = not-expression, { "and", not-expression } ;
 
 not-expression
-    = { "not" }, equality-expression ;
-
-equality-expression
-    = comparison-expression,
-      { ("==" | "!="), comparison-expression } ;
+    = { "not" }, comparison-expression ;
 
 comparison-expression
     = additive-expression,
-      { ("<" | "<=" | ">" | ">="), additive-expression } ;
+      [ comparison-operator, additive-expression ] ;
+
+comparison-operator
+    = "==" | "!=" | "<" | "<=" | ">" | ">=" ;
 
 additive-expression
     = multiplicative-expression,
@@ -479,7 +477,12 @@ numeric-type
     | "float32" | "float64" ;
 ```
 
-All binary chains are left-folded. In particular, `a < b < c` means `(a < b) < c`; Aurora does not implement Python-style chained comparisons. `not a == b` means `not (a == b)`. Casts bind more tightly than arithmetic.
+Arithmetic and Boolean chains are left-folded. The optional comparison suffix
+permits exactly one unparenthesized equality or ordering operator. Ordering,
+equality, and mixed chains are rejected rather than left-folded or given
+Python-style chained-comparison semantics; write the repeated operations with
+`and`. `not a == b` means `not (a == b)`. Casts bind more tightly than
+arithmetic.
 
 ## Primary Expressions And Literals
 
@@ -569,6 +572,7 @@ The grammar intentionally excludes:
 - trailing commas
 - match guards, alternative patterns, and collection patterns
 - call-site `borrow` annotations
+- `assert`, exception statements, `raise`, and `yield`
 - detached `spawn`, `select`, and proposal-only concurrency syntax
 
 If a form is absent from this grammar, examples and books must not present it as implemented Aurora.

@@ -28,7 +28,11 @@ def main() -> int32:
             return 1
     match json.parse_string_map("{\"name\":\"aurora\"}"):
         case Result.Ok(parsed):
-            print(parsed["name"])
+            match parsed.get("name"):
+                case Option.Some(name):
+                    print(name)
+                case Option.None:
+                    return 1
         case Result.Err(error):
             print(error)
             return 1
@@ -42,7 +46,11 @@ def main() -> int32:
             return 1
     match toml.parse_string_map("name = \"aurora\""):
         case Result.Ok(parsed):
-            print(parsed["name"])
+            match parsed.get("name"):
+                case Option.Some(name):
+                    print(name)
+                case Option.None:
+                    return 1
         case Result.Err(error):
             print(error)
             return 1

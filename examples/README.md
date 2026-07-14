@@ -21,7 +21,7 @@ The examples are organized by topic so they can serve both as quick references a
   - `mut`, reassignment, and compound assignment
   - prints `5`
 - `numbers.au`
-  - signed integer floor division, divisor-sign remainder, floating true division through integer `.to_float()`, exact `as float64`, and the rounded `2^53 + 1` conversion boundary
+  - signed integer floor division, divisor-sign remainder, exact float-context integer literals, floating true division through integer `.to_float()`, exact `as float64`, and shortest-roundtrip printing at the rounded `2^53 + 1` conversion boundary
   - prints:
     - `2`
     - `-3`
@@ -29,8 +29,11 @@ The examples are organized by topic so they can serve both as quick references a
     - `-3`
     - `-2`
     - `3.5`
-    - `42.0`
+    - `2.0`
     - `true`
+    - `true`
+    - `42.0`
+    - `9007199254740992.0`
 - `named_arguments.au`
   - named arguments on functions, instance methods, and associated methods,
     including an explicit `own` constructor parameter
@@ -104,7 +107,7 @@ The examples are organized by topic so they can serve both as quick references a
     - `true`
     - `true`
 - `map_basics.au`
-  - `Map[K, V]` literals, `extend(...)`, `items()` / `entries()`, indexed reads/writes, and the maintained map method surface
+  - `Map[K, V]` literals, `extend(...)`, `items()` / `entries()`, indexed writes, copy-value indexed reads, and the maintained map method surface (`get`/`remove` make non-copy reads explicit)
   - prints:
     - `3`
     - `true`

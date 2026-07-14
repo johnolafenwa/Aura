@@ -1,4 +1,4 @@
-error: `self: Type` is not a method receiver; use `self` or `borrow self` for shared access, `own self` to consume, or `borrow mut self` to mutate
+error[AU3004]: `self: Type` is not a method receiver; use `self` or `borrow self` for shared access, `own self` to consume, or `borrow mut self` to mutate
  --> crates/aurora-compiler/tests/fixtures/parse-fail/typed_self_receiver.au:4:14
   |
 4 |     def read(self: Counter) -> int32:

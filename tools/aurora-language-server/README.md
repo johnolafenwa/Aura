@@ -25,6 +25,10 @@ The server starts one persistent compiler service:
 
 Requests and responses are newline-delimited JSON. The server caches compiler analysis per document version, debounces changes, cancels obsolete completion work, guards asynchronous responses by document version, and invalidates only changed documents and their dependents.
 
+Compiler diagnostics keep the stable `AU####` code, related source spans,
+notes, help, and machine-applicable edits through the LSP mapping. The bridge
+does not classify or recreate semantic diagnostics independently.
+
 If the compiler process cannot be started, the lexical recovery layer provides only:
 
 - recovered top-level declarations and nested method declarations

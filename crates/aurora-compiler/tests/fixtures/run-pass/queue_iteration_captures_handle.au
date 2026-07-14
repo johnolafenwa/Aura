@@ -1,0 +1,12 @@
+def main() -> int32:
+    mut jobs = Queue[int32]()
+    other = Queue[int32]()
+    jobs.put(1)
+    jobs.close()
+    other.put(2)
+    other.close()
+
+    for job in jobs:
+        print(job)
+        jobs = other
+    return 0

@@ -42,13 +42,13 @@ Integer bounds are exact:
 
 `float32` and `float64` use IEEE-754 binary32 and binary64 representations. Literal lexing first requires a finite binary64 value; contextual `float32` conversion may round or overflow as recorded in [Current Limits](/manual/current-limits). Runtime operations may produce NaN, but Aurora 0.1 makes `/`, `//`, or `%` by a floating zero explicit runtime failures rather than producing infinity or NaN through those operators.
 
-`int` is an alias for `int64`, so the two spellings have identical bounds, type identity, layout, and runtime behavior. An unsuffixed integer literal uses an expected integer type when one is available and otherwise defaults to `int64`.
+`int` is an alias for `int64`, so the two spellings have identical bounds, type identity, layout, and runtime behavior. An unsuffixed integer literal uses an expected integer type when one is available. It may also use an expected `float32` or `float64` when its value is exactly representable in that target; this is literal typing, not a conversion available to integer variables. Otherwise it defaults to `int64`.
 
 The default does not widen explicitly typed APIs. Existing fixed `int32` contracts remain `int32`, including `main()` exit statuses, `range(...)` bounds and yielded values, collection lengths, Vec indexes, queue capacities, and byte-count parameters. A literal passed to one of those positions adopts the expected `int32` type and must fit it.
 
 `Duration` stores a non-negative integral count of milliseconds representable by signed 128-bit storage. Literal units are normalized to milliseconds. `Range` contains `int32` start/end values and iterates from the start inclusive to the end exclusive.
 
-Numeric literals are checked against the target type. Integer literals must fit the annotated integer type. Integer-to-float casts reject silent precision loss. Separately, every integer type provides `.to_float() -> float64`, which intentionally permits IEEE-754 round-to-nearest, ties-to-even conversion when an application wants to enter the floating domain.
+Numeric literals are checked against the target type. Integer literals must fit an annotated integer target, and a float-context integer literal must be exactly representable in its `float32` or `float64` target. An inexact literal must make rounding explicit with a floating spelling or `.to_float()`. Integer-to-float casts also reject silent precision loss. Separately, every integer type provides `.to_float() -> float64`, which intentionally permits IEEE-754 round-to-nearest, ties-to-even conversion when an application wants to enter the floating domain.
 
 A bare `value: String` parameter resolves to a shared borrow; use `borrow
 String` when that contract should be explicit in source. The spelling `str` is
@@ -173,6 +173,16 @@ result: Result[int32, String] = Result.Ok(42)
 failure: Result[int32, String] = Result.Err("bad number")
 ```
 
+Bare `None` contextually denotes `Option.None` whenever an expected
+`Option[T]` is available. This context flows through grouping, annotated
+bindings, returns, and arguments. Equality and inequality provide the context
+symmetrically: if either operand is `Option[T]`, a bare `None` on the other side
+has that same option type. Unit `None == None` is `true` and unit
+`None != None` is `false`. A qualified `Option.None` without an expected or
+otherwise inferred specialization is rejected because `T` is unconstrained.
+Aurora has no identity-test spelling: use `value == None`, `value != None`, or
+`match`, not Python's `is` or `is not`.
+
 Pattern matching may use qualified or short-form variants when the type is known:
 
 ```python
@@ -240,3 +250,81 @@ def parse_answer() -> Result[int32, String]:
     value = try parse_int32("42")
     return Result.Ok(value)
 ```
+
+## Grammar
+
+Type syntax consists of an identifier or module-qualified type path, optional
+bracketed type arguments, the optional marker `?`, and `indirect` in class-field
+position, as collected in [Grammar](/manual/grammar). `borrow`, `borrow mut`,
+and `own` on parameters and returns are passing contracts around a type; they
+do not construct separate runtime type values.
+
+## Typing Rules
+
+Every expression has one static type. An annotation, parameter, return, field,
+collection element, or expected enum context may type a compatible literal;
+otherwise integers default to `int64` and floating literals to `float64`.
+Unqualified `int` is exactly `int64`. Non-literal values never widen
+implicitly. Generic arity, substitutions, bounds, field recursion, optional
+desugaring, cast legality, and exact assignment equality are checked before
+execution.
+
+## Runtime Semantics
+
+Copy scalars and declared copy aggregates are represented by value. Other
+values use the maintained owned runtime representations documented by their
+feature pages. Arithmetic and casts are checked and may trap with a runtime
+diagnostic; typed library failure remains an `Option` or `Result` value.
+`indirect` inserts the maintained runtime indirection needed to construct a
+recursive field.
+
+## Ownership And Evaluation Order
+
+The static type determines whether reading an owned place copies it or moves
+it. A copy declaration is valid only when every stored field or payload is
+copy. Borrowing and parameter passing do not change the underlying type, and
+Aurora inserts neither hidden cloning nor runtime coercion. Type annotations
+are erased after checking and add no evaluation step.
+
+## Diagnostics
+
+`AU1101` reports malformed type, type-argument, or annotation syntax. `AU2001`
+reports an unknown or unavailable type name. `AU2002` reports type mismatches,
+unresolved contextual literal typing, generic arity, payload, field, and
+annotation mismatches. `AU2003` reports unsupported numeric operators or
+casts, and `AU2004` reports invalid constructor argument binding. `AU2999`
+covers invalid recursive layouts and other type rejections without a narrower
+category. `AU3001` reports use of a moved non-copy value; `AU3002` reports a
+borrow conflict; `AU3003` reports mutation through an immutable place; and
+`AU3004` reports an invalid ownership or receiver type mode. Runtime `AU4001`
+means a general checked trap, `AU4002` means numeric overflow, underflow, range,
+or exactness failure, `AU4003` means a bounds or lookup violation, `AU4004` means a zero
+divisor, and `AU4005` means a trapping resource or I/O failure.
+
+## Backend Support
+
+The checker produces one canonical type model for MIR lowering, compiler-backed
+analysis, and direct native code generation. All types documented as
+implemented are supported by both maintained execution paths; the parity gate
+contains a backend surface that cannot preserve the same behavior.
+
+## Limits And Implementation-Defined Behavior
+
+`str` is currently an alias rather than a borrowed view; non-copy borrowed
+returns are contained; tuples, callable types, user-defined numeric casts, and
+non-numeric casts are unavailable; and recursive value fields require
+`indirect`. `intsize` and `uintsize` follow the target pointer width, and host
+process exit transport may narrow an `int32` after Aurora returns it. Other
+numeric widths and overflow behavior are language-defined rather than
+implementation-defined.
+
+## Status
+
+The scalar, collection, enum, class, trait-bound, resource, optional, result,
+and indirect types described by this Manual are implemented for the post-Phase
+1.5 surface. Borrowed-return syntax reserves the provenance contract for a
+future live non-copy alias representation; calls cannot produce such aliases
+today. Callable, closure, tuple, and FFI types are unavailable. `str` is the
+implemented compatibility alias for `String`; a distinct borrowed `str` view
+type is unavailable. None of those unavailable types may be inferred from
+current syntax.

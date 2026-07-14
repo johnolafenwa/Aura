@@ -27,8 +27,8 @@ use crate::runtime_value::{
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration,
-    register_task_as_queue_producer_for_values, render_float, result_err, result_ok,
-    run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
+    register_task_as_queue_producer_for_values, render_float, render_float32, result_err,
+    result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
     send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
     spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
@@ -1044,7 +1044,7 @@ fn render_runtime_diagnostic(diagnostic: Diagnostic) -> String {
     if let Some(context) = DIRECT_PROGRAM_SOURCE.get() {
         diagnostic.render_with_source(&context.path, &context.source)
     } else {
-        format!("error: {}", diagnostic.message)
+        format!("error[{}]: {}", diagnostic.code, diagnostic.message)
     }
 }
 
@@ -1121,6 +1121,7 @@ fn emit_runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
 }
 
 fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
+    let diagnostic = diagnostic.into_runtime_trap();
     if direct_cleanup_is_draining() {
         emit_runtime_diagnostic_error(direct_primary_runtime_diagnostic().unwrap_or(diagnostic));
     }
@@ -1578,6 +1579,14 @@ pub extern "C-unwind" fn aurora_direct_print_u64(value: u64) {
 pub extern "C-unwind" fn aurora_direct_print_f64(value: f64) {
     task_runtime_boundary(|| {
         write_stdout(&render_float(value));
+        write_stdout("\n");
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aurora_direct_print_f32(value: f64) {
+    task_runtime_boundary(|| {
+        write_stdout(&render_float32(value as f32));
         write_stdout("\n");
     })
 }
@@ -2755,11 +2764,12 @@ pub extern "C-unwind" fn aurora_direct_map_index(
                 .map(|(_, value)| value.clone())
         });
         let Some(value) = value else {
+            let message = format!("map key `{}` was not present", key.render());
             match runtime_span(line, column) {
                 Some(span) => {
-                    runtime_error_at(span, format!("map key `{}` was not present", key.render()))
+                    runtime_diagnostic_error(Diagnostic::coded_at("AU4003", span, message))
                 }
-                None => runtime_error(format!("map key `{}` was not present", key.render())),
+                None => runtime_diagnostic_error(Diagnostic::coded("AU4003", message)),
             }
         };
         boxed_value(value)
@@ -3662,10 +3672,10 @@ pub extern "C-unwind" fn aurora_direct_channel_new(capacity: *mut OpaqueValue) -
         }
         let capacity = expect_i32_value(
             unsafe { value_ref(capacity) }.borrow(),
-            "queue(capacity=...)",
+            "Queue(capacity=...)",
         );
         if capacity <= 0 {
-            runtime_error("`queue(capacity=...)` expects a positive `int32`");
+            runtime_error("`Queue(capacity=...)` expects a positive `int32`");
         }
         boxed_value(Value::Channel(ChannelValue::with_capacity(
             capacity as usize,
@@ -5370,7 +5380,7 @@ pub extern "C-unwind" fn aurora_direct_process_completed_stdout(
     task_runtime_boundary(|| match unsafe { value_ref(completed) } {
         Value::ProcessCompleted(completed) => match completed.stdout() {
             Ok(stdout) => boxed_value(Value::String(stdout)),
-            Err(error) => runtime_error(error.to_string()),
+            Err(error) => runtime_diagnostic_error(Diagnostic::coded("AU4005", error.to_string())),
         },
         other => runtime_error(format!(
             "expected `process.Completed`, found `{}`",
@@ -5386,7 +5396,7 @@ pub extern "C-unwind" fn aurora_direct_process_completed_stderr(
     task_runtime_boundary(|| match unsafe { value_ref(completed) } {
         Value::ProcessCompleted(completed) => match completed.stderr() {
             Ok(stderr) => boxed_value(Value::String(stderr)),
-            Err(error) => runtime_error(error.to_string()),
+            Err(error) => runtime_diagnostic_error(Diagnostic::coded("AU4005", error.to_string())),
         },
         other => runtime_error(format!(
             "expected `process.Completed`, found `{}`",

@@ -2,11 +2,18 @@
 
 Last updated: 2026-07-14
 
-## Active Work Session
-
-- None. The Phase 1.5 session completed at 2026-07-14 06:26:58 BST and its final evidence is recorded in `work/2026-07-13-phase1-5-semantic-redefaults.md`.
-
 ## Latest Completed Session
+
+- Started: 2026-07-14 08:45:15 BST.
+- Completed: 2026-07-14 15:03:21 BST.
+- Elapsed: 6h 18m 06s.
+- Result: Batch 1 of 5 is complete at the reference-freeze checkpoint: P1-P5, the shared structured diagnostic system, MIR call/task backtraces, the executable normative Manual, four provisional semantic gap-fill ADRs, and the one-time coverage re-ratchet all landed together. No Batch 2 or Phase 3 work started.
+- Provisional review: ADR-0014 (Map literals/indexing), ADR-0015 (supplied/default argument order), ADR-0016 (retained non-copy expression borrows), and ADR-0017 (one-time iteration source selection) await checkpoint ratification.
+- Final compiler coverage: 53,769/55,971 lines (96.065820%), 3,324/3,434 functions (96.796738%), and 78,212/83,064 regions (94.158721%). Enforced floors are 96.06% / 96.79% / 94.15% by downward truncation; LSP coverage remains 100%.
+- Quality result: the exact full `npm run ci` gate passes, including the 242-test CLI product suite, 552-test compiler library suite, forced MIR/direct parity matrix, LSP and extension suites, instrumented tests, 29-page reference integrity, docs build, audit, Clippy, and hygiene. No synthetic-coverage test or coverage exclusion was added.
+- Next: ratify or reverse ADR-0014 through ADR-0017 before Batch 2. V6 remains in Batch 2 with Phase 4 native work; native backtraces remain in Batch 3 frame work.
+
+## Previous Completed Session
 
 - Started: 2026-07-13 13:58:22 BST; resumed after S1-S4 ratification at 16:40:01; resumed after G1-G3 ratification at 19:50:02.
 - Completed: 2026-07-14 06:26:58 BST.
@@ -30,17 +37,21 @@ Last updated: 2026-07-14
 
 - Stabilize the frozen 0.1 technical-preview surface through compatibility fixes, parity regressions, and preview-user feedback rather than adding more language syntax.
 - Keep the categorized example library, manual, and `tutorials/` synchronized with the implemented language subset whenever behavior changes.
-- Preserve the post-Phase-1.5 compiler lines/functions/regions floor at `96.05/96.72/94.06` and the LSP at 100%; add behavior-focused regression tests without treating marginal compiler coverage growth as the product roadmap.
+- Preserve the Batch 1 checkpoint compiler lines/functions/regions floor at `96.06/96.79/94.15` and the LSP at 100%; add behavior-focused regression tests without treating marginal compiler coverage growth as the product roadmap.
 
 ## Todo
 
-- Next, before or with Phase 4, complete V6: diagnose why the direct int32 10M loop is roughly 2x slower than int64, fix or document the cause, and retain both measurements in the benchmark baseline.
+- In Batch 2 with the Phase 4 native work, complete V6: diagnose why the direct int32 10M loop is roughly 2x slower than int64, fix or document the cause, and retain both measurements in the benchmark baseline.
+- In Batch 3 frame work, add native direct-backend Aurora call-chain and task-ancestry backtraces, then remove the temporary parity normalization for the three supplemental MIR backtrace note families; primary trap code/message/span parity remains mandatory meanwhile.
 - Publish signed 0.1 preview archives for every supported platform after the release workflow has passed on each target.
 - Use the host-array / tensor-lite layer as the next ML systems milestone, starting with a small dtype and shape surface before tensor or accelerator syntax.
 - Expand control-plane serialization and networking from the current honest baseline only when real agent-service examples require nested schemas, pooling, redirects, HTTP/2, or server-side TLS.
 
 ## Done
 
+- Corrected `process.Completed.stdout()` and `stderr()` invalid-UTF-8 traps to the runtime I/O band `AU4005` on both MIR and direct backends; the parity-focused regression executes both methods through both products and pins the unchanged primary message.
+- Added MIR runtime trap backtraces with function names and source spans, exact TaskGroup child entry and spawn-site ancestry, and once-only diagnostic annotation; focused compiler and `aura run` regressions pin both structured notes and human rendering. Native backtraces remain explicitly deferred to the Batch 3 frame work, with the forced parity gate temporarily ignoring only the three supplemental MIR note prefixes while still requiring exact primary trap parity.
+- Closed Batch 1 P3's previously untracked Queue/Task trait-dispatch parity gap through the preferred contained path: MIR runtime member dispatch now falls back to the sema-resolved user trait implementation for non-builtin `Queue[T]` and `Task[T]` member names, while generic run-pass fixtures keep both handles in the forced MIR/direct parity matrix; also recorded P4's intentional parameter-versus-loop `own` spelling asymmetry in ADR-0006 and the normative Manual.
 - Completed the July 13 ratified trust-recovery Phase 1 tickets 1-8 in 2h 10m 44s (10:03:59-12:14:43 BST): recorded accepted ADRs for D1-D13; added forced-MIR/forced-direct runtime-fixture parity with fallback disabled; implemented contextual `None` and unit equality; contained non-copy borrowed returns; replaced dotted semantic places with root-plus-projection paths; isolated direct-runtime call depth, diagnostics, cancellation fallback, and cleanup state per task with a 1,000-suspended-task regression; moved DNS/connect setup to the bounded blocking service under one deadline; removed environment spoofing from `sys.args()`; corrected runtime, architecture, tutorial, example, and manual claims; independently reviewed and fixed nested-`None`, operator-trait borrowed-return, projected-borrow sibling, diagnostic-ordering, and direct generated-stack unwind regressions; measured the Phase 1.5 migration surface and confirmed `own` is cleanly reservable; and passed the exact full `npm run ci` gate at 96.02% compiler lines / 96.90% functions / 93.96% regions and 100% LSP coverage.
 - Completed the July 12-13 language-reference pass in 57m 34s (23:04:44-00:02:18 BST): established the Manual as the normative Aurora 0.1 specification; added the complete grammar, names/scopes, static semantics, execution model, diagnostics, and conformance chapters; expanded the declaration, ownership, package, CLI, runtime, limit, and API contracts enough to derive a future language book; added the reference-integrity CI gate; corrected stale Learn/tutorial/backend/API claims; fixed parser, checker, bounded-read, metrics, and hover-contract defects exposed by the audit with unit, fixture, MIR, and direct-backend regressions; and passed the exact full `npm run ci` gate at 96.05% compiler lines / 96.87% functions / 93.95% regions and 100% LSP coverage.
 - Completed the July 10 directions 1-5 pass in 4h 37m (16:13:01-20:50:49 BST): froze the 0.1 syntax and compiler coverage floor; established a relocatable technical-preview release, CI, documentation, and hygiene surface; added parity, fuzz, scheduler-model/stress, sanitizer, audit, and benchmark safety gates; replaced per-request LSP compiler processes with a persistent, cancellable, dependency-aware service and a small lexical recovery layer; added the ML/agent control-plane foundations (`sys`, `path`, JSON/TOML string maps, logs/traces/metrics, HTTPS/chunked HTTP, and `new`/`fmt`/`test` workflows); fixed all parity and TLS-close regressions discovered by the new gates; eliminated llvm-cov ABI map collisions without changing shipped symbols; and passed the exact full `npm run ci` gate at 96.05% compiler lines / 96.86% functions / 93.94% regions and 100% LSP coverage.

@@ -1,0 +1,16 @@
+trait Add[Rhs, Out]:
+    def add(own self, rhs: borrow Rhs) -> Out
+
+class Token:
+    value: String
+
+impl Add[Token, Token] for Token:
+    def add(own self, rhs: borrow Token) -> Token:
+        return Token(value=self.value + rhs.value)
+
+def main():
+    left = Token(value="left")
+    right = Token(value="right")
+    combined = left + right
+    print(combined.value)
+    print(left.value)

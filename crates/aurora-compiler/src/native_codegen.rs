@@ -217,6 +217,7 @@ struct NativeCodegen<'a> {
     exit_call: FuncId,
     print_i64: FuncId,
     print_u64: FuncId,
+    print_f32: FuncId,
     print_f64: FuncId,
     print_bool: FuncId,
     print_value: FuncId,
@@ -673,6 +674,7 @@ impl<'a> NativeCodegen<'a> {
             exit_call => ("aurora_direct_exit_call", [], None),
             print_i64 => ("aurora_direct_print_i64", [types::I64], None),
             print_u64 => ("aurora_direct_print_u64", [types::I64], None),
+            print_f32 => ("aurora_direct_print_f32", [types::F64], None),
             print_f64 => ("aurora_direct_print_f64", [types::F64], None),
             print_bool => ("aurora_direct_print_bool", [types::I64], None),
             print_value => ("aurora_direct_print_value", [types::I64], None),
@@ -1044,6 +1046,7 @@ impl<'a> NativeCodegen<'a> {
             exit_call,
             print_i64,
             print_u64,
+            print_f32,
             print_f64,
             print_bool,
             print_value,
@@ -1618,6 +1621,9 @@ impl<'a> NativeCodegen<'a> {
         let print_u64 = self
             .object
             .declare_func_in_func(self.print_u64, builder.func);
+        let print_f32 = self
+            .object
+            .declare_func_in_func(self.print_f32, builder.func);
         let print_f64 = self
             .object
             .declare_func_in_func(self.print_f64, builder.func);
@@ -2452,6 +2458,7 @@ impl<'a> NativeCodegen<'a> {
             exit_call,
             print_i64,
             print_u64,
+            print_f32,
             print_f64,
             print_bool,
             print_value,
@@ -3102,6 +3109,7 @@ struct FunctionCompiler<'a> {
     exit_call: cranelift_codegen::ir::FuncRef,
     print_i64: cranelift_codegen::ir::FuncRef,
     print_u64: cranelift_codegen::ir::FuncRef,
+    print_f32: cranelift_codegen::ir::FuncRef,
     print_f64: cranelift_codegen::ir::FuncRef,
     print_bool: cranelift_codegen::ir::FuncRef,
     print_value: cranelift_codegen::ir::FuncRef,
@@ -3740,6 +3748,7 @@ impl<'a> FunctionCompiler<'a> {
                 task_group,
                 function,
                 args,
+                ..
             } => self.compile_start_task(*returns_handle, task_group, function, args),
             Rvalue::Try { .. } => unreachable!("try rvalues are handled before target lowering"),
         }
@@ -4555,7 +4564,12 @@ impl<'a> FunctionCompiler<'a> {
                     .ins()
                     .call(self.print_u64, &[argument.values[0]]);
             }
-            Some(ScalarKind::Float32) | Some(ScalarKind::Float64) => {
+            Some(ScalarKind::Float32) => {
+                self.builder
+                    .ins()
+                    .call(self.print_f32, &[argument.values[0]]);
+            }
+            Some(ScalarKind::Float64) => {
                 self.builder
                     .ins()
                     .call(self.print_f64, &[argument.values[0]]);

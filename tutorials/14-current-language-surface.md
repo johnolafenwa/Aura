@@ -33,7 +33,7 @@ Do not mix top-level executable statements with `main` in the same file.
 
 Floating-point literals default to `float64`, but they can adopt an expected `float32` type from an annotation, parameter, return type, or class field.
 
-Unsuffixed integer literals default to `int64`, and `int` is an alias for `int64`. Expected integer types still take precedence, so fixed `int32` APIs and annotations remain `int32`. Integer literals support the full `uint128` range when that type is expected.
+Unsuffixed integer literals default to `int64`, and `int` is an alias for `int64`. Expected integer types still take precedence, so fixed `int32` APIs and annotations remain `int32`. An integer literal can also adopt an expected `float32` or `float64` type when its value is exactly representable there; this never converts an already-bound integer variable. Integer literals support the full `uint128` range when that integer type is expected.
 
 ## Types
 
@@ -198,6 +198,7 @@ The current compiler supports these expression forms:
 - explicit numeric casts with `expr as Type`
   - integer casts are range-checked and integer-to-float casts reject silent precision loss
 - integer `.to_float() -> float64`, which uses nearest-even conversion and may round
+- shortest-roundtrip `float32`/`float64` rendering through `print`, preserving integral `.0` and signed zero
 - list literals such as `[1, 2, 3]`
 - map literals such as `{"aurora": 1}`
 - set literals such as `{1, 2, 3}`
@@ -209,7 +210,7 @@ The current compiler supports these expression forms:
 - `try expr`
 - parenthesized expressions
 
-Indexed expressions remain ordinary values after parsing. Copy-typed element reads like `values[idx]` still work directly, while non-copy vector elements such as `String` require `get(index)` for an explicit cloned read. Negative Vec indexes normalize as `len + index` for direct access and every maintained Vec index method. Map indexing and interpolations such as `f"{counts['key']}"` remain supported. Integer indexing and slicing are not supported on `String`.
+Indexed expressions remain ordinary values after parsing. Copy-typed element reads like `values[idx]` still work directly, while non-copy vector elements such as `String` require `get(index)` for an explicit cloned read. Negative Vec indexes normalize as `len + index` for direct access and every maintained Vec index method. Map indexing and interpolations such as `f"{counts['key']}"` remain supported when the Map value type is copy; non-copy values use `get(key)` for an explicit cloned optional read or `remove(key)` for ownership transfer. Integer indexing and slicing are not supported on `String`.
 
 ## Methods
 
@@ -549,7 +550,7 @@ Current collection notes:
 - `Vec[T]` supports equality and inequality when both sides have the same `Vec[T]` type
 - `Vec.insert(index, value)`, `Vec.set(index, value)`, `Vec.remove(index)`, and `Vec.swap(first, second)` now trap on out-of-bounds indices instead of silently ignoring the operation
 - empty map literals still need an expected `Map[K, V]` type, or you can use `Map[K, V]()` explicitly
-- `Map[K, V]` supports literal construction, indexed reads/writes, and the maintained method surface `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`
+- `Map[K, V]` supports literal construction, indexed writes for every `V`, direct indexed reads only when `V` is copy, and the maintained method surface `len`, `is_empty`, `clone`, `get`, `set`, `remove`, `contains_key`, `keys`, `values`, `items`, `entries`, `clear`, and `extend`; non-copy reads use `get` for an explicit clone or `remove` for ownership transfer
 - `Map.items()` and `Map.entries()` return `Vec[MapEntry[K, V]]`, where entry values expose `.key` and `.value`
 - `Set[T]` supports literal construction with `{...}` and the maintained method surface `len`, `is_empty`, `clone`, `contains`, `insert`, and `remove`
 - bare and explicit-`borrow` Set iteration are shared; `for value in own set:` consumes

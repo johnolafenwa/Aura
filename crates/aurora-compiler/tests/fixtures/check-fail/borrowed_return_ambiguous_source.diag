@@ -1,4 +1,4 @@
-error: borrowed return type is ambiguous; write an explicit borrow source such as `-> borrow[left] T`
+error[AU3002]: borrowed return type is ambiguous; write an explicit borrow source such as `-> borrow[left] T`
  --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_return_ambiguous_source.au:1:82
   |
 1 | def choose(left: borrow String, right: borrow String, pick_left: bool) -> borrow String:

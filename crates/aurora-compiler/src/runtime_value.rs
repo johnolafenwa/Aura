@@ -2152,19 +2152,11 @@ impl Value {
 }
 
 pub(crate) fn render_float(value: f64) -> String {
-    if !value.is_finite() {
-        return value.to_string();
-    }
-    let roundtripped_f32 = (value as f32) as f64;
-    let mut rendered = if value == roundtripped_f32 {
-        (value as f32).to_string()
-    } else {
-        value.to_string()
-    };
-    if !rendered.contains(['.', 'e', 'E']) {
-        rendered.push_str(".0");
-    }
-    rendered
+    format!("{value:?}")
+}
+
+pub(crate) fn render_float32(value: f32) -> String {
+    format!("{value:?}")
 }
 
 pub(crate) fn float_floor_divmod(left: f64, right: f64) -> (f64, f64) {

@@ -1,4 +1,4 @@
-error: recursive field `b` on class `A` requires `indirect`
+error[AU2999]: recursive field `b` on class `A` requires `indirect`
  --> crates/aurora-compiler/tests/fixtures/check-fail/mutual_recursive_classes_require_indirect.au:2:5
   |
 2 |     b: B?

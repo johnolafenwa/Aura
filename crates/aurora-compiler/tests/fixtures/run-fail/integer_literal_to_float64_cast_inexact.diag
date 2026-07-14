@@ -1,0 +1,5 @@
+error[AU4002]: integer value `9007199254740993` cannot be represented exactly as `float64`
+ --> crates/aurora-compiler/tests/fixtures/run-fail/integer_literal_to_float64_cast_inexact.au:2:11
+  |
+2 |     print(9007199254740993 as float64)
+  |           ^

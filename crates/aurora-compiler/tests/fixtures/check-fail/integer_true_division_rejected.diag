@@ -1,4 +1,4 @@
-error: integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division
+error[AU2003]: integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division
  --> crates/aurora-compiler/tests/fixtures/check-fail/integer_true_division_rejected.au:2:20
   |
 2 |     value: int64 = 7 / 3

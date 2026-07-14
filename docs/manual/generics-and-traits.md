@@ -291,3 +291,96 @@ The selected conversion runs before `Result.Err` is returned from the enclosing 
 - equal-specificity overlapping implementations remain an error at the use site
 
 Observable syntax and implementation limits are collected in [Current Limits](/manual/current-limits), while cross-cutting type rules are in [Static Semantics](/manual/static-semantics#generics-traits-and-implementations).
+
+## Grammar
+
+The normative productions for type parameters, bounds, explicit
+specialization, trait declarations, supertraits, `Self`, and implementation
+blocks are in [Grammar](/manual/grammar). Classes, enums, functions, methods,
+traits, and implementations use the declaration-specific parameter forms
+shown above. Trait methods may be signature-only or have a default suite;
+implementation methods always use ordinary method-definition syntax.
+
+## Typing Rules
+
+Generic arguments are invariant and have exact arity. Inference is local and
+contextual, must resolve every declared parameter, and must satisfy every
+substituted bound. Trait satisfaction is nominal through a visible applicable
+`impl`, never structural. Implementations must conform after substituting
+receiver mode, parameter modes and types, return mode and type, borrowed-return
+source, and supertrait requirements. Dispatch selects one unique
+greatest-specificity applicable implementation; equal-best matches are
+rejected. `Self` denotes the enclosing/implementing concrete specialization
+only in its supported declaration contexts.
+
+## Runtime Semantics
+
+Generic construction and calls use the statically resolved specialization;
+there is no runtime generic inference. Trait member and operator calls invoke
+the statically selected implementation, inheriting a trait default body when
+the implementation omits that method. Source order never resolves overlapping
+implementations. `try` invokes the selected `From[Source]` conversion before
+constructing the enclosing `Result.Err`. Traits do not create runtime
+reflection, dynamic method dictionaries, or implicit conversions.
+
+## Ownership And Evaluation Order
+
+Parameter ownership is resolved at the generic declaration and remains stable
+after specialization: an unresolved bare `T` is shared, even when one later
+substitution is copy, while `own T` is the explicit consuming form. Trait and
+implementation signatures must agree on that resolved mode. Receiver
+evaluation precedes ordinary arguments, selected methods keep their declared
+receiver/parameter behavior, and `From.from` owns its source error. No generic
+or trait boundary inserts a hidden clone, coercion, or ownership-mode change.
+
+## Diagnostics
+
+`AU1101` reports malformed generic, trait, supertrait, specialization, or
+implementation syntax. `AU2001` reports unknown types, traits, methods, and
+members. `AU2002` covers inference failure, generic arity, unsatisfied bounds,
+missing trait satisfaction, ambiguous equal-specificity dispatch, invalid
+specialization, and substituted type mismatch. `AU2003` reports an unsupported
+operator when no builtin rule or applicable operator trait supplies it.
+`AU2004` reports call argument binding and the prohibition on ordinary default
+arguments in trait methods. `AU2999` covers duplicate/invalid implementations,
+method-conformance or supertrait failure, unsupported implementation targets,
+and remaining generic/trait rejections. `AU3001` reports use after an owned
+generic or receiver move. `AU3002` reports borrow conflicts, storing through a
+default-borrowed generic parameter, or contained non-copy borrowed returns.
+`AU3003` reports a mutable receiver call through an immutable place, and
+`AU3004` reports an invalid ownership mode. A selected body retains its runtime
+diagnostic: `AU4001` for a general trap, `AU4002` for arithmetic overflow or
+underflow, `AU4003` for a bounds or lookup violation, `AU4004` for a zero
+divisor, and `AU4005` for a resource or I/O failure.
+
+## Backend Support
+
+Generic functions, classes, enums, methods, traits, supertraits, default trait
+bodies, generic and specialized implementations, operator dispatch, `Self`,
+and `From` conversion are implemented for MIR execution and direct native
+generation. User-trait dispatch on builtin `Queue[T]` and `Task[T]` handles is
+also maintained on both backends. The checker supplies one resolved
+specialization and implementation target to lowering, analysis, and the LSP;
+the parity gate rejects backend-specific dispatch behavior.
+
+## Limits And Implementation-Defined Behavior
+
+Aurora 0.1 has no trait objects, dynamic dispatch, associated types or
+constants, higher-kinded parameters, default type arguments, `where` clauses,
+specialization annotations, general subtyping, or separate orphan-rule
+restriction. A bare target parameter in `impl[T] Trait for T` is unsupported.
+Equal-specificity overlaps remain errors, ordinary trait/impl parameters cannot
+add defaults, generic user classes cannot be `with` resources, and calls
+producing non-copy borrowed results are contained. Inference and dispatch are
+defined by the rules above rather than source order or backend implementation
+choice.
+
+## Status
+
+Invariant generics, local/contextual inference, explicit specialization,
+nominal traits and bounds, supertraits, default methods, generic and specialized
+implementations, unique-most-specific dispatch, operator traits, `Self`, and
+`From`-based `try` conversion are implemented for the post-Phase 1.5 surface.
+Live non-copy borrowed results are reserved for the Phase 6 alias work. Trait
+objects, dynamic dispatch, associated types, higher-kinded types, general
+subtyping, and arbitrary blanket implementation targets are unavailable.

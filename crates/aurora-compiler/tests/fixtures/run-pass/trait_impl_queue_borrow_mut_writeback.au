@@ -1,0 +1,17 @@
+copy class Counter:
+    value: int32
+
+trait Touch:
+    def touch(borrow mut self, counter: borrow mut Counter) -> int32
+
+impl[T] Touch for Queue[T]:
+    def touch(borrow mut self, counter: borrow mut Counter) -> int32:
+        counter.value += 1
+        return counter.value
+
+def main() -> int32:
+    mut queue = Queue[int32]()
+    mut counter = Counter(value=6)
+    print(queue.touch(counter))
+    print(counter.value)
+    return 0

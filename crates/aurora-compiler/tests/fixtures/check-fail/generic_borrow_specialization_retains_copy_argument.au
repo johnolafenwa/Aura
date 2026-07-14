@@ -1,0 +1,11 @@
+def bump(value: borrow mut int32) -> int32:
+    value += 1
+    return value
+
+def show[T](first: T, second: int32):
+    print(first)
+    print(second)
+
+def main():
+    mut value: int32 = 1
+    show(value, bump(value))

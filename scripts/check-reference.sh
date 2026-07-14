@@ -148,3 +148,6 @@ if rg -n 'maintained interpreter|tree-walk interpreter' docs/manual; then
   echo "manual still describes the removed interpreter as maintained" >&2
   exit 1
 fi
+
+python3 scripts/test_reference_integrity.py
+python3 scripts/reference_integrity.py

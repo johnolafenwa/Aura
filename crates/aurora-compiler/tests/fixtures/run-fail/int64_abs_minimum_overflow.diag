@@ -1,2 +1,2 @@
-error: integer value `9223372036854775808` does not fit in `int64`
+error[AU4002]: integer value `9223372036854775808` does not fit in `int64`
  --> crates/aurora-compiler/tests/fixtures/run-fail/int64_abs_minimum_overflow.au

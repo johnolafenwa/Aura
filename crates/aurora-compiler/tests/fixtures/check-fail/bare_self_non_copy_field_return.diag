@@ -1,5 +1,8 @@
-error: cannot move non-copy field `value` out of borrowed value `self`
+error[AU3002]: cannot move non-copy field `value` out of borrowed value `self`
  --> crates/aurora-compiler/tests/fixtures/check-fail/bare_self_non_copy_field_return.au:5:21
   |
 5 |         return self.value
   |                     ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/bare_self_non_copy_field_return.au:4:5: `self` is borrowed here
+  = help: take `self` as `own Holder` when the field should be moved, or call `.clone()` on the field to return an independent value
+  = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/bare_self_non_copy_field_return.au:5:26-5:26 with `.clone()`

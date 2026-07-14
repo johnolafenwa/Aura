@@ -1,0 +1,13 @@
+class User:
+    name: String
+
+def show(user: borrow User):
+    alias = user
+    print(alias.name)
+    print(user.name)
+
+def main() -> int32:
+    user = User(name="Ada")
+    show(user)
+    print(user.name)
+    return 0

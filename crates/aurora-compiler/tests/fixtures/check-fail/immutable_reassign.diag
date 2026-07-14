@@ -1,4 +1,4 @@
-error: cannot assign to immutable binding `count`
+error[AU3003]: cannot assign to immutable binding `count`; declare it with `mut` to rebind it
  --> crates/aurora-compiler/tests/fixtures/check-fail/immutable_reassign.au:3:5
   |
 3 |     count = 2

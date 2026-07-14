@@ -1,0 +1,3 @@
+def main():
+    values: Map[String, int32] = {"present": 1}
+    print(values["missing"])

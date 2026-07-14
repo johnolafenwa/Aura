@@ -31,6 +31,12 @@ enum SelectedBuildBackend {
     MirRuntime,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiagnosticFormat {
+    Human,
+    Json,
+}
+
 #[derive(Debug)]
 struct BuildOutcome {
     selected: SelectedBuildBackend,
@@ -54,18 +60,22 @@ fn main() {
             handle_deps_command(remaining);
         }
         "check" => {
-            let input = read_input(&mut args);
+            let (diagnostic_format, input_args) = parse_diagnostic_format(args.collect::<Vec<_>>());
+            let input = read_input(&mut input_args.into_iter());
             let result = if input.from_stdin {
                 check_path_with_source(Path::new(&input.path), &input.source)
             } else {
                 check_path(Path::new(&input.path))
             };
             match result {
-                Ok(_) => {
-                    write_stdout("ok\n");
-                }
+                Ok(_) => match diagnostic_format {
+                    DiagnosticFormat::Human => write_stdout("ok\n"),
+                    DiagnosticFormat::Json => {
+                        write_stdout("{\"schema_version\":1,\"diagnostics\":[]}\n")
+                    }
+                },
                 Err(error) => {
-                    eprintln!("{}", render_error(&input.path, &input.source, &error));
+                    emit_diagnostic(diagnostic_format, &input.path, &input.source, &error);
                     process::exit(1);
                 }
             }
@@ -77,7 +87,8 @@ fn main() {
                 Some(index) => (&remaining[..index], &remaining[index + 1..]),
                 None => (remaining.as_slice(), &[][..]),
             };
-            let input = read_input(&mut input_args.iter().cloned());
+            let (diagnostic_format, input_args) = parse_diagnostic_format(input_args.to_vec());
+            let input = read_input(&mut input_args.into_iter());
             let stdout_sink = std::sync::Arc::new(|chunk: &str| write_stdout(chunk));
             let result = if input.from_stdin {
                 run_path_with_source_and_stdout_sink_and_program_args(
@@ -100,13 +111,14 @@ fn main() {
                     }
                 }
                 Err(error) => {
-                    eprintln!("{}", render_error(&input.path, &input.source, &error));
+                    emit_diagnostic(diagnostic_format, &input.path, &input.source, &error);
                     process::exit(1);
                 }
             }
         }
         "build" => {
             let remaining = args.collect::<Vec<_>>();
+            let (diagnostic_format, remaining) = parse_diagnostic_format(remaining);
             let (output_path, backend, input_args) = parse_build_args(remaining);
             let input = read_input(&mut input_args.into_iter());
             let result = if input.from_stdin {
@@ -140,13 +152,14 @@ fn main() {
                             );
                         }
                         Err(message) => {
-                            eprintln!("{}", message);
+                            let error = Diagnostic::new(message);
+                            emit_diagnostic(diagnostic_format, &input.path, &input.source, &error);
                             process::exit(1);
                         }
                     }
                 }
                 Err(error) => {
-                    eprintln!("{}", render_error(&input.path, &input.source, &error));
+                    emit_diagnostic(diagnostic_format, &input.path, &input.source, &error);
                     process::exit(1);
                 }
             }
@@ -625,7 +638,10 @@ fn handle_deps_command(args: Vec<String>) -> ! {
             process::exit(0);
         }
         Err(error) => {
-            eprintln!("error: {}", error.message);
+            eprintln!(
+                "{}",
+                error.render_with_source(&current_dir.display().to_string(), "")
+            );
             process::exit(1);
         }
     }
@@ -764,6 +780,42 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
         path,
         source,
         from_stdin: false,
+    }
+}
+
+fn parse_diagnostic_format(args: Vec<String>) -> (DiagnosticFormat, Vec<String>) {
+    let mut format = DiagnosticFormat::Human;
+    let mut remaining = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--format" {
+            let value = args
+                .get(index + 1)
+                .unwrap_or_else(|| print_usage_and_exit(2));
+            format = match value.as_str() {
+                "human" => DiagnosticFormat::Human,
+                "json" => DiagnosticFormat::Json,
+                _ => print_usage_and_exit(2),
+            };
+            index += 2;
+        } else {
+            remaining.push(args[index].clone());
+            index += 1;
+        }
+    }
+    (format, remaining)
+}
+
+fn emit_diagnostic(format: DiagnosticFormat, path: &str, source: &str, error: &Diagnostic) {
+    match format {
+        DiagnosticFormat::Human => eprintln!("{}", render_error(path, source, error)),
+        DiagnosticFormat::Json => {
+            let report = serde_json::json!({
+                "schema_version": 1,
+                "diagnostics": [error.structured(path)],
+            });
+            eprintln!("{}", report);
+        }
     }
 }
 
@@ -1409,7 +1461,8 @@ fn write_stdout(text: &str) {
 }
 
 fn usage_text() -> &'static str {
-    "usage: aura <check|run|build|ast|ast-json|mir|analyze> <file.au>\n\
+    "usage: aura <check|run|build> [--format human|json] <file.au>\n\
+       or: aura <ast|ast-json|mir|analyze> <file.au>\n\
        or: aura <check|run|build|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
        or: aura run <file.au> [-- <program-args>...]\n\
        or: aura build [-o <output>] [--backend auto|direct] <file.au>\n\

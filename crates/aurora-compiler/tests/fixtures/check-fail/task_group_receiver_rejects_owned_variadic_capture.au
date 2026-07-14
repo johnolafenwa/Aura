@@ -1,0 +1,6 @@
+def worker(group: own TaskGroup):
+    group.cancel()
+
+def main():
+    mut group = TaskGroup()
+    group.start_soon(worker, group)

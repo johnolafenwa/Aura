@@ -856,14 +856,16 @@ fn local_binding(
         passing,
         borrow_origin: None,
         borrow_label: None,
+        borrowed_at: None,
         match_borrow_mut_place: None,
         stale_match_borrow_mut_place: None,
         moved,
+        moved_at: moved.then_some(Span::new(1, 1)),
         moved_fields: moved_fields
             .iter()
-            .map(|field| projection_path(field))
+            .map(|field| (projection_path(field), Span::new(1, 1)))
             .collect(),
-        frozen_places: BTreeSet::new(),
+        frozen_places: BTreeMap::new(),
     }
 }
 
@@ -2019,30 +2021,24 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
             .expect("boolean and should type check"),
         Type::named("bool")
     );
-    assert!(checker
-        .type_of_expr(
-            &expr(ExprKind::Binary {
-                op: BinaryOp::Add,
-                left: Box::new(expr(ExprKind::Int(1))),
-                right: Box::new(expr(ExprKind::Float(2.0))),
-            }),
-            &mut locals,
-        )
-        .expect_err("mixed numeric operands still reject after hinting")
-        .message
-        .contains("operands must match"));
-    assert!(checker
-        .type_of_expr(
-            &expr(ExprKind::Binary {
-                op: BinaryOp::Add,
-                left: Box::new(expr(ExprKind::Float(1.0))),
-                right: Box::new(expr(ExprKind::Int(2))),
-            }),
-            &mut locals,
-        )
-        .expect_err("mixed numeric operands still reject after hinting")
-        .message
-        .contains("operands must match"));
+    for (left, right) in [
+        (ExprKind::Int(1), ExprKind::Float(2.0)),
+        (ExprKind::Float(1.0), ExprKind::Int(2)),
+    ] {
+        assert_eq!(
+            checker
+                .type_of_expr(
+                    &expr(ExprKind::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(expr(left)),
+                        right: Box::new(expr(right)),
+                    }),
+                    &mut locals,
+                )
+                .expect("an exact integer literal adopts the float operand context"),
+            Type::named("float64")
+        );
+    }
 
     assert!(checker
         .type_of_expr(
@@ -7239,11 +7235,13 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             passing: ReceiverKind::Value,
             borrow_origin: None,
             borrow_label: None,
+            borrowed_at: None,
             match_borrow_mut_place: None,
             stale_match_borrow_mut_place: None,
             moved: false,
-            moved_fields: BTreeSet::new(),
-            frozen_places: BTreeSet::new(),
+            moved_at: None,
+            moved_fields: BTreeMap::new(),
+            frozen_places: BTreeMap::new(),
         },
     )]);
     checker
@@ -7266,11 +7264,13 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             passing: ReceiverKind::Borrow,
             borrow_origin: Some("borrowed".to_string()),
             borrow_label: None,
+            borrowed_at: None,
             match_borrow_mut_place: None,
             stale_match_borrow_mut_place: None,
             moved: false,
-            moved_fields: BTreeSet::new(),
-            frozen_places: BTreeSet::new(),
+            moved_at: None,
+            moved_fields: BTreeMap::new(),
+            frozen_places: BTreeMap::new(),
         },
     )]);
     let borrowed_error = checker
@@ -7290,11 +7290,13 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             passing: ReceiverKind::Value,
             borrow_origin: None,
             borrow_label: None,
+            borrowed_at: None,
             match_borrow_mut_place: None,
             stale_match_borrow_mut_place: None,
             moved: true,
-            moved_fields: BTreeSet::new(),
-            frozen_places: BTreeSet::new(),
+            moved_at: Some(span),
+            moved_fields: BTreeMap::new(),
+            frozen_places: BTreeMap::new(),
         },
     )]);
     let moved_error = checker
@@ -7399,7 +7401,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
         .expect("moving a non-copy field from an owned binding should be tracked");
     assert!(member_locals["holder"]
         .moved_fields
-        .contains(&projection_path("text")));
+        .contains_key(&projection_path("text")));
 
     let mut match_locals = HashMap::from([
         (
@@ -7518,7 +7520,9 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
         .get_mut("holder")
         .expect("branch binding should exist");
     branch_binding.moved = true;
-    branch_binding.moved_fields.insert(projection_path("text"));
+    branch_binding
+        .moved_fields
+        .insert(projection_path("text"), Span::new(1, 1));
     branch_binding.stale_match_borrow_mut_place = Some(place_path("holder.text"));
     let branch_without_binding = HashMap::new();
     checker.merge_control_flow_moves(
@@ -7528,7 +7532,7 @@ fn checker_move_consumption_helpers_cover_managed_specialized_member_and_match_p
     assert!(merged_locals["holder"].moved);
     assert!(merged_locals["holder"]
         .moved_fields
-        .contains(&projection_path("text")));
+        .contains_key(&projection_path("text")));
     assert_eq!(
         merged_locals["holder"].stale_match_borrow_mut_place,
         Some(place_path("holder.text"))
@@ -9913,6 +9917,88 @@ fn method_receiver_borrow_aliasing_checks_overlap_and_distinct_places() {
 }
 
 #[test]
+fn shared_self_projection_mutations_and_mutable_borrow_then_consume_are_actionable() {
+    for (source, operation) in [
+        (
+            "class Bucket:\n    values: Vec[int32]\n\n    def replace(self):\n        self.values[0] = 1\n",
+            "indexed assignment",
+        ),
+        (
+            "class Bucket:\n    values: Vec[int32]\n\n    def append(self):\n        self.values.push(1)\n",
+            "mutating member call",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source)
+            .expect_err("mutating through a shared self projection should fail");
+        assert_eq!(diagnostic.code, "AU3003", "{operation}");
+        assert!(
+            diagnostic
+                .message
+                .contains("cannot mutate through shared receiver `self`"),
+            "{operation}: {}",
+            diagnostic.message
+        );
+        assert_eq!(diagnostic.secondary_spans.len(), 1, "{operation}");
+        assert!(
+            diagnostic.secondary_spans[0]
+                .label
+                .contains("shared receiver `self` is declared here"),
+            "{operation}: {:?}",
+            diagnostic.secondary_spans
+        );
+        assert!(
+            diagnostic
+                .help
+                .iter()
+                .any(|help| help.contains("declare the receiver as `borrow mut self`")),
+            "{operation}: {:?}",
+            diagnostic.help
+        );
+    }
+
+    let overlap = crate::check_source(
+        "class Box:\n    value: int32\n\ndef mutate_then_take(first: borrow mut Box, second: own Box):\n    first.value += second.value\n\ndef main() -> int32:\n    mut value = Box(value=1)\n    mutate_then_take(value, value)\n    return 0\n",
+    )
+    .expect_err("consuming a value while it is mutably borrowed should fail");
+    assert_eq!(overlap.code, "AU3002");
+    assert!(overlap.message.contains(
+        "argument for parameter `second` in function `mutate_then_take` overlaps mutable borrow for parameter `first`; consumed values must be exclusive"
+    ));
+    assert_eq!(overlap.secondary_spans.len(), 1);
+    assert!(overlap.secondary_spans[0]
+        .label
+        .contains("mutable borrow for parameter `first` begins here"));
+    assert!(overlap
+        .help
+        .iter()
+        .any(|help| help.contains("pass non-overlapping places")));
+}
+
+#[test]
+fn match_borrow_mut_requires_a_mutable_place_scrutinee() {
+    for (source, scrutinee_kind) in [
+        (
+            "enum Opt:\n    Some(int32)\n    None\n\ndef main() -> int32:\n    match borrow mut Opt.Some(1):\n        case Some(value):\n            print(value)\n        case None:\n            pass\n    return 0\n",
+            "temporary enum value",
+        ),
+        (
+            "enum Opt:\n    Some(int32)\n    None\n\ndef main() -> int32:\n    value: Opt = Opt.Some(1)\n    match borrow mut value:\n        case Some(found):\n            print(found)\n        case None:\n            pass\n    return 0\n",
+            "immutable local place",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source)
+            .expect_err("match borrow mut should require a mutable place scrutinee");
+        assert_eq!(diagnostic.code, "AU3002", "{scrutinee_kind}");
+        assert_eq!(
+            diagnostic.message,
+            "`match borrow mut` requires a mutable place scrutinee",
+            "{scrutinee_kind}"
+        );
+        assert!(diagnostic.span.is_some(), "{scrutinee_kind}");
+    }
+}
+
+#[test]
 fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
     for (source, expected) in [
             (
@@ -10579,7 +10665,10 @@ def main():
         base_checker
             .type_of_unary_operator_via_trait(span, UnaryOp::Neg, &Type::named("Point"))
             .expect("neg trait lookup should succeed"),
-        Some(Type::named("Point"))
+        Some(ResolvedUnaryOperatorAccess {
+            return_type: Type::named("Point"),
+            receiver_passing: ReceiverKind::Borrow,
+        })
     );
     assert_eq!(
         base_checker
@@ -10590,14 +10679,22 @@ def main():
                 &Type::named("Point"),
             )
             .expect("add trait lookup should succeed"),
-        Some(Type::named("Point"))
+        Some(ResolvedBinaryOperatorAccess {
+            return_type: Type::named("Point"),
+            receiver_passing: ReceiverKind::Borrow,
+            rhs_passing: ReceiverKind::Value,
+        })
     );
     let box_user = Type::Named("Box".to_string(), vec![Type::named("User")]);
     assert_eq!(
         base_checker
             .type_of_binary_operator_via_trait(span, BinaryOp::Add, &box_user, &box_user)
             .expect("generic add impl should satisfy its Named bound for User"),
-        Some(box_user.clone())
+        Some(ResolvedBinaryOperatorAccess {
+            return_type: box_user.clone(),
+            receiver_passing: ReceiverKind::Borrow,
+            rhs_passing: ReceiverKind::Value,
+        })
     );
     let box_point = Type::Named("Box".to_string(), vec![Type::named("Point")]);
     assert_eq!(
@@ -10675,7 +10772,11 @@ def main():
                 &Type::named("Point"),
             )
             .expect("type-param add bound should resolve"),
-        Some(Type::named("Point"))
+        Some(ResolvedBinaryOperatorAccess {
+            return_type: Type::named("Point"),
+            receiver_passing: ReceiverKind::Borrow,
+            rhs_passing: ReceiverKind::Value,
+        })
     );
     assert_eq!(
             type_param_checker
@@ -10685,7 +10786,10 @@ def main():
                     &Type::TypeParam("U".to_string()),
                 )
                 .expect("type-param neg bound should resolve"),
-            Some(Type::named("Point"))
+            Some(ResolvedUnaryOperatorAccess {
+                return_type: Type::named("Point"),
+                receiver_passing: ReceiverKind::Borrow,
+            })
         );
     let type_param_bound_error = type_param_checker
         .assert_type_satisfies_bounds(
@@ -12131,14 +12235,16 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 passing: ReceiverKind::BorrowMut,
                 borrow_origin: Some("counter".to_string()),
                 borrow_label: None,
+                borrowed_at: None,
                 match_borrow_mut_place: None,
                 stale_match_borrow_mut_place: None,
                 moved: false,
-                moved_fields: BTreeSet::from([
-                    projection_path("other"),
-                    projection_path("value.inner"),
+                moved_at: None,
+                moved_fields: BTreeMap::from([
+                    (projection_path("other"), Span::new(1, 1)),
+                    (projection_path("value.inner"), Span::new(1, 1)),
                 ]),
-                frozen_places: BTreeSet::new(),
+                frozen_places: BTreeMap::new(),
             },
         ),
         (
@@ -12173,11 +12279,13 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 passing: ReceiverKind::Borrow,
                 borrow_origin: Some("borrowed".to_string()),
                 borrow_label: None,
+                borrowed_at: None,
                 match_borrow_mut_place: None,
                 stale_match_borrow_mut_place: None,
                 moved: false,
-                moved_fields: BTreeSet::new(),
-                frozen_places: BTreeSet::new(),
+                moved_at: None,
+                moved_fields: BTreeMap::new(),
+                frozen_places: BTreeMap::new(),
             },
         ),
         (
@@ -12190,11 +12298,13 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 passing: ReceiverKind::Borrow,
                 borrow_origin: Some("self".to_string()),
                 borrow_label: None,
+                borrowed_at: None,
                 match_borrow_mut_place: None,
                 stale_match_borrow_mut_place: None,
                 moved: false,
-                moved_fields: BTreeSet::new(),
-                frozen_places: BTreeSet::new(),
+                moved_at: None,
+                moved_fields: BTreeMap::new(),
+                frozen_places: BTreeMap::new(),
             },
         ),
     ]);
@@ -12251,7 +12361,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
         binding,
         &projection_path("value")
     ));
-    assert!(binding.moved_fields.contains(&projection_path("other")));
+    assert!(binding.moved_fields.contains_key(&projection_path("other")));
 
     assert_eq!(
         checker
@@ -12334,11 +12444,13 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             passing: ReceiverKind::Value,
             borrow_origin: None,
             borrow_label: None,
+            borrowed_at: None,
             match_borrow_mut_place: None,
             stale_match_borrow_mut_place: None,
             moved: false,
-            moved_fields: BTreeSet::new(),
-            frozen_places: BTreeSet::new(),
+            moved_at: None,
+            moved_fields: BTreeMap::new(),
+            frozen_places: BTreeMap::new(),
         },
     )]);
     let receiver_error = match checker.prepare_method_receiver_borrows(
@@ -12451,6 +12563,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 path: place_path("counter"),
                 passing: ReceiverKind::Value,
                 param_name: "owned".to_string(),
+                origin_span: span,
             }],
             &place_path("counter"),
             ReceiverKind::Borrow,

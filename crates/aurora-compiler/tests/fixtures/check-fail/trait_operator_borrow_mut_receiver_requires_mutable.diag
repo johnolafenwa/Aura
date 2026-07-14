@@ -1,0 +1,5 @@
+error[AU3002]: operator receiver is declared `borrow mut` and requires a mutable place
+ --> crates/aurora-compiler/tests/fixtures/check-fail/trait_operator_borrow_mut_receiver_requires_mutable.au:15:11
+   |
+15 |     print(left + right)
+   |           ^

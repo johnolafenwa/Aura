@@ -1,0 +1,2 @@
+error[AU4001]: `Queue(capacity=...)` expects a positive `int32`
+ --> crates/aurora-compiler/tests/fixtures/run-fail/queue_zero_capacity.au

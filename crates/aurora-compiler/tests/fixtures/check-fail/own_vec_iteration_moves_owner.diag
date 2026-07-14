@@ -1,5 +1,8 @@
-error: use of moved value `names`
+error[AU3001]: use of moved value `names`
  --> crates/aurora-compiler/tests/fixtures/check-fail/own_vec_iteration_moves_owner.au:5:11
   |
 5 |     print(names.len())
   |           ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/own_vec_iteration_moves_owner.au:3:21: value moved here
+  = help: pass a shared borrow when ownership is not needed, or call `.clone()` at the move site when an independent value is required
+  = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/own_vec_iteration_moves_owner.au:3:26-3:26 with `.clone()`

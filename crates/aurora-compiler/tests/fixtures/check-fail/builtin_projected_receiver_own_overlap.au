@@ -1,0 +1,6 @@
+class Node:
+    children: indirect Vec[Node]
+
+def main():
+    mut node = Node(children=[])
+    node.children.push(node)

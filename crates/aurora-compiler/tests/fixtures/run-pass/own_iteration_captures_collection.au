@@ -1,0 +1,11 @@
+def main() -> int32:
+    mut values: Vec[int32] = [1, 2]
+    for value in own values:
+        print(value)
+        values = [7, 8, 9]
+
+    mut members: Set[int32] = {1, 2}
+    for member in own members:
+        print(member)
+        members = {7}
+    return 0

@@ -90,6 +90,7 @@ The commands you will use day to day are:
 | --- | --- |
 | `aura run file.au` | Parse, type-check, and execute the program. |
 | `aura check file.au` | Parse and type-check without running. |
+| `aura check --format json file.au` | Emit schema-versioned structured diagnostics for tooling. |
 | `aura build -o path file.au` | Compile a standalone native binary to `path`. |
 | `aura ast file.au` | Print the parsed syntax tree. |
 | `aura mir file.au` | Print the lowered intermediate representation. |
@@ -115,14 +116,20 @@ The [Running And Shipping](/learn/native-builds) chapter covers when to pick `ru
 Aurora's error messages usually point at the exact place in the source where the compiler or runtime found the problem:
 
 ```
-error: integer value `2147483648` does not fit in `int32`
+error[AU4002]: integer value `2147483648` does not fit in `int32`
  --> overflow.au:3:14
   |
 3 |     c: int32 = a + b
   |              ^
 ```
 
-The `-->` line names the file, line, and column. The caret points at the offending expression. A program with a checker error will not run; a program with a runtime error prints the diagnostic and exits with a non-zero status.
+The bracketed `AU####` identifier is stable. The `-->` line names the file,
+line, and column, and the caret points at the offending expression. Related
+spans, guidance, and safe source edits follow when available. A program with a
+checker error will not run; a program with a runtime error prints the
+diagnostic and exits with a non-zero status. Use `--format json` with `check`,
+`run`, or `build` when a tool needs the same fields without parsing this human
+layout.
 
 ## Next
 

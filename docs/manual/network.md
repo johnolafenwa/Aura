@@ -237,3 +237,51 @@ def show_addr() -> Result[None, io.Error]:
 ```
 
 When a resource is not scoped with `with`, call its `close()` method when one is provided by the type. Cancellation stops Aurora's wait but cannot roll back host I/O that already completed.
+
+## Grammar
+
+The network module adds no source-language grammar. Network programs use ordinary imports, calls, named arguments, `Duration` literals, `Result`, `Option`, `try`, `match`, task constructs, and `with`. Addresses, URLs, server names, and Unix socket paths are runtime `String` values, not specialized literals.
+
+Omitting a parameter displayed with `= ...` selects its builtin default. In particular, an omitted timeout means no caller-supplied deadline unless this page states a protocol hard cap. Text and byte operations are distinct members; the selected member determines UTF-8 decoding.
+
+## Typing Rules
+
+The constructor and method signatures in all tables above are normative. Listeners, streams, sockets, exchanges, and WebSockets are non-copy resource values. Fallible operations return `Result[..., io.Error]`; EOF and UDP receive timeout use `Option` only in the positions explicitly documented. `Duration` is required for timeout parameters, and byte-count parameters are `int32` checked against each API's runtime range.
+
+Text members accept or return `String` and enforce UTF-8. Byte members accept or return `Vec[uint8]`. HTTP headers use `Map[String, String]`. `HttpExchange.respond_text` and `respond_bytes` consume their response body and header map. Other data arguments are shared for the call unless their displayed signature explicitly says `own`.
+
+## Runtime Semantics
+
+Resolution, binding, and connect work use the bounded blocking service. One explicit connect timeout is an end-to-end budget shared across name resolution, resolved-address attempts, and remaining protocol handshake work. TCP, Unix, TLS, HTTP, and WebSocket waiting failures return typed errors as specified; UDP receive timeout returns `Ok(None)`. Cancellation ends the Aurora wait and returns `io.Error.Cancelled` on cancellation-aware operations, while already-started host work may complete later and is discarded.
+
+TCP is a byte stream; UDP preserves datagrams. Text reads decode strictly and remove only their documented line ending. HTTP supports content-length, chunked, and connection-close framing under the stated parser caps. WebSocket receives complete text or binary messages, with text mode enforcing UTF-8. TLS verifies the named peer using the configured CA file or, for the high-level HTTPS client, the maintained Web PKI root set.
+
+## Ownership And Evaluation Order
+
+Arguments are evaluated left to right. Successful constructors and accept operations return fresh owned resources. Moving a resource invalidates the source binding. Read and accept operations mutate host protocol state internally but are callable through their documented shared receiver; write, send, shutdown, response, and explicit close operations require a mutable receiver place. Response bodies and header maps marked `own` are moved before the response operation begins.
+
+`with` closes a resource exactly once on every lexical scope exit when the type has `close()`. Cleanup cannot undo bytes already sent or host operations already completed. `WebSocketListener` has no `close()` member and therefore cannot satisfy the user-visible `with` resource contract; dropping its owned value is its only current release path.
+
+## Diagnostics
+
+Unknown network members use `AU2001`, type mismatches use `AU2002`, invalid argument binding uses `AU2004`, and remaining static rejections use `AU2999`. Use after moving a resource uses `AU3001`, borrow conflicts use `AU3002`, and a mutating network method called through an immutable place uses `AU3003`.
+
+DNS failures, connection refusal, timeout, invalid UTF-8, invalid byte counts, closed resources, cancellation, TLS verification failure, and protocol errors are documented typed `Result.Err(io.Error)` outcomes, not language diagnostics. An invariant failure escaping that typed boundary uses the general runtime registry, including `AU4005` for a resource or I/O trap.
+
+## Backend Support
+
+TCP, UDP, HTTP, WebSocket, and TLS APIs are implemented by the MIR runtime and direct native backend. Unix domain sockets are implemented by both execution backends on maintained Unix hosts. Timeout accounting, typed error mapping, read caps, protocol parsing, ownership, and cleanup are backend-parity contracts.
+
+Address selection, DNS answers, socket options chosen by the host libraries, and exact host error messages may differ by machine. The high-level HTTPS client uses the same platform-independent Web PKI root policy in both backends.
+
+## Limits And Implementation-Defined Behavior
+
+Whole TCP text reads, TCP line reads, and individual byte-count reads are capped at 64 MiB; TCP/Unix/TLS exact counts must be `1..=67108864`. UDP receive counts must be `1..=65535`, and truncation with a smaller receive buffer follows the host. HTTP messages are capped at 1 MiB and 64 headers. The string-map header boundary is not lossless for repeated fields and can currently expose duplicate equal keys internally.
+
+WebSocket messages are capped at 64 MiB; frames and the write buffer are capped at 16 MiB. WebSocket listener close is unavailable, WebSocket cancellation coverage is incomplete, and WebSocket close currently discards host close errors. TLS handshakes have a hard 10-second cap in addition to any shorter caller deadline. Unix sockets are unavailable on non-Unix hosts, and `unix_listen` will not replace a non-socket path. Redirects, pooling, HTTP/2, proxies, decompression, high-level custom-CA arguments, and lossless repeated-header APIs are absent.
+
+## Status
+
+The constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps documented on this page are implemented and maintained for Aurora 0.1. No network semantics on this page are provisional.
+
+The repeated-header representation, missing WebSocket-listener close operation, incomplete WebSocket cancellation, and discarded WebSocket close errors are documented current limitations. Protocol additions and richer APIs listed above are unavailable future work and are non-normative.

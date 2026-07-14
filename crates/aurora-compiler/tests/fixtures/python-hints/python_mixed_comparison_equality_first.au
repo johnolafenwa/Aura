@@ -1,0 +1,3 @@
+def main():
+    if true == 1 < 2:
+        pass

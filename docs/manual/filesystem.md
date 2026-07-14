@@ -101,3 +101,51 @@ match fs.read_to_string("config.txt"):
     case Result.Err(error):
         print(error)
 ```
+
+## Grammar
+
+The filesystem module adds no source-language grammar. Programs use ordinary imports, calls, member calls, `Result`, `try`, `match`, and `with`. A `with name = expression:` binding follows the general resource-scope grammar and invokes the resource's `close()` operation on every scope exit.
+
+Paths are `String` values, not path literals or a distinct path type. Text and byte operations are selected by different function names; no encoding annotation changes a byte operation into a text operation.
+
+## Typing Rules
+
+The signatures in the one-shot and `fs.File` tables are normative. All operations except `fs.exists` return `Result`; failure values are `io.Error`. Text reads produce `String`, binary reads produce `Vec[uint8]`, and open/create/append produce the non-copy resource type `fs.File`.
+
+`fs.File.write_all`, `write_bytes`, `flush`, and `close` require a mutable receiver place. `read_all` and `read_bytes` are callable through a shared receiver even though the host file cursor advances. Calling a method on the wrong type, supplying a wrong argument type, or ignoring the `Result` where a `try` expression requires it is checked by the ordinary static rules.
+
+## Runtime Semantics
+
+One-shot operations perform the host filesystem action named in the table. `write_string` and `write_bytes` create or replace a file; append operations create when absent and otherwise append. `create_dir` creates only one directory. `read_dir` returns sorted immediate entry names. `fs.exists` deliberately collapses metadata errors to `false`.
+
+Text is strict UTF-8. Invalid text and reads over 64 MiB return `io.Error.InvalidData`; byte reads preserve bytes. A file handle maintains an operating-system cursor, so successive reads observe and advance the same underlying position. Writes and appends are observable as they occur and are not transactional. Normal host failures return the closest documented `io.Error` variant.
+
+## Ownership And Evaluation Order
+
+Call arguments are evaluated left to right. Path, text, and byte-vector arguments are shared for the duration of the operation and are not retained by the filesystem API. Successful reads return fresh owned values. `fs.File` is non-copy: assigning or passing it by ownership moves the handle, and later use of the moved binding is rejected.
+
+`with` owns the bound resource for the lexical scope and closes it exactly once on normal exit, early return, loop transfer, or error propagation. Cleanup runs after the body and does not undo completed host I/O. Shared read methods use interior host state for the file cursor; mutating write, flush, and close methods require a mutable receiver binding.
+
+## Diagnostics
+
+Unknown filesystem members use `AU2001`, wrong types use `AU2002`, and invalid argument binding uses `AU2004`. Use after moving a file handle uses `AU3001`; conflicting borrows use `AU3002`; invoking a mutating file method through an immutable place uses `AU3003`; remaining static rejections use `AU2999`.
+
+Documented filesystem failures are typed outcomes, not language traps: they return `Result.Err(io.Error)`. In particular, missing files, permission failures, invalid UTF-8, closed handles, and the 64 MiB cap must be handled through `Result`. A compiler or runtime invariant failure outside that typed boundary uses the general diagnostic categories in [Diagnostics](/manual/diagnostics), including `AU4005` for an uncaught resource/I/O trap.
+
+## Backend Support
+
+The complete API on this page is implemented by the MIR runtime and direct native backend. Strict UTF-8 decoding, the read cap, sorted directory results, error variants, owned-resource behavior, and cleanup are backend-parity requirements.
+
+Host filesystem results can differ by operating system and environment. Such differences do not permit a backend to change the Aurora return type, discard a successful byte value, or replace a documented typed `io.Error` with a backend-specific value.
+
+## Limits And Implementation-Defined Behavior
+
+Each one-shot read and each `fs.File` whole-file read is capped at 64 MiB. Aurora 0.1 has no chunked file-reading API, recursive directory operation, transactional write, atomic replace helper, memory mapping, filesystem watcher, permission API, or symlink-specific API. Host paths, permissions, case sensitivity, separators, and symlink traversal follow the host.
+
+After opening a directory, an individual entry that fails during enumeration is currently skipped; only failure to open the directory is returned. Non-Unicode entry names are converted lossily. Partial writes and externally visible side effects may remain after a host failure or task cancellation.
+
+## Status
+
+The one-shot functions, `fs.File` methods, typed errors, deterministic cleanup, strict text/byte distinction, and limits documented here are implemented and maintained in Aurora 0.1. No filesystem semantics on this page are provisional.
+
+The skipped-entry behavior is a documented current defect, not a guarantee that callers should rely on. Chunked and asynchronous file access, transactional operations, richer metadata, and cross-platform path abstractions are unavailable future work and are non-normative.

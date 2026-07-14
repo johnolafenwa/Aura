@@ -8,6 +8,8 @@
 
 Chained comparisons are rejected in 0.1 with a focused diagnostic. Phase 3.5
 implements Python semantics, including evaluating each middle operand once.
+The temporary diagnostic names Aurora's implemented `and` spelling; it never
+suggests Python/C-style `&&`.
 
 ## Completion tests
 

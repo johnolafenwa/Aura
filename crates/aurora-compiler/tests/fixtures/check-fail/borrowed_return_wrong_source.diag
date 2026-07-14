@@ -1,4 +1,4 @@
-error: borrowed return expression must come from `left`
+error[AU3002]: borrowed return expression must come from `left`
  --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_return_wrong_source.au:2:12
   |
 2 |     return right

@@ -34,9 +34,37 @@ Except for short-circuit boolean operators and control-flow constructs, subexpre
 - f-string interpolations are evaluated from left to right
 - an index evaluates its base before its index
 - a receiver is evaluated before call arguments
-- explicit call and constructor arguments are evaluated in source order
+- every supplied call or constructor argument is evaluated in call-site source order
 
-Omitted function parameters and class fields evaluate their default expressions when the call/construction occurs. Defaults are associated with declaration-order slots. Each omission causes a fresh evaluation; a mutable default value is not a process-global singleton. A shared-borrow parameter's default temporary lives until the call completes. An `own` parameter consumes its fresh default temporary. Mutable-borrow defaults are statically rejected.
+Evaluating a copy place captures its copied value at that point. A non-copy
+place selected as a binary left operand, index base, method receiver, or
+indexed-assignment target remains borrowed until that operation has consumed
+all of its inputs. A later shared borrow is permitted, but an overlapping
+mutable borrow or consumption is rejected with `AU3002`; the diagnostic points
+to both the conflicting access and the retained-borrow origin. This applies to
+name roots and projected member places, and no backend may insert a hidden deep
+clone. Each f-string interpolation is converted to its rendered `String` at
+its own position before the next interpolation begins.
+
+All supplied arguments complete before any omitted default is evaluated. Each
+supplied function/method argument or class-field expression is fully evaluated
+before the next supplied expression begins. Its copy or move result is captured
+in the destination slot; a borrow-mode selection is established without a
+clone and remains subject to the retained-borrow overlap rule above. Later side
+effects cannot cause an earlier captured argument or field value to be re-read.
+Omitted function parameters and class fields then evaluate their defaults in
+declaration order when the call or construction occurs. Binding supplied values
+to declaration slots never reorders them, and a supplied slot suppresses its
+default. Each omission causes a fresh evaluation; a mutable default value is
+not a process-global singleton. A shared-borrow parameter's default temporary lives until the call completes. An `own` parameter consumes its fresh default
+temporary. Mutable-borrow defaults are statically rejected.
+
+Enum-variant constructor arguments also evaluate in call-site source order.
+Named arguments are then bound by name to the variant's declaration-order
+payload slots; declaration-slot order never reorders their evaluation.
+
+When two evaluated keys in one map literal compare equal, the later value
+replaces the earlier value and the key keeps its first insertion position.
 
 `and` evaluates the right operand only when the left value is `true`. `or` evaluates the right operand only when the left value is `false`. Both operands have static type `bool`.
 
@@ -79,30 +107,58 @@ Equality is defined only after static typing has established compatible operand 
 
 ## Value Rendering
 
-`print`, f-string interpolation, and scalar `.to_string()` use Aurora's maintained value rendering where applicable. Strings render as their contents without quotes and `None` renders as the empty string. Floats retain a decimal marker for integral finite values. A duration renders in normalized milliseconds, for example `2s` renders as `2000ms`.
+`print`, f-string interpolation, and scalar `.to_string()` use Aurora's maintained value rendering where applicable. Strings render as their contents without quotes and `None` renders as the empty string. A directly printed `float32` or `float64` uses the shortest decimal spelling that round-trips to the same value in its source type. Integral finite values retain a decimal marker, scientific notation is used when it is shorter, and signed zero remains `-0.0`. A duration renders in normalized milliseconds, for example `2s` renders as `2000ms`.
 
 Vectors render as `[a, b]`, sets as `Set{a, b}`, and maps as `{key: value}` in their maintained insertion order. Class values render as `Class(field=value, ...)`; enum values render as `Enum.Variant(...)`. Nested strings remain unquoted, so this display form is for people and is not a round-trippable serialization format. Live resources render opaque labels such as `<file>` or `<tcp-stream>` rather than host identifiers.
 
 ## Assignment And Mutation
 
-A simple assignment evaluates the right side before creating or updating the target. Reassignment preserves the target's type. A compound assignment reads the current target once, evaluates the right operand, applies the operator, and stores the result.
+A simple assignment ordinarily evaluates the right side before creating or
+updating the target. Simple Map indexed assignment is the deliberate exception:
+it evaluates and captures its owned key, consuming it when non-copy, before
+evaluating and consuming the assigned value. A side effect in the value
+therefore cannot retarget the write. Simple Map assignment accepts any `V`.
+Reassignment preserves the target's type. A compound assignment selects its
+target place once and uses exactly the corresponding binary operator dispatch,
+including an applicable user-defined operator trait for a root or projected
+target. For a copy target, it captures the current copied value before
+evaluating the right operand and stores the operator result into the originally
+selected place, so right-side effects neither change the left operand nor
+retarget the store. A non-copy root or projected target remains borrowed across
+the right operand; overlapping mutable borrow or consumption is rejected with
+`AU3002`. Direct indexed compound assignment requires a copy `Vec` element or
+`Map` value. A non-copy indexed element is rejected rather than implicitly
+cloned or destructively moved.
 
-Field and index assignment mutate the selected place. Vector indices are zero-based. Map assignment replaces an equal existing key or adds a new entry. Failed checked mutation leaves the operation incomplete and produces its documented runtime failure or typed error.
+Field and index assignment mutate the selected place. Vector indices are
+zero-based. Simple Map assignment replaces an equal existing key or adds a new
+entry; an absent key is therefore not a simple-assignment failure. Compound Map
+assignment requires an existing key and traps with `AU4003` if its initial read
+finds none. Failed checked mutation leaves the operation incomplete and
+produces its documented runtime failure or typed error.
 
 Moving a field marks that field unavailable while leaving disjoint fields usable. Reassigning the exact moved place reinitializes it.
 
 ## Collections And Iteration
 
-`Vec` preserves element order. `Map` and `Set` use the maintained insertion-oriented runtime representation; `Map.items()`/`entries()` explicitly return insertion order. Algorithms should rely on ordering only where the relevant API promises it.
+`Vec` preserves element order. `Map` uses insertion order for its `keys()`,
+`values()`, `items()`, and `entries()` projections. Replacing an equal Map key,
+including from a later literal entry, retains that key's existing slot. `Set`
+uses an insertion-oriented runtime representation, but its public order is not
+promised. Algorithms should rely on ordering only where the relevant API
+promises it.
 
-Bare iteration over a `Vec` or `Set` retains the collection and yields shared
-element access. `own` iteration consumes a non-copy collection and yields owned
-elements. Explicit `borrow` and `borrow mut` iteration retain the collection as
-allowed by the static rules. Range iteration yields `int32` values from
+Bare iteration over a `Vec` or `Set` retains and freezes the selected collection
+for the loop and yields shared element access. `own` iteration moves the
+collection into a loop-private source once at entry and yields owned elements;
+reinitializing the consumed source binding in the body does not switch or
+truncate the active iteration. That one-time source selection is provisional
+under ADR-0017 and does not alter ADR-0006's ownership modes. Explicit `borrow` and `borrow mut` iteration
+retain the collection as allowed by the static rules. Range iteration yields `int32` values from
 `start` inclusive to `end` exclusive; its currently accepted modifiers do not
 change behavior and remain a tracked language-design follow-up.
 
-Queue iteration receives items until the queue closes, cancellation is observed, registered producers complete cleanly with no more items, or an unread sibling-task failure ends the surrounding group. It is a scheduler operation rather than iteration over a snapshot. Each item arrives already owned by the loop binding; explicit `own`, `borrow`, and `borrow mut` modifiers are rejected because neither the received value nor the copyable Queue handle has a place-iteration ownership mode to modify.
+Queue iteration receives items until the queue closes, cancellation is observed, registered producers complete cleanly with no more items, or an unread sibling-task failure ends the surrounding group. It is a scheduler operation rather than iteration over a snapshot. Each item arrives already owned by the loop binding; explicit `own`, `borrow`, and `borrow mut` modifiers are rejected because neither the received value nor the copyable Queue handle has a place-iteration ownership mode to modify. Under provisional ADR-0017, the bare form evaluates and copies its Queue handle once at loop entry. This does not freeze the source binding: rebinding that variable in the body is allowed, but later iterations continue receiving through the captured handle. ADR-0006's ownership carve-out is otherwise unchanged.
 
 ## Pattern Matching
 

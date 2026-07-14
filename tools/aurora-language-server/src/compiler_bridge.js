@@ -224,16 +224,48 @@ function findOccurrence(analysis, line, character) {
   );
 }
 
-function compilerDiagnosticsToLsp(analysis) {
-  return (analysis.diagnostics || []).map((diagnostic) => ({
-    severity: diagnostic.severity,
-    range: {
-      start: { line: diagnostic.line, character: diagnostic.start_character },
-      end: { line: diagnostic.line, character: diagnostic.end_character }
-    },
-    message: diagnostic.message,
-    source: "aurora-compiler"
-  }));
+function compilerDiagnosticsToLsp(analysis, documentUri) {
+  return (analysis.diagnostics || []).map((diagnostic) => {
+    const result = {
+      severity: diagnostic.severity,
+      range: {
+        start: { line: diagnostic.line, character: diagnostic.start_character },
+        end: { line: diagnostic.line, character: diagnostic.end_character }
+      },
+      message: diagnostic.message,
+      source: "aurora-compiler"
+    };
+
+    if (diagnostic.code) {
+      result.code = diagnostic.code;
+    }
+    if (documentUri && diagnostic.secondary_spans?.length) {
+      result.relatedInformation = diagnostic.secondary_spans.map((secondary) => ({
+        location: {
+          uri: documentUri,
+          range: {
+            start: {
+              line: secondary.line,
+              character: secondary.start_character
+            },
+            end: {
+              line: secondary.line,
+              character: secondary.end_character
+            }
+          }
+        },
+        message: secondary.label
+      }));
+    }
+    if (diagnostic.notes || diagnostic.help || diagnostic.edits) {
+      result.data = {
+        notes: diagnostic.notes || [],
+        help: diagnostic.help || [],
+        edits: diagnostic.edits || []
+      };
+    }
+    return result;
+  });
 }
 
 function compilerSymbolsToLsp(analysis) {

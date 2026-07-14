@@ -1,5 +1,6 @@
-error: method `bump` requires a mutable receiver
+error[AU2999]: method `bump` requires a mutable receiver
  --> crates/aurora-compiler/tests/fixtures/check-fail/immutable_mutating_method.au:9:13
   |
 9 |     counter.bump()
   |             ^
+  = help: declare the receiver place with `mut` before calling a mutating method

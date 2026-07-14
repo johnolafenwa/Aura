@@ -92,6 +92,10 @@ fn decode_hex_digit(ch: char) -> Option<u32> {
     }
 }
 
+fn lexical_error(span: Span, message: impl Into<String>) -> Diagnostic {
+    Diagnostic::coded_at("AU1001", span, message)
+}
+
 fn decode_escape(
     chars: &[(usize, char)],
     escape_start: usize,
@@ -100,7 +104,7 @@ fn decode_escape(
     literal_kind: &str,
 ) -> Result<(char, usize)> {
     let Some((_, escaped)) = chars.get(escape_start) else {
-        return Err(Diagnostic::at(
+        return Err(lexical_error(
             Span::new(line_no, column),
             format!("unterminated {} literal", literal_kind),
         ));
@@ -114,25 +118,25 @@ fn decode_escape(
         '0' => Ok(('\0', escape_start + 1)),
         'x' => {
             let Some((_, high)) = chars.get(escape_start + 1) else {
-                return Err(Diagnostic::at(
+                return Err(lexical_error(
                     Span::new(line_no, column),
                     format!("unsupported escape sequence `\\{}`", escaped),
                 ));
             };
             let Some((_, low)) = chars.get(escape_start + 2) else {
-                return Err(Diagnostic::at(
+                return Err(lexical_error(
                     Span::new(line_no, column),
                     format!("unsupported escape sequence `\\{}`", escaped),
                 ));
             };
             let Some(high) = decode_hex_digit(*high) else {
-                return Err(Diagnostic::at(
+                return Err(lexical_error(
                     Span::new(line_no, column),
                     "invalid hexadecimal escape sequence",
                 ));
             };
             let Some(low) = decode_hex_digit(*low) else {
-                return Err(Diagnostic::at(
+                return Err(lexical_error(
                     Span::new(line_no, column),
                     "invalid hexadecimal escape sequence",
                 ));
@@ -142,7 +146,7 @@ fn decode_escape(
         }
         'u' => {
             if !matches!(chars.get(escape_start + 1), Some((_, '{'))) {
-                return Err(Diagnostic::at(
+                return Err(lexical_error(
                     Span::new(line_no, column),
                     "unicode escape sequences must use the form `\\u{...}`",
                 ));
@@ -153,13 +157,13 @@ fn decode_escape(
             while let Some((_, candidate)) = chars.get(index) {
                 if *candidate == '}' {
                     if !saw_digit {
-                        return Err(Diagnostic::at(
+                        return Err(lexical_error(
                             Span::new(line_no, column),
                             "unicode escape sequences must include at least one hexadecimal digit",
                         ));
                     }
                     let Some(decoded) = char::from_u32(scalar) else {
-                        return Err(Diagnostic::at(
+                        return Err(lexical_error(
                             Span::new(line_no, column),
                             "unicode escape sequence is out of range",
                         ));
@@ -167,7 +171,7 @@ fn decode_escape(
                     return Ok((decoded, index + 1));
                 }
                 let Some(digit) = decode_hex_digit(*candidate) else {
-                    return Err(Diagnostic::at(
+                    return Err(lexical_error(
                         Span::new(line_no, column),
                         "invalid unicode escape sequence",
                     ));
@@ -176,7 +180,7 @@ fn decode_escape(
                     .checked_mul(16)
                     .and_then(|value| value.checked_add(digit))
                     .ok_or_else(|| {
-                        Diagnostic::at(
+                        lexical_error(
                             Span::new(line_no, column),
                             "unicode escape sequence is out of range",
                         )
@@ -184,12 +188,12 @@ fn decode_escape(
                 saw_digit = true;
                 index += 1;
             }
-            Err(Diagnostic::at(
+            Err(lexical_error(
                 Span::new(line_no, column),
                 format!("unterminated {} literal", literal_kind),
             ))
         }
-        other => Err(Diagnostic::at(
+        other => Err(lexical_error(
             Span::new(line_no, column),
             format!("unsupported escape sequence `\\{}`", other),
         )),
@@ -205,9 +209,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>> {
         let line_no = index + 1;
 
         if raw_line.contains('\t') {
-            return Err(Diagnostic::at(
+            return Err(Diagnostic::coded_at(
+                "AU1001",
                 Span::new(line_no, 1),
-                "tabs are not supported for indentation",
+                "tabs are not supported for indentation; use spaces",
             ));
         }
 
@@ -236,7 +241,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>> {
             }
 
             if indent != *indent_stack.last().unwrap() {
-                return Err(Diagnostic::at(
+                return Err(lexical_error(
                     Span::new(line_no, 1),
                     "inconsistent indentation",
                 ));
@@ -338,7 +343,7 @@ fn tokenize_line(
                     tokens.push(simple(TokenKind::NotEq, line_no, column));
                     index += 2;
                 } else {
-                    return Err(Diagnostic::at(
+                    return Err(lexical_error(
                         Span::new(line_no, column),
                         "unexpected character `!`",
                     ));
@@ -418,6 +423,13 @@ fn tokenize_line(
                     index += 1;
                 }
             }
+            'f' if matches!(chars.get(index + 1), Some((_, '\''))) => {
+                return Err(Diagnostic::coded_at(
+                    "AU1002",
+                    Span::new(line_no, column),
+                    "f-strings must be double-quoted; use `f\"...\"`",
+                ));
+            }
             'f' if matches!(chars.get(index + 1), Some((_, '"'))) => {
                 index += 2;
                 let mut value = String::new();
@@ -470,7 +482,7 @@ fn tokenize_line(
                                 '"' | '\'' => interpolation_string_quote = Some(current),
                                 '{' => {
                                     if interpolation_depth >= RECURSION_LIMIT {
-                                        return Err(Diagnostic::at(
+                                        return Err(lexical_error(
                                             Span::new(line_no, column),
                                             format!(
                                                 "f-string interpolation exceeds the supported nesting limit of {}",
@@ -491,7 +503,7 @@ fn tokenize_line(
                 }
 
                 if !matches!(chars.get(index), Some((_, '"'))) {
-                    return Err(Diagnostic::at(
+                    return Err(lexical_error(
                         Span::new(line_no, column),
                         "unterminated f-string literal",
                     ));
@@ -524,7 +536,7 @@ fn tokenize_line(
                 }
 
                 if !matches!(chars.get(index), Some((_, current)) if *current == quote) {
-                    return Err(Diagnostic::at(
+                    return Err(lexical_error(
                         Span::new(line_no, column),
                         "unterminated string literal",
                     ));
@@ -563,7 +575,7 @@ fn tokenize_line(
                         exponent_index += 1;
                     }
                     if !matches!(chars.get(exponent_index), Some((_, '0'..='9'))) {
-                        return Err(Diagnostic::at(
+                        return Err(lexical_error(
                             Span::new(line_no, base_column + chars[exponent_start].0),
                             "invalid floating-point literal",
                         ));
@@ -586,7 +598,7 @@ fn tokenize_line(
                         .parse::<f64>()
                         .expect("lexer should only build syntactically valid float literals");
                     if !value.is_finite() {
-                        return Err(Diagnostic::at(
+                        return Err(lexical_error(
                             Span::new(line_no, column),
                             "floating-point literal is out of range",
                         ));
@@ -599,7 +611,7 @@ fn tokenize_line(
                     let value = match text.parse::<u128>() {
                         Ok(value) => value,
                         Err(_) => {
-                            return Err(Diagnostic::at(
+                            return Err(lexical_error(
                                 Span::new(line_no, column),
                                 "invalid integer literal",
                             ));
@@ -613,7 +625,7 @@ fn tokenize_line(
                                     Some(TokenKind::DurationLiteral(match i128::try_from(value) {
                                         Ok(value) => value,
                                         Err(_) => {
-                                            return Err(Diagnostic::at(
+                                            return Err(lexical_error(
                                                 Span::new(line_no, column),
                                                 "invalid duration literal",
                                             ));
@@ -624,7 +636,7 @@ fn tokenize_line(
                                     let multiplied = match value.checked_mul(60_000) {
                                         Some(value) => value,
                                         None => {
-                                            return Err(Diagnostic::at(
+                                            return Err(lexical_error(
                                                 Span::new(line_no, column),
                                                 "invalid duration literal",
                                             ));
@@ -634,7 +646,7 @@ fn tokenize_line(
                                         match i128::try_from(multiplied) {
                                             Ok(value) => value,
                                             Err(_) => {
-                                                return Err(Diagnostic::at(
+                                                return Err(lexical_error(
                                                     Span::new(line_no, column),
                                                     "invalid duration literal",
                                                 ));
@@ -648,7 +660,7 @@ fn tokenize_line(
                                 let multiplied = match value.checked_mul(1000) {
                                     Some(value) => value,
                                     None => {
-                                        return Err(Diagnostic::at(
+                                        return Err(lexical_error(
                                             Span::new(line_no, column),
                                             "invalid duration literal",
                                         ));
@@ -658,7 +670,7 @@ fn tokenize_line(
                                     match i128::try_from(multiplied) {
                                         Ok(value) => value,
                                         Err(_) => {
-                                            return Err(Diagnostic::at(
+                                            return Err(lexical_error(
                                                 Span::new(line_no, column),
                                                 "invalid duration literal",
                                             ));
@@ -735,7 +747,7 @@ fn tokenize_line(
                 });
             }
             _ => {
-                return Err(Diagnostic::at(
+                return Err(lexical_error(
                     Span::new(line_no, column),
                     format!("unexpected character `{}`", ch),
                 ));

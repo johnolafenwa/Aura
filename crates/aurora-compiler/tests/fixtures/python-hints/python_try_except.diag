@@ -1,0 +1,1 @@
+`try`/`except` is not supported; use `Result` with `match` today

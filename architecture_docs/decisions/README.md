@@ -1,8 +1,10 @@
 # Aurora Architecture Decision Records
 
-These ADRs record ratified language and runtime decisions. `Accepted` means
+These ADRs record accepted language and runtime decisions plus any contained
+provisional decisions awaiting the named checkpoint review. `Accepted` means
 the design is binding; it does not by itself claim that the implementation is
-complete. Each ADR names the test locations that must prove completion.
+complete. A provisional status is not binding until ratified. Each ADR names
+the test locations that must prove completion.
 
 1. [ADR-0001: Contextual `None` and `Option` equality](0001-contextual-none-and-option-equality.md)
 2. [ADR-0002: Integer division and modulo](0002-integer-division-and-modulo.md)
@@ -17,3 +19,7 @@ complete. Each ADR names the test locations that must prove completion.
 11. [ADR-0011: Typed errors and assertions](0011-typed-errors-and-assertions.md)
 12. [ADR-0012: Boolean-only conditions](0012-boolean-only-conditions.md)
 13. [ADR-0013: Callable sequencing and ownership](0013-callable-sequencing-and-ownership.md)
+14. [ADR-0014: Map literals and indexing](0014-map-literals-and-indexing.md)
+15. [ADR-0015: Explicit and default argument evaluation order](0015-explicit-and-default-argument-order.md)
+16. [ADR-0016: Retained non-copy expression borrows](0016-retained-noncopy-expression-borrows.md)
+17. [ADR-0017: Iteration source selection](0017-iteration-source-selection.md)

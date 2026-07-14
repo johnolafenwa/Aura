@@ -1,0 +1,11 @@
+trait Describe:
+    def describe(borrow self) -> String
+
+impl[T] Describe for Queue[T]:
+    def describe(borrow self) -> String:
+        return "queue trait"
+
+def main() -> int32:
+    queue = Queue[int32]()
+    print(queue.describe())
+    return 0

@@ -1,0 +1,4 @@
+def main():
+    values = Vec[int32]()
+    if 1 in values:
+        pass

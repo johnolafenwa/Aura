@@ -1,0 +1,55 @@
+trait Add[Rhs, Out]:
+    def add(borrow mut self, rhs: borrow mut Rhs) -> Out
+
+trait Neg[Out]:
+    def neg(borrow mut self) -> Out
+
+copy class Counter:
+    value: int32
+
+class Holder:
+    counter: Counter
+
+impl Add[Counter, Counter] for Counter:
+    def add(borrow mut self, rhs: borrow mut Counter) -> Counter:
+        self.value += rhs.value
+        rhs.value += 1
+        return self
+
+impl Neg[Counter] for Counter:
+    def neg(borrow mut self) -> Counter:
+        self.value = 0 - self.value
+        return self
+
+def main() -> int32:
+    mut direct = Counter(value=1)
+    mut right1 = Counter(value=2)
+    direct += right1
+    print(direct.value)
+    print(right1.value)
+
+    mut holder = Holder(counter=Counter(value=10))
+    mut right2 = Counter(value=3)
+    holder.counter += right2
+    print(holder.counter.value)
+    print(right2.value)
+
+    mut values: Vec[Counter] = [Counter(value=20)]
+    mut right3 = Counter(value=4)
+    values[0] += right3
+    print(values[0].value)
+    print(right3.value)
+
+    mut left = Counter(value=30)
+    mut right4 = Counter(value=5)
+    sum = left + right4
+    print(sum.value)
+    print(right4.value)
+
+    mut negative = Counter(value=7)
+    negated = -negative
+    print(negated.value)
+
+    map: Map[String, int32] = {"answer": 42}
+    print(map["answer"])
+    return 0

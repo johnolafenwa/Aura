@@ -1,4 +1,4 @@
-error: empty set literals require an expected `Set[T]` type annotation in the bootstrap compiler
+error[AU2002]: empty set literals require an expected `Set[T]` type annotation in the bootstrap compiler
  --> crates/aurora-compiler/tests/fixtures/check-fail/set_empty_literal_requires_type.au:2:14
   |
 2 |     values = Set{}

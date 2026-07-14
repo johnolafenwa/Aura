@@ -79,12 +79,15 @@ Aurora has a rich set of numeric types. If you are not sure which to use, start 
 
 The full set of integer types covers `int8` through `int128`, `uint8` through `uint128`, plus `intsize` and `uintsize` for platform-sized integers. `int` is not an additional width: it is exactly `int64`. Use other explicit widths when you need control over memory layout, value ranges, or a fixed-width API contract.
 
-Integer literals default to `int64`. Floating-point literals default to `float64`, but both kinds of literal adopt a compatible expected numeric type from an annotation, parameter, return type, or field:
+Integer literals default to `int64`. Floating-point literals default to `float64`, but both kinds of literal adopt a compatible expected numeric type from an annotation, parameter, return type, or field. An integer literal may adopt `float32` or `float64` only when its integer value is exactly representable there:
 
 ```python
 count: int32 = 12
 ratio: float32 = 3.25
+whole_ratio: float64 = 2
 ```
+
+This float-context rule applies only to literals. It never converts an already-bound integer value. If an integer literal is not exact in the expected floating type, the compiler asks you to use an explicit floating spelling or `.to_float()` so that rounding is visible in the source.
 
 The default-type change does not alter APIs that explicitly use `int32`. For example, `range(...)`, Vec indexes, collection lengths, queue capacities, and a numeric `main()` exit status remain `int32`; literals passed to them adopt that expected type.
 
@@ -158,7 +161,8 @@ match items.get(-2):
 
 items[-1] = 50
 items.insert(-1, 45)             # inserts before the final element
-items.insert(items.len(), 60)    # appends
+end_index = items.len()
+items.insert(end_index, 60)      # appends
 ```
 
 Normalization is `len + index`, performed once. `get` returns `None` if the
@@ -211,7 +215,8 @@ Empty map literals need a type annotation:
 mut counts: Map[String, int32] = {}
 ```
 
-Maps support indexed reads and writes:
+Maps support indexed reads when the value type is copy, and indexed writes for
+all value types:
 
 ```python
 counts["aurora"] = 5
@@ -223,6 +228,10 @@ Map lookups work inside larger expressions including f-strings:
 ```python
 print(f"value: {counts['aurora']}")
 ```
+
+For a non-copy value type, direct `map[key]` is rejected rather than performing
+a hidden clone. Use `get(key)` for an explicit cloned optional read, or
+`remove(key)` to transfer the stored value out.
 
 `items()` and `entries()` both return `Vec[MapEntry[K, V]]`, where each entry exposes `.key` and `.value`:
 
@@ -273,6 +282,7 @@ See [examples/collections/set_basics.au](../examples/collections/set_basics.au).
 Summary of literal type rules:
 
 - integer literals default to `int64` (`int` is an alias for `int64`)
+- integer literals can adopt an expected floating type only when exactly representable
 - floating-point literals default to `float64`
 - duration literals like `5ms`, `1s`, and `2m` have type `Duration`
 - negative literals are supported: `-5`, `-3.5`

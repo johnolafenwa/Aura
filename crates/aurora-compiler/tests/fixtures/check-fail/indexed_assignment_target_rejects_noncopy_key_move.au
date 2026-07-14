@@ -1,0 +1,6 @@
+class Node:
+    table: indirect Map[Node, int32]
+
+def main():
+    mut node = Node(table={})
+    node.table[node] = 1

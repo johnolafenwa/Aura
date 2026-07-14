@@ -1,4 +1,4 @@
-error: shared borrowed values cannot be bound with `mut`
+error[AU3002]: shared borrowed values cannot be bound with `mut`
  --> crates/aurora-compiler/tests/fixtures/check-fail/shared_borrow_mut_binding_rejected.au:5:17
   |
 5 |     mut alias = user

@@ -4,11 +4,11 @@ use crate::ast::{
 };
 use crate::call::{bind_call_arguments, callable_params_from_decl, BuiltinMember, CallConvention};
 use crate::diag::Span;
-use crate::integer::minimal_signed_type_for_negative_literal;
+use crate::integer::{minimal_signed_type_for_negative_literal, IntegerValue};
 use crate::sema::{
     binary_operator_trait, substitute_trait_bound, substitute_type,
-    substitutions_from_decl_type_args, unary_operator_trait, ModuleNamespace, Program, TraitBound,
-    Type,
+    substitutions_from_decl_type_args, type_is_copy_in_program, unary_operator_trait,
+    ModuleNamespace, Program, TraitBound, Type,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -67,6 +67,41 @@ fn is_builtin_binary_operator(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> 
     }
 }
 
+fn is_float_type(ty: &Type) -> bool {
+    matches!(ty, Type::Named(name, args) if args.is_empty() && (name == "float32" || name == "float64"))
+}
+
+fn is_integer_literal_expr(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Int(_) => true,
+        ExprKind::Group(inner) => is_integer_literal_expr(inner),
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+        } => matches!(inner.kind, ExprKind::Int(_)),
+        _ => false,
+    }
+}
+
+fn contextual_float_literal_operand(
+    value: u128,
+    negative: bool,
+    expected: &Type,
+) -> Option<Operand> {
+    let integer = IntegerValue::from_literal(value);
+    let value = match expected {
+        Type::Named(name, args) if args.is_empty() && name == "float32" => integer
+            .to_exact_f32()
+            .map(f64::from)
+            .expect("checked float32-context integer literal should be exact"),
+        Type::Named(name, args) if args.is_empty() && name == "float64" => integer
+            .to_exact_f64()
+            .expect("checked float64-context integer literal should be exact"),
+        _ => return None,
+    };
+    Some(Operand::Float(if negative { -value } else { value }))
+}
+
 fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {
     match ty {
         Type::TypeParam(name) => {
@@ -87,11 +122,19 @@ fn adjusted_binary_operand_types(
     right_expr: &Expr,
     mut right_ty: Type,
 ) -> (Type, Type) {
-    if left_ty != right_ty && matches!(left_expr.kind, ExprKind::Int(_) | ExprKind::Float(_)) {
-        left_ty = right_ty.clone();
-    }
-    if left_ty != right_ty && matches!(right_expr.kind, ExprKind::Int(_) | ExprKind::Float(_)) {
-        right_ty = left_ty.clone();
+    if left_ty != right_ty {
+        if is_integer_literal_expr(left_expr) && is_float_type(&right_ty) {
+            left_ty = right_ty.clone();
+        } else if is_integer_literal_expr(right_expr) && is_float_type(&left_ty) {
+            right_ty = left_ty.clone();
+        } else if is_integer_literal_expr(left_expr) || matches!(left_expr.kind, ExprKind::Float(_))
+        {
+            left_ty = right_ty.clone();
+        } else if is_integer_literal_expr(right_expr)
+            || matches!(right_expr.kind, ExprKind::Float(_))
+        {
+            right_ty = left_ty.clone();
+        }
     }
     (left_ty, right_ty)
 }
@@ -261,6 +304,7 @@ pub enum Rvalue {
         task_group: Operand,
         function: String,
         args: Vec<MirArg>,
+        span: crate::diag::Span,
     },
     Binary {
         op: BinaryOp,
@@ -1334,7 +1378,7 @@ impl<'a> Lowerer<'a> {
 
         if let AssignTarget::Index { object, index } = &assign.target {
             let lowered_object = self.lower_expr(object);
-            let lowered_index = self.lower_expr(index);
+            let lowered_index = self.lower_expr_at_sequence_point(index, None);
             let index_field = match self.infer_expr_type(object) {
                 Some(Type::Named(name, args)) if name == "Map" && args.len() == 2 => {
                     INTERNAL_MAP_INDEX_FIELD.to_string()
@@ -1383,20 +1427,18 @@ impl<'a> Lowerer<'a> {
                     },
                 });
                 let indexed_value_type = self.local_types[&current].clone();
-                let result = self.new_typed_temp(indexed_value_type.clone());
-                let lowered_value =
-                    self.lower_expr_with_expected(&assign.value, Some(&indexed_value_type));
-                self.retarget_operand_place(&lowered_value, &indexed_value_type);
-                self.emit(Instruction::Assign {
-                    target: result.clone(),
-                    value: Rvalue::Binary {
+                let compound = Expr {
+                    kind: ExprKind::Binary {
                         op,
-                        left: Operand::Place(current),
-                        right: lowered_value,
-                        span: assign.span,
+                        left: Box::new(Expr {
+                            kind: ExprKind::Name(current),
+                            span: assign.span,
+                        }),
+                        right: Box::new(assign.value.clone()),
                     },
-                });
-                Operand::Place(result)
+                    span: assign.span,
+                };
+                self.lower_expr_with_expected(&compound, Some(&indexed_value_type))
             } else {
                 self.lower_expr(&assign.value)
             };
@@ -1439,18 +1481,42 @@ impl<'a> Lowerer<'a> {
         let target = self.render_assign_target(&assign.target);
         let target_ty = match &assign.target {
             AssignTarget::Name(name) => self.local_types.get(name).cloned(),
-            _ => None,
+            AssignTarget::Member { object, field } => self.infer_expr_type(&Expr {
+                kind: ExprKind::Member {
+                    object: object.clone(),
+                    field: field.clone(),
+                },
+                span: assign.span,
+            }),
+            AssignTarget::Index { .. } => None,
         };
         if let Some(op) = assign.op {
-            let value = self.lower_expr(&assign.value);
-            self.emit(Instruction::Assign {
-                target: target.clone(),
-                value: Rvalue::Binary {
-                    op,
-                    left: Operand::Place(target),
-                    right: value,
+            let left = match &assign.target {
+                AssignTarget::Name(name) => Expr {
+                    kind: ExprKind::Name(name.clone()),
                     span: assign.span,
                 },
+                AssignTarget::Member { object, field } => Expr {
+                    kind: ExprKind::Member {
+                        object: object.clone(),
+                        field: field.clone(),
+                    },
+                    span: assign.span,
+                },
+                AssignTarget::Index { .. } => unreachable!("handled above"),
+            };
+            let compound = Expr {
+                kind: ExprKind::Binary {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(assign.value.clone()),
+                },
+                span: assign.span,
+            };
+            let value = self.lower_expr_with_expected(&compound, target_ty.as_ref());
+            self.emit(Instruction::Assign {
+                target,
+                value: Rvalue::Use(value),
             });
             return;
         }
@@ -1480,7 +1546,7 @@ impl<'a> Lowerer<'a> {
                 Some(Rvalue::VecLiteral {
                     elements: elements
                         .iter()
-                        .map(|element| self.lower_expr_with_expected(element, Some(&args[0])))
+                        .map(|element| self.lower_expr_at_sequence_point(element, Some(&args[0])))
                         .collect(),
                     element_type: args[0].clone(),
                 })
@@ -1491,7 +1557,7 @@ impl<'a> Lowerer<'a> {
                 Some(Rvalue::SetLiteral {
                     elements: elements
                         .iter()
-                        .map(|element| self.lower_expr_with_expected(element, Some(&args[0])))
+                        .map(|element| self.lower_expr_at_sequence_point(element, Some(&args[0])))
                         .collect(),
                     element_type: args[0].clone(),
                 })
@@ -1511,8 +1577,8 @@ impl<'a> Lowerer<'a> {
                     entries: entries
                         .iter()
                         .map(|entry| MirMapEntry {
-                            key: self.lower_expr_with_expected(&entry.key, Some(&args[0])),
-                            value: self.lower_expr_with_expected(&entry.value, Some(&args[1])),
+                            key: self.lower_expr_at_sequence_point(&entry.key, Some(&args[0])),
+                            value: self.lower_expr_at_sequence_point(&entry.value, Some(&args[1])),
                         })
                         .collect(),
                     key_type: args[0].clone(),
@@ -1847,8 +1913,21 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_for(&mut self, for_stmt: &crate::ast::ForStmt) {
-        let iterable = self.lower_expr(&for_stmt.iterable);
         let iterable_ty = self.infer_expr_type(&for_stmt.iterable);
+        let iterable = if for_stmt.borrow_mode == Some(ReceiverKind::Value) {
+            let source = self.lower_expr(&for_stmt.iterable);
+            let captured = iterable_ty
+                .clone()
+                .map(|ty| self.new_typed_temp(ty))
+                .unwrap_or_else(|| self.new_temp());
+            self.emit(Instruction::Assign {
+                target: captured.clone(),
+                value: Rvalue::Use(source),
+            });
+            Operand::Place(captured)
+        } else {
+            self.lower_expr_at_sequence_point(&for_stmt.iterable, None)
+        };
         let dispatch_block = self.new_block("for_iter");
         let body_block = self.new_block("for_body");
         let after_block = self.new_block("for_end");
@@ -2259,7 +2338,7 @@ impl<'a> Lowerer<'a> {
                 let temp = self.new_temp_for_expr(expr);
                 let elements = elements
                     .iter()
-                    .map(|element| self.lower_expr(element))
+                    .map(|element| self.lower_expr_at_sequence_point(element, None))
                     .collect::<Vec<_>>();
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
@@ -2278,7 +2357,7 @@ impl<'a> Lowerer<'a> {
                 let temp = self.new_temp_for_expr(expr);
                 let elements = elements
                     .iter()
-                    .map(|element| self.lower_expr(element))
+                    .map(|element| self.lower_expr_at_sequence_point(element, None))
                     .collect::<Vec<_>>();
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
@@ -2303,8 +2382,8 @@ impl<'a> Lowerer<'a> {
                 let entries = entries
                     .iter()
                     .map(|entry| MirMapEntry {
-                        key: self.lower_expr(&entry.key),
-                        value: self.lower_expr(&entry.value),
+                        key: self.lower_expr_at_sequence_point(&entry.key, None),
+                        value: self.lower_expr_at_sequence_point(&entry.value, None),
                     })
                     .collect::<Vec<_>>();
                 self.emit(Instruction::Assign {
@@ -2326,7 +2405,15 @@ impl<'a> Lowerer<'a> {
                             MirFormatPart::Literal(text.clone())
                         }
                         crate::ast::FormatPart::Expr(expr) => {
-                            MirFormatPart::Value(self.lower_expr(expr))
+                            let value = self.lower_expr_at_sequence_point(expr, None);
+                            let rendered = self.new_typed_temp(Type::named("String"));
+                            self.emit(Instruction::Assign {
+                                target: rendered.clone(),
+                                value: Rvalue::FormatString {
+                                    parts: vec![MirFormatPart::Value(value)],
+                                },
+                            });
+                            MirFormatPart::Value(Operand::Place(rendered))
                         }
                     })
                     .collect::<Vec<_>>();
@@ -2342,7 +2429,14 @@ impl<'a> Lowerer<'a> {
                 if let Some(field) = self.operator_field_for_unary(*op, value) {
                     let temp = self.new_temp_for_expr(expr);
                     let receiver_place = self.render_place_expr_option(value);
-                    let object = self.lower_expr(value);
+                    let receiver_passing = unary_operator_trait(*op)
+                        .and_then(|(trait_name, method_name)| {
+                            self.trait_info_in_scope(trait_name)
+                                .and_then(|info| info.methods.get(method_name))
+                                .and_then(|method| method.decl.receiver)
+                        })
+                        .unwrap_or(ReceiverKind::Borrow);
+                    let object = self.lower_expr_for_passing(value, None, receiver_passing);
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
                         value: Rvalue::Call {
@@ -2397,12 +2491,20 @@ impl<'a> Lowerer<'a> {
                 if let Some(field) = self.operator_field_for_binary(*op, left, right) {
                     let temp = self.new_temp_for_expr(expr);
                     let receiver_place = self.render_place_expr_option(left);
-                    let object = self.lower_expr(left);
-                    let args = vec![MirArg {
+                    let receiver_passing = binary_operator_trait(*op)
+                        .and_then(|(trait_name, method_name)| {
+                            self.trait_info_in_scope(trait_name)
+                                .and_then(|info| info.methods.get(method_name))
+                                .and_then(|method| method.decl.receiver)
+                        })
+                        .unwrap_or(ReceiverKind::Borrow);
+                    let object = self.lower_expr_for_passing(left, None, receiver_passing);
+                    let source_args = vec![Argument {
                         name: None,
-                        value: self.lower_expr(right),
-                        writeback_place: None,
+                        value: (**right).clone(),
+                        span: right.span,
                     }];
+                    let args = self.lower_member_call_args(expr.span, left, &field, &source_args);
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
                         value: Rvalue::Call {
@@ -2418,13 +2520,25 @@ impl<'a> Lowerer<'a> {
                 }
                 let left_ty = self.infer_expr_type(left);
                 let right_ty = self.infer_expr_type(right);
-                let left_expected = matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
-                    .then(|| right_ty.as_ref())
-                    .flatten();
-                let right_expected = matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
-                    .then(|| left_ty.as_ref())
-                    .flatten();
-                let left = self.lower_expr_with_expected(left, left_expected);
+                let left_expected = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                    || (is_integer_literal_expr(left)
+                        && right_ty.as_ref().is_some_and(|ty| {
+                            is_float_type(ty) || crate::sema::integer_type_bounds(ty).is_some()
+                        })) {
+                    right_ty.as_ref()
+                } else {
+                    None
+                };
+                let right_expected = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                    || (is_integer_literal_expr(right)
+                        && left_ty.as_ref().is_some_and(|ty| {
+                            is_float_type(ty) || crate::sema::integer_type_bounds(ty).is_some()
+                        })) {
+                    left_ty.as_ref()
+                } else {
+                    None
+                };
+                let left = self.lower_expr_at_sequence_point(left, left_expected);
                 let right = self.lower_expr_with_expected(right, right_expected);
                 let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
@@ -2487,8 +2601,8 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Index { object, index } => {
                 let temp = self.new_temp_for_expr(expr);
-                let lowered_object = self.lower_expr(object);
-                let lowered_index = self.lower_expr(index);
+                let lowered_object = self.lower_expr_at_sequence_point(object, None);
+                let lowered_index = self.lower_expr_at_sequence_point(index, None);
                 let receiver_place = self.render_place_expr_option(object);
                 let field = match self.infer_expr_type(object) {
                     Some(Type::Named(name, args)) if name == "Map" && args.len() == 2 => {
@@ -2552,9 +2666,93 @@ impl<'a> Lowerer<'a> {
         }
         match &expr.kind {
             ExprKind::Group(inner) => self.lower_expr_with_expected(inner, expected),
+            ExprKind::Int(value) => expected
+                .and_then(|expected| contextual_float_literal_operand(*value, false, expected))
+                .unwrap_or_else(|| self.lower_expr(expr)),
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                expr: inner,
+            } => match &inner.kind {
+                ExprKind::Int(value) => {
+                    if let Some(value) = expected.and_then(|expected| {
+                        contextual_float_literal_operand(*value, true, expected)
+                    }) {
+                        return value;
+                    }
+                    if let Some(expected) = expected
+                        .filter(|expected| crate::sema::integer_type_bounds(expected).is_some())
+                    {
+                        let temp = self.new_typed_temp(expected.clone());
+                        self.emit(Instruction::Assign {
+                            target: temp.clone(),
+                            value: Rvalue::Unary {
+                                op: UnaryOp::Neg,
+                                value: Operand::Int(*value),
+                                span: expr.span,
+                            },
+                        });
+                        return Operand::Place(temp);
+                    }
+                    self.lower_expr(expr)
+                }
+                _ => self.lower_expr(expr),
+            },
             ExprKind::Call { callee, args } => self.lower_call(expr, callee, args, expected),
             _ => self.lower_expr(expr),
         }
+    }
+
+    fn lower_expr_at_sequence_point(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
+        let value = self.lower_expr_with_expected(expr, expected);
+        if self.render_place_expr_option(expr).is_none() {
+            return value;
+        }
+        let Operand::Place(_) = value else {
+            return value;
+        };
+        let inferred_type = self.infer_expr_type(expr);
+        let value_type = if Self::is_contextual_none_expr(expr) {
+            expected.cloned().or(inferred_type)
+        } else {
+            inferred_type.or_else(|| expected.cloned())
+        };
+        let Some(value_type) = value_type else {
+            return value;
+        };
+        if !type_is_copy_in_program(&value_type, self.program) {
+            return value;
+        }
+        let temp = self.new_typed_temp(value_type);
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::Use(value),
+        });
+        Operand::Place(temp)
+    }
+
+    fn lower_expr_for_passing(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+        passing: ReceiverKind,
+    ) -> Operand {
+        if matches!(passing, ReceiverKind::Borrow | ReceiverKind::BorrowMut) {
+            return self.lower_expr_with_expected(expr, expected);
+        }
+        let value = self.lower_expr_with_expected(expr, expected);
+        if self.render_place_expr_option(expr).is_none() {
+            return value;
+        }
+        let value_type = expected.cloned().or_else(|| self.infer_expr_type(expr));
+        let Some(value_type) = value_type else {
+            return value;
+        };
+        let temp = self.new_typed_temp(value_type);
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::Use(value),
+        });
+        Operand::Place(temp)
     }
 
     fn is_contextual_none_expr(expr: &Expr) -> bool {
@@ -2805,6 +3003,24 @@ impl<'a> Lowerer<'a> {
                     .resolve_class_info(name)
                     .expect("class should exist during MIR lowering")
                     .clone();
+                let explicit_type_args = match &callee.kind {
+                    ExprKind::Specialize { type_args, .. } => Some(type_args.as_slice()),
+                    _ => None,
+                };
+                let constructor_type = expected
+                    .filter(|expected| {
+                        matches!(expected, Type::Named(expected_name, _) if expected_name == name)
+                    })
+                    .cloned()
+                    .or_else(|| {
+                        self.infer_class_constructor_type(name, args, explicit_type_args)
+                    });
+                let substitutions = match constructor_type {
+                    Some(Type::Named(_, type_args)) => {
+                        substitutions_from_decl_type_args(&class.decl.type_params, &type_args)
+                    }
+                    _ => std::collections::HashMap::new(),
+                };
                 let field_names = class
                     .decl
                     .fields
@@ -2831,19 +3047,26 @@ impl<'a> Lowerer<'a> {
                         field_name
                     };
                     let field_type = class
-                        .decl
                         .fields
-                        .iter()
-                        .find(|field| field.name == field_name)
-                        .map(|field| lower_type_ref(&field.ty));
-                    let value = self.lower_expr_with_expected(&argument.value, field_type.as_ref());
+                        .get(&field_name)
+                        .map(|field| substitute_type(&field.ty, &substitutions));
+                    let value =
+                        self.lower_expr_at_sequence_point(&argument.value, field_type.as_ref());
                     if let Some(field_decl) = class
                         .decl
                         .fields
                         .iter()
                         .find(|field| field.name == field_name)
                     {
-                        self.retarget_operand_place(&value, &lower_type_ref(&field_decl.ty));
+                        let field_type = substitute_type(
+                            &class
+                                .fields
+                                .get(&field_decl.name)
+                                .expect("checked class field should have a semantic type")
+                                .ty,
+                            &substitutions,
+                        );
+                        self.retarget_operand_place(&value, &field_type);
                     }
                     provided.insert(field_name, value);
                 }
@@ -2859,10 +3082,17 @@ impl<'a> Lowerer<'a> {
                             })
                         } else {
                             field.default.as_ref().map(|default| {
-                                let field_type = lower_type_ref(&field.ty);
+                                let field_type = substitute_type(
+                                    &class
+                                        .fields
+                                        .get(&field.name)
+                                        .expect("checked class field should have a semantic type")
+                                        .ty,
+                                    &substitutions,
+                                );
                                 let value =
                                     self.lower_expr_with_expected(default, Some(&field_type));
-                                self.retarget_operand_place(&value, &lower_type_ref(&field.ty));
+                                self.retarget_operand_place(&value, &field_type);
                                 MirFieldInit {
                                     name: field.name.clone(),
                                     value,
@@ -3001,6 +3231,7 @@ impl<'a> Lowerer<'a> {
                                     &method.decl.params,
                                     args,
                                     callee.span,
+                                    Some(&method.signature.param_passings),
                                 );
                                 self.emit(Instruction::Assign {
                                     target: temp.clone(),
@@ -3040,6 +3271,7 @@ impl<'a> Lowerer<'a> {
                                 &function.decl.params,
                                 args,
                                 callee.span,
+                                Some(&function.signature.param_passings),
                             );
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
@@ -3085,8 +3317,10 @@ impl<'a> Lowerer<'a> {
                                     .iter()
                                     .find(|field_decl| field_decl.name == field_name)
                                     .map(|field_decl| lower_type_ref(&field_decl.ty));
-                                let value = self
-                                    .lower_expr_with_expected(&argument.value, field_type.as_ref());
+                                let value = self.lower_expr_at_sequence_point(
+                                    &argument.value,
+                                    field_type.as_ref(),
+                                );
                                 if let Some(field_decl) = class
                                     .decl
                                     .fields
@@ -3151,9 +3385,9 @@ impl<'a> Lowerer<'a> {
                     let (function, params, _return_type, display_name) = self
                         .resolve_task_start_target(&args[0].value)
                         .expect("task-group start should lower from a supported callable target");
-                    let group = self.lower_expr(object);
+                    let group = self.lower_expr_at_sequence_point(object, None);
                     let lowered_args =
-                        self.lower_user_args(&display_name, &params, &args[1..], callee.span);
+                        self.lower_user_args(&display_name, &params, &args[1..], callee.span, None);
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
                         value: Rvalue::StartTask {
@@ -3161,6 +3395,7 @@ impl<'a> Lowerer<'a> {
                             task_group: group,
                             function,
                             args: lowered_args,
+                            span: expr.span,
                         },
                     });
                     return Operand::Place(temp);
@@ -3178,6 +3413,7 @@ impl<'a> Lowerer<'a> {
                                 &method.decl.params,
                                 args,
                                 callee.span,
+                                Some(&method.signature.param_passings),
                             );
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
@@ -3189,7 +3425,7 @@ impl<'a> Lowerer<'a> {
                             return Operand::Place(temp);
                         }
                     }
-                    if let Some((function_name, params)) = self
+                    if let Some((function_name, params, param_passings)) = self
                         .trait_impl_method_for_class_name(class_name, field)
                         .filter(|(_, method)| method.decl.receiver.is_none())
                         .map(|(trait_impl, method)| {
@@ -3202,6 +3438,7 @@ impl<'a> Lowerer<'a> {
                                     field
                                 ),
                                 method.decl.params.clone(),
+                                method.signature.param_passings.clone(),
                             )
                         })
                     {
@@ -3210,6 +3447,7 @@ impl<'a> Lowerer<'a> {
                             &params,
                             args,
                             callee.span,
+                            Some(&param_passings),
                         );
                         self.emit(Instruction::Assign {
                             target: temp.clone(),
@@ -3243,13 +3481,18 @@ impl<'a> Lowerer<'a> {
                 }
 
                 let receiver_place = self.render_place_expr_option(object);
+                let lowered_object =
+                    if let Some(passing) = self.user_member_receiver_passing(object, field) {
+                        self.lower_expr_for_passing(object, None, passing)
+                    } else {
+                        self.lower_expr_at_sequence_point(object, None)
+                    };
                 let lowered_args = self.lower_member_call_args(callee.span, object, field, args);
-                let object = self.lower_expr(object);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::Call {
                         callee: CallTarget::Member {
-                            object,
+                            object: lowered_object,
                             field: field.clone(),
                             receiver_place,
                         },
@@ -3259,12 +3502,90 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Name(name) => {
                 let resolved_function = self.resolve_function_info(name).cloned();
+                let contextual_param_types = resolved_function.as_ref().map(|function_info| {
+                    let substitutions = match &callee.kind {
+                        ExprKind::Specialize { type_args, .. } => {
+                            let type_args =
+                                type_args.iter().map(lower_type_ref).collect::<Vec<_>>();
+                            substitutions_from_decl_type_args(
+                                &function_info.decl.type_params,
+                                &type_args,
+                            )
+                        }
+                        _ => {
+                            let mut substitutions = std::collections::HashMap::new();
+                            if let Some(expected) = expected {
+                                let type_params = function_info
+                                    .decl
+                                    .type_params
+                                    .iter()
+                                    .cloned()
+                                    .collect::<BTreeSet<_>>();
+                                let _ = crate::sema::type_pattern_matches(
+                                    &function_info.signature.return_type,
+                                    expected,
+                                    &type_params,
+                                    &mut substitutions,
+                                );
+                            }
+                            let ordered_args = bind_call_arguments(
+                                name,
+                                &callable_params_from_decl(&function_info.decl.params),
+                                args,
+                                callee.span,
+                                CallConvention::PositionalOrNamed,
+                            )
+                            .expect("type-checked generic call should bind during MIR lowering");
+                            let type_params = function_info
+                                .decl
+                                .type_params
+                                .iter()
+                                .cloned()
+                                .collect::<BTreeSet<_>>();
+                            // Infer from non-integer-literal arguments first so a
+                            // literal can adopt a concrete float type established
+                            // by another argument instead of prematurely fixing T
+                            // to its standalone int64 default.
+                            for literal_pass in [false, true] {
+                                for (argument, param) in ordered_args
+                                    .iter()
+                                    .zip(function_info.signature.params.iter())
+                                {
+                                    let Some(argument) = argument else {
+                                        continue;
+                                    };
+                                    if is_integer_literal_expr(&argument.value) != literal_pass {
+                                        continue;
+                                    }
+                                    let Some(actual) = self.infer_expr_type(&argument.value) else {
+                                        continue;
+                                    };
+                                    let _ = crate::sema::type_pattern_matches(
+                                        param,
+                                        &actual,
+                                        &type_params,
+                                        &mut substitutions,
+                                    );
+                                }
+                            }
+                            substitutions
+                        }
+                    };
+                    function_info
+                        .signature
+                        .params
+                        .iter()
+                        .map(|param| substitute_type(param, &substitutions))
+                        .collect::<Vec<_>>()
+                });
                 let lowered_args = if let Some(function_info) = resolved_function.as_ref() {
-                    self.lower_user_args(
+                    self.lower_user_args_with_types(
                         &format!("function `{}`", name),
                         &function_info.decl.params,
                         args,
                         callee.span,
+                        contextual_param_types.as_deref(),
+                        Some(&function_info.signature.param_passings),
                     )
                 } else {
                     self.lower_args(args)
@@ -3323,14 +3644,49 @@ impl<'a> Lowerer<'a> {
         let inferred_type = self.infer_expr_type(expr);
         let enum_type = expected_enum_type.or(inferred_type.as_ref());
         let payload_types = self.variant_payload_types(enum_type, enum_name, variant_name);
-        args.iter()
-            .enumerate()
-            .map(|(index, argument)| {
-                self.lower_expr_with_expected(
-                    &argument.value,
-                    payload_types.as_ref().and_then(|types| types.get(index)),
-                )
-            })
+        let named_payloads = self
+            .resolve_enum_info(enum_name)
+            .and_then(|enum_info| enum_info.variants.get(variant_name))
+            .filter(|variant| variant.named_payloads)
+            .map(|variant| {
+                variant
+                    .payloads
+                    .iter()
+                    .map(|payload| {
+                        payload
+                            .name
+                            .clone()
+                            .expect("checked named enum payload should have a name")
+                    })
+                    .collect::<Vec<_>>()
+            });
+        let mut lowered = (0..args.len())
+            .map(|_| None)
+            .collect::<Vec<Option<Operand>>>();
+
+        // Evaluate in call-site order, then bind named payloads back to their
+        // declaration slots so positional pattern matching sees declaration
+        // order rather than source argument order.
+        for (source_index, argument) in args.iter().enumerate() {
+            let slot = named_payloads
+                .as_ref()
+                .and_then(|names| {
+                    argument
+                        .name
+                        .as_ref()
+                        .and_then(|name| names.iter().position(|candidate| candidate == name))
+                })
+                .unwrap_or(source_index);
+            let value = self.lower_expr_at_sequence_point(
+                &argument.value,
+                payload_types.as_ref().and_then(|types| types.get(slot)),
+            );
+            lowered[slot] = Some(value);
+        }
+
+        lowered
+            .into_iter()
+            .map(|payload| payload.expect("checked enum constructor should fill every payload"))
             .collect()
     }
 
@@ -3345,32 +3701,79 @@ impl<'a> Lowerer<'a> {
             return self.lower_args(args);
         };
 
-        if let Type::Named(class_name, _) = &receiver_type {
+        if let Type::Named(class_name, class_args) = &receiver_type {
             if let Some(class) = self.resolve_class_info(class_name).cloned() {
                 if let Some(method) = class
                     .methods
                     .get(field)
                     .filter(|method| method.decl.receiver.is_some())
                 {
-                    return self.lower_user_args(
+                    let substitutions =
+                        substitutions_from_decl_type_args(&class.decl.type_params, class_args);
+                    let expected_param_types = method
+                        .signature
+                        .params
+                        .iter()
+                        .map(|param| substitute_type(param, &substitutions))
+                        .collect::<Vec<_>>();
+                    return self.lower_user_args_with_types(
                         &format!("method `{}`", field),
                         &method.decl.params,
                         args,
                         span,
+                        Some(&expected_param_types),
+                        Some(&method.signature.param_passings),
                     );
                 }
             }
         }
 
-        let trait_method_params = self
-            .trait_method_for_receiver(&receiver_type, field)
-            .map(|(method, _)| method.decl.params.clone());
+        let trait_method =
+            self.trait_method_for_receiver(&receiver_type, field)
+                .map(|(method, substitutions)| {
+                    (
+                        method.decl.params.clone(),
+                        method.signature.param_passings.clone(),
+                        method
+                            .signature
+                            .params
+                            .iter()
+                            .map(|param| substitute_type(param, &substitutions))
+                            .collect::<Vec<_>>(),
+                    )
+                });
 
-        if let Some(params) = trait_method_params {
-            return self.lower_user_args(&format!("method `{}`", field), &params, args, span);
+        if let Some((params, param_passings, expected_param_types)) = trait_method {
+            return self.lower_user_args_with_types(
+                &format!("method `{}`", field),
+                &params,
+                args,
+                span,
+                Some(&expected_param_types),
+                Some(&param_passings),
+            );
         }
 
         self.lower_args(args)
+    }
+
+    fn user_member_receiver_passing(
+        &self,
+        object_expr: &Expr,
+        field: &str,
+    ) -> Option<ReceiverKind> {
+        let receiver_type = self.infer_expr_type(object_expr)?;
+        if let Type::Named(class_name, _) = &receiver_type {
+            if let Some(method) = self
+                .resolve_class_info(class_name)
+                .and_then(|class| class.methods.get(field))
+                .filter(|method| method.decl.receiver.is_some())
+            {
+                return method.decl.receiver;
+            }
+        }
+        self.trait_method_for_receiver(&receiver_type, field)
+            .and_then(|(method, _)| method.decl.receiver)
     }
 
     fn lower_user_args(
@@ -3379,6 +3782,19 @@ impl<'a> Lowerer<'a> {
         params: &[crate::ast::Param],
         args: &[Argument],
         span: Span,
+        param_passings: Option<&[ReceiverKind]>,
+    ) -> Vec<MirArg> {
+        self.lower_user_args_with_types(callee_name, params, args, span, None, param_passings)
+    }
+
+    fn lower_user_args_with_types(
+        &mut self,
+        callee_name: &str,
+        params: &[crate::ast::Param],
+        args: &[Argument],
+        span: Span,
+        expected_param_types: Option<&[Type]>,
+        param_passings: Option<&[ReceiverKind]>,
     ) -> Vec<MirArg> {
         let ordered_args = bind_call_arguments(
             callee_name,
@@ -3389,27 +3805,80 @@ impl<'a> Lowerer<'a> {
         )
         .expect("type-checked user-defined call should bind during MIR lowering");
 
-        ordered_args
-            .into_iter()
-            .zip(params.iter())
-            .map(|(argument, param)| MirArg {
+        let mut lowered_by_param = (0..params.len())
+            .map(|_| None)
+            .collect::<Vec<Option<MirArg>>>();
+
+        // Supplied expressions retain call-site order even when named
+        // arguments bind to declaration slots in another order.
+        for argument in args {
+            let index = ordered_args
+                .iter()
+                .position(|bound| matches!(bound, Some(bound) if std::ptr::eq(*bound, argument)))
+                .expect("bound source argument should retain its declaration slot");
+            let param = &params[index];
+            let expected = expected_param_types
+                .and_then(|types| types.get(index))
+                .cloned()
+                .unwrap_or_else(|| lower_type_ref(&param.ty));
+            let passing = param_passings
+                .and_then(|passings| passings.get(index))
+                .copied();
+            let value = if let Some(passing) = passing {
+                self.lower_expr_for_passing(&argument.value, Some(&expected), passing)
+            } else if is_float_type(&expected) {
+                self.lower_expr_at_sequence_point(&argument.value, Some(&expected))
+            } else {
+                self.lower_expr_at_sequence_point(&argument.value, None)
+            };
+            let writeback_place = if passing == Some(ReceiverKind::BorrowMut)
+                || param.mode == crate::ast::ParamMode::BorrowMut
+            {
+                self.render_place_expr_option(&argument.value)
+            } else {
+                None
+            };
+            lowered_by_param[index] = Some(MirArg {
                 name: None,
-                value: self.lower_expr(argument.map(|argument| &argument.value).unwrap_or_else(
-                    || {
-                        param
-                            .default
-                            .as_ref()
-                            .expect("optional parameter should provide a default expression")
-                    },
-                )),
-                writeback_place: argument.and_then(|argument| {
-                    if param.mode == crate::ast::ParamMode::BorrowMut {
-                        self.render_place_expr_option(&argument.value)
-                    } else {
-                        None
-                    }
-                }),
-            })
+                value,
+                writeback_place,
+            });
+        }
+
+        // Omitted defaults follow only after every supplied argument, in
+        // declaration order.
+        for (index, param) in params.iter().enumerate() {
+            if lowered_by_param[index].is_some() {
+                continue;
+            }
+            let default = param
+                .default
+                .as_ref()
+                .expect("optional parameter should provide a default expression");
+            let expected = expected_param_types
+                .and_then(|types| types.get(index))
+                .cloned()
+                .unwrap_or_else(|| lower_type_ref(&param.ty));
+            let passing = param_passings
+                .and_then(|passings| passings.get(index))
+                .copied();
+            let value = if let Some(passing) = passing {
+                self.lower_expr_for_passing(default, Some(&expected), passing)
+            } else if is_float_type(&expected) {
+                self.lower_expr_with_expected(default, Some(&expected))
+            } else {
+                self.lower_expr_at_sequence_point(default, None)
+            };
+            lowered_by_param[index] = Some(MirArg {
+                name: None,
+                value,
+                writeback_place: None,
+            });
+        }
+
+        lowered_by_param
+            .into_iter()
+            .map(|argument| argument.expect("every parameter should have a lowered argument"))
             .collect()
     }
 
@@ -3417,7 +3886,7 @@ impl<'a> Lowerer<'a> {
         args.iter()
             .map(|argument| MirArg {
                 name: argument.name.clone(),
-                value: self.lower_expr(&argument.value),
+                value: self.lower_expr_at_sequence_point(&argument.value, None),
                 writeback_place: None,
             })
             .collect()

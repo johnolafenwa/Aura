@@ -24,11 +24,33 @@ pub struct AnalysisOutput {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AnalysisDiagnostic {
+    pub code: String,
     pub line: usize,
     pub start_character: usize,
     pub end_character: usize,
     pub message: String,
     pub severity: u8,
+    pub secondary_spans: Vec<AnalysisDiagnosticSpan>,
+    pub notes: Vec<String>,
+    pub help: Vec<String>,
+    pub edits: Vec<AnalysisDiagnosticEdit>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AnalysisDiagnosticSpan {
+    pub line: usize,
+    pub start_character: usize,
+    pub end_character: usize,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AnalysisDiagnosticEdit {
+    pub line: usize,
+    pub start_character: usize,
+    pub end_character: usize,
+    pub replacement: String,
+    pub applicability: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -2742,11 +2764,35 @@ fn analysis_diagnostic(error: &Diagnostic) -> AnalysisDiagnostic {
         .map(|span| (span.line.saturating_sub(1), span.column.saturating_sub(1)))
         .unwrap_or((0, 0));
     AnalysisDiagnostic {
+        code: error.code.clone(),
         line,
         start_character,
         end_character: start_character + 1,
         message: error.message.clone(),
         severity: 1,
+        secondary_spans: error
+            .secondary_spans
+            .iter()
+            .map(|secondary| AnalysisDiagnosticSpan {
+                line: secondary.span.line.saturating_sub(1),
+                start_character: secondary.span.column.saturating_sub(1),
+                end_character: secondary.span.column,
+                label: secondary.label.clone(),
+            })
+            .collect(),
+        notes: error.notes.clone(),
+        help: error.help.clone(),
+        edits: error
+            .edits
+            .iter()
+            .map(|edit| AnalysisDiagnosticEdit {
+                line: edit.start.line.saturating_sub(1),
+                start_character: edit.start.column.saturating_sub(1),
+                end_character: edit.end.column.saturating_sub(1),
+                replacement: edit.replacement.clone(),
+                applicability: edit.applicability.clone(),
+            })
+            .collect(),
     }
 }
 

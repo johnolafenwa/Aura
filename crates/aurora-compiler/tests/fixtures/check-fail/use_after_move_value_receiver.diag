@@ -1,5 +1,7 @@
-error: use of moved value `token`
+error[AU3001]: use of moved value `token`
  --> crates/aurora-compiler/tests/fixtures/check-fail/use_after_move_value_receiver.au:10:11
    |
 10 |     print(token.value)
    |           ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/use_after_move_value_receiver.au:9:5: value moved here
+  = help: pass a shared borrow when ownership is not needed, or call `.clone()` at the move site when an independent value is required

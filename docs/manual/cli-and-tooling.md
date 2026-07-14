@@ -86,7 +86,7 @@ Stdin analysis and completion do not mutate package lockfiles.
 - hover information
 - definition targets
 
-The output is one JSON object with `diagnostics`, `symbols`, and `occurrences` arrays. Positions are zero-based. Diagnostics contain `line`, `start_character`, `end_character`, `message`, and numeric `severity`; symbols additionally contain `name`, `kind`, `detail`, and recursive `children`; occurrences contain `hover` and an optional `definition` range, whose `file_path` may identify another module.
+The output is one JSON object with `diagnostics`, `symbols`, and `occurrences` arrays. Positions are zero-based. Diagnostics contain `code`, `line`, `start_character`, `end_character`, `message`, numeric `severity`, `secondary_spans`, `notes`, `help`, and `edits`; symbols contain `name`, `kind`, `detail`, and recursive `children`; occurrences contain `hover` and an optional `definition` range, whose `file_path` may identify another module. An edit includes its range, replacement text, and applicability.
 
 `analyze` exits successfully even when the JSON contains source diagnostics: the request itself succeeded and the diagnostics are data. The language server prefers this compiler-backed analysis when it succeeds.
 
@@ -187,3 +187,55 @@ npm run ci
 That gate checks Rust formatting, Rust tests, native/MIR parity, LSP tests and coverage, VS Code extension tests, compiler coverage, reference integrity, docs build, npm and RustSec audits, Clippy with warnings treated as errors, and repository hygiene.
 
 GitHub Actions runs the repo gate on Linux and macOS. The release workflow publishes `v*` tag builds as GitHub Release assets, including platform CLI archives, the packaged VS Code extension, and a static docs archive.
+
+## Grammar
+
+The command line is a tooling protocol, not part of Aurora source grammar. Its maintained invocation forms are the command forms in the table above and the usage text printed by `aura help`. The single-source compiler commands use either one `.au` path or their documented `--stdin <virtual-path>` form; the virtual path supplies module and package context while standard input supplies the source text. `fmt` and `test` instead accept their documented path lists. `aura run` alone accepts program arguments after `--`. `--format human|json` is accepted by `check`, `run`, and `build` and does not change source-language parsing.
+
+Aurora source accepted by these commands is governed by the [Grammar](/manual/grammar), not by this page. Command names, options, output formats, and exit statuses are case-sensitive.
+
+## Typing Rules
+
+`check`, `run`, and `build` use the same package resolver, parser, static checker, and ownership checker. A program that fails those stages is not executed or emitted. `analyze` exposes the same semantic model in a recoverable editor-oriented report, and `complete` queries completion at a zero-based source position. Inspection commands expose intermediate compiler data but do not define additional source types.
+
+For `check`, `run`, and `build`, JSON diagnostic mode has schema version `1` and contains a `diagnostics` array. Each diagnostic carries its stable code, severity, message, optional primary span, secondary spans, notes, help, and machine-applicable edits. The `analyze` and persistent-service representations carry the same semantic diagnostic information in their documented editor-coordinate shapes.
+
+## Runtime Semantics
+
+`check` performs no program execution. `run` executes checked MIR and forwards arguments after `--` to `sys.args()`. `build` emits a standalone host executable: `auto` tries the direct backend and may use the MIR-launcher fallback, while `direct` makes inability to emit directly an error. Both built forms must preserve the checked language semantics.
+
+Human-format `check` success writes exactly `ok` followed by a newline. JSON-format success writes a schema-version-1 object with an empty diagnostic array. `analyze` returning source diagnostics is a successful tooling request and therefore exits `0`; malformed CLI usage exits `2`; compile, build, and runtime failures exit `1`. A successful `main() -> int32` requests that integer as the process status. The complete stream and status rules are in the table above.
+
+## Ownership And Evaluation Order
+
+Selecting a CLI command or output format does not alter Aurora ownership, borrowing, cleanup, or evaluation order. `run`, a directly built program, and a MIR-launcher build must observe the same left-to-right source evaluation and the same resource cleanup rules.
+
+Tool-side mutations are explicit: `fmt` without `--check`, `deps update`, and successful lockfile-producing package commands may write files; `analyze --stdin` and `complete --stdin` do not write a lockfile. Source received through `--stdin` is not retained after the command or service request, but its virtual path remains semantically significant for imports, module identity, and diagnostic locations.
+
+## Diagnostics
+
+Compiler-backed commands can surface the complete append-only registry. `AU1001` means invalid lexical input; `AU1002` means an invalid f-string delimiter; and `AU1101` means invalid syntax. `AU2001` means name-resolution failure; `AU2002` means type mismatch; `AU2003` means unsupported operator; `AU2004` means argument-binding failure; `AU2005` means focused migration guidance; and `AU2999` means a general compile-time rejection without a narrower code. `AU3001` means use of a moved value; `AU3002` means a borrow violation; `AU3003` means a mutability violation; and `AU3004` means an invalid ownership mode. `AU4001` means a general runtime trap; `AU4002` means arithmetic overflow or underflow; `AU4003` means a bounds or lookup violation; `AU4004` means a zero divisor; and `AU4005` means a trapping resource or I/O failure. The structured schema is defined in [Diagnostics](/manual/diagnostics).
+
+Human diagnostics render as `error[AU####]` with source context when a span is available. `--format json` emits the schema-version-1 report on standard error for a failing `check`, `run`, or `build`. Usage errors, missing command-line operands, and host failures that prevent the tool itself from starting are CLI errors rather than Aurora-language diagnostics; they print usage or a tool error and have no `AU####` code.
+
+## Backend Support
+
+The parser, checker, package resolver, diagnostic model, analysis engine, and MIR lowering are shared by all maintained execution routes. `aura run` uses the MIR runtime. `aura build --backend direct` uses native direct emission, and `--backend auto` may select the checked MIR-launcher fallback. The language server delegates semantic analysis and completion to the persistent compiler service; its lexical fallback is recovery-only and is not a second language implementation.
+
+Backend parity is a release gate. A construct accepted by one maintained execution backend must have the same observable result or diagnostic in the other, subject only to the platform limits documented below.
+
+## Limits And Implementation-Defined Behavior
+
+Native linking requires a supported host C compiler and the installed Aurora runtime layout described above. `ast`, `ast-json`, and `mir` are inspection formats, not stable serialization APIs. The formatter currently normalizes the maintained whitespace surface; it is not a configurable style engine. `aura test` runs `.au` programs as test units rather than discovering functions by annotation, and a timed-out worker cannot be forcibly stopped inside the CLI process.
+
+Filesystem path interpretation, process exit-code width, executable format, linker selection, and availability of Unix-only APIs follow the maintained host platform. Package graph, source-size, recursion, runtime, and backend limits are collected in [Current Limits](/manual/current-limits).
+
+## Status
+
+The commands and contracts documented as maintained on this page are implemented in Aurora 0.1 and covered by CLI, compiler, LSP, extension, backend-parity, and repository-gate tests. `analyze`, `complete`, and diagnostic schema version `1` are maintained tooling contracts; internal AST and MIR layouts are intentionally unstable.
+
+A package registry, publishing and installation workflow, Windows support, a
+configurable formatter, and annotation-based test discovery are unavailable.
+They are future work and are not part of this normative reference. Aurora has
+no second legacy execution engine alongside the maintained MIR runtime and
+direct native backend.

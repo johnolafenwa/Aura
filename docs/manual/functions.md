@@ -32,7 +32,11 @@ def classify(value: int32) -> String:
     return "non-negative"
 ```
 
-There is no implicit numeric widening or general return coercion. Contextual literal typing and `None`-to-`Option[T]` handling follow [Static Semantics](/manual/static-semantics#contextual-inference).
+There is no implicit numeric widening or general return coercion. A bare
+`None` in an argument or return position adopts an expected `Option[T]`, and
+grouping does not discard that context. Other contextual literal typing and
+the complete symmetric option-equality rule follow [Static
+Semantics](/manual/static-semantics#contextual-inference).
 
 Function names share the module item namespace with classes, enums, traits, and imports. Duplicate items and attempts to redefine maintained builtin function names are rejected. Ordinary parameter names must be unique. A method parameter also cannot be named `self` when the method has a receiver. In a method declaration, `self: Type` is rejected rather than treated as an ordinary first parameter; receivers use `self`, `borrow self`, `own self`, or `borrow mut self`. See [Names And Scopes](/manual/names-and-scopes) for the complete namespace rules.
 
@@ -132,7 +136,16 @@ The complete rules are:
 - a default expression cannot reference any parameter of the same declaration, including an earlier parameter
 - trait method declarations and trait implementation methods cannot declare defaults
 
-Defaults are evaluated afresh when the corresponding argument is omitted. They are not process-global singleton values. Explicit arguments are evaluated in source order, and omitted defaults are associated with their declaration-order slots; see [Execution Model](/manual/execution-model#evaluation-order).
+Defaults are evaluated afresh when the corresponding argument is omitted. They
+are not process-global singleton values. Every supplied argument is evaluated
+first in call-site source order before the next supplied expression begins. A
+copy or move result is captured in its parameter slot; a borrow-mode selection
+is established without cloning and remains subject to the retained non-copy
+overlap rules. Later side effects cannot change an earlier captured argument.
+Defaults for omitted parameters are then evaluated in declaration order.
+Binding named values to parameter slots never reorders their evaluation, and a
+supplied argument suppresses its default. See [Execution
+Model](/manual/execution-model#evaluation-order).
 
 ## Named Arguments For Builtins
 
@@ -257,3 +270,84 @@ def main():
 `main` takes no parameters and returns exactly `int32` or `None`. A returned `int32` becomes the requested host exit status; `None` means success. An imported function named `main` remains an ordinary imported function. A file cannot combine a local `main` with executable top-level statements.
 
 The alternate top-level execution form, evaluation order, cleanup on return, and the 256-call runtime depth limit are specified in [Execution Model](/manual/execution-model#entry-module-execution).
+
+## Grammar
+
+Function and method declarations, generic parameters and bounds, receiver and
+ordinary parameter forms, defaults, borrowed-return sources, return annotations,
+and call arguments are normative in [Grammar](/manual/grammar). Ordinary
+functions are module items; nested function declarations and lambda syntax are
+not accepted.
+
+## Typing Rules
+
+Every ordinary parameter has one declared type and declaration-stable passing
+mode. Calls bind positional then named arguments, substitute inferred or
+explicit generic arguments, enforce bounds and exact types, and fill only legal
+defaults. Every reachable non-`None` path returns the declared type. Borrowed
+return provenance is checked at the declaration and call; non-copy results are
+contained until live aliases exist.
+
+## Runtime Semantics
+
+The callee target is resolved statically. Supplied arguments evaluate left to
+right and each result is captured before later argument side effects; omitted
+defaults then evaluate freshly in declaration order, a call creates one frame,
+and `return` transfers its value after exited cleanups run.
+`try` may perform that return early. Entry `main` maps `None` to success or its
+`int32` result to the requested host process status.
+
+## Ownership And Evaluation Order
+
+Copy arguments are copied. Default-mode and explicit shared non-copy parameters
+borrow for the call; `own` parameters consume their arguments; `borrow mut`
+requires one exclusive mutable place and writes through it. Borrowed default
+temporaries live through the call, owned defaults are consumed, and mutable
+borrow defaults are rejected as guaranteed lost writes. Task start first stores
+owned captures and then invokes the target under its declared ABI.
+
+## Diagnostics
+
+`AU1101` means malformed function, method, parameter, return, or call syntax.
+`AU2001` means the call target or referenced declaration could not be resolved.
+`AU2002` means a signature, parameter, default, return, bound, or entrypoint type
+mismatch. `AU2004` means positional or named argument binding failed. `AU2005`
+means focused migration guidance for an unavailable callable spelling.
+`AU2999` means a callable rejection without a narrower compile-time code.
+`AU3001` means a moved argument was used; `AU3002` means a borrow or alias
+conflict; `AU3003` means a mutability violation; and `AU3004` means an invalid
+parameter, receiver, return, or task-capture ownership mode. `AU4001` means a
+call-depth or general call trap. A callee's `AU4002` means arithmetic overflow
+or underflow, `AU4003` means bounds or lookup violation, `AU4004` means zero divisor, and
+`AU4005` means a trapping resource or I/O failure; each retains its MIR
+backtrace notes.
+
+## Backend Support
+
+Ordinary, generic, imported, associated, trait-dispatched, and maintained task
+target calls are implemented for MIR execution and direct native builds.
+Shared semantic checking and the forced parity matrix require identical call
+results and primary failures. Compiler analysis and the LSP use the same
+resolved signature metadata.
+
+## Limits And Implementation-Defined Behavior
+
+Aurora has no first-class function values, closures, lambdas, variadics,
+overloads, nested functions, or mutable-borrow task targets. Runtime calls are
+limited to 256 nested Aurora frames. Host process exit representation may narrow
+the requested `int32` after it leaves Aurora; function binding and evaluation
+order are otherwise not implementation-defined.
+
+## Status
+
+The function, method, generic, default-argument, named-argument, borrowed-return
+containment, task-target, and entrypoint contracts described above are
+implemented. Supplied/default evaluation and argument capture follow
+`architecture_docs/decisions/0015-explicit-and-default-argument-order.md`,
+which remains **Provisional — Batch 1 checkpoint review**. The rules are pinned
+by
+`crates/aurora-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au`
+on both backends. Borrowed-return declarations reserve a provenance contract
+for a future live-alias representation, but calls producing non-copy borrowed
+values are unavailable today. First-class callables, closures, and FFI call
+signatures are unavailable and are not part of the frozen Batch 1 surface.

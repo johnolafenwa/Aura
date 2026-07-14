@@ -977,6 +977,127 @@ fn check_rejects_huge_left_associative_expression_chains_without_crashing() {
 }
 
 #[test]
+fn compile_commands_emit_the_shared_structured_diagnostic_schema() {
+    let (temp, source_path) = write_temp_source(
+        "aurora-structured-diagnostics",
+        "def main():\n    print(missing)\n",
+    );
+    let output_path = temp.path().join("out");
+
+    let commands = [
+        vec![
+            "check".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ],
+        vec![
+            "run".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ],
+        vec![
+            "build".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+            "-o".to_string(),
+            output_path.display().to_string(),
+        ],
+    ];
+
+    for mut arguments in commands {
+        let command_name = arguments[0].clone();
+        arguments.push(source_path.display().to_string());
+        let output = Command::new(aura_bin())
+            .args(&arguments)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run aura {command_name}: {error}"));
+        assert!(
+            !output.status.success(),
+            "{command_name} should reject the source"
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stderr).unwrap_or_else(|error| {
+                panic!(
+                    "{command_name} should emit one JSON document: {error}; stderr was {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )
+            });
+        assert_eq!(report["schema_version"], 1, "{command_name}");
+        assert_eq!(report["diagnostics"].as_array().unwrap().len(), 1);
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "AU2001", "{command_name}");
+        assert_eq!(diagnostic["severity"], "error", "{command_name}");
+        assert_eq!(diagnostic["message"], "unknown name `missing`");
+        assert!(diagnostic["primary_span"]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("/main.au"));
+        assert_eq!(diagnostic["primary_span"]["start"]["line"], 2);
+        assert!(diagnostic["secondary_spans"].is_array());
+        assert!(diagnostic["notes"].is_array());
+        assert!(diagnostic["help"].is_array());
+        assert!(diagnostic["edits"].is_array());
+    }
+}
+
+#[test]
+fn compile_commands_preserve_the_chained_comparison_migration_diagnostic() {
+    let (temp, source_path) = write_temp_source(
+        "aurora-chained-comparison-diagnostic",
+        "def main():\n    if 1 < 2 < 3:\n        pass\n",
+    );
+    let output_path = temp.path().join("out");
+    let message = "chained comparisons are not available yet; write the comparisons with `and` today; chained comparisons arrive in a later Aurora release";
+    let commands = [
+        vec![
+            "check".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ],
+        vec![
+            "run".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ],
+        vec![
+            "build".to_string(),
+            "--backend".to_string(),
+            "direct".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+            "-o".to_string(),
+            output_path.display().to_string(),
+        ],
+    ];
+
+    for mut arguments in commands {
+        let command_name = arguments[0].clone();
+        arguments.push(source_path.display().to_string());
+        let output = Command::new(aura_bin())
+            .args(&arguments)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run aura {command_name}: {error}"));
+        assert!(
+            !output.status.success(),
+            "{command_name} should reject the chain"
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr)
+            .unwrap_or_else(|error| panic!("{command_name} should emit JSON: {error}"));
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "AU2005", "{command_name}");
+        assert_eq!(diagnostic["message"], message, "{command_name}");
+        assert_eq!(
+            diagnostic["primary_span"]["start"]["line"], 2,
+            "{command_name}"
+        );
+        assert_eq!(
+            diagnostic["primary_span"]["start"]["column"], 14,
+            "{command_name}"
+        );
+    }
+}
+
+#[test]
 fn direct_backend_reports_recursion_overflow_without_signalling() {
     let source = r#"def recurse(n: int32) -> int32:
     if n == 0:
@@ -2384,12 +2505,38 @@ fn run_and_direct_backends_preserve_integer_to_float_expression_contexts() {
 }
 
 #[test]
+fn run_and_direct_backends_preserve_float_context_integer_literals() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/float_context_integer_literals.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/float_context_integer_literals.stdout"
+    );
+    assert_run_and_direct_source_stdout("aurora-float-context-integer-literals", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_preserve_shortest_roundtrip_float_printing() {
+    let source = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/float_shortest_roundtrip_printing.au"
+    );
+    let expected = include_str!(
+        "../../aurora-compiler/tests/fixtures/run-pass/float_shortest_roundtrip_printing.stdout"
+    );
+    assert_run_and_direct_source_stdout(
+        "aurora-shortest-roundtrip-float-printing",
+        source,
+        expected,
+    );
+}
+
+#[test]
 fn run_and_direct_backends_preserve_the_numbers_example() {
     let source = include_str!("../../../examples/basics/numbers.au");
     assert_run_and_direct_source_stdout(
         "aurora-numbers-example",
         source,
-        "2\n-3\n2\n-3\n-2\n3.5\n42.0\ntrue\n",
+        "2\n-3\n2\n-3\n-2\n3.5\n2.0\ntrue\ntrue\n42.0\n9007199254740992.0\n",
     );
 }
 
@@ -3190,7 +3337,8 @@ def main() -> int32:
     print_int_option(values.remove(-2))
     print(values.swap(first=-1, second=-3))
     print(values.insert(index=-1, value=99))
-    print(values.insert(index=values.len(), value=77))
+    end_index = values.len()
+    print(values.insert(index=end_index, value=77))
     for value in values:
         print(value)
     return 0
@@ -3272,7 +3420,7 @@ fn built_direct_binaries_render_runtime_errors_with_source_context() {
         "direct-backend runtime-error binary should fail"
     );
     let stderr = String::from_utf8_lossy(&run.stderr);
-    assert!(stderr.contains("error: division by zero"));
+    assert!(stderr.contains("error[AU4004]: division by zero"));
     assert!(stderr.contains(&format!("{}:2:11", source_path.display())));
     assert!(stderr.contains("|"));
     assert!(stderr.contains("^"));
@@ -3584,7 +3732,7 @@ fn built_default_binaries_render_runtime_errors_with_source_context() {
         "default-backend runtime-error binary should fail"
     );
     let stderr = String::from_utf8_lossy(&run.stderr);
-    assert!(stderr.contains("error: division by zero"));
+    assert!(stderr.contains("error[AU4004]: division by zero"));
     assert!(stderr.contains(&format!("{}:2:11", source_path.display())));
     assert!(stderr.contains("|"));
     assert!(stderr.contains("^"));
@@ -4861,10 +5009,17 @@ def serve_http(listener: own net.HttpListener) -> Result[None, io.Error]:
     with server_listener = listener:
         exchange = try server_listener.accept(timeout=1s)
         with request = exchange:
+            method = request.method()
+            path = request.path()
             body = try request.body_text()
             headers = request.headers()
-            try request.respond_text(200, request.method() + ":" + request.path() + ":" + body + ":" + headers["X-Test"], {{"Content-Type": "text/plain"}})
-            return Result.Ok(None)
+            match headers.get("X-Test"):
+                case Option.Some(test_header):
+                    try request.respond_text(200, method + ":" + path + ":" + body + ":" + test_header, {{"Content-Type": "text/plain"}})
+                    return Result.Ok(None)
+                case Option.None:
+                    try request.respond_text(400, "missing X-Test", {{"Content-Type": "text/plain"}})
+                    return Result.Ok(None)
 
 def serve_http_bytes(listener: own net.HttpListener) -> Result[None, io.Error]:
     with server_listener = listener:

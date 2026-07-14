@@ -1,4 +1,4 @@
-error: call to function `name_ref` produces borrowed non-copy result `String`, which Aurora 0.1 cannot materialize safely; return an owned clone or expose an owner method instead
+error[AU3002]: call to function `name_ref` produces borrowed non-copy result `String`, which Aurora 0.1 cannot materialize safely; return an owned clone or expose an owner method instead
  --> crates/aurora-compiler/tests/fixtures/check-fail/borrowed_noncopy_return_call.au:9:13
   |
 9 |     alias = name_ref(user)

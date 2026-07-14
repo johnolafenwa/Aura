@@ -1,0 +1,68 @@
+class FloatBox[T]:
+    value: T
+
+    def echo(borrow self, value: own T) -> T:
+        return value
+
+def echo_float64(value: float64) -> float64:
+    return value
+
+def echo_float32(value: float32) -> float32:
+    return value
+
+def generic_identity[T](value: own T) -> T:
+    return value
+
+def generic_second[T](first: own T, second: own T) -> T:
+    return second
+
+def float64_default(value: float64 = 6) -> float64:
+    return value
+
+def float32_negative_default(value: float32 = -8) -> float32:
+    return value
+
+def float64_literal_return() -> float64:
+    return 9
+
+def float32_negative_literal_return() -> float32:
+    return -10
+
+def main() -> int32:
+    x: float64 = 2
+    negative: float32 = -3
+    exact_float32_boundary: float32 = 16777216
+    exact_beyond_int64: float64 = 9223372036854775808
+    print(x == 2.0)
+    print(negative == -3.0)
+    print(exact_float32_boundary == 16777216.0)
+    print(exact_beyond_int64 == 9223372036854775808.0)
+
+    print(7.5 // 2 == 3.0)
+    print(-7.5 % 2 == 0.5)
+    print(2 + 0.5 == 2.5)
+    print(-2 + 2.5 == 0.5)
+    narrow_operand: float32 = 1.5
+    print(narrow_operand + 2 == 3.5)
+    print(-1 + narrow_operand == 0.5)
+
+    print(echo_float64(4) == 4.0)
+    print(echo_float32(-5) == -5.0)
+    print(generic_identity[float64](11) == 11.0)
+    inferred_generic: float64 = generic_identity(12)
+    print(inferred_generic == 12.0)
+    explicit_box = FloatBox[float64](value=13)
+    inferred_box: FloatBox[float64] = FloatBox(value=14)
+    print(explicit_box.value == 13.0)
+    print(inferred_box.value == 14.0)
+    print(explicit_box.echo(15) == 15.0)
+    existing_float: float64 = 16.0
+    print(generic_second(existing_float, 17) == 17.0)
+    print(float64_default() == 6.0)
+    print(float32_negative_default() == -8.0)
+    print(float64_literal_return() == 9.0)
+    print(float32_negative_literal_return() == -10.0)
+
+    casted = 2 as float64
+    print(casted == 2.0)
+    return 0

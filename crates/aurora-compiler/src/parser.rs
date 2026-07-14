@@ -14,6 +14,28 @@ use crate::limits::RECURSION_LIMIT;
 type TypeParamBounds = std::collections::BTreeMap<String, Vec<TypeRef>>;
 type ParsedTypeParams = (Vec<String>, TypeParamBounds);
 
+fn parse_error(span: Span, message: impl Into<String>) -> Diagnostic {
+    Diagnostic::coded_at("AU1101", span, message)
+}
+
+fn chained_comparison_diagnostic(span: Span) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU2005",
+        span,
+        "chained comparisons are not available yet; write the comparisons with `and` today; chained comparisons arrive in a later Aurora release",
+    )
+}
+
+fn is_unparenthesized_ordering_comparison(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq,
+            ..
+        }
+    )
+}
+
 pub fn parse(source: &str) -> Result<Module> {
     let tokens = lex(source)?;
     Parser::new(tokens).parse_module()
@@ -275,7 +297,7 @@ impl Parser {
             }
             self.expect_simple(TokenKind::RParen)?;
             if saw_named && saw_unnamed {
-                return Err(Diagnostic::at(
+                return Err(parse_error(
                     span,
                     "enum variant payloads must be either all named or all positional",
                 ));
@@ -543,7 +565,8 @@ impl Parser {
         loop {
             if allow_receiver && receiver.is_none() {
                 if self.at_typed_receiver_start() {
-                    return Err(Diagnostic::at(
+                    return Err(Diagnostic::coded_at(
+                        "AU3004",
                         self.current_span(),
                         "`self: Type` is not a method receiver; use `self` or `borrow self` for shared access, `own self` to consume, or `borrow mut self` to mutate",
                     ));
@@ -551,7 +574,7 @@ impl Parser {
 
                 if self.at_borrow_receiver_start() {
                     if !params.is_empty() {
-                        return Err(Diagnostic::at(
+                        return Err(parse_error(
                             self.current_span(),
                             "method receiver must be the first parameter",
                         ));
@@ -572,7 +595,7 @@ impl Parser {
 
                 if self.at_own_receiver_start() {
                     if !params.is_empty() {
-                        return Err(Diagnostic::at(
+                        return Err(parse_error(
                             self.current_span(),
                             "method receiver must be the first parameter",
                         ));
@@ -588,7 +611,7 @@ impl Parser {
 
                 if self.at_value_receiver_start() {
                     if !params.is_empty() {
-                        return Err(Diagnostic::at(
+                        return Err(parse_error(
                             self.current_span(),
                             "method receiver must be the first parameter",
                         ));
@@ -604,13 +627,13 @@ impl Parser {
 
             let span = self.current_span();
             if self.at_simple(&TokenKind::KwBorrow) {
-                return Err(Diagnostic::at(
+                return Err(parse_error(
                     self.current_span(),
                     "ordinary borrowed parameters must be written as `name: borrow Type` or `name: borrow mut Type`",
                 ));
             }
             if self.at_simple(&TokenKind::KwOwn) {
-                return Err(Diagnostic::at(
+                return Err(parse_error(
                     self.current_span(),
                     "ordinary owned parameters must be written as `name: own Type`",
                 ));
@@ -710,7 +733,14 @@ impl Parser {
     }
 
     fn parse_stmt_inner(&mut self) -> Result<Stmt> {
-        if self.at_simple(&TokenKind::KwReturn) {
+        if self.at_simple(&TokenKind::KwTry) && matches!(self.peek_kind(1), Some(TokenKind::Colon))
+        {
+            Err(Diagnostic::coded_at(
+                "AU2005",
+                self.current_span(),
+                "`try`/`except` is not supported; use `Result` with `match` today",
+            ))
+        } else if self.at_simple(&TokenKind::KwReturn) {
             self.parse_return_stmt()
         } else if self.at_simple(&TokenKind::KwPass) {
             self.parse_pass_stmt()
@@ -970,7 +1000,7 @@ impl Parser {
                         let negative = match IntegerValue::from_literal(value).checked_neg() {
                             Some(value) => value,
                             None => {
-                                return Err(Diagnostic::at(
+                                return Err(parse_error(
                                     minus.span,
                                     "negative integer literal in pattern is outside the supported range",
                                 ));
@@ -983,7 +1013,7 @@ impl Parser {
                         LiteralPatternKind::Float(-value)
                     }
                     _ => {
-                        return Err(Diagnostic::at(
+                        return Err(parse_error(
                             minus.span,
                             "match patterns currently support enum variants, `_`, and boolean/string/integer/float literals",
                         ));
@@ -997,7 +1027,7 @@ impl Parser {
             _ => {}
         }
         if !matches!(self.current_kind(), TokenKind::Identifier(_)) {
-            return Err(Diagnostic::at(
+            return Err(parse_error(
                 span,
                 "match patterns currently support enum variants, `_`, and boolean/string/integer/float literals",
             ));
@@ -1234,23 +1264,46 @@ impl Parser {
 
         loop {
             if let Some(token) = self.eat_simple(&TokenKind::KwIs) {
-                return Err(Diagnostic::at(
+                return Err(Diagnostic::coded_at(
+                    "AU2005",
                     token.span,
                     "`is` is not supported; use `== None` or `match` for optional values",
                 ));
             }
-            let op = if self.eat_simple(&TokenKind::EqEq).is_some() {
-                Some(BinaryOp::Eq)
-            } else if self.eat_simple(&TokenKind::NotEq).is_some() {
-                Some(BinaryOp::NotEq)
+            let op = if let Some(token) = self.eat_simple(&TokenKind::EqEq) {
+                Some((BinaryOp::Eq, token.span))
+            } else if let Some(token) = self.eat_simple(&TokenKind::NotEq) {
+                Some((BinaryOp::NotEq, token.span))
             } else {
                 None
             };
 
-            let Some(op) = op else { break };
+            let Some((op, operator_span)) = op else {
+                break;
+            };
+            if chain_len > 0 || is_unparenthesized_ordering_comparison(&expr) {
+                return Err(chained_comparison_diagnostic(operator_span));
+            }
             chain_len += 1;
             self.check_expression_chain_limit(chain_len)?;
+            let right_start = self.index;
             let right = self.parse_comparison()?;
+            if is_unparenthesized_ordering_comparison(&right) {
+                let second_operator_span = self.tokens[right_start..self.index]
+                    .iter()
+                    .find(|token| {
+                        matches!(
+                            token.kind,
+                            TokenKind::Less
+                                | TokenKind::LessEq
+                                | TokenKind::Greater
+                                | TokenKind::GreaterEq
+                        )
+                    })
+                    .map(|token| token.span)
+                    .unwrap_or(operator_span);
+                return Err(chained_comparison_diagnostic(second_operator_span));
+            }
             let span = expr.span;
             expr = Expr {
                 kind: ExprKind::Binary {
@@ -1270,19 +1323,34 @@ impl Parser {
         let mut chain_len = 0usize;
 
         loop {
-            let op = if self.eat_simple(&TokenKind::Less).is_some() {
-                Some(BinaryOp::Less)
-            } else if self.eat_simple(&TokenKind::LessEq).is_some() {
-                Some(BinaryOp::LessEq)
-            } else if self.eat_simple(&TokenKind::Greater).is_some() {
-                Some(BinaryOp::Greater)
-            } else if self.eat_simple(&TokenKind::GreaterEq).is_some() {
-                Some(BinaryOp::GreaterEq)
+            if self.at_simple(&TokenKind::KwIn)
+                || (self.at_simple(&TokenKind::KwNot)
+                    && matches!(self.peek_kind(1), Some(TokenKind::KwIn)))
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU2005",
+                    self.current_span(),
+                    "`in` is not available yet; use `.contains(...)` today; native `in` arrives in a later Aurora release",
+                ));
+            }
+            let op = if let Some(token) = self.eat_simple(&TokenKind::Less) {
+                Some((BinaryOp::Less, token.span))
+            } else if let Some(token) = self.eat_simple(&TokenKind::LessEq) {
+                Some((BinaryOp::LessEq, token.span))
+            } else if let Some(token) = self.eat_simple(&TokenKind::Greater) {
+                Some((BinaryOp::Greater, token.span))
+            } else if let Some(token) = self.eat_simple(&TokenKind::GreaterEq) {
+                Some((BinaryOp::GreaterEq, token.span))
             } else {
                 None
             };
 
-            let Some(op) = op else { break };
+            let Some((op, operator_span)) = op else {
+                break;
+            };
+            if chain_len > 0 {
+                return Err(chained_comparison_diagnostic(operator_span));
+            }
             chain_len += 1;
             self.check_expression_chain_limit(chain_len)?;
             let right = self.parse_additive()?;
@@ -1562,7 +1630,13 @@ impl Parser {
 
         match token.kind {
             TokenKind::Identifier(name) => {
-                if name == "Set" && self.eat_simple(&TokenKind::LBrace).is_some() {
+                if name == "lambda" {
+                    Err(Diagnostic::coded_at(
+                        "AU2005",
+                        token.span,
+                        "lambda expressions are not available yet; use a named `def` today",
+                    ))
+                } else if name == "Set" && self.eat_simple(&TokenKind::LBrace).is_some() {
                     let mut elements = Vec::new();
                     if !self.at_simple(&TokenKind::RBrace) {
                         loop {
@@ -1628,6 +1702,13 @@ impl Parser {
                 if !self.at_simple(&TokenKind::RBracket) {
                     loop {
                         elements.push(self.parse_expr()?);
+                        if self.at_simple(&TokenKind::KwFor) {
+                            return Err(Diagnostic::coded_at(
+                                "AU2005",
+                                self.current_span(),
+                                "comprehensions are not available yet; use an explicit loop today",
+                            ));
+                        }
                         if self.eat_simple(&TokenKind::Comma).is_none() {
                             break;
                         }
@@ -1676,11 +1757,11 @@ impl Parser {
                     span: token.span,
                 })
             }
-            TokenKind::KwBorrow => Err(Diagnostic::at(
+            TokenKind::KwBorrow => Err(parse_error(
                 token.span,
                 "call arguments cannot start with `borrow`; pass the value directly",
             )),
-            other => Err(Diagnostic::at(
+            other => Err(parse_error(
                 token.span,
                 format!("unexpected token in expression: {:?}", other),
             )),
@@ -1826,7 +1907,7 @@ impl Parser {
             TokenKind::SlashEqual => Ok(Some(BinaryOp::Div)),
             TokenKind::DoubleSlashEqual => Ok(Some(BinaryOp::FloorDiv)),
             TokenKind::PercentEqual => Ok(Some(BinaryOp::Mod)),
-            other => Err(Diagnostic::at(
+            other => Err(parse_error(
                 token.span,
                 format!("expected assignment operator, found {:?}", other),
             )),
@@ -2024,22 +2105,19 @@ impl Parser {
             }
 
             let Some(expr_end) = expr_end else {
-                return Err(Diagnostic::at(span, "unterminated f-string interpolation"));
+                return Err(parse_error(span, "unterminated f-string interpolation"));
             };
             let raw_expr_text = &value[expr_start..expr_end];
             let leading_ws = raw_expr_text.len() - raw_expr_text.trim_start().len();
             let expr_text = raw_expr_text.trim();
             if expr_text.is_empty() {
-                return Err(Diagnostic::at(
-                    span,
-                    "f-string interpolation cannot be empty",
-                ));
+                return Err(parse_error(span, "f-string interpolation cannot be empty"));
             }
             let mut expr =
                 match parse_expression_with_recursion_depth(expr_text, self.recursion_depth) {
                     Ok(expr) => expr,
                     Err(error) => {
-                        return Err(Diagnostic::at(
+                        return Err(parse_error(
                             span,
                             format!("invalid f-string interpolation `{}`: {}", expr_text, error),
                         ))
@@ -2069,7 +2147,7 @@ impl Parser {
         if token.kind == kind {
             Ok(token)
         } else {
-            Err(Diagnostic::at(
+            Err(parse_error(
                 token.span,
                 format!("expected {:?}, found {:?}", kind, token.kind),
             ))
@@ -2126,7 +2204,7 @@ impl Parser {
         match token.kind {
             TokenKind::Identifier(name) => Ok(name),
             TokenKind::KwFrom => Ok("from".to_string()),
-            _ => Err(Diagnostic::at(token.span, "expected identifier")),
+            _ => Err(parse_error(token.span, "expected identifier")),
         }
     }
 
@@ -2135,7 +2213,7 @@ impl Parser {
         match token.kind {
             TokenKind::Identifier(name) => Ok(name),
             TokenKind::KwFrom => Ok("from".to_string()),
-            other => Err(Diagnostic::at(
+            other => Err(parse_error(
                 token.span,
                 format!("expected member name, found {:?}", other),
             )),
@@ -2269,7 +2347,7 @@ impl Parser {
     }
 
     fn error_here(&self, message: impl Into<String>) -> Diagnostic {
-        Diagnostic::at(self.current_span(), message)
+        parse_error(self.current_span(), message)
     }
 }
 

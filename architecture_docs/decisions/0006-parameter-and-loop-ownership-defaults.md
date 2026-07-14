@@ -21,6 +21,8 @@ MIR, native ABI selection, analysis, and editor signatures use the convention
 chosen at the declaration rather than recomputing it after generic
 substitution.
 
+The spelling asymmetry is intentional: parameter ownership occupies the type position as `value: own T`, parallel to `value: borrow T`, while loop ownership prefixes the iterable as `for value in own values` because loops have no type position.
+
 Moving a defaulted borrowed parameter is rejected with guidance to declare it
 as `own T` or clone before consuming it. Storage, insertion, and transfer APIs
 therefore carry explicit owned-parameter metadata. This includes collection
@@ -90,6 +92,12 @@ editor tooling.
 - Exact diagnostics for moving a defaulted parameter and both categories of
   rejected mutable-borrow default.
 - Declaration-stability tests for generic `T`, including copy specialization.
+- Directional call-boundary fixtures for copy-typed shared/mutable borrows,
+  owned non-copy arguments, later plain place reads, and source-ordered named
+  arguments.
+- Operator-trait fixtures applying declared receiver and right-operand passing
+  modes, plus a legal copy-value snapshot and the distinct TaskGroup capture
+  boundary.
 - Check/run fixtures for parameters, Vec/Set loops, unchanged match/local moves,
   all three rejected Queue modifiers, and bare Queue receive ownership.
 - Structural metadata checks for every retaining builtin and rendered `own`

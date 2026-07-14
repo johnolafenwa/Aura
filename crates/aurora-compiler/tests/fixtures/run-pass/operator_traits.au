@@ -8,6 +8,9 @@ class Point:
     x: int32
     y: int32
 
+class PointHolder:
+    point: Point
+
 impl Add[Point, Point] for Point:
     def add(borrow self, rhs: Point) -> Point:
         return Point(x=self.x + rhs.x, y=self.y + rhs.y)
@@ -22,8 +25,16 @@ def add_all[T: Add[T, T]](left: T, right: T) -> T:
 def main() -> int32:
     point = add_all(left=Point(x=2, y=3), right=Point(x=4, y=5))
     negated = -point
+    mut accumulated = Point(x=1, y=2)
+    accumulated += Point(x=3, y=4)
+    mut holder = PointHolder(point=Point(x=10, y=20))
+    holder.point += Point(x=1, y=2)
     print(point.x)
     print(point.y)
     print(negated.x)
     print(negated.y)
+    print(accumulated.x)
+    print(accumulated.y)
+    print(holder.point.x)
+    print(holder.point.y)
     return 0

@@ -1,5 +1,8 @@
-error: cannot move non-copy field `entries` out of borrowed value `self` in match scrutinee; use `match borrow self.entries:` to inspect it by shared borrow
+error[AU3002]: cannot move non-copy field `entries` out of borrowed value `self` in match scrutinee; use `match borrow self.entries:` to inspect it by shared borrow
  --> crates/aurora-compiler/tests/fixtures/check-fail/match_borrow_self_member_suggests_match_borrow.au:5:20
   |
 5 |         match self.entries:
   |                    ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/match_borrow_self_member_suggests_match_borrow.au:4:5: `self` is borrowed here
+  = help: use `match borrow self.entries:` to inspect the field without moving it
+  = fix: replace crates/aurora-compiler/tests/fixtures/check-fail/match_borrow_self_member_suggests_match_borrow.au:5:15-5:15 with `borrow `

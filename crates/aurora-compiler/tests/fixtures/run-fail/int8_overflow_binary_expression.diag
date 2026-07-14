@@ -1,4 +1,4 @@
-error: integer value `200` does not fit in `int8`
+error[AU4002]: integer value `200` does not fit in `int8`
  --> crates/aurora-compiler/tests/fixtures/run-fail/int8_overflow_binary_expression.au:4:11
   |
 4 |     print(a + b)

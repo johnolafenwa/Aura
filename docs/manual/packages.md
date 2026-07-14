@@ -189,3 +189,51 @@ Package boundaries do not create implicit public exports, wildcard imports, rela
 - package graphs and direct dependency counts have the documented finite limits
 
 See [Current Limits](/manual/current-limits#runtime) for the broader maintained implementation limits and [Conformance](/manual/conformance) for package test coverage.
+
+## Grammar
+
+Source imports have the maintained forms `import dotted.module` and `from dotted.module import name`, as specified in [Grammar](/manual/grammar#imports). Import paths are absolute within the resolved local or dependency namespace. Relative imports, wildcard imports, aliases, and package-name prefixes for the current package are not grammar.
+
+`Aurora.toml` and `Aurora.lock` use TOML as external tooling formats, not Aurora source grammar. Their accepted keys, table shapes, selector combinations, identifier rules, and lockfile version are exactly the contracts documented above; unrecognized source kinds or unsupported dependency forms are rejected rather than inferred.
+
+## Typing Rules
+
+Package and module resolution completes before static checking. An import binds a module namespace or a visible declaration with its defining module identity and declared type. Local modules use their `src/`-relative dotted name; a dependency's package name is its import root. Only `public` top-level declarations cross a module boundary, with class member visibility checked separately.
+
+Imports do not erase types or ownership modes. Calls to imported functions and methods are checked against their original signatures, and trait implementations retain defining-module identities for coherence and dispatch. A package manifest does not create an Aurora value, implicit export, prelude, or relationship between workspace members.
+
+## Runtime Semantics
+
+Resolution discovers the nearest package, any exact containing workspace, the transitive path/git graph, and the applicable lockfile before loading source. Imported modules contribute declarations only: top-level executable statements in an imported file are not run as module initialization. The selected entry module alone supplies program execution.
+
+Ordinary locked resolution reuses a matching exact git revision for moving selectors. `deps update` deliberately refreshes eligible moving selectors and then deterministically rewrites the owning version-1 lockfile. Successful file-backed compiler paths may create or rewrite that lockfile; analysis and completion of editor buffers use the no-lockfile path.
+
+## Ownership And Evaluation Order
+
+An import binds compile-time namespaces and declarations, not runtime resource values, so importing neither moves nor borrows a value and has no runtime evaluation position. Ownership begins when an imported declaration is called, constructed, or otherwise evaluated, using the declaration's normal parameter, receiver, field, and return contracts.
+
+Package traversal order cannot introduce initialization side effects. Lockfile and git-cache writes are tooling side effects that occur during successful graph resolution; they precede program execution and are not rolled back by a later runtime failure.
+
+## Diagnostics
+
+`AU1101` means invalid syntax in a loaded Aurora module or malformed TOML syntax in a manifest or lockfile. `AU2001` means module, import, package, or name resolution failed. `AU2002` means a cross-module type mismatch. `AU2004` means imported-call argument binding failed. `AU2999` means a manifest, lockfile, package-graph, source-root, cycle, limit, or dependency-safety rejection without a narrower code. Through imported declarations, `AU3001` means use of a moved value, `AU3002` means a borrow violation, `AU3003` means a mutability violation, and `AU3004` means an invalid ownership mode.
+
+File-backed `check`, `run`, and `build` render package-loading diagnostics through the normal compiler diagnostic path. `aura deps update` renders compiler-owned resolver failures in human form with the same stable `error[AU####]` code and exit status `1`; structured `--format` output is limited to `check`, `run`, and `build`. Malformed `deps` invocation is a command-usage error with status `2`, not a language diagnostic.
+
+## Backend Support
+
+Package discovery, resolution, import loading, visibility, type checking, lockfile handling, and MIR lowering occur in the shared compiler front end. The MIR runtime and direct native backend therefore receive the same resolved declarations and module identities. Backend parity includes imported function behavior and cross-package trait dispatch.
+
+Built executables do not resolve source packages at runtime. Direct builds contain emitted program code; MIR-launcher builds contain serialized checked MIR and the runtime launcher. The package sources and git cache are compiler inputs, not runtime dependencies of the built program.
+
+## Limits And Implementation-Defined Behavior
+
+Source roots are fixed at `src/`; package tests alone may enter through the root `tests/` directory. Each package may declare at most 1,024 direct dependencies, and one graph may contain at most 4,096 packages. Workspace membership is an exact normalized path list, not a glob, and membership does not imply a dependency. Registry/version dependencies, publish, install, wildcard imports, relative imports, and implicit workspace dependencies are unavailable.
+
+Git commands default to a 60-second timeout, disable interactive credential prompts, and use the cache and symlink checks documented above. Cache location follows `XDG_CACHE_HOME`, then `HOME`, then a temporary fallback. Network availability, git transport, filesystem canonicalization, and credentials are host-dependent. These controls protect resolver operation; they do not establish trust in dependency source code.
+
+## Status
+
+Single packages, exact-path workspaces, path dependencies, pinned and moving git selectors, deterministic lockfile version 1, package visibility, cross-package trait dispatch, and editor no-lockfile analysis are implemented and maintained in Aurora 0.1. No package semantics on this page are provisional.
+
+Registry resolution, publishing, installation, alternative source roots, workspace globs, import aliases, wildcard or relative imports, implicit re-exports, and import-time initialization are unavailable. Any future mention of those facilities is non-normative until this reference and conformance suite are amended.

@@ -208,7 +208,12 @@ def inspect_http_response(response: own net.HttpResponse) -> Result[String, io.E
     with received = response:
         print(received.status())
         print(received.reason())
-        print(received.headers()["Content-Type"])
+        headers = received.headers()
+        match headers.get("Content-Type"):
+            case Option.Some(content_type):
+                print(content_type)
+            case Option.None:
+                pass
         text = try received.text()
         bytes = received.bytes()
         print(bytes.len())
@@ -312,10 +317,16 @@ def serve_http(listener: own net.HttpListener) -> Result[None, io.Error]:
     with server_listener = listener:
         exchange = try server_listener.accept(timeout=1s)
         with request = exchange:
+            method = request.method()
+            path = request.path()
             body = try request.body_text()
             headers = request.headers()
-            try request.respond_text(200, request.method() + ":" + request.path() + ":" + body + ":" + headers["X-Test"], {{"Content-Type": "text/plain"}})
-            return Result.Ok(None)
+            match headers.get("X-Test"):
+                case Option.Some(test_header):
+                    try request.respond_text(200, method + ":" + path + ":" + body + ":" + test_header, {{"Content-Type": "text/plain"}})
+                    return Result.Ok(None)
+                case Option.None:
+                    return Result.Ok(None)
 
 def serve_http_bytes(listener: own net.HttpListener) -> Result[None, io.Error]:
     with server_listener = listener:

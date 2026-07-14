@@ -1,0 +1,24 @@
+def bump(value: borrow mut int32) -> int32:
+    value += 1
+    return value
+
+def main():
+    values: Map[int32, int32] = {1: 10, 2: 20, 1: 30}
+    print(values.len())
+    print(values[1])
+    keys = values.keys()
+    print(keys[0])
+    print(keys[1])
+    print("literal order")
+    mut first: int32 = 1
+    ordered: Map[int32, int32] = {first: bump(first)}
+    ordered_keys = ordered.keys()
+    print(ordered_keys[0])
+    print(ordered[1])
+    print("assignment order")
+    mut second: int32 = 1
+    mut assigned: Map[int32, int32] = {}
+    assigned[second] = bump(second)
+    assigned_keys = assigned.keys()
+    print(assigned_keys[0])
+    print(assigned[1])

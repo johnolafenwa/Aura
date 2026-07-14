@@ -1,0 +1,61 @@
+def bump(value: borrow mut int32) -> int32:
+    value += 1
+    return value
+
+class Printer:
+    def show(self, value: int32):
+        print(value)
+
+class Counter:
+    value: int32
+
+def make_printer() -> Printer:
+    print("receiver")
+    return Printer()
+
+def make_argument() -> int32:
+    print("argument")
+    return 7
+
+def push_and_return(values: borrow mut Vec[int32]) -> int32:
+    values.push(2)
+    return 0
+
+def bump_and_return(value: borrow mut int32) -> int32:
+    value += 1
+    return 10
+
+def bump_counter_and_return(counter: borrow mut Counter) -> int32:
+    counter.value += 1
+    return 10
+
+def main():
+    mut value: int32 = 1
+    print("binary")
+    print(value + bump(value))
+
+    value = 1
+    print("vector")
+    values = [value, bump(value)]
+    print(values[0])
+    print(values[1])
+
+    value = 1
+    print("f-string")
+    print(f"{value}{bump(value)}")
+
+    mut vector: Vec[int32] = [1]
+    print("non-copy f-string")
+    print(f"{vector}{push_and_return(vector)}")
+    print(vector)
+
+    print("compound assignment")
+    value = 1
+    value += bump_and_return(value)
+    print(value)
+    mut counter = Counter(value=1)
+    counter.value += bump_counter_and_return(counter)
+    print(counter.value)
+
+    print("member call")
+    make_printer().show(make_argument())

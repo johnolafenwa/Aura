@@ -26,17 +26,21 @@ Aurora uses local, contextual inference rather than global inference. Public fun
 
 ### Literals
 
-- An integer literal adopts an expected integer type and must fit it; otherwise it defaults to `int64`.
-- A negative integer literal is parsed as unary `-` applied to a non-negative literal and must fit the selected signed integer type.
+- An integer literal adopts an expected integer type and must fit it. In an expected `float32` or `float64` context it adopts that floating type only when its mathematical integer value is exactly representable there; an inexact case is a static error that directs the author to an explicit floating spelling or `.to_float()`; otherwise it defaults to `int64`.
+- A negative integer literal is parsed as unary `-` applied to a non-negative literal. It follows the same exact float-context rule, or must fit the selected signed integer type.
 - A floating literal adopts an expected `float32` or `float64`; otherwise it defaults to `float64`.
 - `true` and `false` have type `bool`.
 - A single-quoted or double-quoted ordinary string and an f-string each have type `String`; quote choice does not create a distinct type.
 - A duration literal has type `Duration`.
-- Bare `None` has type `None`, except in an expected `Option[T]` position where it denotes `Option.None` of that type.
+- Bare `None` has type `None`, except in an expected `Option[T]` position where it denotes `Option.None` of that type. Expected-option context flows through grouping, annotated bindings, return positions, and argument positions. For `==` and `!=`, when either operand has static type `Option[T]`, a bare `None` on the other side is contextually typed as that same option specialization; this rule is symmetric. Unit `None == None` is `true` and unit `None != None` is `false`. A qualified `Option.None` with no expected specialization remains an inference error.
 
 ### Collections
 
-A non-empty list, set, or map infers its element/key/value type from the first value unless an expected collection type is available. All remaining values must have the same inferred type.
+A non-empty list, set, or map infers its element/key/value type from the first
+value unless an expected collection type is available. All remaining values
+must have the same inferred type. Equal keys in one map literal are permitted;
+the later value replaces the earlier value at runtime without changing the
+key's first insertion position.
 
 An empty collection literal has no self-contained element type and therefore requires an expected `Vec[T]`, `Set[T]`, or `Map[K, V]` type. `{}` is grammatically a map literal but may be interpreted as an empty `Set[T]` when its expected type is `Set[T]`.
 
@@ -69,7 +73,16 @@ The first simple-name assignment introduces a binding. Its type is the annotatio
 
 Compound assignments `+=`, `-=`, `*=`, `/=`, `%=`, and `//=` read the current target, apply the corresponding binary operation, and write the result. The target must already exist, be mutable, not be moved, and have the operation's result type. Integer `/=` is rejected by the same rule and teaching diagnostic as integer `/`; floating `/=` remains valid.
 
-Field assignment requires a mutable base place and a declared field. Index assignment supports `Vec[T]` with exactly an `int32` index and `Map[K, V]` with a key of exactly `K`. An annotation and `mut` are not permitted on member or index assignment.
+Field assignment requires a mutable base place and a declared field. Index
+assignment supports `Vec[T]` with exactly an `int32` index and `Map[K, V]`
+with a key of exactly `K`. Simple Map index assignment accepts any `V` and
+replaces an equal existing key or inserts a new entry. Its key and value are
+owned storage positions: each is consumed when non-copy. The key is fully
+evaluated and captured before the assigned value is evaluated, so value-side
+effects do not retarget the write. Compound Map indexed assignment is permitted
+only for copy `V`; non-copy `V` is rejected rather than implicitly cloned or
+destructively removed before the operator completes. An annotation and `mut`
+are not permitted on member or index assignment.
 
 ## Expression Typing
 
@@ -100,7 +113,7 @@ integer `/` is not supported; use `//` for floor division, or call `.to_float()`
 
 Arithmetic and ordering operators may otherwise resolve through the corresponding `Add`, `Sub`, `Mul`, `Div`, `Mod`, or `Ord` trait method. `//` is builtin-only and has no `FloorDiv` trait. Builtin equality does not dispatch through an operator trait in Aurora 0.1.
 
-Operator operands are not implicitly widened. A literal may be contextually typed to match the other operand; non-literal values require an explicit numeric cast.
+Operator operands are not implicitly widened. An integer literal may be contextually typed to match an integer operand, or a `float32`/`float64` operand when the literal is exactly representable in that floating type. A floating literal may adopt the other operand's floating type. Non-literal values require an explicit numeric cast or integer `.to_float()` conversion.
 
 ### Conditions
 
@@ -108,11 +121,30 @@ Operator operands are not implicitly widened. A literal may be contextually type
 
 ### Indexing And Members
 
-Direct indexing supports `Vec[T]` with exactly an `int32` index and `Map[K, V]` with exactly `K`. For a vector, a negative index `i` is normalized once as `len + i` before the existing bounds check; this applies equally to direct reads and writes and to `get`, `set`, `remove`, both `swap` indexes, and `insert`. An index that remains invalid is not clamped. Direct access and mutating methods fail at runtime, while `get` returns `None`; `insert` accepts the post-normalization range `0..=len`. An already-bound `int64` index is not implicitly narrowed.
+Direct indexing supports `Vec[T]` with exactly an `int32` index and `Map[K, V]`
+with exactly `K`. For a vector, a negative index `i` is normalized once as
+`len + i` before the existing bounds check; this applies equally to direct
+reads and writes and to `get`, `set`, `remove`, both `swap` indexes, and
+`insert`. An index that remains invalid is not clamped. Direct access and
+mutating methods fail at runtime, while `get` returns `None`; `insert` accepts
+the post-normalization range `0..=len`. An already-bound `int64` index is not
+implicitly narrowed.
 
-A direct read produces `T` or `V`, but moving a non-copy vector element by direct indexing is restricted by ownership rules; use `get()` when an explicit clone/optional result is required. Integer indexing and slicing are not defined for `String` in Aurora 0.1.
+A direct read produces `T` or `V` only when that element/value type is
+copyable. For a non-copy vector element, use `get(index)` for an explicit
+cloned optional read. For a non-copy map value, use `get(key)` for an explicit
+cloned optional read or `remove(key)` to transfer ownership. A missing map key
+in a direct read is runtime diagnostic `AU4003`. Integer indexing and slicing
+are not defined for `String` in Aurora 0.1.
 
 Member access must resolve to a visible field, method, enum variant, module item, or maintained builtin member. Calling a receiver method also validates whether the receiver is consumed, shared-borrowed, or mutable-borrowed.
+
+A non-copy place selected as a binary left operand, index base, method receiver,
+or indexed-assignment target remains borrowed through the operation's later
+inputs. Another shared borrow is valid, but an overlapping mutable borrow or
+consumption is rejected with `AU3002`, with the retained selection reported as
+the borrow origin. The same rule applies to name roots and projected member
+places. The checker never legalizes the operation by assuming a deep clone.
 
 ## Call Binding
 
@@ -125,7 +157,19 @@ Arguments are written as positional arguments followed by named arguments. Bindi
 5. omitted parameters require defaults
 6. each argument type must equal the substituted parameter type
 
-Default expressions are evaluated for each call where the parameter is omitted. Defaults may refer only to names valid under the declaration's default-expression rules; they do not capture a caller's locals. A shared-borrow default's temporary lives through the call. An `own` default is consumed. A `borrow mut` default is rejected because mutations to its caller-invisible temporary would be silently lost.
+Default expressions are evaluated for each call where the parameter is omitted.
+Every supplied argument expression is evaluated first in call-site source
+order before the next supplied expression begins. A copy or move result is
+captured in its argument slot; a borrow-mode selection is established without
+cloning and is checked under the retained-borrow rule above. Later side effects
+therefore cannot re-read or change an earlier captured argument. Defaults for
+omitted parameters are then evaluated in declaration order. Binding a named argument to its
+declaration slot does not reorder evaluation, and no default is evaluated for a
+supplied parameter. Defaults may refer only to names valid under the
+declaration's default-expression rules; they do not capture a caller's locals.
+A shared-borrow default's temporary lives through the call. An `own` default is
+consumed. A `borrow mut` default is rejected because mutations to its
+caller-invisible temporary would be silently lost.
 
 A bare parameter resolves to value passing for a copy type and shared borrowing
 for a non-copy type. An unresolved generic type is not assumed copyable, so its
@@ -137,13 +181,24 @@ are checked together for overlapping move/shared/mutable access.
 
 ## Class Construction
 
-Calling a class name constructs a value. Constructor fields may be supplied positionally in declaration order, then by name. Positional arguments cannot follow a named argument. Every field without a declaration default must be supplied exactly once; provided and default values must match the substituted field types.
+Calling a class name constructs a value. Constructor fields may be supplied
+positionally in declaration order, then by name. Positional arguments cannot
+follow a named argument. Every field without a declaration default must be
+supplied exactly once; provided and default values must match the substituted
+field types. Supplied field expressions follow the same source-order capture
+rule as call arguments, so a later field expression cannot change an earlier
+captured field value.
 
 A class receiver is declared as shared `self` (or its explicit synonym `borrow self`), consuming `own self`, or mutable `borrow mut self`. A first method parameter written `self: Type` is rejected with guidance naming those forms. A method without a receiver is associated and is called through the class/type rather than an instance.
 
 ## Enum Construction And Matching
 
-An enum variant constructor must name an existing variant and provide exactly its payload shape. A variant declares either all positional payloads or all named payloads; constructors bind accordingly.
+An enum variant constructor must name an existing variant and provide exactly
+its payload shape. A variant declares either all positional payloads or all
+named payloads; constructors bind accordingly. Supplied named payload
+expressions evaluate in their written source order, each result is captured,
+and those results then bind by payload name to the variant's declaration-order
+slots. Declaration-slot binding does not reorder evaluation.
 
 Generic enum constructors require sufficient context to determine all type arguments. This may come from explicit specialization, an expected annotation/parameter/return type, or payload inference. Bare builtin variants such as `Some`, `Ok`, `Err`, or `None` are accepted only where the expected enum identity is unambiguous.
 

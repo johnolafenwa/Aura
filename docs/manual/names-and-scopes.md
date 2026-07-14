@@ -137,3 +137,69 @@ Builtin enum types such as `Option`, `Result`, `QueueReceive`, and `process.Erro
 An entry module may contain executable top-level statements instead of a local `main`. Those statements share one top-level local environment and execute in source order after checking.
 
 Imported modules contribute declarations, not executable initialization: their top-level statements are checked as source but are not run as import side effects in Aurora 0.1. Reusable modules should therefore keep executable work inside public functions. This boundary may be tightened in a later release, but programs MUST NOT depend on imported top-level side effects today.
+
+## Grammar
+
+Identifier spelling is defined by [Lexical Structure](/manual/lexical-structure).
+The binding positions are module declarations and imports, parameters and
+receivers, simple-name assignments, `for` and `with` targets, match payloads,
+and generic parameter lists in the [Grammar](/manual/grammar). Member access
+uses a dot-separated syntactic path; it does not add dynamic lookup syntax.
+
+## Typing Rules
+
+Every value and type name is resolved statically in the priority and namespace
+rules above. A resolved value binding carries one fixed type. Reassignment
+requires the existing mutable binding and the same type; it never creates a
+shadow. Generic and `Self` resolution occurs before substitution and bound
+checking. Ambiguous trait implementations and unavailable or private names are
+rejected rather than selected by source order.
+
+## Runtime Semantics
+
+Local and parameter references read their statically selected storage place;
+module, type, function, and associated-member names select compiler metadata
+and do not perform a runtime dictionary lookup. Entry-module top-level bindings
+are created in source order. Imports load declarations during compilation and
+do not execute imported top-level statements as initialization side effects.
+
+## Ownership And Evaluation Order
+
+Resolving a name has no side effect, but evaluating the resolved place may copy,
+borrow, mutate, or move it according to its type and the surrounding
+expression. Initializers are evaluated before a new local enters scope. Block
+and pattern scopes are entered only for the selected runtime path; ownership
+state from continuing paths is merged conservatively by the checker.
+
+## Diagnostics
+
+`AU2001` reports unknown, unavailable, or unresolved names. `AU2002` covers
+type-name arity and related expected-type failures. `AU2999` covers duplicate,
+reserved, private, ambiguous, or otherwise invalid name/scope declarations not
+assigned a narrower code. Reads of places invalidated after resolution use
+`AU3001` for a moved place, `AU3002` for a borrow conflict, `AU3003` for an
+immutable place, and `AU3004` for an invalid ownership mode, with related
+source spans and repair guidance where applicable.
+
+## Backend Support
+
+Name, visibility, trait, module, and scope resolution are compiler-front-end
+operations shared by MIR execution and direct native builds. Both backends
+receive the same resolved targets and substituted types. Compiler-backed LSP
+hover, definitions, and diagnostics use that same resolution result.
+
+## Limits And Implementation-Defined Behavior
+
+Local declarations cannot shadow visible locals in the positions listed above;
+items cannot be nested in function suites; wildcard or relative-dot imports and
+import aliases are unavailable; and imported top-level execution is absent.
+Package filesystem mapping is specified by [Packages](/manual/packages), not
+left to implementation-defined name lookup.
+
+## Status
+
+Static lexical scope, module imports, visibility, generic/type namespaces,
+member lookup, and the documented entry-module top-level scope are implemented.
+Dynamic names, reflection-based lookup, nested items, import side effects,
+wildcard imports, and user-selectable shadowing are unavailable. No future
+name-resolution form is implied by an identifier that happens to lex today.

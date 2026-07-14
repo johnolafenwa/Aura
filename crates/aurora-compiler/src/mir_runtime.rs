@@ -8,7 +8,8 @@ use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::UnaryOp;
-use crate::diag::{Diagnostic, Result};
+use crate::call::BuiltinMember;
+use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::mir::{
     CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMethod, MirModule,
@@ -25,9 +26,9 @@ use crate::runtime_value::{
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration,
-    register_task_as_queue_producer_for_values, result_err, result_ok, run_blocking_io,
-    run_lightweight_root_task, send_error_cancelled, send_error_closed, send_error_full,
-    send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
+    register_task_as_queue_producer_for_values, render_float, render_float32, result_err,
+    result_ok, run_blocking_io, run_lightweight_root_task, send_error_cancelled, send_error_closed,
+    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, spawn_lightweight_task,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out,
     wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
@@ -111,14 +112,14 @@ pub fn run_with_stdout_sink_and_program_args(
         }) {
         Ok(handle) => handle,
         Err(error) => {
-            return Err(Diagnostic::new(format!(
-                "failed to start MIR runtime thread: {}",
-                error
-            )));
+            return Err(Diagnostic::coded(
+                "AU4001",
+                format!("failed to start MIR runtime thread: {}", error),
+            ));
         }
     };
     match handle.join() {
-        Ok(result) => result,
+        Ok(result) => result.map_err(Diagnostic::into_runtime_trap),
         Err(payload) => std::panic::resume_unwind(payload),
     }
 }
@@ -167,13 +168,13 @@ pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> R
     let module = match serde_json::from_slice::<MirModule>(mir_json) {
         Ok(module) => module,
         Err(error) => {
-            return Err(Diagnostic::new(format!(
-                "failed to deserialize embedded MIR: {}",
-                error
-            )))
+            return Err(Diagnostic::coded(
+                "AU4001",
+                format!("failed to deserialize embedded MIR: {}", error),
+            ))
         }
     };
-    validate_runtime_module_complexity(&module)?;
+    validate_runtime_module_complexity(&module).map_err(Diagnostic::into_runtime_trap)?;
     let _ = source_path;
     let _ = source;
     run_with_stdout_sink_and_program_args(&module, None, host_process_args())
@@ -409,7 +410,23 @@ struct MirRuntime {
     cancellation: CancellationContext,
     program_args: Arc<Vec<String>>,
     call_depth: usize,
+    call_stack: Vec<AuroraCallFrame>,
+    task_ancestry: Vec<AuroraTaskSpawn>,
     return_type_stack: Vec<Type>,
+}
+
+#[derive(Clone)]
+struct AuroraCallFrame {
+    function: String,
+    span: Span,
+}
+
+#[derive(Clone)]
+struct AuroraTaskSpawn {
+    task_function: String,
+    task_entry_span: Span,
+    parent_function: String,
+    spawn_span: Span,
 }
 
 struct CallOutcome {
@@ -424,6 +441,15 @@ struct EvaluatedMirArg {
     value: Value,
     ty: Option<Type>,
     writeback_place: Option<String>,
+}
+
+struct TraitMemberCallContext<'a> {
+    receiver: &'a Value,
+    receiver_static_ty: Option<&'a Type>,
+    field: &'a str,
+    receiver_place: Option<&'a str>,
+    args: &'a [MirArg],
+    expected_return_type: Option<&'a Type>,
 }
 
 enum RvalueOutcome {
@@ -663,8 +689,57 @@ impl MirRuntime {
             cancellation,
             program_args,
             call_depth: 0,
+            call_stack: Vec::new(),
+            task_ancestry: Vec::new(),
             return_type_stack: Vec::new(),
         }
+    }
+
+    fn annotate_runtime_trap_once(&self, mut error: Diagnostic) -> Diagnostic {
+        if error
+            .notes
+            .iter()
+            .any(|note| note.starts_with("Aurora call chain"))
+        {
+            return error;
+        }
+
+        if !self.call_stack.is_empty() {
+            let frames = self
+                .call_stack
+                .iter()
+                .rev()
+                .map(|frame| format!("{} at {}", frame.function, frame.span))
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            error
+                .notes
+                .push(format!("Aurora call chain (innermost first): {frames}"));
+        }
+
+        if let Some(task) = self.task_ancestry.last() {
+            error.notes.push(format!(
+                "Aurora task entry: {} at {}",
+                task.task_function, task.task_entry_span
+            ));
+            let ancestry = self
+                .task_ancestry
+                .iter()
+                .rev()
+                .map(|spawn| {
+                    format!(
+                        "{} spawned from {} at {}",
+                        spawn.task_function, spawn.parent_function, spawn.spawn_span
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            error
+                .notes
+                .push(format!("Aurora task ancestry (youngest first): {ancestry}"));
+        }
+
+        error
     }
 
     fn find_trait_impl_method(&self, receiver_ty: &Type, field: &str) -> Option<&MirMethod> {
@@ -696,6 +771,63 @@ impl MirRuntime {
             }
         }
         best
+    }
+
+    fn evaluate_resolved_trait_member_call(
+        &mut self,
+        context: TraitMemberCallContext<'_>,
+        env: &mut Env,
+    ) -> Result<Option<Value>> {
+        let TraitMemberCallContext {
+            receiver,
+            receiver_static_ty,
+            field,
+            receiver_place,
+            args,
+            expected_return_type,
+        } = context;
+        let Some(receiver_ty) = receiver_static_ty else {
+            return Ok(None);
+        };
+        let Some(method) = self.find_trait_impl_method(receiver_ty, field).cloned() else {
+            return Ok(None);
+        };
+        let function = self
+            .functions
+            .get(&method.function_name)
+            .cloned()
+            .ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "unknown MIR method body `{}`",
+                    method.function_name
+                ))
+            })?;
+        let evaluated_args = evaluate_named_args(args, env)?;
+        let outcome = self.call_function_with_receiver_type(
+            &function,
+            Some(receiver.clone()),
+            evaluated_args.clone(),
+            expected_return_type,
+            Some(receiver_ty),
+        )?;
+        if method.receiver == Some(MirReceiverKind::BorrowMut) {
+            let updated = outcome.updated_receiver.ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "mutable MIR method `{}` did not return an updated receiver",
+                    field
+                ))
+            })?;
+            if let Some(place) = receiver_place {
+                env.write_place(place, updated)?;
+            }
+        }
+        self.apply_borrowed_param_writebacks(
+            &function.params,
+            &evaluated_args,
+            &outcome.updated_params,
+            env,
+        )?;
+        Ok(Some(outcome.value))
     }
 
     fn find_from_trait_impl_method(
@@ -1098,6 +1230,10 @@ impl MirRuntime {
                 ),
             ));
         }
+        self.call_stack.push(AuroraCallFrame {
+            function: function.name.clone(),
+            span: function.span,
+        });
         self.call_depth += 1;
         let outcome = (|| {
             let bound_args = bind_args(&function.params, args)?;
@@ -1179,6 +1315,8 @@ impl MirRuntime {
             })
         })();
         self.call_depth -= 1;
+        let outcome = outcome.map_err(|error| self.annotate_runtime_trap_once(error));
+        self.call_stack.pop();
         outcome
     }
 
@@ -1645,11 +1783,13 @@ impl MirRuntime {
                 task_group,
                 function,
                 args,
+                span,
             } => Ok(RvalueOutcome::Value(self.start_task(
                 *returns_handle,
                 task_group,
                 function,
                 args,
+                *span,
                 env,
             )?)),
             Rvalue::Binary {
@@ -1700,19 +1840,26 @@ impl MirRuntime {
                 entries,
                 key_type,
                 value_type,
-            } => Ok(RvalueOutcome::Value(Value::Map(MapValue {
-                key_type: key_type.clone(),
-                value_type: value_type.clone(),
-                entries: entries
-                    .iter()
-                    .map(|entry| {
-                        Ok((
-                            self.evaluate_operand(&entry.key, env)?,
-                            self.evaluate_operand(&entry.value, env)?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-            }))),
+            } => {
+                let mut values = Vec::new();
+                for entry in entries {
+                    let key = self.evaluate_operand(&entry.key, env)?;
+                    let value = self.evaluate_operand(&entry.value, env)?;
+                    if let Some(index) = values
+                        .iter()
+                        .position(|(candidate_key, _)| *candidate_key == key)
+                    {
+                        values[index].1 = value;
+                    } else {
+                        values.push((key, value));
+                    }
+                }
+                Ok(RvalueOutcome::Value(Value::Map(MapValue {
+                    key_type: key_type.clone(),
+                    value_type: value_type.clone(),
+                    entries: values,
+                })))
+            }
             Rvalue::Construct { class_name, fields } => {
                 let mut values = BTreeMap::new();
                 for field in fields {
@@ -1803,7 +1950,16 @@ impl MirRuntime {
                 if name == "print" {
                     let values = evaluate_named_args(args, env)?;
                     let bound = bind_builtin_args(&["value"], values)?;
-                    let rendered = format!("{}\n", bound[0].value.render());
+                    let rendered_value = match (&bound[0].value, bound[0].ty.as_ref()) {
+                        (Value::Float(value), Some(Type::Named(name, args)))
+                            if name == "float32" && args.is_empty() =>
+                        {
+                            render_float32(*value as f32)
+                        }
+                        (Value::Float(value), _) => render_float(*value),
+                        (value, _) => value.render(),
+                    };
+                    let rendered = format!("{}\n", rendered_value);
                     let mut stdout = lock_stdout(&self.stdout);
                     stdout.push_str(&rendered);
                     drop(stdout);
@@ -2266,9 +2422,46 @@ impl MirRuntime {
                         env,
                     ),
                     Value::Channel(channel) => {
+                        if BuiltinMember::resolve("Queue", field).is_none()
+                            && !matches!(
+                                field.as_str(),
+                                "__get_in_task_group" | "__get_with_registered_producers"
+                            )
+                        {
+                            if let Some(value) = self.evaluate_resolved_trait_member_call(
+                                TraitMemberCallContext {
+                                    receiver: &receiver,
+                                    receiver_static_ty: receiver_static_ty.as_ref(),
+                                    field,
+                                    receiver_place: receiver_place.as_deref(),
+                                    args,
+                                    expected_return_type,
+                                },
+                                env,
+                            )? {
+                                return Ok(value);
+                            }
+                        }
                         self.evaluate_channel_method(channel.clone(), field, args, env)
                     }
-                    Value::Task(task) => self.evaluate_task_method(task.clone(), field, args, env),
+                    Value::Task(task) => {
+                        if BuiltinMember::resolve("Task", field).is_none() {
+                            if let Some(value) = self.evaluate_resolved_trait_member_call(
+                                TraitMemberCallContext {
+                                    receiver: &receiver,
+                                    receiver_static_ty: receiver_static_ty.as_ref(),
+                                    field,
+                                    receiver_place: receiver_place.as_deref(),
+                                    args,
+                                    expected_return_type,
+                                },
+                                env,
+                            )? {
+                                return Ok(value);
+                            }
+                        }
+                        self.evaluate_task_method(task.clone(), field, args, env)
+                    }
                     Value::TaskGroup(group) => {
                         self.evaluate_task_group_method(group.clone(), field, args, env)
                     }
@@ -2459,6 +2652,7 @@ impl MirRuntime {
         task_group: &Operand,
         function: &str,
         args: &[MirArg],
+        spawn_span: Span,
         env: &Env,
     ) -> Result<Value> {
         let function = self
@@ -2487,6 +2681,19 @@ impl MirRuntime {
         let stdout_sink = self.stdout_sink.clone();
         let program_args = self.program_args.clone();
         let function_for_task = function.clone();
+        let mut task_ancestry = self.task_ancestry.clone();
+        let parent_function = self
+            .call_stack
+            .last()
+            .expect("task starts only while an Aurora call frame is active")
+            .function
+            .clone();
+        task_ancestry.push(AuroraTaskSpawn {
+            task_function: function.name.clone(),
+            task_entry_span: function.span,
+            parent_function,
+            spawn_span,
+        });
         let task = spawn_lightweight_task(move || {
             let mut runtime = MirRuntime::new_with_stdout_sink_and_program_args(
                 module,
@@ -2495,6 +2702,7 @@ impl MirRuntime {
                 cancellation,
                 program_args,
             );
+            runtime.task_ancestry = task_ancestry;
             runtime
                 .call_function(&function_for_task, None, bound_args)
                 .map(|outcome| outcome.value)
@@ -3056,7 +3264,8 @@ impl MirRuntime {
                     .find(|(candidate_key, _)| *candidate_key == key)
                     .map(|(_, value)| value.clone())
                     .ok_or_else(|| {
-                        Diagnostic::at(
+                        Diagnostic::coded_at(
+                            "AU4003",
                             crate::diag::Span::new(line, column),
                             format!("map key `{}` was not present", key.render()),
                         )
@@ -4448,14 +4657,14 @@ impl MirRuntime {
                 completed
                     .stdout()
                     .map(Value::String)
-                    .map_err(|error| Diagnostic::new(error.to_string()))
+                    .map_err(|error| Diagnostic::coded("AU4005", error.to_string()))
             }
             "stderr" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 completed
                     .stderr()
                     .map(Value::String)
-                    .map_err(|error| Diagnostic::new(error.to_string()))
+                    .map_err(|error| Diagnostic::coded("AU4005", error.to_string()))
             }
             "stdout_bytes" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;

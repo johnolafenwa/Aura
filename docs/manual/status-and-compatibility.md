@@ -19,6 +19,12 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 
 The ratified correctness-recovery and Phase 1.5 semantic re-defaults are the final pre-reference language changes for 0.1. Outside those recorded ADR decisions, syntax expansion is frozen for the hardening cycle. Work in this cycle prioritizes correctness, native-runtime safety, editor responsiveness, and an honest control-plane surface. APIs may still change while 0.1 remains untagged.
 
+The post-Phase-1.5 Manual is reference-frozen. Every later semantic change,
+including a compatible extension, requires an ADR and must update the normative
+reference, compiler fixtures, maintained examples, and tutorials in the same
+commit. A change that cannot keep those surfaces synchronized does not enter
+the maintained language.
+
 Compiler coverage is held at the current non-regression floor rather than being pushed to 100%. New behavior still requires focused tests; the freeze only ends marginal coverage work that does not reduce product risk.
 
 ## Maintained Concurrency Surface

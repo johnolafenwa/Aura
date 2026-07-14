@@ -1,0 +1,7 @@
+error[AU3002]: cannot borrow `box.value` while `box` remains reserved for consumption by the left operand
+ --> crates/aurora-compiler/tests/fixtures/check-fail/trait_operator_own_receiver_rejects_rhs_read.au:13:24
+   |
+13 |     result = box + box.value
+   |                        ^
+  = related crates/aurora-compiler/tests/fixtures/check-fail/trait_operator_own_receiver_rejects_rhs_read.au:13:14: consumption by the left operand begins here
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first

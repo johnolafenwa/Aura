@@ -753,6 +753,26 @@ def main() -> int32:
 }
 
 #[test]
+fn deps_update_preserves_the_compiler_diagnostic_code() {
+    let temp = TempDir::new("aurora-cli-deps-update-diagnostic-code");
+
+    let output = Command::new(aura_bin())
+        .arg("deps")
+        .arg("update")
+        .current_dir(temp.path())
+        .output()
+        .expect("failed to run deps update outside a package");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("error[AU2999]: could not find an enclosing Aurora package"),
+        "deps update must retain the compiler-owned diagnostic code, stderr was:\n{stderr}"
+    );
+    assert!(stderr.contains(&temp.path().display().to_string()));
+}
+
+#[test]
 fn deps_update_refreshes_all_git_dependencies_in_the_current_package() {
     let temp = TempDir::new("aurora-cli-deps-update-all");
     let util_repo = GitRepo::init(

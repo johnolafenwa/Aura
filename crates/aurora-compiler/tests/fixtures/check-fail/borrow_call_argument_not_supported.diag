@@ -1,4 +1,4 @@
-error: call arguments cannot start with `borrow`; pass the value directly
+error[AU1101]: call arguments cannot start with `borrow`; pass the value directly
  --> crates/aurora-compiler/tests/fixtures/check-fail/borrow_call_argument_not_supported.au:9:16
   |
 9 |     print(read(borrow user))

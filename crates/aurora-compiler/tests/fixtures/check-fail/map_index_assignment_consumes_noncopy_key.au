@@ -1,0 +1,5 @@
+def main():
+    mut labels: Map[String, int32] = {}
+    key = "language"
+    labels[key] = 1
+    print(key)

@@ -1,4 +1,4 @@
-error: unsupported operands for binary expression: `Counter`
+error[AU2999]: unsupported operands for binary expression: `Counter`
  --> crates/aurora-compiler/tests/fixtures/check-fail/floor_division_has_no_trait_dispatch.au:14:14
    |
 14 |     result = left // right
