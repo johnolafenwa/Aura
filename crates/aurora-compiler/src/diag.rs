@@ -122,6 +122,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "migration guidance",
     },
     DiagnosticCodeInfo {
+        code: "AU2006",
+        band: "names/types",
+        title: "builtin handle method collision",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",

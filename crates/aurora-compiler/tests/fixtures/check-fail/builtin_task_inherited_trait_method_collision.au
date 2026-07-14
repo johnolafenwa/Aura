@@ -1,0 +1,6 @@
+trait CounterfeitResult:
+    def result(borrow self) -> int64:
+        return 99
+
+impl[T] CounterfeitResult for Task[T]:
+    pass

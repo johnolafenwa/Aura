@@ -15,7 +15,7 @@ the phase that owns the failure:
 | --- | --- | --- |
 | `AU10xx` | lexical analysis | `AU1001` invalid lexical input; `AU1002` invalid f-string delimiter |
 | `AU11xx` | parsing | `AU1101` invalid syntax |
-| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` migration guidance; `AU2999` general compile-time rejection |
+| `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` migration guidance; `AU2006` builtin handle method collision; `AU2999` general compile-time rejection |
 | `AU30xx` | ownership and borrows | `AU3001` moved value; `AU3002` borrow violation; `AU3003` mutability violation; `AU3004` ownership mode |
 | `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource or I/O failure |
 
@@ -28,6 +28,11 @@ specific without changing a code when the failure category is unchanged.
 `AU2999` is the maintained catch-all for compile-time rejections that do not
 yet have a narrower public category. It is a stable code, not permission for a
 tool to omit the code.
+
+`AU2006` identifies an explicit or inherited trait method whose name would
+shadow a builtin member on `Queue[T]`, `Task[T]`, or `TaskGroup`. Its guidance
+requires the trait method to be renamed; backend dispatch is never selected by
+which implementation happens to run first.
 
 ## Diagnostic Structure
 

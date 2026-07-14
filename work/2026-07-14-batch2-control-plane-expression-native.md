@@ -3,7 +3,7 @@
 ## Session
 
 - Started: 2026-07-14 17:18:17 BST.
-- Current elapsed: 5h 26m 12s as of 2026-07-14 22:44:29 BST.
+- Current elapsed: 6h 00m 53s as of 2026-07-14 23:19:10 BST.
 - Hard stop: 2026-07-15 05:18:17 BST after 12 continuous hours.
 - Batch boundary: complete B2.0 and Phases 3, 3.5, and 4 plus V6; do not begin Phase 5.
 
@@ -40,6 +40,13 @@ at the Batch 2 checkpoint with one coverage re-ratchet.
   receiver or argument.
 - Corrected the normative call rule in the Functions manual and promoted
   ADR-0016 to Accepted.
+- Rejected explicit and inherited trait methods that collide with builtin
+  `Queue[T]`, `Task[T]`, or `TaskGroup` members under dedicated code `AU2006`.
+  The direct backend now preserves builtin-member precedence even if malformed
+  internal MIR bypasses the checker.
+- Added Queue, Task default-method, and TaskGroup collision fixtures, a
+  checker-bypass emitted-object regression, and the matching normative
+  diagnostics, trait, concurrency, conformance, CLI, and freeze-guard text.
 
 ## Verification
 
@@ -83,8 +90,19 @@ at the Batch 2 checkpoint with one coverage re-ratchet.
   suites, the 212-case forced MIR/direct parity matrix, LSP and extension
   suites, clean compiler coverage at the frozen floors, 100% LSP coverage,
   29-page reference integrity, docs build, audit, strict Clippy, and hygiene.
+- B2.0-b was pinned failing-first: the new fixtures were initially accepted,
+  and the forged MIR collision initially selected the trait path. The focused
+  fixture suite, emitted-object regression, diagnostic-registry unit test,
+  reference-integrity gate, formatting, strict compiler Clippy, and diff check
+  all pass after the fix.
+- B2.0-b's clean full `npm run ci` gate exits zero with 242 CLI tests, 553
+  compiler-library tests, the 212-case forced MIR/direct parity matrix, LSP and
+  extension suites, 29-page reference integrity, docs build, audit, strict
+  Clippy, and hygiene. The accumulated compiler report is 53,892 / 56,100 lines
+  (`96.06%`), 3,334 / 3,444 functions (`96.81%`), and 78,384 / 83,247 regions
+  (`94.16%`). No synthetic coverage test or exclusion was added.
 
 ## Follow-up
 
-- B2.0-a is complete and ready for its isolated commit. Continue with B2.0-b's
-  builtin handle-method collision rejection and direct dispatch guard.
+- B2.0-a is committed at `8bca972`. Commit the now full-gated B2.0-b ticket,
+  then begin B2.0-c.

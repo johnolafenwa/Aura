@@ -75,6 +75,8 @@ grep -Fq '`value: T` | Shared borrow when `T` is non-copy' docs/manual/functions
 grep -Fq '`value: own T` | Owned argument' docs/manual/functions.md
 grep -Fq 'caller-invisible temporary' docs/manual/functions.md
 grep -Fq 'declaration-stable' docs/manual/generics-and-traits.md
+grep -Fq 'define or inherit a trait method whose name is a builtin member of that handle.' docs/manual/generics-and-traits.md
+grep -Fq 'builtin handle members always retain builtin dispatch' docs/manual/generics-and-traits.md
 grep -Fq 'for value in own values' docs/manual/statements.md
 grep -Fq 'Queue iteration receives values' docs/manual/concurrency.md
 grep -Fq 'parameter `x` is borrowed; declare it as `own String`' docs/manual/diagnostics.md

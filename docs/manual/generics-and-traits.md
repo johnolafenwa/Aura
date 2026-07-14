@@ -175,6 +175,12 @@ Aurora 0.1 retains these borrowed-return conformance rules even though only copy
 
 Implementation methods cannot add default ordinary arguments. Extra methods, missing required methods, receiver mismatches, and signature mismatches are rejected before body execution.
 
+An `impl` targeting `Queue[T]`, `Task[T]`, or `TaskGroup` MUST NOT explicitly
+define or inherit a trait method whose name is a builtin member of that handle.
+Builtin handle names are reserved for their runtime operation; a collision
+reports `AU2006` and the trait method must be renamed. This rule is applied
+after default trait methods are inherited.
+
 ## Trait Method Dispatch
 
 For a concrete value, member lookup considers inherent class methods and applicable visible trait implementations. The selected method keeps its declared receiver and argument ownership behavior.
@@ -342,10 +348,11 @@ missing trait satisfaction, ambiguous equal-specificity dispatch, invalid
 specialization, and substituted type mismatch. `AU2003` reports an unsupported
 operator when no builtin rule or applicable operator trait supplies it.
 `AU2004` reports call argument binding and the prohibition on ordinary default
-arguments in trait methods. `AU2999` covers duplicate/invalid implementations,
-method-conformance or supertrait failure, unsupported implementation targets,
-and remaining generic/trait rejections. `AU3001` reports use after an owned
-generic or receiver move. `AU3002` reports borrow conflicts, storing through a
+arguments in trait methods. `AU2006` reports builtin handle method collisions.
+`AU2999` covers duplicate/invalid implementations, method-conformance or
+supertrait failure, unsupported implementation targets, and remaining
+generic/trait rejections. `AU3001` reports use after an owned generic or
+receiver move. `AU3002` reports borrow conflicts, storing through a
 default-borrowed generic parameter, or contained non-copy borrowed returns.
 `AU3003` reports a mutable receiver call through an immutable place, and
 `AU3004` reports an invalid ownership mode. A selected body retains its runtime
@@ -358,10 +365,12 @@ divisor, and `AU4005` for a resource or I/O failure.
 Generic functions, classes, enums, methods, traits, supertraits, default trait
 bodies, generic and specialized implementations, operator dispatch, `Self`,
 and `From` conversion are implemented for MIR execution and direct native
-generation. User-trait dispatch on builtin `Queue[T]` and `Task[T]` handles is
-also maintained on both backends. The checker supplies one resolved
-specialization and implementation target to lowering, analysis, and the LSP;
-the parity gate rejects backend-specific dispatch behavior.
+generation. User-trait dispatch on builtin `Queue[T]`, `Task[T]`, and
+`TaskGroup` handles is maintained for noncolliding method names on both
+backends; builtin handle members always retain builtin dispatch. The checker
+supplies one resolved specialization and implementation target to lowering,
+analysis, and the LSP; the parity gate rejects backend-specific dispatch
+behavior.
 
 ## Limits And Implementation-Defined Behavior
 

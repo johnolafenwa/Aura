@@ -13,6 +13,7 @@ use cranelift_module::{default_libcall_names, DataDescription, DataId, FuncId, L
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::ast::{BinaryOp, UnaryOp};
+use crate::call::BuiltinMember;
 use crate::diag::Span;
 use crate::mir::{
     BasicBlock, CallTarget, Instruction, MirArg, MirClass, MirFormatPart, MirFunction, MirMapEntry,
@@ -10097,7 +10098,9 @@ impl<'a> FunctionCompiler<'a> {
                     )),
                 };
             }
-            if self.classes.contains_key(name) || self.find_trait_method(object_ty, field).is_some()
+            if self.classes.contains_key(name)
+                || (BuiltinMember::resolve(name, field).is_none()
+                    && self.find_trait_method(object_ty, field).is_some())
             {
                 if let Ok(result) = self.compile_class_member_call(
                     name,

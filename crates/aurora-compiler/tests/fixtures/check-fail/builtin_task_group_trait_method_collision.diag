@@ -1,0 +1,6 @@
+error[AU2006]: trait method `cancel` collides with builtin handle method `TaskGroup.cancel`
+ --> crates/aurora-compiler/tests/fixtures/check-fail/builtin_task_group_trait_method_collision.au:5:5
+  |
+5 |     def cancel(borrow self) -> None:
+  |     ^
+  = help: rename the trait method; builtin handle methods cannot be shadowed by trait implementations

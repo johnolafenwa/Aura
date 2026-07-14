@@ -1,0 +1,6 @@
+trait CounterfeitCancel:
+    def cancel(borrow self) -> None
+
+impl CounterfeitCancel for TaskGroup:
+    def cancel(borrow self) -> None:
+        pass

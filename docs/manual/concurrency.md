@@ -229,25 +229,28 @@ is therefore significant.
 forms. `AU2001` reports unknown concurrency types, functions, or members,
 including removed `Channel` names. `AU2002` covers generic, duration, capacity,
 task-vector, argument, and outcome type mismatch. `AU2004` reports invalid
-constructor or method argument binding. `AU2999` covers unsupported targets,
-removed method aliases, method-reference misuse, and remaining static
-concurrency rejections. `AU3001` reports use after a value moves into task or
-queue storage. `AU3002` reports invalid borrowed capture/storage use and the
-rejected `borrow mut` task-target boundary. `AU3003` reports a mutating call
-through an immutable place, and `AU3004` reports each forbidden Queue-iteration
-ownership modifier. Timeout, cancellation, closure, fullness, and an observed
-task error are typed values, not diagnostics. An unread child trap retains its
-original code. `AU4001` reports a general runtime trap, including zero or
-negative Queue capacity. `AU4002` reports arithmetic overflow or underflow,
-`AU4003` a bounds or lookup violation, `AU4004` a zero divisor, and `AU4005` a
-resource or I/O failure.
+constructor or method argument binding. `AU2006` reports an explicit or
+inherited trait method that collides with a builtin `Queue[T]`, `Task[T]`, or
+`TaskGroup` member. `AU2999` covers unsupported targets, removed method aliases,
+method-reference misuse, and remaining static concurrency rejections. `AU3001`
+reports use after a value moves into task or queue storage. `AU3002` reports
+invalid borrowed capture/storage use and the rejected `borrow mut` task-target
+boundary. `AU3003` reports a mutating call through an immutable place, and
+`AU3004` reports each forbidden Queue-iteration ownership modifier. Timeout,
+cancellation, closure, fullness, and an observed task error are typed values,
+not diagnostics. An unread child trap retains its original code. `AU4001`
+reports a general runtime trap, including zero or negative Queue capacity.
+`AU4002` reports arithmetic overflow or underflow, `AU4003` a bounds or lookup
+violation, `AU4004` a zero divisor, and `AU4005` a resource or I/O failure.
 
 ## Backend Support
 
 Structured groups, task targets and captures, Queue operations and iteration,
-wait helpers, sleep, cancellation, and user-trait dispatch on `Queue[T]` and
-`Task[T]` are maintained on both MIR execution and direct native generation.
-The scheduler/runtime surface and primary diagnostics are parity-pinned.
+wait helpers, sleep, cancellation, and user-trait dispatch on `Queue[T]`,
+`Task[T]`, and `TaskGroup` for noncolliding method names are maintained on both
+MIR execution and direct native generation. Builtin handle member names retain
+builtin dispatch on both backends. The scheduler/runtime surface and primary
+diagnostics are parity-pinned.
 MIR traps include Aurora call-chain and task-ancestry notes; direct native
 traps may omit only those supplemental notes until the deferred frame work.
 

@@ -1678,6 +1678,7 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
                 },
             );
         }
+        reject_builtin_handle_trait_method_collisions(impl_decl, &for_type, &methods)?;
         trait_impls.push(TraitImplInfo {
             module_name: module_name.clone(),
             decl: impl_decl.clone(),
@@ -1816,6 +1817,51 @@ pub fn check_with_context(module: Module, context: ModuleContext) -> Result<Prog
     checker.check_top_level(&program.top_level_stmts)?;
 
     Ok(program)
+}
+
+fn reject_builtin_handle_trait_method_collisions(
+    impl_decl: &ImplDecl,
+    for_type: &Type,
+    methods: &BTreeMap<String, TraitImplMethodInfo>,
+) -> Result<()> {
+    let Type::Named(handle_name, _) = for_type else {
+        return Ok(());
+    };
+    if !matches!(handle_name.as_str(), "Queue" | "Task" | "TaskGroup") {
+        return Ok(());
+    }
+
+    for (method_name, method) in methods {
+        if BuiltinMember::resolve(handle_name, method_name).is_none() {
+            continue;
+        }
+
+        let explicit_method = impl_decl
+            .methods
+            .iter()
+            .find(|candidate| candidate.name.as_str() == method_name.as_str());
+        let primary_span = explicit_method.map_or(impl_decl.span, |method| method.span);
+        let mut diagnostic = Diagnostic::coded_at(
+            "AU2006",
+            primary_span,
+            format!(
+                "trait method `{method_name}` collides with builtin handle method \
+                 `{handle_name}.{method_name}`"
+            ),
+        )
+        .with_help(
+            "rename the trait method; builtin handle methods cannot be shadowed by trait implementations",
+        );
+        if explicit_method.is_none() {
+            diagnostic = diagnostic.with_secondary(
+                method.decl.span,
+                "colliding default trait method is declared here",
+            );
+        }
+        return Err(diagnostic);
+    }
+
+    Ok(())
 }
 
 fn lower_type(

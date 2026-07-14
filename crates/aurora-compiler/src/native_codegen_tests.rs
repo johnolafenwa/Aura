@@ -5247,6 +5247,58 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_backend_prefers_builtin_handle_member_if_collision_reaches_mir() {
+    let source = r#"
+trait Probe:
+    def probe(borrow self) -> int64
+
+impl[T] Probe for Queue[T]:
+    def probe(borrow self) -> int64:
+        return 99
+
+def main() -> int32:
+    queue = Queue[int32]()
+    received = queue.get()
+    return 0
+"#;
+
+    let mut mir = lower_source_to_mir(source).expect("noncolliding source should lower");
+    let trait_symbol = {
+        let method = mir
+            .trait_impls
+            .iter_mut()
+            .find(|trait_impl| trait_impl.trait_name == "Probe")
+            .and_then(|trait_impl| {
+                trait_impl
+                    .methods
+                    .iter_mut()
+                    .find(|method| method.name == "probe")
+            })
+            .expect("Probe.probe should lower");
+        let symbol = mangle_symbol(&method.function_name);
+        method.name = "get".to_string();
+        symbol
+    };
+
+    let object =
+        emit_host_object(&mir).expect("builtin dispatch should survive malformed internal MIR");
+    let referenced = object_referenced_symbols(&object);
+
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aurora_direct_channel_recv")),
+        "Queue.get should reference the builtin receive helper: {referenced:?}"
+    );
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.contains(&trait_symbol)),
+        "Queue.get must not dispatch to the colliding trait body: {referenced:?}"
+    );
+}
+
+#[test]
 fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
     let one_arg = vec![MirArg {
         name: None,
