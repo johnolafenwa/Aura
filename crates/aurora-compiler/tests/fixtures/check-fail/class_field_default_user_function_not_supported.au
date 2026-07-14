@@ -1,0 +1,8 @@
+def default_port() -> int32:
+    return 8080
+
+class Server:
+    port: int32 = default_port()
+
+def main():
+    pass

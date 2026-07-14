@@ -5,7 +5,7 @@ Last updated: 2026-07-14
 ## Active Work Session
 
 - Started: 2026-07-14 17:18:17 BST.
-- Current elapsed: 6h 00m 53s as of 2026-07-14 23:19:10 BST.
+- Current elapsed: 7h 08m 46s as of 2026-07-15 00:27:03 BST.
 - Target: Complete authorized Batch 2 of 5: close B2.0-a/b/c first, then Phase 3 practical control plane, Phase 3.5 Python expression kernel, Phase 4 native execution path, V6, the full-gated logical commits, and the single checkpoint coverage re-ratchet.
 - Stop rule: complete Batch 2 and report its checkpoint, encounter a genuine stop under the provisional-decision protocol, or reach 12 continuous hours at 2026-07-15 05:18:17 BST. Do not begin Phase 5.
 - Freeze rule: every semantic addition or correction must update its ADR/reference, fixtures, examples, and tutorials in the same logical commit; full `npm run ci` must be green before each commit.
@@ -52,6 +52,7 @@ Last updated: 2026-07-14
 
 - In Batch 2 with the Phase 4 native work, complete V6: diagnose why the direct int32 10M loop is roughly 2x slower than int64, fix or document the cause, and retain both measurements in the benchmark baseline.
 - In Batch 3 frame work, add native direct-backend Aurora call-chain and task-ancestry backtraces, then remove the temporary parity normalization for the three supplemental MIR backtrace note families; primary trap code/message/span parity remains mandatory meanwhile.
+- In the same Batch 3 frame work, replace the current flat prose call-chain/task-ancestry `notes` entries with explicit structured frame lists in the diagnostic schema and its CLI/LSP bridges.
 - Publish signed 0.1 preview archives for every supported platform after the release workflow has passed on each target.
 - Use the host-array / tensor-lite layer as the next ML systems milestone, starting with a small dtype and shape surface before tensor or accelerator syntax.
 - Expand control-plane serialization and networking from the current honest baseline only when real agent-service examples require nested schemas, pooling, redirects, HTTP/2, or server-side TLS.

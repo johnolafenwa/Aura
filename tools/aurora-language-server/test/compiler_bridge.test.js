@@ -814,6 +814,46 @@ test("compiler bridge preserves the chained-comparison code, guidance, and opera
   }
 });
 
+test("compiler bridge preserves indexed non-copy ownership diagnostic codes", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-index-ownership-"));
+  const cases = [
+    {
+      code: "AU3005",
+      source: [
+        "def main():",
+        "    values: Vec[String] = [\"one\"]",
+        "    value: String = values[0]",
+        ""
+      ].join("\n")
+    },
+    {
+      code: "AU3006",
+      source: [
+        "def main():",
+        "    mut values: Vec[String] = [\"one\"]",
+        "    values[0] += \"two\"",
+        ""
+      ].join("\n")
+    }
+  ];
+
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    for (const entry of cases) {
+      const mainPath = path.join(tempRoot, `${entry.code}.au`);
+      const mainUri = `file://${mainPath}`;
+      const analysis = await analyzeWithCompiler(mainUri, entry.source);
+
+      assert.ok(analysis, `${entry.code} should return compiler analysis`);
+      assert.equal(analysis.diagnostics.length, 1, entry.code);
+      assert.equal(analysis.diagnostics[0].code, entry.code);
+      assert.equal(compilerDiagnosticsToLsp(analysis, mainUri)[0].code, entry.code);
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge reports typed self with the receiver-forms diagnostic", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aurora-lsp-typed-self-"));
   const source = [

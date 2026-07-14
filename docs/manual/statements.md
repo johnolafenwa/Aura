@@ -392,7 +392,7 @@ Bindings own, copy, or borrow their initializer according to type and context.
 `own` Vec/Set iteration consumes once into a loop-private source, bare or
 `borrow` collection iteration retains and freezes its selected place, and Queue
 iteration captures a copy handle once while receiving already-owned items.
-The one-time iterable selection is the provisional ADR-0017 rule; the ownership
+The one-time iterable selection is the accepted ADR-0017 rule; the ownership
 modes themselves remain those accepted in ADR-0006.
 Simple Map indexed assignment consumes non-copy keys and values into owned
 storage; direct Vec/Map indexed compound assignment is restricted to copy
@@ -409,13 +409,14 @@ iteration, match, return, or assignment mismatch. `AU2003` means an unsupported
 compound-assignment operator. `AU2004` means call or target argument binding
 failed. `AU2005` means focused migration guidance for a Python-shaped
 statement. `AU2999` means an exhaustiveness, contextual-legality, unsupported
-statement, or non-copy Vec/Map indexed compound-assignment rejection without a
-narrower code. `AU3001` means use of a moved
+statement rejection without a narrower code. `AU3001` means use of a moved
 place; `AU3002` means a borrow conflict, including later access that mutably
 borrows or consumes an overlapping retained non-copy compound or indexed-
 assignment target; `AU3003` means an immutable target was used mutably; and
 `AU3004` means an
-invalid loop, parameter, or ownership mode.
+invalid loop, parameter, or ownership mode. `AU3005` identifies a non-copy
+direct indexed read, and `AU3006` identifies a non-copy indexed compound
+assignment.
 During execution, `AU4001` means a general statement trap, `AU4002` means
 numeric range, overflow, or underflow failure, `AU4003` means a bounds or lookup
 violation, `AU4004` means a zero divisor, and `AU4005` means a trapping resource

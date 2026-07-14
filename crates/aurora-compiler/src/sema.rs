@@ -4791,7 +4791,7 @@ impl<'a> FunctionChecker<'a> {
                 self.check_vec_index_type(index, index.span, locals)?;
                 if assign.op.is_some() && !self.is_copy_type(&target_ty) {
                     return Err(Diagnostic::coded_at(
-                        "AU2999",
+                        "AU3006",
                         assign.span,
                         format!(
                             "cannot implicitly copy `{}` out of a vector index for compound assignment; use `get(index)` for an explicit cloned optional read, or `remove(index)` to transfer ownership and assign the result explicitly",
@@ -4810,7 +4810,7 @@ impl<'a> FunctionChecker<'a> {
                 }
                 if assign.op.is_some() && !self.is_copy_type(value_ty) {
                     return Err(Diagnostic::coded_at(
-                        "AU2999",
+                        "AU3006",
                         assign.span,
                         format!(
                             "cannot implicitly copy `{}` out of a map index for compound assignment; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership and assign the result explicitly",
@@ -6189,7 +6189,8 @@ impl<'a> FunctionChecker<'a> {
                         expr.span,
                     )?;
                     if !self.is_copy_type(&element_ty) {
-                        return Err(Diagnostic::at(
+                        return Err(Diagnostic::coded_at(
+                            "AU3005",
                             expr.span,
                             format!(
                                 "cannot implicitly copy `{}` out of a vector index; use `get(index)` for an explicit cloned read instead",
@@ -6231,7 +6232,7 @@ impl<'a> FunctionChecker<'a> {
                     )?;
                     if !self.is_copy_type(value_ty) {
                         return Err(Diagnostic::coded_at(
-                            "AU2999",
+                            "AU3005",
                             expr.span,
                             format!(
                                 "cannot implicitly copy `{}` out of a map index; use `get(key)` for an explicit cloned optional read, or `remove(key)` to transfer ownership",
@@ -10382,9 +10383,11 @@ impl<'a> FunctionChecker<'a> {
                 span,
                 "Python-style `str(value)` is not available yet; use a double-quoted f-string today",
             ),
-            Some("String") => {
-                Diagnostic::at(span, "strings use quoted literals; `String(...)` is not a constructor")
-            }
+            Some("String") => Diagnostic::coded_at(
+                "AU2005",
+                span,
+                "strings use quoted literals; `String(...)` is not a constructor",
+            ),
             Some("Some" | "None" | "Ok" | "Err" | "Closed") => Diagnostic::at(
                 span,
                 "bare enum variants require an expected enum type or a qualified form such as `Result.Ok(...)`",
@@ -12483,7 +12486,8 @@ impl<'a> FunctionChecker<'a> {
         if self.is_shared_self_place(object, locals) {
             return Err(self.shared_self_mutation_diagnostic(span, locals));
         }
-        Err(Diagnostic::at(
+        Err(Diagnostic::coded_at(
+            "AU3003",
             span,
             format!("method `{}` requires a mutable receiver", method_name),
         )

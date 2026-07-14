@@ -349,7 +349,7 @@ The function, method, generic, default-argument, named-argument, borrowed-return
 containment, task-target, and entrypoint contracts described above are
 implemented. Supplied/default evaluation and argument capture follow
 `architecture_docs/decisions/0015-explicit-and-default-argument-order.md`,
-which remains **Provisional — Batch 1 checkpoint review**. The rules are pinned
+which is **Accepted**. The rules are pinned
 by
 `crates/aurora-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au`
 on both backends. Borrowed-return declarations reserve a provenance contract

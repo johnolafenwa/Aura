@@ -152,6 +152,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "ownership mode",
     },
     DiagnosticCodeInfo {
+        code: "AU3005",
+        band: "ownership",
+        title: "non-copy indexed read",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3006",
+        band: "ownership",
+        title: "non-copy indexed compound assignment",
+    },
+    DiagnosticCodeInfo {
         code: "AU4001",
         band: "runtime",
         title: "runtime trap",

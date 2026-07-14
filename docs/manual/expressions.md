@@ -433,8 +433,8 @@ function after required cleanup.
 Evaluation copies copy values and moves non-copy values only when the static
 context consumes them. Default-mode non-copy parameters borrow; `own`
 parameters and consuming receivers move; explicit borrows retain the owner.
-Non-copy indexed reads require the safe method surface instead of an implicit
-copy. Binary left operands, index bases, method receivers, and indexed-assignment
+Non-copy indexed reads report `AU3005` and require the safe method surface
+instead of an implicit copy. Binary left operands, index bases, method receivers, and indexed-assignment
 targets retain their non-copy borrow through later inputs. An overlapping
 mutable borrow or consumption is rejected with `AU3002`, and no hidden clone
 repairs the invalid expression.
@@ -451,6 +451,9 @@ means use of a moved value; `AU3002` means a borrow conflict, including a later
 mutable borrow or consumption overlapping a retained non-copy binary operand,
 index base, method receiver, or indexed-assignment target; `AU3003` means an
 immutable place was used mutably; and `AU3004` means an invalid ownership mode.
+`AU3005` means a direct indexed read would copy a non-copy stored value, and
+`AU3006` means indexed compound assignment would do the same during its
+read-modify-write step.
 At runtime, `AU4001` means a general expression trap, `AU4002` means arithmetic
 overflow, underflow, range, or conversion-exactness failure, `AU4003` means a
 bounds or lookup violation, `AU4004` means a zero divisor, and `AU4005` means a

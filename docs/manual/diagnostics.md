@@ -16,7 +16,7 @@ the phase that owns the failure:
 | `AU10xx` | lexical analysis | `AU1001` invalid lexical input; `AU1002` invalid f-string delimiter |
 | `AU11xx` | parsing | `AU1101` invalid syntax |
 | `AU20xx` | names and types | `AU2001` name resolution; `AU2002` type mismatch; `AU2003` unsupported operator; `AU2004` argument binding; `AU2005` migration guidance; `AU2006` builtin handle method collision; `AU2999` general compile-time rejection |
-| `AU30xx` | ownership and borrows | `AU3001` moved value; `AU3002` borrow violation; `AU3003` mutability violation; `AU3004` ownership mode |
+| `AU30xx` | ownership and borrows | `AU3001` moved value; `AU3002` borrow violation; `AU3003` mutability violation; `AU3004` ownership mode; `AU3005` non-copy indexed read; `AU3006` non-copy indexed compound assignment |
 | `AU40xx` | runtime-checked traps | `AU4001` general runtime trap; `AU4002` arithmetic overflow or underflow; `AU4003` bounds or lookup violation; `AU4004` zero divisor; `AU4005` resource or I/O failure |
 
 The registry is append-only. Once published, a code MUST NOT be reused,
@@ -33,6 +33,12 @@ tool to omit the code.
 shadow a builtin member on `Queue[T]`, `Task[T]`, or `TaskGroup`. Its guidance
 requires the trait method to be renamed; backend dispatch is never selected by
 which implementation happens to run first.
+
+`AU3005` rejects a direct `Vec` or `Map` indexed read whose stored type is
+non-copy; use the explicit cloned `get` surface or transfer ownership with
+`remove` where available. `AU3006` rejects the corresponding indexed compound
+assignment because read-modify-write would otherwise require a hidden clone or
+destructive move of the stored value.
 
 ## Diagnostic Structure
 
@@ -88,6 +94,13 @@ invalid source rather than silently reinterpret it.
 `aura check --format json` writes one JSON document. `aura run --format json`
 and `aura build --format json` use the same document for compile failures. The
 top-level `schema_version` is currently `1`, and `diagnostics` is an array.
+
+For `check`, `run`, and `build`, the current compiler emits at most one
+diagnostic per invocation: the pipeline stops at the first failure. On failure
+the schema-version-1 `diagnostics` array therefore contains exactly one entry;
+on successful `check` it is empty. The array is retained for schema
+compatibility and future recovery, and tools must not infer that the source
+contains no additional errors.
 
 ```json
 {
@@ -176,6 +189,8 @@ Hints MUST name an available spelling when one exists. For a reserved future
 feature, they MUST say that it arrives in a later Aurora release and name a
 working expression or statement form for today. The complete hint family is
 pinned under `crates/aurora-compiler/tests/fixtures/python-hints/`.
+`AU2005` also identifies `String(...)` constructor-shaped source and directs
+the caller to Aurora string literals.
 
 ## Runtime Traps And Backtraces
 
@@ -189,6 +204,11 @@ Aurora function and its source span, ordered innermost first. If the trap occurs
 in a task, notes also identify that task's entry and its ancestry, including the
 source location from which each task was started. These are Aurora frames, not
 host Rust frames.
+
+Structured output currently transports the Aurora call chain, task entry, and
+task ancestry as flat prose strings in `notes`. Dedicated structured frame
+lists are deferred to the Batch 3 native-frame work; tools MUST treat these
+notes as prose rather than parse them.
 
 Native-backend Aurora backtraces are deferred to the Batch 3 frame work. Until
 then, native execution preserves the same primary trap code, message, and source

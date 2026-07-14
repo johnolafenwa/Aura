@@ -128,7 +128,8 @@ retarget the store. A non-copy root or projected target remains borrowed across
 the right operand; overlapping mutable borrow or consumption is rejected with
 `AU3002`. Direct indexed compound assignment requires a copy `Vec` element or
 `Map` value. A non-copy indexed element is rejected rather than implicitly
-cloned or destructively moved.
+cloned or destructively moved, with `AU3006`. A non-copy direct indexed read is
+rejected with `AU3005`.
 
 Field and index assignment mutate the selected place. Vector indices are
 zero-based. Simple Map assignment replaces an equal existing key or adds a new
@@ -152,13 +153,13 @@ Bare iteration over a `Vec` or `Set` retains and freezes the selected collection
 for the loop and yields shared element access. `own` iteration moves the
 collection into a loop-private source once at entry and yields owned elements;
 reinitializing the consumed source binding in the body does not switch or
-truncate the active iteration. That one-time source selection is provisional
+truncate the active iteration. That one-time source selection is accepted
 under ADR-0017 and does not alter ADR-0006's ownership modes. Explicit `borrow` and `borrow mut` iteration
 retain the collection as allowed by the static rules. Range iteration yields `int32` values from
 `start` inclusive to `end` exclusive; its currently accepted modifiers do not
 change behavior and remain a tracked language-design follow-up.
 
-Queue iteration receives items until the queue closes, cancellation is observed, registered producers complete cleanly with no more items, or an unread sibling-task failure ends the surrounding group. It is a scheduler operation rather than iteration over a snapshot. Each item arrives already owned by the loop binding; explicit `own`, `borrow`, and `borrow mut` modifiers are rejected because neither the received value nor the copyable Queue handle has a place-iteration ownership mode to modify. Under provisional ADR-0017, the bare form evaluates and copies its Queue handle once at loop entry. This does not freeze the source binding: rebinding that variable in the body is allowed, but later iterations continue receiving through the captured handle. ADR-0006's ownership carve-out is otherwise unchanged.
+Queue iteration receives items until the queue closes, cancellation is observed, registered producers complete cleanly with no more items, or an unread sibling-task failure ends the surrounding group. It is a scheduler operation rather than iteration over a snapshot. Each item arrives already owned by the loop binding; explicit `own`, `borrow`, and `borrow mut` modifiers are rejected because neither the received value nor the copyable Queue handle has a place-iteration ownership mode to modify. Under accepted ADR-0017, the bare form evaluates and copies its Queue handle once at loop entry. This does not freeze the source binding: rebinding that variable in the body is allowed, but later iterations continue receiving through the captured handle. ADR-0006's ownership carve-out is otherwise unchanged.
 
 ## Pattern Matching
 

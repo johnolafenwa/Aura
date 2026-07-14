@@ -115,8 +115,8 @@ and `for value in borrow mut jobs` are all rejected; use the bare form above.
 The bare form evaluates and copies the Queue handle once at loop entry. It does
 not freeze the source binding: rebinding `jobs` in the body is permitted, but
 later receives continue through the captured handle rather than switching to
-the newly bound Queue. This source-selection timing is recorded provisionally
-in ADR-0017; ADR-0006's receive ownership and modifier carve-out are unchanged.
+the newly bound Queue. This source-selection timing is accepted in ADR-0017;
+ADR-0006's receive ownership and modifier carve-out are unchanged.
 The receive loop ends when the queue closes, cancellation interrupts it, or
 the relevant producers in the active task group complete. Closing queues
 explicitly is still the clearest program shape.

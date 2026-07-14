@@ -1,6 +1,6 @@
 # ADR-0015: Explicit and default argument evaluation order
 
-- Status: Provisional — Batch 1 checkpoint review
+- Status: Accepted
 - Date: 2026-07-14
 - Reference gap: supplied/default ordering and result-capture timing
 
@@ -18,7 +18,7 @@ deferred storing an earlier result until after a later expression ran, that
 later expression could mutate the earlier expression's source place and change
 the observed argument or field value despite the stated order.
 
-## Provisional decision
+## Decision
 
 For function calls, method calls, class construction, and enum-variant
 construction, Aurora evaluates all supplied argument expressions first in

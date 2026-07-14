@@ -3,7 +3,7 @@
 ## Session
 
 - Started: 2026-07-14 17:18:17 BST.
-- Current elapsed: 6h 00m 53s as of 2026-07-14 23:19:10 BST.
+- Current elapsed: 7h 08m 46s as of 2026-07-15 00:27:03 BST.
 - Hard stop: 2026-07-15 05:18:17 BST after 12 continuous hours.
 - Batch boundary: complete B2.0 and Phases 3, 3.5, and 4 plus V6; do not begin Phase 5.
 
@@ -47,6 +47,16 @@ at the Batch 2 checkpoint with one coverage re-ratchet.
 - Added Queue, Task default-method, and TaskGroup collision fixtures, a
   checker-bypass emitted-object regression, and the matching normative
   diagnostics, trait, concurrency, conformance, CLI, and freeze-guard text.
+- Added dedicated `AU3005`/`AU3006` categories for non-copy indexed reads and
+  indexed compound assignment, corrected the remaining mutability and String
+  constructor guidance codes, and pinned all six classifications through
+  compiler fixtures and the LSP bridge.
+- Made the CLI's one-diagnostic compile cap explicit, corrected `aura build`
+  help so required `-o <output>` is not shown as optional, pinned the current
+  class-field-default user-function limit, and accepted ADR-0014, ADR-0015,
+  and ADR-0017 throughout the frozen reference.
+- Recorded structured diagnostic frame lists for Batch 3; the current call
+  chain and task ancestry remain flat prose notes until that native-frame pass.
 
 ## Verification
 
@@ -101,8 +111,26 @@ at the Batch 2 checkpoint with one coverage re-ratchet.
   Clippy, and hygiene. The accumulated compiler report is 53,892 / 56,100 lines
   (`96.06%`), 3,334 / 3,444 functions (`96.81%`), and 78,384 / 83,247 regions
   (`94.16%`). No synthetic coverage test or exclusion was added.
+- B2.0-c was pinned failing-first: the fixture suite reported `AU2999` where
+  the new ownership/mutability/guidance oracles require dedicated codes, the
+  CLI help regression showed `[-o <output>]`, and the focused LSP bridge test
+  observed `AU2999` instead of `AU3005`.
+- After implementation, the full check-fail fixture oracle, diagnostic-registry
+  unit, CLI help test, two-error structured-diagnostic test across `check`,
+  `run`, and `build`, and focused LSP `AU3005`/`AU3006` bridge test pass.
+  Reference integrity passes all 29 pages, the VitePress build exits zero,
+  strict compiler/CLI Clippy and formatting pass, and `git diff --check` is
+  clean.
+- B2.0-c's first full gate passed every behavior, parity, LSP, extension, and
+  coverage check, then stopped only because the newly added reference guard
+  searched for prose split across two Markdown lines. Narrowing the guard to a
+  stable contiguous phrase made the standalone 29-page reference gate pass.
+- The required clean full `npm run ci` rerun exits zero end to end. Its compiler
+  report is 53,893 / 56,102 lines (`96.06%`), 3,334 / 3,444 functions
+  (`96.81%`), and 78,384 / 83,247 regions (`94.16%`); LSP coverage remains
+  100%. No synthetic coverage test or exclusion was added.
 
 ## Follow-up
 
-- B2.0-a is committed at `8bca972`. Commit the now full-gated B2.0-b ticket,
-  then begin B2.0-c.
+- B2.0-a is committed at `8bca972` and B2.0-b at `8590cc3`. Commit the now
+  full-gated B2.0-c cleanup, then begin the Phase 3 builtin metadata foundation.

@@ -296,8 +296,9 @@ casts, and `AU2004` reports invalid constructor argument binding. `AU2999`
 covers invalid recursive layouts and other type rejections without a narrower
 category. `AU3001` reports use of a moved non-copy value; `AU3002` reports a
 borrow conflict; `AU3003` reports mutation through an immutable place; and
-`AU3004` reports an invalid ownership or receiver type mode. Runtime `AU4001`
-means a general checked trap, `AU4002` means numeric overflow, underflow, range,
+`AU3004` reports an invalid ownership or receiver type mode. `AU3005` reports a
+non-copy indexed read, and `AU3006` reports a non-copy indexed compound
+assignment. Runtime `AU4001` means a general checked trap, `AU4002` means numeric overflow, underflow, range,
 or exactness failure, `AU4003` means a bounds or lookup violation, `AU4004` means a zero
 divisor, and `AU4005` means a trapping resource or I/O failure.
 

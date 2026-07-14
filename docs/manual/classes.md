@@ -310,7 +310,9 @@ resolution and signatures.
 
 Aurora 0.1 has no class inheritance, overloads, property syntax, custom
 constructor hook, or general destructor hook. Generic user classes cannot be
-managed directly by `with`. Calls producing non-copy borrowed field results
+managed directly by `with`. A class field default cannot call a user-defined
+function in the current compiler; compute that value before construction and
+pass it as an explicit field argument. Calls producing non-copy borrowed field results
 are contained until live alias storage exists. `indirect` is only a recursive
 field-layout marker; its storage representation and the physical order or
 padding of fields are not observable language contracts. Construction and
@@ -328,6 +330,6 @@ custom constructor/destructor hooks, and generic `with` resources are
 unavailable and MUST NOT be inferred from accepted class syntax. The
 constructor evaluation rule is implemented under
 `architecture_docs/decisions/0015-explicit-and-default-argument-order.md`,
-whose status is **Provisional — Batch 1 checkpoint review**, and is pinned by
+whose status is **Accepted**, and is pinned by
 `crates/aurora-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au`
 on both backends.

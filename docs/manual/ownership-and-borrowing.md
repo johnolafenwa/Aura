@@ -218,7 +218,7 @@ Bare `Vec` and `Set` iteration retains the collection and yields shared-borrowed
 non-copy elements. `for value in own collection` moves the collection once into
 a loop-private source and yields owned elements. Reinitializing the consumed
 source binding in the body cannot switch or truncate that active iteration.
-That one-time source selection is provisional under ADR-0017; ADR-0006's
+That one-time source selection is accepted under ADR-0017; ADR-0006's
 accepted loop ownership modes are unchanged.
 `for value in borrow collection` is the explicit shared form.
 `for value in borrow mut vec` requires a mutable vector place and yields
@@ -232,7 +232,7 @@ a scheduler operation, not a place traversal. The bare form copies the Queue
 handle once at loop entry and yields owned items without freezing the source
 binding; rebinding that source does not switch later receives. All three
 explicit ownership modifiers are rejected. The one-time handle selection is
-also provisional under ADR-0017. See
+also accepted under ADR-0017. See
 [Concurrency](/manual/concurrency).
 
 ## Clone
@@ -359,7 +359,7 @@ instead of cloning or destructively moving the stored value.
 syntax. `AU2002` covers type and provenance-source type mismatch, while
 `AU2004` reports argument binding that cannot satisfy a required mutable place.
 `AU2999` covers unsupported move/control-flow/resource cases without a narrower
-category, including non-copy Vec/Map indexed compound assignment. `AU3001`
+category. `AU3001`
 reports use of a moved or partially moved place. `AU3002`
 reports overlapping or invalid borrows, moving through a borrow, borrowed-
 return provenance/materialization failure, invalid mutable-borrow defaults or
@@ -370,6 +370,8 @@ diagnostic points to both the later access and the retained-borrow origin.
 `AU3003` reports assignment or mutation through an immutable place, including
 shared `self`. `AU3004`
 reports invalid parameter, receiver, loop, or Queue-iteration ownership modes.
+`AU3005` rejects a direct indexed read of a non-copy Vec element or Map value;
+`AU3006` rejects the corresponding indexed compound read-modify-write.
 Ownership failures are static. A runtime operation reached through an owned or
 borrowed value keeps its own code: `AU4001` for a general trap, `AU4002` for
 arithmetic overflow or underflow, `AU4003` for a bounds or lookup violation,
@@ -402,8 +404,8 @@ owned/shared/mutable passing, all receiver modes, call-boundary exclusivity,
 partial moves and reinitialization, flow-sensitive checks, borrowed-return
 containment, borrowed matching and Vec/Set iteration, task capture, cloning,
 and lexical resource ownership are implemented for the post-Phase 1.5
-surface; the one-time Vec/Set/Queue iteration-source rule remains provisional
-under ADR-0017 at the Batch 1 checkpoint. Live non-copy borrowed aliases and their runtime storage are reserved
+surface; the one-time Vec/Set/Queue iteration-source rule is accepted under
+ADR-0017. Live non-copy borrowed aliases and their runtime storage are reserved
 for Phase 6. General reference values outside that reserved contract, mutable
 Set iteration, Queue ownership modifiers, and mutable-borrow task capture are
 unavailable.

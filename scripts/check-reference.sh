@@ -80,6 +80,27 @@ grep -Fq 'builtin handle members always retain builtin dispatch' docs/manual/gen
 grep -Fq 'for value in own values' docs/manual/statements.md
 grep -Fq 'Queue iteration receives values' docs/manual/concurrency.md
 grep -Fq 'parameter `x` is borrowed; declare it as `own String`' docs/manual/diagnostics.md
+grep -Fq 'the current compiler emits at most one' docs/manual/diagnostics.md
+grep -Fq '`AU3005` rejects a direct `Vec` or `Map` indexed read' docs/manual/diagnostics.md
+grep -Fq '`AU3006` rejects the corresponding indexed compound' docs/manual/diagnostics.md
+grep -Fq 'code: "AU3005"' crates/aurora-compiler/src/diag.rs
+grep -Fq 'code: "AU3006"' crates/aurora-compiler/src/diag.rs
+grep -Fq 'or: aura build -o <output>' crates/aura/src/main.rs
+if grep -Fq 'aura build [-o <output>]' crates/aura/src/main.rs; then
+  echo 'aura help still presents required build output as optional' >&2
+  exit 1
+fi
+if grep -Fq '<check|run|build' crates/aura/src/main.rs; then
+  echo 'aura help still advertises build through a form without required output' >&2
+  exit 1
+fi
+grep -Fq 'Class field defaults cannot call user-defined functions' docs/manual/current-limits.md
+test -s crates/aurora-compiler/tests/fixtures/check-fail/class_field_default_user_function_not_supported.au
+grep -Fq 'Structured frame-list fields are deferred to Batch 3' docs/manual/current-limits.md
+grep -Fq 'notes as prose rather than parse them.' docs/manual/diagnostics.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0014-map-literals-and-indexing.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0015-explicit-and-default-argument-order.md
+grep -Fq -- '- Status: Accepted' architecture_docs/decisions/0017-iteration-source-selection.md
 grep -Fq 'default temporary lives until the call completes' docs/manual/execution-model.md
 grep -Fq 'push(value: own T)' docs/manual/api-index.md
 grep -Fq 'set(key: own K, value: own V)' docs/manual/api-index.md

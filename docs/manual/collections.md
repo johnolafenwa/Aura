@@ -72,8 +72,8 @@ for entry in counts.items():
 Bare or explicit shared Vec/Set iteration freezes the selected collection for
 the loop. `own` iteration instead moves the collection once into a loop-private
 source. Reinitializing the consumed source binding in the body cannot switch or
-truncate the active iteration. ADR-0017 records this one-time source-selection
-rule provisionally without changing ADR-0006's loop ownership modes.
+truncate the active iteration. Accepted ADR-0017 records this one-time
+source-selection rule without changing ADR-0006's loop ownership modes.
 
 ## Vec[T]
 
@@ -320,12 +320,12 @@ index/key type mismatch, and method argument type mismatch. `AU2004` reports
 invalid constructor or method argument binding. `AU2005` supplies the focused
 Python-migration guidance for `len(...)`, `.append(...)`, `in`, and
 comprehensions. `AU2999` covers unsupported collection methods, non-indexable
-values, forbidden non-copy direct reads, non-copy Vec/Map indexed compound
-assignment, and remaining static collection rejections. `AU3001` reports use after moving a
+values, and remaining static collection rejections. `AU3001` reports use after moving a
 stored value, indexed-assignment key, or consuming collection. `AU3002`
 reports mutation/move while a collection or element is borrowed and invalid
 mutable iteration. `AU3003` reports mutation through an immutable collection
-place. `AU4003` (`bounds or lookup violation`) reports an out-of-range Vec
+place. `AU3005` rejects a non-copy direct Vec/Map indexed read, and `AU3006`
+rejects a non-copy Vec/Map indexed compound assignment. `AU4003` (`bounds or lookup violation`) reports an out-of-range Vec
 index or a missing direct Map key.
 Optional absence from `get` and Boolean absence from Set/Map membership or
 removal are typed values, not diagnostics.
@@ -350,7 +350,7 @@ representation, but Set order is not a promised API contract; algorithms MUST
 NOT depend on it. Allocation success is limited by available host resources.
 Map duplicate-key position, read ownership, simple-assignment ownership/order,
 and missing-key behavior are language rules under ADR-0014. Copy-only Vec/Map
-indexed compound assignment is a language rule under ADR-0016. Neither is
+indexed compound assignment is also a language rule under ADR-0014. Neither is
 implementation-defined permission for backend divergence.
 
 ## Status
@@ -360,7 +360,7 @@ iteration modes, negative Vec indexing, and the documented method surfaces are
 implemented for the post-Phase 1.5 surface. The duplicate-key, direct-read,
 simple-assignment, and compound-assignment Map rules are implemented under
 `architecture_docs/decisions/0014-map-literals-and-indexing.md`, whose status is
-**Provisional — Batch 1 checkpoint review**. They are pinned by
+**Accepted**. They are pinned by
 `crates/aurora-compiler/tests/fixtures/run-pass/map_literal_duplicate_keys.au`,
 `crates/aurora-compiler/tests/fixtures/check-fail/map_index_non_copy_requires_explicit_clone.au`,
 `crates/aurora-compiler/tests/fixtures/check-fail/map_index_assignment_consumes_noncopy_key.au`,

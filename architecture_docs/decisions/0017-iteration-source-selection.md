@@ -1,6 +1,6 @@
 # ADR-0017: Iteration source selection
 
-- Status: Provisional — Batch 1 checkpoint review
+- Status: Accepted
 - Date: 2026-07-14
 - Reference gap: timing and identity of a selected loop source
 
@@ -16,7 +16,7 @@ different queues for the same checked program.
 This is an evaluation-order gap, not a change to ADR-0006's ownership modes.
 No syntax, yielded-value ownership, or mutation permission changes.
 
-## Provisional decision
+## Decision
 
 - A `for` statement evaluates and selects its iterable once, before its first
   iteration.

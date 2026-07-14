@@ -12,6 +12,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 - Direct recursive fields require `indirect`.
 - Borrowed-return declarations use explicit sources and labels. Calls returning copy types materialize copies; calls producing non-copy borrowed results are rejected until Phase 6 live aliases.
 - Empty list, map, and set literals need an expected collection type.
+- Class field defaults cannot call user-defined functions in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `String(...)` is not a constructor; use string literals and string methods.
 - Ordinary strings may use single or double quotes, but triple-quoted, raw, and byte-string literals are not implemented. F-strings remain double-quoted.
 - `String` has scalar-count `len()` and UTF-8 `byte_len()`, but no integer indexing, slicing, `chars()`, `ord()`, or `chr()` in Aurora 0.1.
@@ -29,6 +30,7 @@ This page documents known current limits of the Aurora compiler and runtime.
 ## Runtime
 
 - MIR runtime traps include Aurora function names and source spans in an innermost-first call-chain note. A trap escaping a structured child task also includes the child entry and its spawn ancestry.
+- Runtime call chains and task ancestry are currently carried as flat prose entries in the diagnostic `notes` array. Structured frame-list fields are deferred to Batch 3 with the native-frame work.
 - Native direct-backend traps preserve the same primary diagnostic code, message, and span but do not yet include Aurora call-chain or task-ancestry notes. Native backtraces are deferred to the Batch 3 frame work; until then, forced backend parity ignores only these three supplemental MIR note families and continues to compare the complete primary trap diagnostic.
 - Aurora task code executes on one cooperative scheduler thread per program. Aurora 0.1 does not run two Aurora tasks in parallel; blocking-worker threads perform host operations only.
 - Scheduling is cooperative, not preemptive. A task that runs CPU code without reaching `cancelled()` or another scheduler-aware operation can starve every other Aurora task.

@@ -980,7 +980,7 @@ fn check_rejects_huge_left_associative_expression_chains_without_crashing() {
 fn compile_commands_emit_the_shared_structured_diagnostic_schema() {
     let (temp, source_path) = write_temp_source(
         "aurora-structured-diagnostics",
-        "def main():\n    print(missing)\n",
+        "def main():\n    print(missing)\n    print(also_missing)\n",
     );
     let output_path = temp.path().join("out");
 
@@ -1139,16 +1139,37 @@ fn help_flags_exit_successfully() {
             args,
             String::from_utf8_lossy(&output.stderr)
         );
+        let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            String::from_utf8_lossy(&output.stdout).contains("usage: aura"),
+            stdout.contains("usage: aura"),
             "help path {:?} should print usage",
             args
         );
         assert!(
-            !String::from_utf8_lossy(&output.stdout).contains("run-mir"),
+            !stdout.contains("run-mir"),
             "help path {:?} should no longer advertise `run-mir`, stdout was:\n{}",
             args,
-            String::from_utf8_lossy(&output.stdout)
+            stdout
+        );
+        assert!(
+            stdout.contains("or: aura build -o <output>"),
+            "help path {:?} should show that `build -o` is required, stdout was:\n{}",
+            args,
+            stdout
+        );
+        assert!(
+            !stdout.contains("aura build [-o <output>]"),
+            "help path {:?} must not show the required output option as optional, stdout was:\n{}",
+            args,
+            stdout
+        );
+        assert!(
+            stdout
+                .lines()
+                .filter(|line| line.contains("aura build"))
+                .all(|line| line.contains("-o <output>")),
+            "every advertised build form must include required `-o <output>`, stdout was:\n{}",
+            stdout
         );
     }
 }

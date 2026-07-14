@@ -1461,12 +1461,12 @@ fn write_stdout(text: &str) {
 }
 
 fn usage_text() -> &'static str {
-    "usage: aura <check|run|build> [--format human|json] <file.au>\n\
+    "usage: aura <check|run> [--format human|json] <file.au>\n\
        or: aura <ast|ast-json|mir|analyze> <file.au>\n\
-       or: aura <check|run|build|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
+       or: aura <check|run|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
        or: aura run <file.au> [-- <program-args>...]\n\
-       or: aura build [-o <output>] [--backend auto|direct] <file.au>\n\
-       or: aura build [-o <output>] [--backend auto|direct] --stdin <virtual-path>\n\
+       or: aura build -o <output> [--backend auto|direct] [--format human|json] <file.au>\n\
+       or: aura build -o <output> [--backend auto|direct] [--format human|json] --stdin <virtual-path>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
        or: aura lsp\n\

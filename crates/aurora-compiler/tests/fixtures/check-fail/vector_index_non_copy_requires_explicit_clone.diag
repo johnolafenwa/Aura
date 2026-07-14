@@ -1,4 +1,4 @@
-error[AU2999]: cannot implicitly copy `String` out of a vector index; use `get(index)` for an explicit cloned read instead
+error[AU3005]: cannot implicitly copy `String` out of a vector index; use `get(index)` for an explicit cloned read instead
  --> crates/aurora-compiler/tests/fixtures/check-fail/vector_index_non_copy_requires_explicit_clone.au:3:21
   |
 3 |     first: String = items[0]

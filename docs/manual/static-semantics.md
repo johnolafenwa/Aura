@@ -133,7 +133,9 @@ implicitly narrowed.
 A direct read produces `T` or `V` only when that element/value type is
 copyable. For a non-copy vector element, use `get(index)` for an explicit
 cloned optional read. For a non-copy map value, use `get(key)` for an explicit
-cloned optional read or `remove(key)` to transfer ownership. A missing map key
+cloned optional read or `remove(key)` to transfer ownership. These non-copy
+direct-read rejections use `AU3005`; a non-copy indexed compound assignment
+uses `AU3006` because its initial read has the same ownership problem. A missing map key
 in a direct read is runtime diagnostic `AU4003`. Integer indexing and slicing
 are not defined for `String` in Aurora 0.1.
 

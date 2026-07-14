@@ -1,6 +1,6 @@
 # ADR-0014: Map literals and indexing
 
-- Status: Provisional — Batch 1 checkpoint review
+- Status: Accepted
 - Date: 2026-07-14
 - Reference gap: duplicate literal keys and indexed read/assignment ownership
 
@@ -19,7 +19,7 @@ assignment must first read the existing stored value. Leaving those two forms
 under one undifferentiated rule would either reject valid non-copy replacement
 or permit a hidden clone/destructive read during compound assignment.
 
-## Provisional decision
+## Decision
 
 - Map-literal entries are evaluated from left to right, key before value.
 - When a later literal entry has a key equal to an earlier entry, its value
@@ -27,7 +27,7 @@ or permit a hidden clone/destructive read during compound assignment.
 - `map[key]` returns the stored value only when `V` is a copy type. For a
   non-copy `V`, checking rejects the indexed read and directs callers to
   `get(key)` for the existing explicit cloned optional read or `remove(key)`
-  to transfer ownership.
+  to transfer ownership. This rejection uses `AU3005`.
 - A missing key in an indexed read traps at runtime with `AU4003`.
 - Simple indexed assignment, `map[key] = value`, inserts an absent key or
   replaces an equal existing key; it does not trap merely because the key was
@@ -44,7 +44,7 @@ or permit a hidden clone/destructive read during compound assignment.
   moving/removing the stored value before the operation would make failure
   destructive. Such code is rejected with guidance to use `get(key)` for an
   explicit cloned optional read or `remove(key)` for an explicit ownership
-  transfer followed by a simple assignment.
+  transfer followed by a simple assignment. This rejection uses `AU3006`.
 
 This is a contained gap-fill guided by P1 (no plausible-but-wrong map model),
 P2 (backend parity), P3 (Python-compatible duplicate-key value behavior), P4
